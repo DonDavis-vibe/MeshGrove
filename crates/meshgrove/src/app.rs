@@ -79,6 +79,9 @@ pub struct App {
     viewer: ModelViewer,
     /// Models opened in windows of their own.
     model_windows: Vec<ModelWindow>,
+    /// The large preview over the window (Space, or double-click when Meshgrove is the default app).
+    preview_open: bool,
+    preview_viewer: ModelViewer,
     model: ModelStatus,
     meshes: MeshStore,
     turntable: Turntable,
@@ -181,6 +184,12 @@ impl App {
             renderer: Renderer::new(&rs.device, &rs.adapter),
             viewer: ModelViewer::new(),
             model_windows: Vec::new(),
+            preview_open: false,
+            preview_viewer: {
+                let mut v = ModelViewer::new();
+                v.set_quality(config.preview_quality);
+                v
+            },
             model: ModelStatus::Idle,
             meshes: MeshStore::new(rs.device.clone(), cc.egui_ctx.clone()),
             turntable: Turntable::default(),
@@ -303,8 +312,12 @@ impl App {
             self.navigate(entry.path);
             return;
         }
-        if meshes::viewable(entry.kind) {
-            self.open_model_window(entry);
+        if meshes::viewable(entry.kind) && actions::default_app_is_meshgrove(&entry.path, entry.kind) {
+            // Meshgrove would only start another window: show the model large right here.
+            if self.gallery.selected != Some(index) {
+                self.gallery.select(Some(index));
+            }
+            self.open_preview();
             return;
         }
         self.open_with_default_app(&entry);
@@ -379,6 +392,13 @@ impl App {
                 WindowAction::OpenInSlicer(path) => self.open_in_slicer(vec![path]),
                 WindowAction::Message(message) => self.toast(message),
             }
+        }
+    }
+
+    fn open_preview(&mut self) {
+        if self.selected_entry().is_some_and(|e| meshes::viewable(e.kind)) {
+            self.preview_viewer.reset_view();
+            self.preview_open = true;
         }
     }
 
@@ -638,6 +658,12 @@ impl App {
                     self.open_with_default_app(&entry);
                 }
             }
+            Action::OpenInWindow(index) => {
+                if let Some(entry) = self.entries().get(index).cloned() {
+                    self.open_model_window(entry);
+                }
+            }
+            Action::Preview => self.open_preview(),
             Action::ShowInFolder(index) => self.show_in_folder(index),
             Action::OpenInSlicer => self.open_in_slicer(self.selected_paths()),
             Action::ShowInFileManager => {
@@ -716,6 +742,10 @@ impl App {
                     let name =
                         self.bed.as_ref().map_or_else(|| t!("settings.printer_none").into_owned(), |b| b.name.clone());
                     self.toast(t!("toast.printer_set", name = name).into_owned());
+                }
+                SettingsChange::PreviewQuality(quality) => {
+                    self.config.preview_quality = quality;
+                    self.preview_viewer.set_quality(quality);
                 }
                 SettingsChange::GltfUnit(unit) => {
                     self.config.gltf_unit = unit;
@@ -818,6 +848,11 @@ impl App {
     }
 
     /// Keeps the 3D viewer in sync with the selection (debounced, loads run in the mesh store).
+    fn set_viewer_mesh(&mut self, mesh: Option<(std::sync::Arc<meshgrove_render::GpuMesh>, MeshSource)>) {
+        self.preview_viewer.set_mesh(mesh.clone());
+        self.viewer.set_mesh(mesh);
+    }
+
     fn update_viewer(&mut self, ctx: &egui::Context) {
         if self.gallery.selected != self.last_selected {
             self.last_selected = self.gallery.selected;
@@ -826,30 +861,31 @@ impl App {
         }
         let wanted = self.selected_entry().filter(|e| meshes::viewable(e.kind)).map(|e| (e.path.clone(), e.kind));
         let Some((path, kind)) = wanted else {
-            self.viewer.set_mesh(None);
+            self.set_viewer_mesh(None);
             self.model = ModelStatus::Idle;
             return;
         };
         let waited = self.selection_changed.elapsed();
         if waited < VIEWER_DEBOUNCE {
             ctx.request_repaint_after(VIEWER_DEBOUNCE - waited);
-            self.viewer.set_mesh(None);
+            self.set_viewer_mesh(None);
             self.model = ModelStatus::Loading;
             return;
         }
         match self.meshes.request(&path, kind, self.viewer_plate) {
             MeshState::Loading => {
-                self.viewer.set_mesh(None);
+                self.set_viewer_mesh(None);
                 self.model = ModelStatus::Loading;
             }
             MeshState::Failed(e) => {
-                self.viewer.set_mesh(None);
-                self.model = ModelStatus::Failed(e.clone());
+                let e = e.clone();
+                self.set_viewer_mesh(None);
+                self.model = ModelStatus::Failed(e);
             }
             MeshState::Ready(loaded) => {
                 let loaded = loaded.clone();
                 let source = MeshSource { path: path.clone(), kind, plate: self.viewer_plate };
-                self.viewer.set_mesh(Some((loaded.mesh, source)));
+                self.set_viewer_mesh(Some((loaded.mesh, source)));
                 if self.plates.as_ref().is_none_or(|(p, _)| *p != path) {
                     let textures = loaded
                         .info
@@ -880,6 +916,16 @@ impl App {
         if pressed(Modifiers::ALT, Key::ArrowUp) || (!typing && pressed(Modifiers::NONE, Key::Backspace)) {
             self.leave_search();
             self.nav.up();
+        }
+        if self.preview_open && pressed(Modifiers::NONE, Key::Escape) {
+            self.preview_open = false;
+        }
+        if !typing && pressed(Modifiers::NONE, Key::Space) {
+            if self.preview_open {
+                self.preview_open = false;
+            } else {
+                self.open_preview();
+            }
         }
         if !typing && pressed(Modifiers::NONE, Key::Delete) {
             let paths = self.selected_paths();
@@ -1190,6 +1236,9 @@ impl App {
     }
 }
 
+static PREVIEW_BACKDROP: std::sync::LazyLock<egui::Id> = std::sync::LazyLock::new(|| egui::Id::unique("preview_backdrop"));
+static PREVIEW_PANEL: std::sync::LazyLock<egui::Id> = std::sync::LazyLock::new(|| egui::Id::unique("preview_panel"));
+
 impl App {
     fn pane_places(&mut self, ui: &mut Ui) {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
@@ -1251,6 +1300,73 @@ impl App {
             viewer: &mut self.viewer,
             render_state: rs,
             renderer: &self.renderer,
+        }
+    }
+
+    /// The large model view over (almost) the whole window; click outside, Esc or Space closes it.
+    fn preview_overlay(&mut self, ctx: &egui::Context, rs: &egui_wgpu::RenderState) {
+        if !self.preview_open {
+            return;
+        }
+        let Some(name) = self.selected_entry().filter(|e| meshes::viewable(e.kind)).map(|e| listing::file_name(&e.path))
+        else {
+            self.preview_open = false;
+            return;
+        };
+        let screen = ctx.content_rect();
+        let mut close = false;
+        egui::Area::new(*PREVIEW_BACKDROP).order(egui::Order::Foreground).fixed_pos(screen.min).show(
+            ctx,
+            |ui| {
+                let response = ui.allocate_rect(screen, egui::Sense::click());
+                ui.painter().rect_filled(screen, 0.0, egui::Color32::from_black_alpha(190));
+                close |= response.clicked();
+            },
+        );
+        let panel = screen.shrink(20.0);
+        let mut message = None;
+        egui::Area::new(*PREVIEW_PANEL).order(egui::Order::Foreground).fixed_pos(panel.min).show(
+            ctx,
+            |ui| {
+                egui::Frame::new()
+                    .fill(ui.visuals().panel_fill)
+                    .corner_radius(8.0)
+                    .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                    .inner_margin(10.0)
+                    .show(ui, |ui| {
+                        ui.set_min_size(panel.size() - egui::vec2(20.0, 20.0));
+                        ui.set_max_size(panel.size() - egui::vec2(20.0, 20.0));
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Label::new(RichText::new(name).heading().strong()).truncate());
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button("✕").on_hover_text(t!("preview.close")).clicked() {
+                                    close = true;
+                                }
+                            });
+                        });
+                        let hint = ui.text_style_height(&egui::TextStyle::Small) + 6.0;
+                        let mut size = ui.available_size();
+                        size.y = (size.y - hint).max(80.0);
+                        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                        match &self.model {
+                            ModelStatus::Loading => {
+                                child.centered_and_justified(|ui| ui.spinner());
+                            }
+                            ModelStatus::Failed(e) => {
+                                child.centered_and_justified(|ui| ui.colored_label(ui.visuals().error_fg_color, e));
+                            }
+                            _ => message = self.preview_viewer.ui(&mut child, rs, &self.renderer),
+                        }
+                        ui.add(egui::Label::new(RichText::new(t!("preview.hint")).weak()).truncate());
+                    });
+            },
+        );
+        if let Some(message) = message {
+            self.toast(message);
+        }
+        if close {
+            self.preview_open = false;
         }
     }
 
@@ -1441,6 +1557,8 @@ impl eframe::App for App {
             let reset = host.reset;
             self.layout = if reset { layout::default_tree() } else { tree };
         });
+
+        self.preview_overlay(&ctx, &rs);
 
         let info = AppInfo { gpu: &self.gpu_name, db_path: &self.db_path };
         let changes = self.settings.show(&ctx, &self.config, self.slicer.as_ref(), self.bed.as_ref(), info);

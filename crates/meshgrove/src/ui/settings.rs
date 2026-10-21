@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
-use meshgrove_core::config::{Config, GltfUnit, Slicer};
+use meshgrove_core::config::{Config, GltfUnit, PreviewQuality, Slicer};
 use meshgrove_core::printer::Bed;
 use meshgrove_core::userdata;
 
@@ -19,10 +19,29 @@ pub enum SettingsChange {
     /// `None`: take the printer selected in the slicer.
     Printer(Option<Bed>),
     GltfUnit(GltfUnit),
+    PreviewQuality(PreviewQuality),
     Export(PathBuf),
     Import(PathBuf),
     OpenBackups,
     ClearCache,
+}
+
+/// Picture quality of the large preview.
+fn preview(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+    ui.label(RichText::new(t!("settings.preview")).strong());
+    ui.horizontal(|ui| {
+        ui.label(t!("settings.preview_quality"));
+        for (quality, label) in [
+            (PreviewQuality::Standard, t!("settings.preview_standard")),
+            (PreviewQuality::High, t!("settings.preview_high")),
+            (PreviewQuality::Studio, t!("settings.preview_studio")),
+        ] {
+            if ui.radio(config.preview_quality == quality, label).clicked() && config.preview_quality != quality {
+                changes.push(SettingsChange::PreviewQuality(quality));
+            }
+        }
+    });
+    ui.weak(t!("settings.preview_hint"));
 }
 
 /// How model files without a fixed unit are read.
@@ -148,6 +167,8 @@ impl SettingsDialog {
                     self.printer(ui, config, bed, &mut changes);
                     ui.separator();
                     models(ui, config, &mut changes);
+                    ui.separator();
+                    preview(ui, config, &mut changes);
                     ui.separator();
                     self.user_data(ui, &mut changes);
                     ui.separator();

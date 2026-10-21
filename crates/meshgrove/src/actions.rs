@@ -209,6 +209,43 @@ fn reveal(paths: &[PathBuf]) -> io::Result<()> {
     open_with_default_app(folder)
 }
 
+/// Whether a double-click on this model file would start Meshgrove itself (it is the system's
+/// default application for the file type). Only known on Linux; elsewhere `false`.
+pub fn default_app_is_meshgrove(path: &Path, kind: meshgrove_core::Kind) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use meshgrove_core::Kind;
+        let query = |args: &[&std::ffi::OsStr]| {
+            let out = Command::new("xdg-mime").args(args).output().ok()?;
+            out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        };
+        let from_file = || {
+            path.is_file().then(|| query(&["query".as_ref(), "filetype".as_ref(), path.as_os_str()])).flatten()
+        };
+        let by_kind = || {
+            let ext = path.extension().map(|e| e.to_ascii_lowercase());
+            Some(match kind {
+                Kind::Stl => "model/stl",
+                Kind::ThreeMf => "model/3mf",
+                Kind::Step => "model/step",
+                Kind::Obj => "model/obj",
+                Kind::Ply => "model/x-ply",
+                Kind::Gltf if ext.is_some_and(|e| e == "gltf") => "model/gltf+json",
+                Kind::Gltf => "model/gltf-binary",
+                _ => return None,
+            }
+            .to_owned())
+        };
+        let Some(mime) = from_file().or_else(by_kind) else { return false };
+        query(&["query".as_ref(), "default".as_ref(), mime.as_ref()]).is_some_and(|d| d == "meshgrove.desktop")
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (path, kind);
+        false
+    }
+}
+
 /// Opens a file or folder with the system's default application.
 pub fn open_with_default_app(path: &Path) -> io::Result<()> {
     let opener = if cfg!(target_os = "macos") {

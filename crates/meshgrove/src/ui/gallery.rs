@@ -44,6 +44,10 @@ pub enum Action {
     /// Go to the folder that contains a search or "include subfolders" result.
     ShowInFolder(usize),
     /// The following act on the selection.
+    /// Large preview of the selected model.
+    Preview,
+    /// Show the model in a window of its own.
+    OpenInWindow(usize),
     OpenInSlicer,
     ShowInFileManager,
     CopyPaths,
@@ -295,7 +299,9 @@ impl Gallery {
                             };
                             item(ui, t!("menu.open"), Action::Open(entry));
                             if viewable {
+                                item(ui, t!("menu.preview"), Action::Preview);
                                 item(ui, t!("menu.open_with_default_app"), Action::OpenWithDefaultApp(entry));
+                                item(ui, t!("menu.own_window"), Action::OpenInWindow(entry));
                             }
                             if sliceable && let Some(slicer) = &menu.slicer {
                                 item(ui, t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);

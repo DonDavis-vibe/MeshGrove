@@ -4,7 +4,7 @@
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
-    eye: vec4<f32>,          // xyz = camera position (world)
+    eye: vec4<f32>,          // xyz = camera position (world), w = 2 for studio lighting
     base_color: vec4<f32>,   // linear RGB
     key_dir: vec4<f32>,      // xyz = direction *towards* the key light (world)
     fill_dir: vec4<f32>,
@@ -59,6 +59,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let half_v = normalize(u.key_dir.xyz + to_eye);
     let spec = pow(max(dot(n, half_v), 0.0), 48.0) * 0.18;
 
-    let lit = in.color * (hemi + key * 0.85 + fill * 0.12) + vec3<f32>(spec + rim);
+    var lit = in.color * (hemi + key * 0.85 + fill * 0.12) + vec3<f32>(spec + rim);
+    if u.eye.w > 1.5 {
+        // Studio: a kicker from behind, a tight glossy highlight and a stronger edge glow.
+        let kicker = max(dot(n, normalize(vec3<f32>(-u.key_dir.xy, 0.6))), 0.0);
+        let gloss = pow(max(dot(n, half_v), 0.0), 160.0) * 0.45;
+        let edge = pow(1.0 - max(dot(n, to_eye), 0.0), 4.0) * 0.45;
+        lit = in.color * (hemi * 1.1 + key * 0.9 + fill * 0.2 + kicker * 0.18) + vec3<f32>(spec * 0.8 + gloss + edge);
+    }
     return vec4<f32>(lit, 1.0);
 }
