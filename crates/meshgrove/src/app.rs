@@ -19,7 +19,9 @@ use crate::library::{LibEvent, LibraryService, Transfer};
 use crate::meshes::{self, MeshState, MeshStore};
 use crate::nav::{Listing, Navigator};
 use crate::thumbs::{ThumbResult, ThumbService};
-use crate::ui::details::{self, DetailsContext, ModelStatus, NoteEditor, TagEditor};
+use crate::ui::details::{self, DetailsContext, DetailsOutput, ModelStatus, NoteEditor, TagEditor};
+use crate::ui::layout::{self, Pane};
+use egui_tiles::Tree;
 use crate::ui::duplicates::{self, DupAction, GroupInfo};
 use crate::ui::gallery::{Action, Arrange, Gallery, MenuContext};
 use crate::ui::settings::{AppInfo, SettingsChange, SettingsDialog};
@@ -102,6 +104,7 @@ pub struct App {
     tags_dirty: bool,
     tag_input: String,
     focus_tags: bool,
+    layout: Tree<Pane>,
     /// Note of the selection as shown in the editor; saved shortly after the last keystroke.
     note_input: String,
     note_mixed: bool,
@@ -199,6 +202,7 @@ impl App {
             tags_dirty: true,
             tag_input: String::new(),
             focus_tags: false,
+            layout: layout::load().unwrap_or_else(layout::default_tree),
             note_input: String::new(),
             note_mixed: false,
             note_edited: None,
@@ -1127,6 +1131,178 @@ impl App {
     }
 }
 
+impl App {
+    fn pane_places(&mut self, ui: &mut Ui) {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        let info = LibraryInfo {
+            tags: &self.all_tags,
+            duplicate_groups: self.duplicate_groups,
+            showing_duplicates: matches!(self.view, View::Duplicates { .. }),
+        };
+        match self.sidebar.show(ui, &self.config, self.nav.current(), info) {
+            Some(SidebarAction::Navigate(path)) => self.navigate(path),
+            Some(SidebarAction::AddRoot(path)) => {
+                if !self.config.library_roots.contains(&path) {
+                    self.config.library_roots.push(path);
+                    self.save_config();
+                    self.library.set_roots(self.config.library_roots.clone());
+                }
+            }
+            Some(SidebarAction::RemoveRoot(path)) => {
+                self.config.library_roots.retain(|r| r != &path);
+                self.save_config();
+                self.library.set_roots(self.config.library_roots.clone());
+            }
+            Some(SidebarAction::SearchTag(tag)) => {
+                self.scope = Scope::Library;
+                self.search = if tag.contains(' ') { format!("tag:\"{tag}\"") } else { format!("tag:{tag}") };
+                self.run_search();
+            }
+            Some(SidebarAction::ShowDuplicates) => self.show_duplicates(),
+            None => {}
+        }
+    }
+
+    fn details_context<'a>(
+        &'a mut self,
+        rs: &'a egui_wgpu::RenderState,
+        focus_tags: bool,
+    ) -> DetailsContext<'a> {
+        let entries = view_entries(&self.view, &self.nav);
+        let entry = self.gallery.selected.and_then(|i| entries.get(i));
+        let thumb = self.gallery.selected.and_then(|i| self.gallery.thumb(i));
+        let picked = self.gallery.selection();
+        let selection = (picked.len(), picked.iter().filter_map(|&i| entries.get(i)).map(|e| e.size).sum());
+        DetailsContext {
+            entry,
+            selection,
+            tags: TagEditor {
+                enabled: self.menu.can_tag,
+                on_selection: &self.selection_tags,
+                all: &self.all_tags,
+                input: &mut self.tag_input,
+                focus: focus_tags,
+            },
+            note: NoteEditor { enabled: self.menu.can_tag, text: &mut self.note_input, mixed: self.note_mixed },
+            bed: self.bed.as_ref(),
+            thumb,
+            model: &self.model,
+            plates: self.plates.as_ref().map_or(&[][..], |(_, p)| p.as_slice()),
+            viewer: &mut self.viewer,
+            render_state: rs,
+            renderer: &self.renderer,
+        }
+    }
+
+    fn apply_details_output(&mut self, out: DetailsOutput) {
+        if out.clicked_plate.is_some() {
+            self.viewer_plate = out.clicked_plate;
+        }
+        if let Some(tag) = out.add_tag {
+            self.library.tag(self.menu_for.clone(), tag);
+        }
+        if let Some(tag) = out.remove_tag {
+            self.library.untag(self.menu_for.clone(), tag);
+        }
+        if out.note_changed {
+            self.note_edited = Some(Instant::now());
+        }
+        if let Some(message) = out.message {
+            self.toast(message);
+        }
+    }
+}
+
+/// Three dots centred in the pane's header bar; dragging them moves the pane like its tab does.
+/// Returns whether a drag started on them.
+fn grip_handle(ui: &Ui) -> bool {
+    const BAR: f32 = 24.0;
+    let pane = ui.max_rect();
+    if pane.width() < 200.0 {
+        return false;
+    }
+    let bar = egui::Rect::from_center_size(egui::pos2(pane.center().x, pane.top() - BAR / 2.0), egui::vec2(36.0, BAR));
+    // The pane's Ui is clipped to the pane, so paint and listen on the whole screen instead.
+    let ctx = ui.ctx();
+    let (hovered, pressed) = ctx.input(|i| (i.pointer.hover_pos().is_some_and(|p| bar.contains(p)), i.pointer.primary_pressed()));
+    let color = if hovered { ui.visuals().widgets.hovered.fg_stroke.color } else { ui.visuals().weak_text_color() };
+    if hovered {
+        ctx.set_cursor_icon(egui::CursorIcon::Grab);
+    }
+    let painter = egui::Painter::new(ctx.clone(), ui.layer_id(), ctx.content_rect());
+    let line = egui::Stroke::new(1.0, ui.visuals().widgets.inactive.bg_fill);
+    painter.hline(pane.x_range(), pane.top() - 0.5, line);
+    for i in -1..=1 {
+        painter.circle_filled(bar.center() + egui::vec2(i as f32 * 6.0, 0.0), 1.5, color);
+    }
+    hovered && pressed
+}
+
+/// Draws the panes of the dockable layout with the app's state.
+struct PaneHost<'a> {
+    app: &'a mut App,
+    rs: &'a egui_wgpu::RenderState,
+    reset: bool,
+}
+
+impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
+    fn pane_ui(&mut self, ui: &mut Ui, _tile_id: egui_tiles::TileId, pane: &mut Pane) -> egui_tiles::UiResponse {
+        let rs = self.rs;
+        let grip = grip_handle(ui);
+        ui.shrink_clip_rect(ui.max_rect());
+        match pane {
+            Pane::Places => self.app.pane_places(ui),
+            Pane::Files => self.app.central(ui, rs),
+            Pane::Preview => {
+                let cx = self.app.details_context(rs, false);
+                let out = details::preview(ui, cx);
+                self.app.apply_details_output(out);
+            }
+            Pane::Info => {
+                let focus = std::mem::take(&mut self.app.focus_tags);
+                let cx = self.app.details_context(rs, focus);
+                let out = details::info(ui, cx);
+                self.app.apply_details_output(out);
+            }
+        }
+        if grip { egui_tiles::UiResponse::DragStarted } else { egui_tiles::UiResponse::None }
+    }
+
+    fn tab_bar_hline_stroke(&self, visuals: &egui::Visuals) -> egui::Stroke {
+        egui::Stroke::new(1.0, visuals.widgets.inactive.bg_fill)
+    }
+
+    fn tab_bar_color(&self, visuals: &egui::Visuals) -> egui::Color32 {
+        visuals.panel_fill
+    }
+
+    fn tab_title_for_pane(&mut self, pane: &Pane) -> egui::WidgetText {
+        pane.title().into()
+    }
+
+    fn is_tab_closable(&self, _tiles: &egui_tiles::Tiles<Pane>, _tile_id: egui_tiles::TileId) -> bool {
+        false
+    }
+
+    fn simplification_options(&self) -> egui_tiles::SimplificationOptions {
+        egui_tiles::SimplificationOptions { all_panes_must_have_tabs: true, ..Default::default() }
+    }
+
+    fn top_bar_right_ui(
+        &mut self,
+        tiles: &egui_tiles::Tiles<Pane>,
+        ui: &mut Ui,
+        _tile_id: egui_tiles::TileId,
+        tabs: &egui_tiles::Tabs,
+        _scroll_offset: &mut f32,
+    ) {
+        let holds_files = tabs.children.iter().any(|&c| matches!(tiles.get(c), Some(egui_tiles::Tile::Pane(Pane::Files))));
+        if holds_files && ui.small_button("↺").on_hover_text(t!("pane.reset")).clicked() {
+            self.reset = true;
+        }
+    }
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -1194,96 +1370,14 @@ impl eframe::App for App {
         });
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
 
-        let sidebar_action = egui::Panel::left("sidebar")
-            .default_size(250.0)
-            .max_size(420.0)
-            .show(ui, |ui| {
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                let info = LibraryInfo {
-                    tags: &self.all_tags,
-                    duplicate_groups: self.duplicate_groups,
-                    showing_duplicates: matches!(self.view, View::Duplicates { .. }),
-                };
-                self.sidebar.show(ui, &self.config, self.nav.current(), info)
-            })
-            .inner;
-        match sidebar_action {
-            Some(SidebarAction::Navigate(path)) => self.navigate(path),
-            Some(SidebarAction::AddRoot(path)) => {
-                if !self.config.library_roots.contains(&path) {
-                    self.config.library_roots.push(path);
-                    self.save_config();
-                    self.library.set_roots(self.config.library_roots.clone());
-                }
-            }
-            Some(SidebarAction::RemoveRoot(path)) => {
-                self.config.library_roots.retain(|r| r != &path);
-                self.save_config();
-                self.library.set_roots(self.config.library_roots.clone());
-            }
-            Some(SidebarAction::SearchTag(tag)) => {
-                self.scope = Scope::Library;
-                self.search = if tag.contains(' ') { format!("tag:\"{tag}\"") } else { format!("tag:{tag}") };
-                self.run_search();
-            }
-            Some(SidebarAction::ShowDuplicates) => self.show_duplicates(),
-            None => {}
-        }
-
-        let focus_tags = std::mem::take(&mut self.focus_tags);
-        let details_out = egui::Panel::right("details")
-            .default_size(340.0)
-            .show(ui, |ui| {
-                let entries = view_entries(&self.view, &self.nav);
-                let entry = self.gallery.selected.and_then(|i| entries.get(i));
-                let thumb = self.gallery.selected.and_then(|i| self.gallery.thumb(i));
-                let picked = self.gallery.selection();
-                let selection = (picked.len(), picked.iter().filter_map(|&i| entries.get(i)).map(|e| e.size).sum());
-                details::show(
-                    ui,
-                    DetailsContext {
-                        entry,
-                        selection,
-                        tags: TagEditor {
-                            enabled: self.menu.can_tag,
-                            on_selection: &self.selection_tags,
-                            all: &self.all_tags,
-                            input: &mut self.tag_input,
-                            focus: focus_tags,
-                        },
-                        note: NoteEditor {
-                            enabled: self.menu.can_tag,
-                            text: &mut self.note_input,
-                            mixed: self.note_mixed,
-                        },
-                        bed: self.bed.as_ref(),
-                        thumb,
-                        model: &self.model,
-                        plates: self.plates.as_ref().map_or(&[][..], |(_, p)| p.as_slice()),
-                        viewer: &mut self.viewer,
-                        render_state: &rs,
-                        renderer: &self.renderer,
-                    },
-                )
-            })
-            .inner;
-        if details_out.clicked_plate.is_some() {
-            self.viewer_plate = details_out.clicked_plate;
-        }
-        if let Some(tag) = details_out.add_tag {
-            self.library.tag(self.menu_for.clone(), tag);
-        }
-        if let Some(tag) = details_out.remove_tag {
-            self.library.untag(self.menu_for.clone(), tag);
-        }
-        if details_out.note_changed {
-            self.note_edited = Some(Instant::now());
-        }
-        if let Some(message) = details_out.message {
-            self.toast(message);
-        }
-
-        egui::CentralPanel::default().show(ui, |ui| self.central(ui, &rs));
+        let fill = ui.visuals().panel_fill;
+        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
+            let mut tree = std::mem::replace(&mut self.layout, Tree::empty(egui::Id::unique("layout")));
+            let mut host = PaneHost { app: self, rs: &rs, reset: false };
+            tree.ui(&mut host, ui);
+            let reset = host.reset;
+            self.layout = if reset { layout::default_tree() } else { tree };
+        });
 
         let info = AppInfo { gpu: &self.gpu_name, db_path: &self.db_path };
         let changes = self.settings.show(&ctx, &self.config, self.slicer.as_ref(), self.bed.as_ref(), info);
@@ -1297,6 +1391,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        layout::save(&self.layout);
         self.save_note();
         self.library.flush(Duration::from_secs(3));
         self.save_config();

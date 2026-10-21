@@ -64,43 +64,56 @@ pub struct DetailsContext<'a> {
     pub renderer: &'a Renderer,
 }
 
-pub fn show(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
+/// The "Preview" pane: file name and the 3D view (or a large picture), filling the pane.
+pub fn preview(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
     let mut out = DetailsOutput::default();
     let Some(entry) = cx.entry else {
         ui.centered_and_justified(|ui| ui.weak(t!("details.none_selected")));
         return out;
     };
     let (count, total_size) = cx.selection;
+    ui.add_space(4.0);
+    if count > 1 {
+        let text = t!("details.multi", count = i18n::count(count), size = i18n::file_size(total_size));
+        ui.label(RichText::new(text).strong().color(ui.visuals().selection.stroke.color));
+    }
+    ui.add(egui::Label::new(RichText::new(meshgrove_core::listing::file_name(&entry.path)).heading().strong()).truncate());
+    ui.add_space(4.0);
+
+    if meshes::viewable(entry.kind) {
+        let hint = ui.text_style_height(&egui::TextStyle::Small) + 6.0;
+        let mut size = ui.available_size();
+        size.y = (size.y - hint).max(80.0);
+        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        match cx.model {
+            ModelStatus::Loading => {
+                child.centered_and_justified(|ui| ui.spinner());
+            }
+            ModelStatus::Failed(e) => {
+                child.centered_and_justified(|ui| ui.colored_label(ui.visuals().error_fg_color, e));
+            }
+            _ => out.message = cx.viewer.ui(&mut child, cx.render_state, cx.renderer),
+        }
+        ui.add(egui::Label::new(RichText::new(t!("viewer.hint")).weak()).truncate());
+    } else if entry.kind == Kind::Image
+        && let Some(Thumb::Ready(texture, _)) = cx.thumb
+    {
+        ui.add(egui::Image::new(texture).fit_to_exact_size(ui.available_size()).corner_radius(4.0));
+    }
+    out
+}
+
+/// The "Info" pane: facts, plates, tags, note and path of the selection.
+pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
+    let mut out = DetailsOutput::default();
+    let Some(entry) = cx.entry else {
+        ui.centered_and_justified(|ui| ui.weak(t!("details.none_selected")));
+        return out;
+    };
+    let (count, _) = cx.selection;
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         ui.add_space(4.0);
-        if count > 1 {
-            let text = t!("details.multi", count = i18n::count(count), size = i18n::file_size(total_size));
-            ui.label(RichText::new(text).strong().color(ui.visuals().selection.stroke.color));
-        }
-        ui.label(RichText::new(meshgrove_core::listing::file_name(&entry.path)).heading().strong());
-        ui.add_space(4.0);
-
-        let side = ui.available_width();
-        if meshes::viewable(entry.kind) {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side.min(420.0)), egui::Sense::hover());
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-            match cx.model {
-                ModelStatus::Loading => {
-                    child.centered_and_justified(|ui| ui.spinner());
-                }
-                ModelStatus::Failed(e) => {
-                    child.centered_and_justified(|ui| ui.colored_label(ui.visuals().error_fg_color, e));
-                }
-                _ => out.message = cx.viewer.ui(&mut child, cx.render_state, cx.renderer),
-            }
-            ui.weak(t!("viewer.hint"));
-        } else if entry.kind == Kind::Image
-            && let Some(Thumb::Ready(texture, _)) = cx.thumb
-        {
-            ui.add(egui::Image::new(texture).max_width(side).corner_radius(4.0));
-        }
-
-        ui.add_space(8.0);
         facts(ui, entry, cx.thumb, cx.model, cx.bed);
         if !cx.plates.is_empty() {
             let active = match cx.model {
