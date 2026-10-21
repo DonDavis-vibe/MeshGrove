@@ -1,0 +1,21 @@
+[package]
+name = "stl-browser"
+description = "Gallery browser for 3D-print files (STL, 3MF, STEP) with live previews"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+stlb-core.workspace = true
+stlb-render.workspace = true
+eframe.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
+wgpu.workspace = true
+glam.workspace = true
+log.workspace = true
+env_logger.workspace = true
+anyhow.workspace = true
+rust-i18n.workspace = true
+sys-locale.workspace = true

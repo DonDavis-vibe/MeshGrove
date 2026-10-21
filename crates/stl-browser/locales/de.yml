@@ -1,0 +1,10 @@
+_version: 1
+app.title: "STL-Browser"
+viewer.no_model: "Kein Modell geladen"
+viewer.hint: "Linke Maustaste: drehen · Rechte Maustaste: verschieben · Mausrad: zoomen · Doppelklick: Ansicht zurücksetzen"
+details.dimensions: "Maße"
+details.triangles: "Dreiecke"
+details.file_size: "Dateigröße"
+details.load_time: "Ladezeit"
+status.gpu: "Grafikkarte: %{name}"
+error.load_failed: "Datei konnte nicht geladen werden: %{error}"

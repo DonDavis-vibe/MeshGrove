@@ -1,0 +1,13 @@
+[package]
+name = "stlb-core"
+description = "File formats, mesh loading, indexing and duplicate detection for the STL browser (no GUI)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+glam.workspace = true
+fast-float2.workspace = true
+blake3.workspace = true

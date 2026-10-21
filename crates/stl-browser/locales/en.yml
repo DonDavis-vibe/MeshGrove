@@ -1,0 +1,10 @@
+_version: 1
+app.title: "STL Browser"
+viewer.no_model: "No model loaded"
+viewer.hint: "Left mouse: rotate · Right mouse: pan · Wheel: zoom · Double-click: reset view"
+details.dimensions: "Dimensions"
+details.triangles: "Triangles"
+details.file_size: "File size"
+details.load_time: "Load time"
+status.gpu: "GPU: %{name}"
+error.load_failed: "Could not load file: %{error}"

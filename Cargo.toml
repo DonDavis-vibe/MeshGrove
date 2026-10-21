@@ -1,0 +1,42 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/stlb-core",
+    "crates/stlb-render",
+    "crates/stl-browser",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+stlb-core = { path = "crates/stlb-core" }
+stlb-render = { path = "crates/stlb-render" }
+
+anyhow = "1.0"
+thiserror = "2.0"
+log = "0.4"
+env_logger = "0.11"
+bytemuck = { version = "1.25", features = ["derive"] }
+glam = { version = "0.34", features = ["bytemuck"] }
+fast-float2 = "0.2"
+blake3 = "1.8"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
+pollster = "1.0"
+wgpu = "30"
+egui = "0.37"
+egui-wgpu = "0.37"
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts", "accesskit"] }
+rust-i18n = "4.2"
+sys-locale = "0.3"
+
+[profile.dev.package."*"]
+# Mesh parsing and image encoding are painfully slow unoptimized; keep our own code debuggable.
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
