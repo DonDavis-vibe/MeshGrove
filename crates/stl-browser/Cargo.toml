@@ -24,3 +24,4 @@ crossbeam-channel.workspace = true
 image.workspace = true
 dirs.workspace = true
 notify.workspace = true
+trash.workspace = true

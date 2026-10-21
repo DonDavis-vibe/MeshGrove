@@ -15,8 +15,9 @@ use crate::query::Query;
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i32 = 1;
-const SCHEMA: &str = "
+const SCHEMA_VERSION: i32 = 2;
+/// The index proper: a cache of the disk, rebuilt when its layout changes.
+const INDEX_SCHEMA: &str = "
 CREATE TABLE dirs (
     id INTEGER PRIMARY KEY,
     path TEXT NOT NULL UNIQUE,
@@ -46,6 +47,35 @@ CREATE TABLE files (
 CREATE INDEX files_content ON files(content_hash);
 CREATE INDEX files_geo ON files(geo_sig);
 ";
+/// User data: kept across index rebuilds. Tags hang on file content, so they survive renames
+/// and moves and are shared by identical copies.
+const TAGS_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE
+);
+CREATE TABLE IF NOT EXISTS file_tags (
+    content_hash TEXT NOT NULL,
+    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (content_hash, tag_id)
+);
+CREATE INDEX IF NOT EXISTS file_tags_tag ON file_tags(tag_id);
+";
+
+/// Files that share content (exact copies) or geometry (re-exports, moved/rotated copies).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DuplicateGroup {
+    pub exact: bool,
+    pub files: Vec<Entry>,
+}
+
+impl DuplicateGroup {
+    /// Disk space the extra copies take.
+    pub fn wasted(&self) -> u64 {
+        let total: u64 = self.files.iter().map(|f| f.size).sum();
+        total - self.files.iter().map(|f| f.size).max().unwrap_or(0)
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Counts {
@@ -98,9 +128,12 @@ impl Library {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version != SCHEMA_VERSION {
-            // The index is only a cache of the disk: rebuild instead of migrating.
-            conn.execute_batch("DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS dirs;")?;
-            conn.execute_batch(SCHEMA)?;
+            if version != 1 {
+                // The index is only a cache of the disk: rebuild it instead of migrating.
+                conn.execute_batch("DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS dirs;")?;
+                conn.execute_batch(INDEX_SCHEMA)?;
+            }
+            conn.execute_batch(TAGS_SCHEMA)?; // v1 → v2 only added the tag tables
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Library { conn })
@@ -263,6 +296,14 @@ impl Library {
             args.push(format!("%{}%", escape_like(term)));
             sql += &format!(" AND f.search LIKE ?{} ESCAPE '\\'", args.len());
         }
+        for tag in &query.tags {
+            args.push(tag.clone());
+            sql += &format!(
+                " AND f.content_hash IN (SELECT ft.content_hash FROM file_tags ft JOIN tags t ON t.id = ft.tag_id
+                   WHERE t.name = ?{} COLLATE NOCASE)",
+                args.len()
+            );
+        }
         if !query.kinds.is_empty() {
             let list: Vec<String> = query.kinds.iter().map(|k| format!("'{}'", k.as_str())).collect();
             sql += &format!(" AND f.kind IN ({})", list.join(","));
@@ -284,6 +325,149 @@ impl Library {
         stmt.query_map(params![d, format!("{d}/"), format!("{d}0"), n as i64], entry_from_row)?.collect()
     }
 
+    fn content_hash_of(&self, path: &Path) -> Result<Option<String>, Error> {
+        let (Some(dir), Some(name)) = (path.parent().and_then(path_str), path.file_name().and_then(|n| n.to_str()))
+        else {
+            return Ok(None);
+        };
+        // Archive members keep their inner path in `name`; try the plain split first.
+        let direct = self
+            .conn
+            .query_row(
+                "SELECT f.content_hash FROM files f JOIN dirs d ON d.id = f.dir_id WHERE d.path = ?1 AND f.name = ?2",
+                params![dir, name],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?;
+        if let Some(found) = direct {
+            return Ok(found);
+        }
+        let Some((archive, member)) = crate::archive::split(path) else { return Ok(None) };
+        self.conn
+            .query_row(
+                "SELECT f.content_hash FROM files f JOIN dirs d ON d.id = f.dir_id WHERE d.path = ?1 AND f.name = ?2",
+                params![path_str(&archive), member],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(Option::flatten)
+    }
+
+    /// The file's content hash, computed and stored now if the file was not processed yet.
+    /// `None` for files outside the library.
+    fn ensure_content_hash(&mut self, path: &Path) -> Result<Option<String>, Error> {
+        if let Some(hash) = self.content_hash_of(path)? {
+            return Ok(Some(hash));
+        }
+        let (archive, member) = match crate::archive::split(path) {
+            Some((a, m)) => (a, m),
+            None => (path.parent().map(Path::to_path_buf).unwrap_or_default(), listing_name(path)),
+        };
+        let Ok(bytes) = crate::archive::read(path) else { return Ok(None) };
+        let hash = crate::dedupe::content_hash(&bytes);
+        let updated = self.conn.execute(
+            "UPDATE files SET content_hash = ?3 WHERE name = ?2 AND dir_id = (SELECT id FROM dirs WHERE path = ?1)",
+            params![path_str(&archive), member, hash],
+        )?;
+        Ok((updated > 0).then_some(hash))
+    }
+
+    /// Adds `tag` to the library files at `paths`.
+    pub fn tag(&mut self, paths: &[PathBuf], tag: &str) -> Result<(), Error> {
+        let tag = tag.trim();
+        if tag.is_empty() {
+            return Ok(());
+        }
+        self.conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", [tag])?;
+        let id: i64 = self.conn.query_row("SELECT id FROM tags WHERE name = ?1 COLLATE NOCASE", [tag], |r| r.get(0))?;
+        for path in paths {
+            if let Some(hash) = self.ensure_content_hash(path)? {
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO file_tags (content_hash, tag_id) VALUES (?1, ?2)",
+                    params![hash, id],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes `tag` from the files at `paths`; tags nobody uses any more disappear.
+    pub fn untag(&mut self, paths: &[PathBuf], tag: &str) -> Result<(), Error> {
+        for path in paths {
+            if let Some(hash) = self.content_hash_of(path)? {
+                self.conn.execute(
+                    "DELETE FROM file_tags WHERE content_hash = ?1
+                     AND tag_id = (SELECT id FROM tags WHERE name = ?2 COLLATE NOCASE)",
+                    params![hash, tag],
+                )?;
+            }
+        }
+        self.conn.execute("DELETE FROM tags WHERE id NOT IN (SELECT tag_id FROM file_tags)", [])?;
+        Ok(())
+    }
+
+    /// Tags on any of `paths`, with how many of those files carry each.
+    pub fn tags_of(&self, paths: &[PathBuf]) -> Result<Vec<(String, usize)>, Error> {
+        let mut counts: Vec<(String, usize)> = Vec::new();
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT t.name FROM file_tags ft JOIN tags t ON t.id = ft.tag_id WHERE ft.content_hash = ?1",
+        )?;
+        for path in paths {
+            let Some(hash) = self.content_hash_of(path)? else { continue };
+            for name in stmt.query_map([hash], |r| r.get::<_, String>(0))? {
+                let name = name?;
+                match counts.iter_mut().find(|(n, _)| *n == name) {
+                    Some((_, c)) => *c += 1,
+                    None => counts.push((name, 1)),
+                }
+            }
+        }
+        counts.sort_by_key(|(name, _)| name.to_lowercase());
+        Ok(counts)
+    }
+
+    /// Every tag with the number of indexed files carrying it.
+    pub fn all_tags(&self) -> Result<Vec<(String, usize)>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.name, COUNT(f.id) FROM tags t
+             JOIN file_tags ft ON ft.tag_id = t.id
+             LEFT JOIN files f ON f.content_hash = ft.content_hash
+             GROUP BY t.id ORDER BY t.name COLLATE NOCASE",
+        )?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize)))?.collect()
+    }
+
+    /// Groups of duplicate models, the ones wasting most space first.
+    pub fn duplicate_groups(&self) -> Result<Vec<DuplicateGroup>, Error> {
+        let select = "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns FROM files f JOIN dirs d ON d.id = f.dir_id";
+        let mut groups = Vec::new();
+        for (exact, keys_sql, files_sql) in [
+            (
+                true,
+                "SELECT content_hash FROM files WHERE content_hash IS NOT NULL AND kind IN ('stl', '3mf', 'step')
+                 GROUP BY content_hash HAVING COUNT(*) > 1",
+                format!("{select} WHERE f.content_hash = ?1 ORDER BY d.path, f.name"),
+            ),
+            (
+                false,
+                // Same geometry but not all byte-identical (re-exports, other formats, moved parts).
+                "SELECT geo_sig FROM files WHERE geo_sig IS NOT NULL
+                 GROUP BY geo_sig HAVING COUNT(DISTINCT content_hash) > 1",
+                format!("{select} WHERE f.geo_sig = ?1 ORDER BY d.path, f.name"),
+            ),
+        ] {
+            let keys: Vec<String> =
+                self.conn.prepare(keys_sql)?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+            let mut stmt = self.conn.prepare(&files_sql)?;
+            for key in keys {
+                let files = stmt.query_map([key], entry_from_row)?.collect::<Result<Vec<_>, _>>()?;
+                groups.push(DuplicateGroup { exact, files });
+            }
+        }
+        groups.sort_by_key(|g| std::cmp::Reverse(g.wasted()));
+        Ok(groups)
+    }
+
     pub fn counts(&self) -> Result<Counts, Error> {
         self.conn.query_row(
             "SELECT COUNT(*),
@@ -302,6 +486,10 @@ impl Library {
             },
         )
     }
+}
+
+fn listing_name(path: &Path) -> String {
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
 fn remove_tree(conn: &Connection, dir: &Path) -> Result<(), Error> {
@@ -451,6 +639,103 @@ mod tests {
         )
         .unwrap();
         assert_eq!(lib.folder_preview(Path::new("/lib/3D_druck/minis"), 9).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn tags_follow_content_and_feed_search() {
+        let mut lib = library();
+        let minis = Path::new("/lib/3D_druck/minis");
+        let meta = |hash: &str| ThumbMeta { content_hash: Some(hash.into()), ..Default::default() };
+        lib.store_meta(&minis.join("Knight.stl"), "k", &meta("h-knight")).unwrap();
+        lib.store_meta(&minis.join("box_lid.3mf"), "k", &meta("h-lid")).unwrap();
+        let both = [minis.join("Knight.stl"), minis.join("box_lid.3mf")];
+        lib.tag(&both, "Castle Tower").unwrap();
+        lib.tag(&both[..1], "bemalt").unwrap();
+        lib.tag(&both[..1], "  ").unwrap();
+        assert_eq!(lib.tags_of(&both).unwrap(), [("bemalt".into(), 1), ("Castle Tower".into(), 2)]);
+        assert_eq!(
+            names(&lib.search(&query::parse(r#"tag:"castle tower""#), 9).unwrap()),
+            ["box_lid.3mf", "Knight.stl"]
+        );
+        assert_eq!(names(&lib.search(&query::parse("tag:bemalt box"), 9).unwrap()), Vec::<&str>::new());
+
+        // Renamed on disk: the new row gets the same content hash once processed, and the tags are back.
+        let root = Path::new("/lib/3D_druck");
+        lib.update_dir(
+            root,
+            minis,
+            9,
+            &[
+                file("/lib/3D_druck/minis", "Knight_v2.stl", 100, 1),
+                file("/lib/3D_druck/minis", "box_lid.3mf", 50, 1),
+            ],
+            &[],
+        )
+        .unwrap();
+        lib.store_meta(&minis.join("Knight_v2.stl"), "k", &meta("h-knight")).unwrap();
+        assert_eq!(
+            lib.tags_of(&[minis.join("Knight_v2.stl")]).unwrap(),
+            [("bemalt".into(), 1), ("Castle Tower".into(), 1)]
+        );
+
+        lib.untag(&both[1..], "Castle Tower").unwrap();
+        lib.untag(&[minis.join("Knight_v2.stl")], "bemalt").unwrap();
+        assert_eq!(lib.all_tags().unwrap(), [("Castle Tower".into(), 1)], "unused tag 'bemalt' is gone");
+    }
+
+    #[test]
+    fn duplicate_groups_exact_and_geometry() {
+        let mut lib = library();
+        let root = Path::new("/lib/3D_druck");
+        let other = Path::new("/lib/3D_druck/copies");
+        lib.update_dir(
+            root,
+            other,
+            1,
+            &[
+                file("/lib/3D_druck/copies", "Knight.stl", 100, 1),
+                file("/lib/3D_druck/copies", "knight.3mf", 30, 1),
+            ],
+            &[],
+        )
+        .unwrap();
+        let meta = |hash: &str, sig: &str| ThumbMeta {
+            content_hash: Some(hash.into()),
+            geo_sig: Some(sig.into()),
+            ..Default::default()
+        };
+        lib.store_meta(Path::new("/lib/3D_druck/minis/Knight.stl"), "k", &meta("h1", "g1")).unwrap();
+        lib.store_meta(Path::new("/lib/3D_druck/copies/Knight.stl"), "k", &meta("h1", "g1")).unwrap();
+        lib.store_meta(Path::new("/lib/3D_druck/copies/knight.3mf"), "k", &meta("h2", "g1")).unwrap();
+        lib.store_meta(Path::new("/lib/3D_druck/minis/box_lid.3mf"), "k", &meta("h3", "g3")).unwrap();
+        let groups = lib.duplicate_groups().unwrap();
+        assert_eq!(groups.len(), 2);
+        let exact = groups.iter().find(|g| g.exact).unwrap();
+        assert_eq!(exact.files.len(), 2);
+        assert_eq!(exact.wasted(), 100);
+        let geo = groups.iter().find(|g| !g.exact).unwrap();
+        assert_eq!(geo.files.len(), 3, "the 3MF re-export joins the two STL copies");
+        assert_eq!(geo.wasted(), 130);
+        assert!(groups[0].wasted() >= groups[1].wasted());
+    }
+
+    #[test]
+    fn v1_index_is_upgraded_keeping_its_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(INDEX_SCHEMA).unwrap();
+            conn.execute("INSERT INTO dirs (path, parent, mtime_ns) VALUES ('/r', NULL, 1)", []).unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+        }
+        let mut lib = Library::open(&path).unwrap();
+        assert_eq!(lib.dir_mtime(Path::new("/r")), Some(1), "index kept");
+        lib.update_dir(Path::new("/r"), Path::new("/r"), 2, &[file("/r", "a.stl", 1, 1)], &[]).unwrap();
+        lib.store_meta(Path::new("/r/a.stl"), "k", &ThumbMeta { content_hash: Some("h".into()), ..Default::default() })
+            .unwrap();
+        lib.tag(&[PathBuf::from("/r/a.stl")], "x").unwrap();
+        assert_eq!(lib.all_tags().unwrap(), [("x".into(), 1)]);
     }
 
     #[test]

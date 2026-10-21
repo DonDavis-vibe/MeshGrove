@@ -4,6 +4,8 @@ use egui::{Align2, Color32, FontId, Painter, Rect, Stroke, StrokeKind, pos2, vec
 
 /// KDE Breeze folder blue.
 pub const FOLDER_BLUE: Color32 = Color32::from_rgb(61, 174, 233);
+/// Archives get a warm tone so they stand apart from folders.
+pub const ARCHIVE_AMBER: Color32 = Color32::from_rgb(222, 164, 66);
 
 /// Folder in the middle of the square `r`.
 pub fn folder(p: &Painter, r: Rect) {
@@ -20,12 +22,12 @@ pub fn folder(p: &Painter, r: Rect) {
 
 /// Folder whose contents peek out: up to four previews in the folder body, the front flap
 /// drawn translucently over their lower part.
-pub fn folder_mosaic(p: &Painter, r: Rect, previews: &[(egui::TextureId, egui::Vec2)], paper: Color32) {
+pub fn folder_mosaic(p: &Painter, r: Rect, previews: &[(egui::TextureId, egui::Vec2)], paper: Color32, color: Color32) {
     let w = r.width();
     let body =
         Rect::from_min_max(pos2(r.min.x + w * 0.04, r.min.y + w * 0.12), pos2(r.max.x - w * 0.04, r.max.y - w * 0.04));
     let tab = Rect::from_min_size(pos2(body.min.x, body.min.y - w * 0.07), vec2(w * 0.32, w * 0.12));
-    let back = FOLDER_BLUE.linear_multiply(0.7);
+    let back = color.linear_multiply(0.7);
     p.rect_filled(tab, w * 0.03, back);
     p.rect_filled(body, w * 0.05, back);
 
@@ -50,7 +52,7 @@ pub fn folder_mosaic(p: &Painter, r: Rect, previews: &[(egui::TextureId, egui::V
     }
 
     let flap = Rect::from_min_max(pos2(body.min.x, body.max.y - body.height() * 0.3), body.max);
-    p.rect_filled(flap, w * 0.05, FOLDER_BLUE.gamma_multiply(0.85));
+    p.rect_filled(flap, w * 0.05, color.gamma_multiply(0.85));
 }
 
 fn split_h(r: Rect) -> [Rect; 2] {
@@ -100,6 +102,17 @@ pub fn badge(p: &Painter, r: Rect, label: &str, bg: Color32, fg: Color32) {
         pos2(r.min.x + 4.0, r.max.y - galley.size().y - 2.0 * pad.y - 4.0),
         galley.size() + 2.0 * pad,
     );
+    p.rect(rect, 4.0, bg, Stroke::NONE, StrokeKind::Inside);
+    p.galley(rect.min + pad, galley, fg);
+}
+
+/// Small badge in the upper-right corner (e.g. "2×" for duplicates).
+pub fn corner_badge(p: &Painter, r: Rect, label: &str, bg: Color32, fg: Color32) {
+    let font = FontId::proportional(10.5);
+    let galley = p.layout_no_wrap(label.to_owned(), font, fg);
+    let pad = vec2(5.0, 2.0);
+    let size = galley.size() + 2.0 * pad;
+    let rect = Rect::from_min_size(pos2(r.max.x - size.x - 4.0, r.min.y + 4.0), size);
     p.rect(rect, 4.0, bg, Stroke::NONE, StrokeKind::Inside);
     p.galley(rect.min + pad, galley, fg);
 }

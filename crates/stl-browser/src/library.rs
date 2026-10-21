@@ -28,6 +28,8 @@ pub enum LibEvent {
     Scanned { changed: Vec<PathBuf> },
     /// Files whose thumbnail facts are missing or stale, to process in the background.
     Pending(Vec<Job>),
+    /// Tags were added or removed.
+    TagsChanged,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -41,6 +43,8 @@ enum Cmd {
     SetRoots(Vec<PathBuf>),
     Changed(Vec<PathBuf>),
     StoreMeta(PathBuf, String, ThumbMeta),
+    Tag(Vec<PathBuf>, String),
+    Untag(Vec<PathBuf>, String),
 }
 
 pub struct LibraryService {
@@ -74,6 +78,19 @@ impl LibraryService {
 
     pub fn store_meta(&self, path: PathBuf, key: String, meta: ThumbMeta) {
         let _ = self.tx.send(Cmd::StoreMeta(path, key, meta));
+    }
+
+    pub fn tag(&self, paths: Vec<PathBuf>, tag: String) {
+        let _ = self.tx.send(Cmd::Tag(paths, tag));
+    }
+
+    pub fn untag(&self, paths: Vec<PathBuf>, tag: String) {
+        let _ = self.tx.send(Cmd::Untag(paths, tag));
+    }
+
+    /// Files were changed by the app itself (e.g. moved to the trash): rescan their folders.
+    pub fn changed(&self, paths: Vec<PathBuf>) {
+        let _ = self.tx.send(Cmd::Changed(paths));
     }
 
     pub fn try_event(&self) -> Option<LibEvent> {
@@ -145,6 +162,20 @@ impl Worker {
                             if path.is_dir() { path } else { path.parent().map(Path::to_path_buf).unwrap_or(path) };
                         dirty.insert(dir);
                     }
+                }
+                Ok(Cmd::Tag(paths, tag)) => {
+                    if let Err(e) = lib.tag(&paths, &tag) {
+                        log::warn!("tagging failed: {e}");
+                    }
+                    let _ = self.events.send(LibEvent::TagsChanged);
+                    self.ctx.request_repaint();
+                }
+                Ok(Cmd::Untag(paths, tag)) => {
+                    if let Err(e) = lib.untag(&paths, &tag) {
+                        log::warn!("removing tag failed: {e}");
+                    }
+                    let _ = self.events.send(LibEvent::TagsChanged);
+                    self.ctx.request_repaint();
                 }
                 Ok(Cmd::StoreMeta(path, key, meta)) => {
                     if let Err(e) = lib.store_meta(&path, &key, &meta) {

@@ -1,6 +1,7 @@
 //! Incremental library scan. A folder is only listed again when its modification time
 //! changed (files added, removed or renamed); unchanged folders reuse the indexed subfolders,
 //! so a startup rescan of a big library on a spinning disk costs one `stat` per folder.
+//! Archives are treated as folders: their members are indexed below the archive's path.
 
 use std::collections::HashSet;
 use std::io;
@@ -9,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::db::{self, Library};
-use crate::listing;
+use crate::{archive, listing};
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ScanReport {
@@ -35,7 +36,7 @@ pub fn scan(
             break;
         }
         let meta = match std::fs::metadata(&dir) {
-            Ok(m) if m.is_dir() => m,
+            Ok(m) if m.is_dir() || (m.is_file() && archive::is_archive_file(&dir)) => m,
             _ => {
                 lib.remove_tree(&dir).map_err(io::Error::other)?;
                 continue;
@@ -49,13 +50,23 @@ pub fn scan(
         let mtime = db::nanos(meta.modified().ok());
         let subdirs = if !force && lib.dir_mtime(&dir) == Some(mtime) {
             lib.child_dirs(&dir)
+        } else if meta.is_file() {
+            // A broken or password-protected archive is indexed as empty rather than failing the scan.
+            let members = archive::entries(&dir).unwrap_or_default();
+            lib.update_dir(root, &dir, mtime, &members, &[]).map_err(io::Error::other)?;
+            report.changed_dirs.push(dir.clone());
+            Vec::new()
         } else {
             let entries = match listing::list_dir(&dir) {
                 Ok(entries) => entries,
                 Err(e) if e.kind() == io::ErrorKind::PermissionDenied => continue,
                 Err(e) => return Err(e),
             };
-            let subdirs: Vec<PathBuf> = entries.iter().filter(|e| e.is_dir()).map(|e| e.path.clone()).collect();
+            let subdirs: Vec<PathBuf> = entries
+                .iter()
+                .filter(|e| e.is_dir() || e.kind == crate::Kind::Archive)
+                .map(|e| e.path.clone())
+                .collect();
             lib.update_dir(root, &dir, mtime, &entries, &subdirs).map_err(io::Error::other)?;
             report.changed_dirs.push(dir.clone());
             subdirs
@@ -111,6 +122,29 @@ mod tests {
         scan(&mut lib, &root, &root, false, &no).unwrap();
         assert!(names(&lib, "boss").is_empty());
         assert_eq!(lib.counts().unwrap().files, 1);
+    }
+
+    #[test]
+    fn archive_members_are_indexed_like_folder_contents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let zip = root.join("pack.zip");
+        crate::archive::tests::make_zip(&zip);
+        let mut lib = Library::open_in_memory().unwrap();
+        let no = AtomicBool::new(false);
+        let report = scan(&mut lib, &root, &root, false, &no).unwrap();
+        assert_eq!(report.changed_dirs.len(), 2, "root and the archive");
+        let hits = lib.search(&query::parse("orc"), 9).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, zip.join("minis/orc.stl"));
+        assert_eq!(lib.folder_preview(&zip, 4).unwrap().len(), 1);
+        assert!(
+            scan(&mut lib, &root, &root, false, &no).unwrap().changed_dirs.is_empty(),
+            "unchanged archive is not re-read"
+        );
+        std::fs::remove_file(&zip).unwrap();
+        scan(&mut lib, &root, &root, false, &no).unwrap();
+        assert!(names(&lib, "orc").is_empty());
     }
 
     #[test]

@@ -47,7 +47,7 @@ pub enum ThumbResult {
 
 /// Which kinds get a picture (everything else shows an icon).
 pub fn has_thumbnail(kind: Kind) -> bool {
-    matches!(kind, Kind::Stl | Kind::ThreeMf | Kind::Image)
+    matches!(kind, Kind::Stl | Kind::ThreeMf | Kind::Image | Kind::Pdf)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -173,7 +173,9 @@ impl ThumbService {
             let shared = shared.clone();
             spawn("thumb-reader", move || {
                 while let Some((item, generation)) = shared.pop(Stage::Generate) {
-                    let bytes = std::fs::read(&item.job.path);
+                    // poppler reads PDFs on disk itself (only the first page); everything else is read here.
+                    let pdf_on_disk = item.job.kind == Kind::Pdf && stlb_core::archive::split(&item.job.path).is_none();
+                    let bytes = if pdf_on_disk { Ok(Vec::new()) } else { stlb_core::archive::read(&item.job.path) };
                     if work_tx.send((item.job, generation, bytes)).is_err() {
                         break;
                     }
@@ -299,6 +301,14 @@ fn generate(job: &Job, bytes: &[u8], render_tx: &Sender<RenderRequest>) -> Resul
             }
             let model = parsed.map_err(|e| Failure::Permanent(e.to_string()))?;
             Ok(Thumbnail { image: render(model.mesh, render_tx)?, meta })
+        }
+        Kind::Pdf => {
+            let image = if bytes.is_empty() {
+                loaders::pdf::thumbnail_from_path(&job.path, THUMB_PX)
+            } else {
+                loaders::pdf::thumbnail_from_bytes(bytes, THUMB_PX)
+            };
+            Ok(Thumbnail { image: image.map_err(|e| Failure::Permanent(e.to_string()))?, meta: ThumbMeta::default() })
         }
         Kind::Image => {
             let image = loaders::image::thumbnail(bytes, THUMB_PX).map_err(|e| Failure::Permanent(e.to_string()))?;

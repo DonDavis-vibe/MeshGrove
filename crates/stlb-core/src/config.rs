@@ -1,9 +1,62 @@
 //! User settings in `~/.config/stl-browser/config.toml`.
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+/// How to start the slicer with model files: `program [args…] files…`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Slicer {
+    pub name: String,
+    pub program: PathBuf,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Extra environment; `LD_LIBRARY_PATH` is prepended to the inherited value.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
+    pub workdir: Option<PathBuf>,
+}
+
+impl Slicer {
+    /// Finds an installed slicer: the user's Anycubic Slicer Next build first, then common
+    /// Orca/Prusa/Bambu installs (distribution packages and Flatpaks).
+    pub fn detect() -> Option<Slicer> {
+        let home = dirs::home_dir()?;
+        let anycubic = home.join("opt/AnycubicSlicer");
+        let anycubic_bin = anycubic.join("app/bin/AnycubicSlicerNext");
+        if anycubic_bin.is_file() {
+            return Some(Slicer {
+                name: "Anycubic Slicer Next".into(),
+                program: anycubic_bin,
+                args: Vec::new(),
+                env: vec![
+                    ("LD_LIBRARY_PATH".into(), anycubic.join("app/lib").to_string_lossy().into_owned()),
+                    // WebKitGTK renders a blank window on NVIDIA + Wayland without this.
+                    ("WEBKIT_DISABLE_DMABUF_RENDERER".into(), "1".into()),
+                ],
+                workdir: Some(anycubic),
+            });
+        }
+        let flatpak = |id: &str| {
+            ["/var/lib/flatpak/exports/bin", &format!("{}/.local/share/flatpak/exports/bin", home.display())]
+                .iter()
+                .map(|dir| Path::new(dir).join(id))
+                .find(|p| p.exists())
+        };
+        let candidates = [
+            ("OrcaSlicer", Some(PathBuf::from("/usr/bin/orca-slicer"))),
+            ("OrcaSlicer", flatpak("io.github.softfever.OrcaSlicer")),
+            ("PrusaSlicer", Some(PathBuf::from("/usr/bin/prusa-slicer"))),
+            ("PrusaSlicer", flatpak("com.prusa3d.PrusaSlicer")),
+            ("Bambu Studio", flatpak("com.bambulab.BambuStudio")),
+        ];
+        candidates.into_iter().find_map(|(name, program)| {
+            let program = program.filter(|p| p.exists())?;
+            Some(Slicer { name: name.into(), program, args: Vec::new(), env: Vec::new(), workdir: None })
+        })
+    }
+}
 
 /// Gallery sort order (folders always come first).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +82,8 @@ pub struct Config {
     pub sort_descending: bool,
     /// "de" / "en"; `None` follows the system language.
     pub language: Option<String>,
+    /// `None`: detect an installed slicer at startup.
+    pub slicer: Option<Slicer>,
 }
 
 impl Default for Config {
@@ -41,6 +96,7 @@ impl Default for Config {
             sort_by: SortKey::Name,
             sort_descending: false,
             language: None,
+            slicer: None,
         }
     }
 }

@@ -86,7 +86,13 @@ impl Navigator {
         let dir = self.current.clone();
         let ctx = self.ctx.clone();
         std::thread::spawn(move || {
-            let result = listing::list_dir(&dir).map_err(|e| e.to_string());
+            // An archive opens like a folder: its members are listed instead.
+            let result = if stlb_core::archive::is_archive_file(&dir) {
+                stlb_core::archive::entries(&dir)
+            } else {
+                listing::list_dir(&dir)
+            }
+            .map_err(|e| e.to_string());
             let _ = tx.send((dir, result));
             ctx.request_repaint();
         });

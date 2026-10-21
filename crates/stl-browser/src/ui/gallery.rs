@@ -3,7 +3,8 @@
 //! mosaic of the models inside them.
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::PathBuf;
 
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{Align, Color32, FontId, Key, Rect, ScrollArea, Sense, TextureOptions, Ui, pos2, vec2};
@@ -38,6 +39,21 @@ pub enum Action {
     Open(usize),
     /// Go to the folder that contains a search or "include subfolders" result.
     ShowInFolder(usize),
+    /// The following act on the selection.
+    OpenInSlicer,
+    ShowInFileManager,
+    CopyPaths,
+    EditTags,
+    Trash,
+}
+
+/// What the context menu can offer for the current selection.
+#[derive(Default)]
+pub struct MenuContext {
+    pub slicer: Option<String>,
+    /// Why the selection cannot go to the trash (read-only drive, inside an archive).
+    pub trash_blocked: Option<String>,
+    pub can_tag: bool,
 }
 
 pub struct GalleryOutput {
@@ -64,7 +80,13 @@ pub struct Gallery {
     mosaics: HashMap<usize, Vec<String>>,
     thumbs: HashMap<String, Thumb>,
     shown: Vec<usize>,
+    /// The focused entry (details panel, keyboard).
     pub selected: Option<usize>,
+    /// Multi-selection (Ctrl/Shift-click, Ctrl+A); contains `selected` when not empty.
+    marked: BTreeSet<usize>,
+    anchor: Option<usize>,
+    /// Files with duplicates in the library → size of their duplicate group.
+    duplicates: HashMap<PathBuf, usize>,
     visible: HashSet<String>,
     scroll_to_selected: bool,
     last_offset: f32,
@@ -106,6 +128,8 @@ impl Gallery {
     /// Forgets the selection and scroll position (a different folder or result set).
     pub fn reset_view(&mut self) {
         self.selected = None;
+        self.marked.clear();
+        self.anchor = None;
         self.last_offset = 0.0;
         self.scroll_to_selected = false;
     }
@@ -115,6 +139,8 @@ impl Gallery {
         if self.selected.is_some_and(|s| !self.shown.contains(&s)) {
             self.selected = None;
         }
+        let shown: HashSet<usize> = self.shown.iter().copied().collect();
+        self.marked.retain(|i| shown.contains(i));
     }
 
     pub fn shown_count(&self) -> usize {
@@ -123,7 +149,45 @@ impl Gallery {
 
     pub fn select(&mut self, entry: Option<usize>) {
         self.selected = entry;
+        self.marked = entry.into_iter().collect();
+        self.anchor = entry;
         self.scroll_to_selected = entry.is_some();
+    }
+
+    /// The entries actions apply to: the multi-selection, or the focused entry.
+    pub fn selection(&self) -> Vec<usize> {
+        if self.marked.is_empty() { self.selected.into_iter().collect() } else { self.marked.iter().copied().collect() }
+    }
+
+    pub fn set_duplicates(&mut self, duplicates: HashMap<PathBuf, usize>) {
+        self.duplicates = duplicates;
+    }
+
+    fn is_marked(&self, entry: usize) -> bool {
+        self.marked.contains(&entry) || self.selected == Some(entry)
+    }
+
+    fn click(&mut self, entry: usize, modifiers: egui::Modifiers) {
+        if modifiers.shift
+            && let Some(anchor) = self.anchor
+            && let (Some(a), Some(b)) =
+                (self.shown.iter().position(|&i| i == anchor), self.shown.iter().position(|&i| i == entry))
+        {
+            self.marked = self.shown[a.min(b)..=a.max(b)].iter().copied().collect();
+            self.selected = Some(entry);
+        } else if modifiers.command {
+            if self.marked.is_empty() {
+                self.marked.extend(self.selected);
+            }
+            if !self.marked.insert(entry) {
+                self.marked.remove(&entry);
+            }
+            self.selected = Some(entry);
+            self.anchor = Some(entry);
+        } else {
+            self.select(Some(entry));
+            self.scroll_to_selected = false;
+        }
     }
 
     pub fn thumb(&self, entry: usize) -> Option<&Thumb> {
@@ -148,7 +212,14 @@ impl Gallery {
         }
     }
 
-    pub fn show(&mut self, ui: &mut Ui, entries: &[Entry], tile: f32, service: &ThumbService) -> GalleryOutput {
+    pub fn show(
+        &mut self,
+        ui: &mut Ui,
+        entries: &[Entry],
+        tile: f32,
+        service: &ThumbService,
+        menu: &MenuContext,
+    ) -> GalleryOutput {
         let rows_of_text = if self.show_folders { 3.0 } else { 2.0 };
         let label_h = rows_of_text * ui.ctx().fonts_mut(|f| f.row_height(&FontId::proportional(LABEL_FONT))) + 4.0;
         let avail = ui.available_width();
@@ -190,19 +261,43 @@ impl Gallery {
                         visible.extend(self.mosaics.get(&entry).into_iter().flatten().cloned());
                         let response = self.tile(ui, &entries[entry], entry, tile_w, tile_h);
                         if response.clicked() {
-                            self.selected = Some(entry);
+                            let modifiers = ui.input(|i| i.modifiers);
+                            self.click(entry, modifiers);
+                        }
+                        if response.secondary_clicked() && !self.is_marked(entry) {
+                            self.select(Some(entry));
+                            self.scroll_to_selected = false;
                         }
                         if response.double_clicked() {
                             action = Some(Action::Open(entry));
                         }
                         let show_folders = self.show_folders;
+                        let is_model = entries[entry].kind.is_model();
                         response.context_menu(|ui| {
-                            if ui.button(t!("menu.open")).clicked() {
-                                action = Some(Action::Open(entry));
-                                ui.close();
+                            let mut item = |ui: &mut Ui, text: std::borrow::Cow<str>, act: Action| {
+                                if ui.button(text).clicked() {
+                                    action = Some(act);
+                                    ui.close();
+                                }
+                            };
+                            item(ui, t!("menu.open"), Action::Open(entry));
+                            if is_model && let Some(slicer) = &menu.slicer {
+                                item(ui, t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);
                             }
-                            if show_folders && ui.button(t!("menu.show_in_folder")).clicked() {
-                                action = Some(Action::ShowInFolder(entry));
+                            if show_folders {
+                                item(ui, t!("menu.show_in_folder"), Action::ShowInFolder(entry));
+                            }
+                            item(ui, t!("menu.show_in_file_manager"), Action::ShowInFileManager);
+                            item(ui, t!("menu.copy_path"), Action::CopyPaths);
+                            if menu.can_tag {
+                                item(ui, t!("menu.edit_tags"), Action::EditTags);
+                            }
+                            ui.separator();
+                            let trash = ui
+                                .add_enabled(menu.trash_blocked.is_none(), egui::Button::new(t!("menu.trash")))
+                                .on_disabled_hover_text(menu.trash_blocked.clone().unwrap_or_default());
+                            if trash.clicked() {
+                                action = Some(Action::Trash);
                                 ui.close();
                             }
                         });
@@ -271,8 +366,10 @@ impl Gallery {
                 .any(|k| i.key_pressed(*k))
         });
         if let Some(t) = target.or_else(|| (any_arrow && pos.is_none()).then_some(0)) {
-            self.selected = Some(self.shown[t]);
-            self.scroll_to_selected = true;
+            self.select(Some(self.shown[t]));
+        }
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::A)) {
+            self.marked = self.shown.iter().copied().collect();
         }
         if ui.input(|i| i.key_pressed(Key::Enter)) {
             return self.selected.map(Action::Open);
@@ -287,7 +384,7 @@ impl Gallery {
             return response;
         }
         let visuals = ui.visuals();
-        let selected = self.selected == Some(index);
+        let selected = self.is_marked(index);
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 6.0, tile_background(visuals, selected, response.hovered()));
 
@@ -295,7 +392,7 @@ impl Gallery {
         let ink = visuals.text_color();
         let paper = visuals.widgets.inactive.bg_fill;
         match (entry.kind, self.thumb(index)) {
-            (Kind::Folder, _) => {
+            (Kind::Folder | Kind::Archive, _) if entry.is_dir() || self.mosaics.contains_key(&index) => {
                 let previews: Vec<(egui::TextureId, egui::Vec2)> = self
                     .mosaics
                     .get(&index)
@@ -306,10 +403,13 @@ impl Gallery {
                         _ => None,
                     })
                     .collect();
-                if previews.is_empty() {
+                let color = if entry.is_dir() { icons::FOLDER_BLUE } else { icons::ARCHIVE_AMBER };
+                if previews.is_empty() && entry.is_dir() {
                     icons::folder(&painter, img);
+                } else if previews.is_empty() {
+                    icons::file(&painter, img, &icons::extension_label(&entry.name), paper, ink);
                 } else {
-                    icons::folder_mosaic(&painter, img, &previews, visuals.extreme_bg_color);
+                    icons::folder_mosaic(&painter, img, &previews, visuals.extreme_bg_color, color);
                 }
             }
             (_, Some(Thumb::Ready(texture, _))) => {
@@ -327,7 +427,16 @@ impl Gallery {
             }
             (_, None) => icons::file(&painter, img, &icons::extension_label(&entry.name), paper, ink),
         }
-        if entry.kind.is_model() {
+        if let Some(n) = self.duplicates.get(&entry.path) {
+            icons::corner_badge(
+                &painter,
+                img,
+                &format!("{n}×"),
+                visuals.warn_fg_color.linear_multiply(0.9),
+                Color32::BLACK,
+            );
+        }
+        if entry.kind.is_model() || (entry.kind == Kind::Archive && self.mosaics.contains_key(&index)) {
             let label = icons::extension_label(&entry.name);
             icons::badge(&painter, img, &label, Color32::from_black_alpha(150), Color32::from_gray(230));
         }
@@ -338,7 +447,9 @@ impl Gallery {
             break_anywhere: true,
             overflow_character: Some('…'),
         };
-        let mut job = LayoutJob::simple(entry.name.clone(), FontId::proportional(LABEL_FONT), ink, w - 4.0);
+        // Archive members carry their inner path in `name`; show just the file name.
+        let shown_name = listing::file_name(&entry.path);
+        let mut job = LayoutJob::simple(shown_name.clone(), FontId::proportional(LABEL_FONT), ink, w - 4.0);
         job.wrap = wrap(2);
         job.halign = Align::Center;
         let galley = painter.layout_job(job);
@@ -354,9 +465,12 @@ impl Gallery {
             painter.galley(pos2(rect.center().x, name_bottom + 1.0), painter.layout_job(job), weak);
         }
 
-        let mut tooltip = entry.name.clone();
+        let mut tooltip = shown_name;
         if let Some(parent) = entry.path.parent() {
             tooltip += &format!("\n{}", parent.display());
+        }
+        if let Some(n) = self.duplicates.get(&entry.path) {
+            tooltip += &format!("\n{}", t!("gallery.duplicate_hint", count = n));
         }
         if let Some(Thumb::Failed(error)) = self.thumb(index) {
             tooltip += &format!("\n⚠ {error}");

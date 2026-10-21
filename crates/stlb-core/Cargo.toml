@@ -19,6 +19,7 @@ image.workspace = true
 zip.workspace = true
 quick-xml.workspace = true
 rusqlite.workspace = true
+compress-tools.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

@@ -16,6 +16,8 @@ pub struct ScreenshotHook {
     pub search: Option<String>,
     /// `STLB_FLATTEN=1`: start with "include subfolders" on.
     pub flatten: bool,
+    /// `STLB_VIEW=duplicates`: open the duplicates view once the index is ready.
+    pub duplicates: bool,
     path: String,
     at: Instant,
     requested: bool,
@@ -32,6 +34,7 @@ impl ScreenshotHook {
         let search = std::env::var("STLB_SEARCH").ok();
         let hold = std::env::var_os("STLB_HOLD").is_some();
         let flatten = std::env::var_os("STLB_FLATTEN").is_some();
+        let duplicates = std::env::var("STLB_VIEW").is_ok_and(|v| v == "duplicates");
         let wheel = std::env::var("STLB_WHEEL").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0);
         Some(ScreenshotHook {
             pointer,
@@ -41,6 +44,7 @@ impl ScreenshotHook {
             pressed: false,
             search,
             flatten,
+            duplicates,
             path,
             at: Instant::now() + Duration::from_secs_f32(delay),
             requested: false,

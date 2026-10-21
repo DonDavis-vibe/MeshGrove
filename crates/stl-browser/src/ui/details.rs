@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use egui::{Grid, RichText, Ui};
+use egui::{Grid, Key, RichText, Ui};
 use stlb_core::Kind;
 use stlb_core::listing::Entry;
 use stlb_render::Renderer;
@@ -19,8 +19,28 @@ pub enum ModelStatus {
     Failed(String),
 }
 
+/// Tags of the selection and the library, for the tag editor.
+pub struct TagEditor<'a> {
+    /// The selection lies in the library (tags live in its index).
+    pub enabled: bool,
+    pub on_selection: &'a [(String, usize)],
+    pub all: &'a [(String, usize)],
+    pub input: &'a mut String,
+    pub focus: bool,
+}
+
+#[derive(Default)]
+pub struct DetailsOutput {
+    pub clicked_plate: Option<usize>,
+    pub add_tag: Option<String>,
+    pub remove_tag: Option<String>,
+}
+
 pub struct DetailsContext<'a> {
     pub entry: Option<&'a Entry>,
+    /// Number and total size of the selected files (the multi-selection, or just `entry`).
+    pub selection: (usize, u64),
+    pub tags: TagEditor<'a>,
     pub thumb: Option<&'a Thumb>,
     pub model: &'a ModelStatus,
     /// Plate previews of a 3MF project (plate number, texture).
@@ -30,16 +50,20 @@ pub struct DetailsContext<'a> {
     pub renderer: &'a Renderer,
 }
 
-/// Returns the build plate the user clicked, if any.
-pub fn show(ui: &mut Ui, cx: DetailsContext<'_>) -> Option<usize> {
+pub fn show(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
+    let mut out = DetailsOutput::default();
     let Some(entry) = cx.entry else {
         ui.centered_and_justified(|ui| ui.weak(t!("details.none_selected")));
-        return None;
+        return out;
     };
-    let mut clicked = None;
+    let (count, total_size) = cx.selection;
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         ui.add_space(4.0);
-        ui.label(RichText::new(&entry.name).heading().strong());
+        if count > 1 {
+            let text = t!("details.multi", count = i18n::count(count), size = i18n::file_size(total_size));
+            ui.label(RichText::new(text).strong().color(ui.visuals().selection.stroke.color));
+        }
+        ui.label(RichText::new(stlb_core::listing::file_name(&entry.path)).heading().strong());
         ui.add_space(4.0);
 
         let side = ui.available_width();
@@ -69,12 +93,62 @@ pub fn show(ui: &mut Ui, cx: DetailsContext<'_>) -> Option<usize> {
                 ModelStatus::Ready(info) => info.plate,
                 _ => None,
             };
-            clicked = plates(ui, cx.plates, active);
+            out.clicked_plate = plates(ui, cx.plates, active);
         }
+        tag_editor(ui, cx.tags, count, &mut out);
         ui.add_space(6.0);
         ui.add(egui::Label::new(RichText::new(entry.path.display().to_string()).small().weak()).wrap());
     });
-    clicked
+    out
+}
+
+fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, count: usize, out: &mut DetailsOutput) {
+    ui.add_space(10.0);
+    ui.label(RichText::new(t!("tags.title")).weak());
+    if !ed.enabled {
+        ui.weak(t!("tags.only_library"));
+        return;
+    }
+    let chip_fill = ui.visuals().selection.bg_fill.linear_multiply(0.45);
+    ui.horizontal_wrapped(|ui| {
+        for (tag, n) in ed.on_selection {
+            let label = if count > 1 && *n < count { format!("{tag} ({n}/{count})") } else { tag.clone() };
+            let chip =
+                egui::Button::new(RichText::new(format!("{label}  ✕")).small()).corner_radius(10.0).fill(chip_fill);
+            if ui.add(chip).on_hover_text(t!("tags.remove_hint")).clicked() {
+                out.remove_tag = Some(tag.clone());
+            }
+        }
+    });
+    let field =
+        ui.add(egui::TextEdit::singleline(ed.input).hint_text(t!("tags.add_hint")).desired_width(f32::INFINITY));
+    if ed.focus {
+        field.request_focus();
+    }
+    if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) && !ed.input.trim().is_empty() {
+        out.add_tag = Some(std::mem::take(ed.input).trim().to_owned());
+        field.request_focus();
+    }
+    // Existing tags not yet on every selected file, matching what is typed.
+    let needle = ed.input.trim().to_lowercase();
+    let on_all = |tag: &str| ed.on_selection.iter().any(|(t, n)| t == tag && *n >= count);
+    let suggestions: Vec<&String> = ed
+        .all
+        .iter()
+        .filter(|(tag, _)| !on_all(tag) && (needle.is_empty() || tag.to_lowercase().contains(&needle)))
+        .map(|(tag, _)| tag)
+        .take(8)
+        .collect();
+    if !suggestions.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            for tag in suggestions {
+                if ui.small_button(format!("+ {tag}")).clicked() {
+                    out.add_tag = Some(tag.clone());
+                    ed.input.clear();
+                }
+            }
+        });
+    }
 }
 
 fn facts(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, model: &ModelStatus) {

@@ -12,6 +12,15 @@ pub enum SidebarAction {
     Navigate(PathBuf),
     AddRoot(PathBuf),
     RemoveRoot(PathBuf),
+    SearchTag(String),
+    ShowDuplicates,
+}
+
+/// Library facts the sidebar lists.
+pub struct LibraryInfo<'a> {
+    pub tags: &'a [(String, usize)],
+    pub duplicate_groups: usize,
+    pub showing_duplicates: bool,
 }
 
 pub struct Sidebar {
@@ -32,7 +41,13 @@ impl Sidebar {
         self.children.clear();
     }
 
-    pub fn show(&mut self, ui: &mut Ui, config: &Config, current: &Path) -> Option<SidebarAction> {
+    pub fn show(
+        &mut self,
+        ui: &mut Ui,
+        config: &Config,
+        current: &Path,
+        library: LibraryInfo,
+    ) -> Option<SidebarAction> {
         let mut action = None;
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             section(ui, &t!("sidebar.places"));
@@ -50,12 +65,27 @@ impl Sidebar {
                     }
                 });
             }
+            if library.duplicate_groups > 0 {
+                let label = format!("⧉  {}", t!("sidebar.duplicates", count = library.duplicate_groups));
+                if ui.selectable_label(library.showing_duplicates, label).clicked() {
+                    action = Some(SidebarAction::ShowDuplicates);
+                }
+            }
             if !config.library_roots.iter().any(|r| current.starts_with(r)) {
                 if config.library_roots.is_empty() {
                     ui.weak(t!("sidebar.library_empty"));
                 }
                 if ui.button(t!("sidebar.add_root")).on_hover_text(current.display().to_string()).clicked() {
                     action = Some(SidebarAction::AddRoot(current.to_path_buf()));
+                }
+            }
+
+            if !library.tags.is_empty() {
+                section(ui, &t!("sidebar.tags"));
+                for (tag, count) in library.tags {
+                    if ui.selectable_label(false, format!("🏷  {tag}  ({count})")).clicked() {
+                        action = Some(SidebarAction::SearchTag(tag.clone()));
+                    }
                 }
             }
 
@@ -149,40 +179,11 @@ fn mounted_drives() -> Vec<PathBuf> {
     let mut drives: Vec<PathBuf> = mounts
         .lines()
         .filter_map(|line| line.split(' ').nth(1))
-        .map(unescape_mount_path)
+        .map(stlb_core::fsinfo::unescape)
         .filter(|p| p.starts_with("/run/media/") || p.starts_with("/mnt/"))
         .map(PathBuf::from)
         .collect();
     drives.sort();
     drives.dedup();
     drives
-}
-
-/// /proc/mounts escapes spaces and friends as octal (`\040`).
-fn unescape_mount_path(raw: &str) -> String {
-    let bytes = raw.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'\\'
-            && i + 3 < bytes.len()
-            && let Ok(v) = u8::from_str_radix(&raw[i + 1..i + 4], 8)
-        {
-            out.push(v);
-            i += 4;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn unescapes_octal_mount_paths() {
-        assert_eq!(super::unescape_mount_path("/run/media/davis/My\\040Drive"), "/run/media/davis/My Drive");
-        assert_eq!(super::unescape_mount_path("/mnt/plain"), "/mnt/plain");
-    }
 }

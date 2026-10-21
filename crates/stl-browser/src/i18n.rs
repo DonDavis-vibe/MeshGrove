@@ -125,6 +125,42 @@ mod tests {
         assert_eq!(Lang::from_tag(""), Lang::De);
     }
 
+    /// Every `t!("key")` used in the code must exist in the German file (and so in both).
+    #[test]
+    fn every_used_key_is_translated() {
+        let de = include_str!("../locales/de.yml");
+        let known: std::collections::HashSet<&str> =
+            de.lines().filter_map(|l| l.split_once(':').map(|(k, _)| k.trim())).collect();
+        let mut missing = Vec::new();
+        let mut stack = vec![std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let code = std::fs::read_to_string(&path).unwrap();
+                for line in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
+                    for (i, _) in line.match_indices("t!(\"") {
+                        // `format!(` ends in `t!(` too: require a word boundary before the macro.
+                        if line[..i].chars().last().is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                            continue;
+                        }
+                        let rest = &line[i + 4..];
+                        let key = &rest[..rest.find('"').unwrap_or(rest.len())];
+                        if !known.contains(key) {
+                            missing.push(format!("{key} ({})", path.file_name().unwrap().to_string_lossy()));
+                        }
+                    }
+                }
+            }
+        }
+        missing.sort();
+        missing.dedup();
+        assert!(missing.is_empty(), "keys missing in de.yml: {missing:#?}");
+    }
+
     /// Every key must exist in both locale files, so no string silently falls back.
     #[test]
     fn locale_files_have_the_same_keys() {

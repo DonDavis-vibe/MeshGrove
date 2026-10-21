@@ -1,4 +1,5 @@
 pub mod image;
+pub mod pdf;
 pub mod stl;
 pub mod threemf;
 

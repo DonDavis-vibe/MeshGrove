@@ -6,20 +6,22 @@ use anyhow::Context as _;
 use crossbeam_channel::{Receiver, bounded};
 use egui::{Button, Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use stlb_core::cache::{ThumbCache, ThumbMeta};
-use stlb_core::config::{Config, SortKey};
+use stlb_core::config::{Config, Slicer, SortKey};
 use stlb_core::db::Library;
 use stlb_core::listing::{self, Entry};
-use stlb_core::query;
+use stlb_core::{Kind, query};
 use stlb_render::Renderer;
 
+use crate::actions;
 use crate::i18n;
 use crate::library::{LibEvent, LibraryService};
 use crate::meshes::{self, MeshState, MeshStore};
 use crate::nav::{Listing, Navigator};
 use crate::thumbs::{ThumbResult, ThumbService};
-use crate::ui::details::{self, DetailsContext, ModelStatus};
-use crate::ui::gallery::{Action, Arrange, Gallery};
-use crate::ui::sidebar::{Sidebar, SidebarAction};
+use crate::ui::details::{self, DetailsContext, ModelStatus, TagEditor};
+use crate::ui::duplicates::{self, DupAction, GroupInfo};
+use crate::ui::gallery::{Action, Arrange, Gallery, MenuContext};
+use crate::ui::sidebar::{LibraryInfo, Sidebar, SidebarAction};
 use crate::ui::turntable::Turntable;
 use crate::ui::viewer::ModelViewer;
 
@@ -32,6 +34,9 @@ const MAX_RESULTS: usize = 5000;
 /// Texture uploads per frame; more would stutter when a whole folder comes out of the cache at once.
 const UPLOADS_PER_FRAME: usize = 24;
 
+/// Files that were (to be) moved to the trash, and how it went.
+type TrashResult = (Vec<PathBuf>, Result<(), String>);
+
 /// What the gallery shows.
 enum View {
     /// The current folder, as listed by the navigator.
@@ -40,6 +45,8 @@ enum View {
     Search(Vec<Entry>),
     /// Every file below `root` ("include subfolders"); `None` while the folders are walked.
     Flatten { root: PathBuf, entries: Option<Vec<Entry>> },
+    /// Groups of duplicate models from the library index.
+    Duplicates { entries: Vec<Entry>, groups: Vec<GroupInfo> },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -82,6 +89,23 @@ pub struct App {
     gpu_name: String,
     rate: RateMeter,
     screenshot: Option<crate::screenshot::ScreenshotHook>,
+    slicer: Option<Slicer>,
+    /// Context-menu facts for `menu_for` (recomputed when the selection changes).
+    menu: MenuContext,
+    menu_for: Vec<PathBuf>,
+    selection_tags: Vec<(String, usize)>,
+    all_tags: Vec<(String, usize)>,
+    tags_dirty: bool,
+    tag_input: String,
+    focus_tags: bool,
+    /// Duplicate groups in the library (for the sidebar) and when to recount them.
+    duplicate_groups: usize,
+    duplicates_due: Option<Instant>,
+    last_processed: usize,
+    trash_confirm: Option<Vec<PathBuf>>,
+    trash_rx: Option<Receiver<TrashResult>>,
+    /// Short message in the status bar (result of an action) and when it was set.
+    toast: Option<(String, Instant)>,
 }
 
 impl App {
@@ -96,11 +120,19 @@ impl App {
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         use_system_ui_font(&cc.egui_ctx);
 
+        let slicer = config.slicer.clone().or_else(Slicer::detect);
+        match &slicer {
+            Some(s) => log::info!("slicer: {} ({})", s.name, s.program.display()),
+            None => log::info!("no slicer found; models open with the default application"),
+        }
         let cache = ThumbCache::new(ThumbCache::default_location().context("no cache directory")?);
         let db_path = Library::default_location().context("no data directory")?;
         let library = LibraryService::start(db_path.clone(), config.library_roots.clone(), cc.egui_ctx.clone());
         let (start_dir, select) = match start {
-            Some(p) if p.is_file() => (p.parent().map(Path::to_path_buf).unwrap_or_default(), Some(p)),
+            // A file opens its folder with the file selected; an archive opens like a folder.
+            Some(p) if p.is_file() && !stlb_core::archive::is_archive_file(&p) => {
+                (p.parent().map(Path::to_path_buf).unwrap_or_default(), Some(p))
+            }
             Some(p) => (p, None),
             None => (
                 config
@@ -141,6 +173,20 @@ impl App {
             gpu_name: rs.adapter.get_info().name,
             rate: RateMeter::default(),
             screenshot: crate::screenshot::ScreenshotHook::from_env(),
+            slicer,
+            menu: MenuContext::default(),
+            menu_for: Vec::new(),
+            selection_tags: Vec::new(),
+            all_tags: Vec::new(),
+            tags_dirty: true,
+            tag_input: String::new(),
+            focus_tags: false,
+            duplicate_groups: 0,
+            duplicates_due: Some(Instant::now()),
+            last_processed: 0,
+            trash_confirm: None,
+            trash_rx: None,
+            toast: None,
             config,
             config_error,
         })
@@ -177,14 +223,16 @@ impl App {
         let entries = self.entries().to_vec();
         let mut mosaics = HashMap::new();
         if let (View::Folder, Some(index)) = (&self.view, &self.index) {
-            for (i, e) in entries.iter().enumerate().filter(|(_, e)| e.is_dir()) {
+            for (i, e) in entries.iter().enumerate().filter(|(_, e)| e.is_dir() || e.kind == Kind::Archive) {
                 let preview = index.folder_preview(&e.path, 4).unwrap_or_default();
                 if !preview.is_empty() {
                     mosaics.insert(i, preview);
                 }
             }
         }
-        self.gallery.show_folders = !matches!(self.view, View::Folder);
+        // Search hits, subfolder views and archive contents come from several folders.
+        self.gallery.show_folders =
+            !matches!(self.view, View::Folder) || stlb_core::archive::is_archive_file(self.nav.current());
         self.gallery.set_entries(&entries, mosaics, &self.thumbs);
         if reset {
             self.gallery.reset_view();
@@ -218,10 +266,18 @@ impl App {
 
     fn open_entry(&mut self, index: usize) {
         let Some(entry) = self.entries().get(index).cloned() else { return };
-        if entry.is_dir() {
+        if entry.is_dir() || entry.kind == Kind::Archive {
             self.navigate(entry.path);
-        } else if let Err(e) = std::process::Command::new("xdg-open").arg(&entry.path).spawn() {
-            log::warn!("xdg-open failed: {e}");
+            return;
+        }
+        // Files inside archives are extracted first so other programs can open them.
+        match stlb_core::archive::materialize(&entry.path) {
+            Ok(file) => {
+                if let Err(e) = std::process::Command::new("xdg-open").arg(&file).spawn() {
+                    log::warn!("xdg-open failed: {e}");
+                }
+            }
+            Err(e) => log::warn!("cannot extract {}: {e}", entry.path.display()),
         }
     }
 
@@ -337,6 +393,8 @@ impl App {
                     let first = self.index.is_none();
                     if first {
                         self.index = Library::open_reader(&self.db_path);
+                        self.menu_for.clear(); // re-evaluate what the selection allows (tags need the index)
+                        self.duplicates_due = Some(Instant::now());
                     }
                     if changed.is_empty() && !first {
                         continue; // periodic safety-net scan found nothing new
@@ -350,8 +408,191 @@ impl App {
                 LibEvent::Pending(jobs) => {
                     log::info!("{} library files need thumbnails/facts", jobs.len());
                     self.thumbs.set_background(jobs);
+                    self.duplicates_due = Some(Instant::now());
+                    self.tags_dirty = true;
+                }
+                LibEvent::TagsChanged => self.tags_dirty = true,
+            }
+        }
+    }
+
+    fn selected_paths(&self) -> Vec<PathBuf> {
+        let entries = self.entries();
+        self.gallery.selection().into_iter().filter_map(|i| entries.get(i)).map(|e| e.path.clone()).collect()
+    }
+
+    fn in_library(&self, path: &Path) -> bool {
+        self.config.library_roots.iter().any(|r| path.starts_with(r))
+    }
+
+    /// Context menu and tag facts follow the selection.
+    fn update_selection_facts(&mut self) {
+        let paths = self.selected_paths();
+        if paths != self.menu_for {
+            self.menu = MenuContext {
+                slicer: self.slicer.as_ref().map(|s| s.name.clone()),
+                trash_blocked: actions::trash_blocked(&paths),
+                can_tag: self.index.is_some() && !paths.is_empty() && paths.iter().all(|p| self.in_library(p)),
+            };
+            self.menu_for = paths;
+            self.tags_dirty = true;
+        }
+        if std::mem::take(&mut self.tags_dirty)
+            && let Some(index) = &self.index
+        {
+            self.all_tags = index.all_tags().unwrap_or_default();
+            self.selection_tags = index.tags_of(&self.menu_for).unwrap_or_default();
+        }
+    }
+
+    /// Recounts duplicates now and then while the library is being processed.
+    fn update_duplicates(&mut self) {
+        let processed = self.library.status().counts.processed;
+        if processed != self.last_processed && self.duplicates_due.is_none() {
+            self.duplicates_due = Some(Instant::now() + Duration::from_secs(3));
+        }
+        let Some(due) = self.duplicates_due else { return };
+        if Instant::now() < due {
+            return;
+        }
+        self.duplicates_due = None;
+        self.last_processed = processed;
+        let Some(index) = &self.index else { return };
+        let groups = index.duplicate_groups().unwrap_or_default();
+        self.duplicate_groups = groups.len();
+        let map = groups.iter().flat_map(|g| g.files.iter().map(move |f| (f.path.clone(), g.files.len()))).collect();
+        self.gallery.set_duplicates(map);
+    }
+
+    fn show_duplicates(&mut self) {
+        let Some(index) = &self.index else { return };
+        let (mut entries, mut groups) = (Vec::new(), Vec::new());
+        for g in index.duplicate_groups().unwrap_or_default() {
+            let start = entries.len();
+            let keep = start + duplicates::suggest_keep(&g.files);
+            let others: Vec<PathBuf> =
+                g.files.iter().enumerate().filter(|(i, _)| start + i != keep).map(|(_, f)| f.path.clone()).collect();
+            let (wasted, exact) = (g.wasted(), g.exact);
+            entries.extend(g.files);
+            groups.push(GroupInfo {
+                range: start..entries.len(),
+                exact,
+                keep,
+                wasted,
+                blocked: actions::trash_blocked(&others),
+            });
+        }
+        self.leave_search();
+        self.flatten = false;
+        self.view = View::Duplicates { entries, groups };
+        self.refresh_gallery(true);
+    }
+
+    fn handle_action(&mut self, ctx: &egui::Context, action: Action) {
+        match action {
+            Action::Open(index) => self.open_entry(index),
+            Action::ShowInFolder(index) => self.show_in_folder(index),
+            Action::OpenInSlicer => {
+                let files: Vec<PathBuf> = self.selected_paths();
+                let models: Vec<PathBuf> = files
+                    .into_iter()
+                    .filter(|p| stlb_core::Kind::from_file_name(&listing::file_name(p)).is_model())
+                    .collect();
+                if let Some(slicer) = &self.slicer {
+                    let message = match actions::open_in_slicer(slicer, &models) {
+                        Ok(()) => t!("toast.slicer_started", name = slicer.name, count = models.len()),
+                        Err(e) => t!("toast.slicer_failed", name = slicer.name, error = e.to_string()),
+                    };
+                    self.toast(message.into_owned());
                 }
             }
+            Action::ShowInFileManager => {
+                if let Err(e) = actions::show_in_file_manager(&self.selected_paths()) {
+                    self.toast(t!("toast.file_manager_failed", error = e.to_string()).into_owned());
+                }
+            }
+            Action::CopyPaths => {
+                let paths = self.selected_paths();
+                let text: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+                ctx.copy_text(text.join("\n"));
+                self.toast(t!("toast.copied", count = paths.len()).into_owned());
+            }
+            Action::EditTags => self.focus_tags = true,
+            Action::Trash => self.request_trash(self.selected_paths()),
+        }
+    }
+
+    fn request_trash(&mut self, paths: Vec<PathBuf>) {
+        match actions::trash_blocked(&paths) {
+            None => self.trash_confirm = Some(paths),
+            Some(reason) if !reason.is_empty() => self.toast(reason),
+            Some(_) => {}
+        }
+    }
+
+    fn toast(&mut self, message: String) {
+        self.toast = Some((message, Instant::now()));
+    }
+
+    /// Confirmation dialog for moving files to the trash; the move runs on a thread.
+    fn trash_dialog(&mut self, ctx: &egui::Context) {
+        let Some(paths) = &self.trash_confirm else { return };
+        let mut decision = None;
+        egui::Modal::new(egui::Id::unique("trash-confirm")).show(ctx, |ui| {
+            ui.set_max_width(460.0);
+            ui.heading(t!("trash.title", count = paths.len()));
+            ui.add_space(4.0);
+            for p in paths.iter().take(8) {
+                ui.label(format!("• {}", listing::file_name(p)));
+            }
+            if paths.len() > 8 {
+                ui.weak(t!("trash.more", count = paths.len() - 8));
+            }
+            ui.add_space(4.0);
+            ui.weak(t!("trash.explain"));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(RichText::new(t!("trash.confirm")).strong()).clicked()
+                    || ui.input(|i| i.key_pressed(Key::Enter))
+                {
+                    decision = Some(true);
+                }
+                if ui.button(t!("trash.cancel")).clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
+                    decision = Some(false);
+                }
+            });
+        });
+        match decision {
+            Some(true) => {
+                let paths = self.trash_confirm.take().unwrap_or_default();
+                let (tx, rx) = bounded(1);
+                let ctx = ctx.clone();
+                std::thread::spawn(move || {
+                    let result = trash::delete_all(&paths).map_err(|e| e.to_string());
+                    let _ = tx.send((paths, result));
+                    ctx.request_repaint();
+                });
+                self.trash_rx = Some(rx);
+            }
+            Some(false) => self.trash_confirm = None,
+            None => {}
+        }
+    }
+
+    fn poll_trash(&mut self) {
+        let Some(rx) = &self.trash_rx else { return };
+        let Ok((paths, result)) = rx.try_recv() else { return };
+        self.trash_rx = None;
+        let message = match &result {
+            Ok(()) => t!("toast.trashed", count = paths.len()),
+            Err(e) => t!("toast.trash_failed", error = e),
+        };
+        self.toast(message.into_owned());
+        self.library.changed(paths);
+        self.duplicates_due = Some(Instant::now() + Duration::from_secs(2));
+        match self.view {
+            View::Duplicates { .. } => self.show_duplicates(),
+            _ => self.nav.reload(),
         }
     }
 
@@ -417,6 +658,10 @@ impl App {
         if pressed(Modifiers::ALT, Key::ArrowUp) || (!typing && pressed(Modifiers::NONE, Key::Backspace)) {
             self.leave_search();
             self.nav.up();
+        }
+        if !typing && pressed(Modifiers::NONE, Key::Delete) {
+            let paths = self.selected_paths();
+            self.request_trash(paths);
         }
         if pressed(Modifiers::NONE, Key::F5) {
             self.nav.reload();
@@ -581,6 +826,14 @@ impl App {
                     self.set_flatten(false);
                 }
             }
+            View::Duplicates { groups, .. } => {
+                ui.label(RichText::new(format!("⧉ {}", t!("dupes.title", count = groups.len()))).strong());
+                if ui.button(t!("search.close")).clicked() {
+                    self.view = View::Folder;
+                    self.on_listing_arrived();
+                }
+                return;
+            }
             View::Folder => {}
         }
         let current = self.nav.current().to_path_buf();
@@ -623,6 +876,13 @@ impl App {
                     ui.weak(t!("status.rate", rate = format!("{rate:.0}")));
                 }
             }
+            if let Some((message, at)) = &self.toast
+                && at.elapsed() < Duration::from_secs(6)
+            {
+                ui.separator();
+                ui.label(RichText::new(message).color(ui.visuals().selection.stroke.color));
+                ui.ctx().request_repaint_after(Duration::from_secs(1));
+            }
             if let Some(err) = &self.config_error {
                 ui.separator();
                 ui.colored_label(ui.visuals().warn_fg_color, t!("error.config", error = err));
@@ -664,6 +924,7 @@ impl App {
             (View::Search(results), _) if results.is_empty() => {
                 Some(if self.index.is_none() { t!("search.unavailable") } else { t!("search.none") }.into_owned())
             }
+            (View::Duplicates { .. }, _) => None,
             _ if self.entries().is_empty() => Some(t!("gallery.empty").into_owned()),
             _ => None,
         };
@@ -675,12 +936,27 @@ impl App {
         if zoom != 1.0 && ui.ui_contains_pointer() {
             self.config.tile_size = (self.config.tile_size * zoom).clamp(*TILE_RANGE.start(), *TILE_RANGE.end());
         }
+        if let View::Duplicates { entries, groups } = &self.view {
+            match duplicates::show(ui, entries, groups, &self.gallery) {
+                Some(DupAction::Select(i)) => self.gallery.select(Some(i)),
+                Some(DupAction::Open(i)) => self.open_entry(i),
+                Some(DupAction::TrashOthers(g)) => {
+                    let paths: Vec<PathBuf> = groups[g]
+                        .range
+                        .clone()
+                        .filter(|&i| i != groups[g].keep)
+                        .map(|i| entries[i].path.clone())
+                        .collect();
+                    self.request_trash(paths);
+                }
+                None => {}
+            }
+            return;
+        }
         let entries = view_entries(&self.view, &self.nav);
-        let output = self.gallery.show(ui, entries, self.config.tile_size, &self.thumbs);
-        match output.action {
-            Some(Action::Open(index)) => self.open_entry(index),
-            Some(Action::ShowInFolder(index)) => self.show_in_folder(index),
-            None => {}
+        let output = self.gallery.show(ui, entries, self.config.tile_size, &self.thumbs, &self.menu);
+        if let Some(action) = output.action {
+            self.handle_action(ui.ctx(), action);
         }
         self.turntable.show(ui, output.hovered, output.viewport, &mut self.meshes, rs, &self.renderer);
     }
@@ -694,7 +970,11 @@ impl eframe::App for App {
             self.on_listing_arrived();
         }
         self.poll_flatten();
+        self.poll_trash();
         self.library_events();
+        self.update_selection_facts();
+        self.update_duplicates();
+        self.trash_dialog(&ctx);
         self.receive_thumbnails(&ctx);
         self.shortcuts(&ctx);
         if let Some(changed) = self.search_changed {
@@ -710,6 +990,11 @@ impl eframe::App for App {
         self.meshes.begin_frame();
         self.update_viewer(&ctx);
         if let Some(hook) = &mut self.screenshot {
+            if hook.duplicates && self.index.is_some() && self.duplicate_groups > 0 {
+                hook.duplicates = false;
+                self.show_duplicates();
+            }
+            let hook = self.screenshot.as_mut().expect("checked above");
             if hook.flatten && !matches!(self.nav.listing, Listing::Loading) {
                 hook.flatten = false;
                 self.set_flatten(true);
@@ -735,7 +1020,12 @@ impl eframe::App for App {
             .max_size(420.0)
             .show(ui, |ui| {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                self.sidebar.show(ui, &self.config, self.nav.current())
+                let info = LibraryInfo {
+                    tags: &self.all_tags,
+                    duplicate_groups: self.duplicate_groups,
+                    showing_duplicates: matches!(self.view, View::Duplicates { .. }),
+                };
+                self.sidebar.show(ui, &self.config, self.nav.current(), info)
             })
             .inner;
         match sidebar_action {
@@ -752,18 +1042,36 @@ impl eframe::App for App {
                 self.save_config();
                 self.library.set_roots(self.config.library_roots.clone());
             }
+            Some(SidebarAction::SearchTag(tag)) => {
+                self.scope = Scope::Library;
+                self.search = if tag.contains(' ') { format!("tag:\"{tag}\"") } else { format!("tag:{tag}") };
+                self.run_search();
+            }
+            Some(SidebarAction::ShowDuplicates) => self.show_duplicates(),
             None => {}
         }
 
-        let clicked_plate = egui::Panel::right("details")
+        let focus_tags = std::mem::take(&mut self.focus_tags);
+        let details_out = egui::Panel::right("details")
             .default_size(340.0)
             .show(ui, |ui| {
-                let entry = self.gallery.selected.and_then(|i| view_entries(&self.view, &self.nav).get(i));
+                let entries = view_entries(&self.view, &self.nav);
+                let entry = self.gallery.selected.and_then(|i| entries.get(i));
                 let thumb = self.gallery.selected.and_then(|i| self.gallery.thumb(i));
+                let picked = self.gallery.selection();
+                let selection = (picked.len(), picked.iter().filter_map(|&i| entries.get(i)).map(|e| e.size).sum());
                 details::show(
                     ui,
                     DetailsContext {
                         entry,
+                        selection,
+                        tags: TagEditor {
+                            enabled: self.menu.can_tag,
+                            on_selection: &self.selection_tags,
+                            all: &self.all_tags,
+                            input: &mut self.tag_input,
+                            focus: focus_tags,
+                        },
                         thumb,
                         model: &self.model,
                         plates: self.plates.as_ref().map_or(&[][..], |(_, p)| p.as_slice()),
@@ -774,8 +1082,14 @@ impl eframe::App for App {
                 )
             })
             .inner;
-        if clicked_plate.is_some() {
-            self.viewer_plate = clicked_plate;
+        if details_out.clicked_plate.is_some() {
+            self.viewer_plate = details_out.clicked_plate;
+        }
+        if let Some(tag) = details_out.add_tag {
+            self.library.tag(self.menu_for.clone(), tag);
+        }
+        if let Some(tag) = details_out.remove_tag {
+            self.library.untag(self.menu_for.clone(), tag);
         }
 
         egui::CentralPanel::default().show(ui, |ui| self.central(ui, &rs));
@@ -798,6 +1112,7 @@ fn view_entries<'a>(view: &'a View, nav: &'a Navigator) -> &'a [Entry] {
         View::Folder => nav.entries(),
         View::Search(entries) => entries,
         View::Flatten { entries, .. } => entries.as_deref().unwrap_or(&[]),
+        View::Duplicates { entries, .. } => entries,
     }
 }
 

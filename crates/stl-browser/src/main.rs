@@ -3,6 +3,7 @@ extern crate rust_i18n;
 
 i18n!("locales", fallback = "en");
 
+mod actions;
 mod app;
 mod i18n;
 mod library;

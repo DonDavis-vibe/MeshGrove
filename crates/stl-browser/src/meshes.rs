@@ -152,7 +152,7 @@ fn ready_bytes(state: &MeshState) -> Option<usize> {
 }
 
 fn load(path: &Path, kind: Kind, plate: Option<usize>, device: &wgpu::Device) -> Result<Loaded, String> {
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let bytes = stlb_core::archive::read(path).map_err(|e| e.to_string())?;
     let (mesh, mut info) = match kind {
         Kind::ThreeMf => {
             let model = threemf::parse_plate(&bytes, plate).map_err(|e| e.to_string())?;
