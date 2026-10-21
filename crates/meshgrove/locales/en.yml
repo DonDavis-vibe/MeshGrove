@@ -107,6 +107,7 @@ tags.add_hint: "Add tag … (Enter)"
 tags.remove_hint: "Remove tag"
 tags.only_library: "Tags are available for files in the library."
 
+menu.open_with_default_app: "Open with default app"
 menu.open_in_slicer: "Open in %{name}"
 menu.show_in_file_manager: "Show in file manager"
 menu.copy_path: "Copy path"

@@ -21,7 +21,7 @@
 
 ---
 
-![Meshgrove showing a folder of household prints, with a toothbrush holder in the 3D viewer](docs/images/screenshot-hero.png)
+![Meshgrove showing a folder of multi-colour models, with a painted 3MF logo open in a model window of its own](docs/images/screenshot-hero.png)
 
 ## Contents
 
@@ -89,7 +89,7 @@ What makes it different from other model managers:
 |---|---|
 | **Gallery** | Thumbnails for STL, 3MF, STEP, OBJ, PLY, glTF/GLB, images and PDFs; folder and archive tiles show a 2×2 mosaic of what is inside; resizable tiles; sort by name, date, size or type; "models only"; "include subfolders" (all files below a folder in one grid); multi-selection |
 | **Hover turntable** | Point at a model tile and the model spins in place. Drag to turn it yourself, and turn the wheel while dragging to zoom |
-| **3D viewer** | Orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **picture export** as a 2048 px PNG |
+| **3D viewer** | In the side panel, or **double-click a model for a window of its own** (resizable, several at once, with "open in slicer"); orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **picture export** as a 2048 px PNG |
 | **3MF projects** | Embedded slicer plate pictures (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); click a plate picture to see that plate in 3D; **multi-colour**: filament colours per object and part, painted models (multi-material painting) and 3MF material colours in the viewer and in rendered previews; filament swatches on tiles and in the details; title, designer and application from the metadata |
 | **STEP / STP** | CAD files are tessellated by OpenCascade in a separate helper process, so a broken file cannot crash the app; results are cached |
 | **Archives** | Open ZIP, 7z, RAR and TAR like folders; every model inside gets a preview; files are extracted only when another program needs them |
@@ -108,15 +108,22 @@ models, so you can navigate by looking instead of reading names.
 
 ![Folder mosaics of a model library](docs/images/screenshot-folders.png)
 
+**Models in their colours.** Multi-colour 3MF projects show the filament of every part and
+their painted areas, plain 3MF files their material colours, and OBJ, PLY and glTF their vertex
+colours and textures. Tiles get a dot per filament; the details list slot and material.
+
+![A painted 3MF logo in the viewer with its two filaments, next to a textured GLB and 3MF tiles with filament dots](docs/images/screenshot-colours.png)
+
 **One search for the whole library.** Here `body` finds every model with "body" in its name,
 from four different folders.
 
 ![Library search for "body" with eleven results](docs/images/screenshot-search.png)
 
-**Measure directly on the model.** Click two points on the surface to get the distance in mm,
-with the difference along each axis.
+**Every model in a window of its own.** Double-click a model to open it next to the gallery, as
+large as you like and with the same tools. Here it measures a coaster holder: click two points
+on the surface to get the distance in mm, with the difference along each axis.
 
-![Measuring a coaster: 74.5 mm](docs/images/screenshot-measure.png)
+![A coaster holder in its own window next to the main window, measured at 79.3 mm](docs/images/screenshot-window.png)
 
 **Duplicate finder.** Exact copies and identical geometry, grouped, with a suggestion which
 copy to keep and one click to move the others to the trash.
@@ -130,24 +137,65 @@ copy to keep and one click to move the others to the trash.
 > built and tested automatically, but have seen little real-world use so far. Please
 > [report problems](https://github.com/DonDavis-vibe/MeshGrove/issues).
 
+Every [release](https://github.com/DonDavis-vibe/MeshGrove/releases) has ready-made packages,
+all with STEP previews. Nothing needs to be built:
+
+| System | Download |
+|---|---|
+| Windows 10/11 (x64) | `Meshgrove-<version>-windows-x64-setup.exe` (installer) or `…-windows-x64-portable.zip` |
+| macOS 11 or newer (Apple Silicon and Intel) | `Meshgrove-<version>-macos-universal.dmg` |
+| Ubuntu 24.04 / 26.04, Debian 13 | `meshgrove_<version>-1_<release>_amd64.deb` |
+| Fedora 44 | `meshgrove-<version>-1.fc44.x86_64.rpm` |
+| Any other Linux (x86_64) | `Meshgrove-<version>-x86_64.AppImage` |
+
 ### Linux
 
-#### From source (recommended)
+#### Packages for Ubuntu, Debian and Fedora
 
-Building takes a few minutes and gives you every feature, including STEP previews.
+Download the package for your release and install it:
+
+```bash
+sudo apt install ./meshgrove_<version>-1_ubuntu24.04_amd64.deb   # Ubuntu, Debian
+sudo dnf install ./meshgrove-<version>-1.fc44.x86_64.rpm         # Fedora
+```
+
+The packages use your system's libarchive and OpenCascade. They add the menu entry, the icon,
+the `model/step` file type and the [thumbnailer for Dolphin](#thumbnails-in-dolphin-and-file-dialogs-linux)
+and other file managers. Start **Meshgrove** from your application menu, or run `meshgrove`
+(optionally with a folder or file: `meshgrove ~/3D-Models`). Systems based on a supported
+release take its package, e.g. Linux Mint 22 the one for Ubuntu 24.04. A package only installs
+on the release it was made for; elsewhere, use the AppImage. Remove Meshgrove with
+`sudo apt remove meshgrove` or `sudo dnf remove meshgrove`.
+
+#### AppImage (any distribution)
+
+```bash
+chmod +x Meshgrove-<version>-x86_64.AppImage
+./Meshgrove-<version>-x86_64.AppImage
+```
+
+The AppImage brings everything it needs, STEP support included, and runs on x86_64
+distributions with glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and everything newer). It adds
+no menu entry by itself (tools like [Gear Lever](https://flathub.org/apps/it.mijorus.gearlever)
+or AppImageLauncher do that) and no file-manager thumbnails; for those, use a package or the
+source build.
+
+#### From source
+
+Building takes a few minutes and works on any distribution.
 
 1. Install Rust and the libraries:
 
    | Distribution | Command |
    |---|---|
    | Fedora / Nobara | `sudo dnf install rust cargo gcc-c++ libarchive-devel opencascade-devel poppler-utils` |
-   | Debian / Ubuntu | `sudo apt install cargo g++ pkg-config libarchive-dev libxkbcommon-dev libwayland-dev poppler-utils` |
+   | Debian / Ubuntu | `sudo apt install cargo g++ pkg-config libarchive-dev libxkbcommon-dev libwayland-dev libocct-data-exchange-dev poppler-utils` |
    | Arch / Manjaro | `sudo pacman -S rust gcc libarchive opencascade poppler` |
 
-   OpenCascade is optional. Without it everything works except STEP previews, and it must be
-   version 7.8 or newer. Ubuntu 24.04 ships 7.6, which the build detects and skips; there you
-   get everything but STEP. poppler is optional too and only provides PDF previews. If your
-   distribution's Rust is older than 1.95, install a current one with [rustup](https://rustup.rs).
+   OpenCascade (version 7.5 or newer) is optional. Without it everything works except STEP
+   previews. poppler is optional too and only provides PDF previews. If your distribution's
+   Rust is older than 1.95 (Ubuntu 24.04, Debian 13), install a current one with
+   [rustup](https://rustup.rs).
 
 2. Build and install for your user (no root needed):
 
@@ -158,45 +206,35 @@ Building takes a few minutes and gives you every feature, including STEP preview
    ```
 
    This builds release binaries and puts them in `~/.local/bin`. It also adds the menu entry,
-   the icon, the `model/step` file type and the thumbnailer in `~/.local/share`. Start
-   **Meshgrove** from your application menu, or run `meshgrove` (optionally with a folder or
-   file: `meshgrove ~/3D-Models`).
+   the icon, the `model/step` file type and the thumbnailer in `~/.local/share`.
 
 3. Update later with `git pull && packaging/install.sh`. Remove it with
    `packaging/install.sh --uninstall`. Your settings, index and cache are kept; see
    [Settings and files on disk](#settings-and-files-on-disk) if you want to delete them too.
 
-#### Release package
-
-Each [release](https://github.com/DonDavis-vibe/MeshGrove/releases) has a
-`Meshgrove-<version>-linux-x86_64.tar.gz`. Unpack it and run `packaging/install.sh` inside
-the folder: it installs the included binaries instead of building. The package needs
-`libarchive` (installed on most desktops) and is built without OpenCascade, so STEP previews
-need the source build.
-
 ### Windows
 
-1. Download `Meshgrove-<version>-windows-x64.zip` from the
-   [releases](https://github.com/DonDavis-vibe/MeshGrove/releases).
-2. Unpack it anywhere, for example to `C:\Programs\Meshgrove`, and start `meshgrove.exe`.
-   Windows SmartScreen may warn because the program is not signed: choose *More info → Run
-   anyway*.
+1. Download `Meshgrove-<version>-windows-x64-setup.exe` from the
+   [releases](https://github.com/DonDavis-vibe/MeshGrove/releases) and run it. Windows
+   SmartScreen may warn because the program is not signed: choose *More info → Run anyway*.
+2. The installer needs no admin rights: it installs for your user, or for all users if you
+   choose so on its first page. It adds a Start menu entry, optionally a desktop shortcut, and
+   Meshgrove under *Open with* for STL, 3MF, STEP, OBJ, PLY and glTF files. Remove it under *Settings → Apps*.
 3. Optional, for PDF previews: install [poppler](https://github.com/oschwartz10612/poppler-windows)
    and make sure `pdftoppm.exe` is on your `PATH`.
 
-The Windows package does not yet include STEP support; see [Roadmap](#roadmap).
+Prefer not to install? `Meshgrove-<version>-windows-x64-portable.zip` holds the same programs:
+unpack it anywhere and start `meshgrove.exe`.
 
 ### macOS
 
-1. Download `Meshgrove-<version>-macos-arm64.zip` (Apple Silicon) from the
-   [releases](https://github.com/DonDavis-vibe/MeshGrove/releases), unpack it and move
-   `Meshgrove.app` to *Applications*.
-2. The app is not notarized. On the first start, right-click it and choose *Open*, or run
+1. Download `Meshgrove-<version>-macos-universal.dmg` from the
+   [releases](https://github.com/DonDavis-vibe/MeshGrove/releases). It runs natively on Apple
+   Silicon and Intel Macs with macOS 11 or newer.
+2. Open it and drag **Meshgrove** onto *Applications*.
+3. The app is not notarized. On the first start, right-click it and choose *Open*, or run
    `xattr -dr com.apple.quarantine /Applications/Meshgrove.app` once.
-3. Optional, for PDF previews: `brew install poppler`.
-
-On Intel Macs, build from source (see [Building from source](#building-from-source)). The macOS
-package does not yet include STEP support.
+4. Optional, for PDF previews: `brew install poppler`.
 
 ## Getting started
 
@@ -218,8 +256,8 @@ package does not yet include STEP support.
 
 ### Browsing the gallery
 
-- **Navigate** with double-click (folders and archives open, files open in their default
-  app), the breadcrumb, the sidebar, or the keyboard: arrow keys move the selection, Enter
+- **Navigate** with double-click (folders and archives open, models open in a window of their
+  own, other files in their default app), the breadcrumb, the sidebar, or the keyboard: arrow keys move the selection, Enter
   opens, Backspace or Alt+↑ goes up, Alt+← / Alt+→ go back and forward.
 - **Tile size:** Ctrl + mouse wheel, Ctrl + `+` / `-`, or the slider in the *View* menu.
 - **View menu:** sort by name, modified date, size or type (ascending or descending); *3D models
@@ -239,7 +277,10 @@ package does not yet include STEP support.
 
 ### The 3D viewer and its tools
 
-The right panel shows the selected model in 3D.
+The right panel shows the selected model in 3D. **Double-click a model** (or press Enter) to
+open it in a window of its own: it can be made as large as the screen, several models can be
+open side by side, each with its own camera, and the window has the same tools, the model's
+facts and an *Open in slicer* button. Esc or the close button closes it.
 
 | Action | Mouse |
 |---|---|
@@ -368,10 +409,10 @@ to the trash* cleans up a group after a confirmation. Tiles everywhere in the ga
 
 ### Working with your slicer and other apps
 
-- **Open in slicer** (context menu): opens the selected models, several at once if you like
-  (STL, 3MF, STEP and OBJ; the slicers do not open PLY and glTF). Files inside archives are
-  extracted to a cache folder first. Meshgrove finds these slicers
-  automatically:
+- **Open in slicer** (context menu, the button in the details panel or in a model window):
+  opens the selected models, several at once if you like (STL, 3MF, STEP and OBJ; the slicers
+  do not open PLY and glTF). Files inside archives are extracted to a cache folder first.
+  Meshgrove finds these slicers automatically:
 
   | System | Detected |
   |---|---|
@@ -391,7 +432,8 @@ to the trash* cleans up a group after a confirmation. Tiles everywhere in the ga
   Dolphin, Explorer or Finder, into many slicers, or into a chat. Archive members are
   extracted first. *Copy path* puts the paths as text instead.
 - **Show in file manager:** opens Dolphin/Nautilus, Explorer or Finder with the files selected.
-- **Open** (double-click on a file): opens it in the system's default application.
+- **Open with default app** (context menu): opens a model in the system's default application,
+  for example the slicer registered for STL files; other files open there with a double-click.
 
 ### Archives (ZIP, 7z, RAR, TAR)
 
@@ -423,8 +465,9 @@ read-only) and disables the action with an explanation.
 
 ### Thumbnails in Dolphin and file dialogs (Linux)
 
-`install.sh` also registers a freedesktop thumbnailer, so Dolphin, the KDE and GTK file
-dialogs and other file managers show the same previews for STL, 3MF, STEP, OBJ, PLY and glTF files. In
+The .deb and .rpm packages and `install.sh` register a freedesktop thumbnailer, so Dolphin,
+the KDE and GTK file dialogs and other file managers show the same previews for STL, 3MF,
+STEP, OBJ, PLY and glTF files. In
 Dolphin, enable them once: *Settings → Configure Dolphin → Interface → Previews*. Tick the
 3D-model entries if they are listed, and raise *Skip previews for local files above* for big
 models. Then reopen the folder. The thumbnailer shares Meshgrove's cache, so files you have
@@ -437,7 +480,8 @@ Ctrl means ⌘ Cmd on macOS.
 | Keys | Action |
 |---|---|
 | ← → ↑ ↓, Home, End | Move the selection |
-| Enter | Open the selected folder, archive or file |
+| Enter | Open the selected folder or archive; a model in its own window; other files in their default app |
+| Esc (in a model window) | Close the window |
 | Backspace, Alt+↑ | Parent folder |
 | Alt+←, Alt+→ | Back, forward |
 | F5 | Reload the folder |
@@ -554,13 +598,13 @@ Meshgrove is built for collections of thousands of files on ordinary hard drives
 | Gallery, viewer, library, tags, notes, duplicates, bed check | ✔ | ✔ | ✔ |
 | ZIP / 7z / RAR / TAR | ✔ | ✔ | ✔ |
 | PDF previews | ✔ with poppler | ✔ with poppler | ✔ with poppler |
-| STEP previews | ✔ with OpenCascade | source build with OpenCascade | source build with OpenCascade |
+| STEP previews | ✔ all packages; source build with OpenCascade | ✔ | ✔ |
 | Copy files to the clipboard | ✔ Wayland (X11: paths as text) | ✔ | ✔ |
 | Show in file manager | ✔ D-Bus (Dolphin, Nautilus, …) | ✔ Explorer | ✔ Finder |
 | Slicer detection | ✔ | ✔ | ✔ |
 | Read-only drive detection | ✔ | – | – |
-| Thumbnails in the system file manager | ✔ freedesktop thumbnailer | – | – |
-| Menu entry and icon | ✔ `install.sh` | ✔ icon in `meshgrove.exe` | ✔ app bundle |
+| Thumbnails in the system file manager | ✔ freedesktop thumbnailer (.deb, .rpm, `install.sh`) | – | – |
+| Menu entry and icon | ✔ .deb, .rpm, `install.sh` | ✔ installer (Start menu, *Open with*) | ✔ app bundle |
 
 ## Troubleshooting and FAQ
 
@@ -580,13 +624,13 @@ after a reboot, put `fs.inotify.max_user_instances=512` into
 Enable the previews in Dolphin's settings (see
 [Thumbnails in Dolphin](#thumbnails-in-dolphin-and-file-dialogs-linux)) and raise the size
 limit. Delete `~/.cache/thumbnails/fail` (install.sh does this) and reopen the folder.
-`~/.local/bin/meshgrove-thumbnailer -s 256 model.stl /tmp/test.png` tests the thumbnailer by
-hand.
+`meshgrove-thumbnailer -s 256 model.stl /tmp/test.png` tests the thumbnailer by hand. The
+AppImage brings no thumbnailer; use a package or the source build for that.
 
 **STEP files show "built without OpenCascade".**
-The STEP helper was built without OpenCascade, or with a version older than 7.8. Install the
-OpenCascade 7.8+ development files (see [Installation](#linux)) and run `packaging/install.sh`
-again.
+This only happens with a source build: the STEP helper was built without OpenCascade, or with
+a version older than 7.5. Install the OpenCascade development files (see
+[From source](#from-source)) and run `packaging/install.sh` again.
 
 **PDFs show only an icon.**
 Install poppler (`pdftoppm` must be on the `PATH`).
@@ -617,7 +661,7 @@ No. It never writes to model files or archives.
 You need Rust 1.95 or newer and libarchive. OpenCascade (STEP) and poppler (PDF, at runtime
 only) are optional.
 
-**Linux:** see [Installation](#from-source-recommended). For development:
+**Linux:** see [From source](#from-source). For development:
 
 ```bash
 cargo run --release -p meshgrove -- ~/3D-Models
@@ -641,11 +685,18 @@ brew install libarchive pkg-config
 cargo build --release -p meshgrove -p meshgrove-step
 ```
 
-**STEP support on any system:** install OpenCascade 7.8 or newer (`dnf install
-opencascade-devel`, `brew install opencascade`, `vcpkg install opencascade`, …). If its headers
-are not in `/usr/include/opencascade`, point the build at them with `OCCT_INCLUDE` (and
-`OCCT_LIB` for the library folder), then build `-p meshgrove-step`. The resulting
-`meshgrove-step-mesher` must sit next to the `meshgrove` executable or be on the `PATH`.
+**STEP support on any system:** install OpenCascade 7.5 or newer (`dnf install
+opencascade-devel`, `apt install libocct-data-exchange-dev`, `brew install opencascade`,
+`vcpkg install opencascade`, …). If its headers are not in `/usr/include/opencascade`, point the
+build at them with `OCCT_INCLUDE` (and `OCCT_LIB` for the library folder), then build
+`-p meshgrove-step`. For a static OpenCascade, such as vcpkg's static triplets, also set
+`OCCT_STATIC=1`. The resulting `meshgrove-step-mesher` must sit next to the `meshgrove`
+executable or be on the `PATH`.
+
+**Release packages:** [`.github/workflows/release.yml`](.github/workflows/release.yml) builds
+them all. Windows, macOS and the AppImage link libarchive and OpenCascade statically from a
+pinned vcpkg ([`packaging/vcpkg/install.sh`](packaging/vcpkg)); the .deb and .rpm use the
+distribution's libraries. The scripts for each format are in [`packaging`](packaging).
 
 ## Architecture
 
@@ -712,7 +763,9 @@ folders to keep test runs away from your real settings:
 | `MESHGROVE_SCREENSHOT=out.png`, `MESHGROVE_SCREENSHOT_DELAY=8` | Save the window after the delay and quit |
 | `MESHGROVE_POINTER=x,y` | Pin the pointer, e.g. to test the hover turntable |
 | `MESHGROVE_HOLD=1`, `MESHGROVE_WHEEL=dy` | Hold the button / turn the wheel at the pointer |
-| `MESHGROVE_CLICKS=x,y;x,y` | Click these points one after another (from 3 s, every 0.8 s) |
+| `MESHGROVE_CLICKS=x,y;x,y` | Click these points one after another (from 3 s, every 0.8 s); `x,y*2` double-clicks |
+| `MESHGROVE_MEASURE=fx,fy;fx,fy` | Measure between these points (fractions of the view) in the first model window |
+| `MESHGROVE_WINDOW_VIEW=top` | Start the first model window in a standard view (`front`, `left`, …) |
 | `MESHGROVE_TYPE=text` | Type text after the clicks |
 | `MESHGROVE_SEARCH=query` | Start with a library search |
 | `MESHGROVE_FLATTEN=1` | Start with "include subfolders" |
@@ -729,8 +782,9 @@ Translations live in [`crates/meshgrove/locales`](crates/meshgrove/locales) (`de
 
 Ideas and next steps, roughly in order:
 
-- [ ] STEP support in the Windows and macOS packages (OpenCascade in the release builds)
-- [ ] Flatpak / AppImage for Linux, an installer for Windows, a notarized macOS app
+- [x] STEP support in all release packages
+- [x] AppImage, .deb and .rpm for Linux, an installer for Windows, a universal DMG for macOS
+- [ ] Flatpak, a notarized macOS app
 - [ ] More formats: OBJ, PLY, G-code previews (embedded thumbnails)
 - [ ] Collections (hand-picked sets across folders) and print status (printed, failed, to do)
 - [ ] Thumbnails in Windows Explorer and macOS Finder
@@ -791,7 +845,8 @@ the [GNU General Public License](LICENSE) for more details.
 The STEP helper uses OpenCascade (LGPL-2.1 with an exception) as a separate program; PDF
 previews call poppler's `pdftoppm` (GPL) as an external program. The licenses of all libraries
 and fonts built into the program are listed in `THIRD-PARTY-LICENSES.md`, which comes with every
-release package.
+release package. In the Windows, macOS and AppImage packages, OpenCascade is built into the STEP
+helper; the source code of that OpenCascade version is attached to each release.
 
 Anycubic, OrcaSlicer, Bambu Studio, PrusaSlicer, KDE, Dolphin, Windows and macOS are trademarks
 of their respective owners. Meshgrove is an independent project and is not affiliated with or

@@ -4,8 +4,11 @@
 //! `MESHGROVE_POINTER=x,y` additionally pins the mouse pointer (logical points) to test hover effects,
 //! `MESHGROVE_SEARCH=query` starts with a library search, `MESHGROVE_HOLD=1` holds the left button down
 //! at the pointer from 0.7 s on and `MESHGROVE_WHEEL=dy` turns the mouse wheel there for half a second after 1 s.
-//! `MESHGROVE_CLICKS=x,y;x,y;…` clicks those points one after the other, from 3 s on, every 0.8 s,
-//! and `MESHGROVE_TYPE=text` types the text after the last click.
+//! `MESHGROVE_CLICKS=x,y;x,y;…` clicks those points one after the other, from 3 s on, every 0.8 s
+//! (`x,y*2` double-clicks), and `MESHGROVE_TYPE=text` types the text after the last click.
+//! `MESHGROVE_MEASURE=fx,fy;fx,fy` measures between those points (fractions of the view) in the
+//! first model window that opens, which the hook's input cannot reach; `MESHGROVE_WINDOW_VIEW=top`
+//! (or `front`, `left` …) starts that window in a standard view.
 
 use std::time::{Duration, Instant};
 
@@ -13,13 +16,18 @@ pub struct ScreenshotHook {
     pub pointer: Option<egui::Pos2>,
     hold: bool,
     wheel: f32,
-    clicks: Vec<egui::Pos2>,
+    /// Point and whether it is a double click.
+    clicks: Vec<(egui::Pos2, bool)>,
     next_click: usize,
     typing: Option<String>,
     release: Option<egui::Pos2>,
     started: Instant,
     pressed: bool,
     pub search: Option<String>,
+    /// Measuring points for the first model window.
+    pub measure: Vec<egui::Vec2>,
+    /// Standard view for the first model window.
+    pub window_view: Option<String>,
     /// `MESHGROVE_FLATTEN=1`: start with "include subfolders" on.
     pub flatten: bool,
     /// `MESHGROVE_VIEW=duplicates`: open the duplicates view once the index is ready.
@@ -40,9 +48,16 @@ impl ScreenshotHook {
             Some(egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?))
         };
         let pointer = std::env::var("MESHGROVE_POINTER").ok().and_then(|s| point(&s));
+        let click = |s: &str| match s.strip_suffix("*2") {
+            Some(s) => point(s).map(|p| (p, true)),
+            None => point(s).map(|p| (p, false)),
+        };
         let clicks =
-            std::env::var("MESHGROVE_CLICKS").map(|s| s.split(';').filter_map(point).collect()).unwrap_or_default();
+            std::env::var("MESHGROVE_CLICKS").map(|s| s.split(';').filter_map(click).collect()).unwrap_or_default();
         let search = std::env::var("MESHGROVE_SEARCH").ok();
+        let measure = std::env::var("MESHGROVE_MEASURE")
+            .map(|s| s.split(';').filter_map(point).map(|p| p.to_vec2()).collect())
+            .unwrap_or_default();
         let hold = std::env::var_os("MESHGROVE_HOLD").is_some();
         let flatten = std::env::var_os("MESHGROVE_FLATTEN").is_some();
         let duplicates = std::env::var("MESHGROVE_VIEW").is_ok_and(|v| v == "duplicates");
@@ -59,6 +74,8 @@ impl ScreenshotHook {
             started: Instant::now(),
             pressed: false,
             search,
+            measure,
+            window_view: std::env::var("MESHGROVE_WINDOW_VIEW").ok(),
             flatten,
             duplicates,
             settings,
@@ -121,12 +138,17 @@ impl ScreenshotHook {
         };
         if let Some(pos) = self.release.take() {
             raw.events.push(button(pos, false));
-        } else if let Some(&pos) = self.clicks.get(self.next_click)
+        } else if let Some(&(pos, double)) = self.clicks.get(self.next_click)
             && t >= 3.0 + 0.8 * self.next_click as f32
         {
             self.next_click += 1;
             self.pointer = Some(pos);
             raw.events.push(egui::Event::PointerMoved(pos));
+            if double {
+                // The first click completes now, the second one with the release next frame.
+                raw.events.push(button(pos, true));
+                raw.events.push(button(pos, false));
+            }
             raw.events.push(button(pos, true));
             self.release = Some(pos);
         }

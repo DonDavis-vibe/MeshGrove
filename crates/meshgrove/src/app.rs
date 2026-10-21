@@ -24,6 +24,7 @@ use crate::ui::layout::{self, Pane};
 use egui_tiles::Tree;
 use crate::ui::duplicates::{self, DupAction, GroupInfo};
 use crate::ui::gallery::{Action, Arrange, Gallery, MenuContext};
+use crate::ui::model_window::{self, ModelWindow, WindowAction, WindowContext};
 use crate::ui::settings::{AppInfo, SettingsChange, SettingsDialog};
 use crate::ui::sidebar::{LibraryInfo, Sidebar, SidebarAction};
 use crate::ui::turntable::Turntable;
@@ -76,6 +77,8 @@ pub struct App {
     index: Option<Library>,
     renderer: Renderer,
     viewer: ModelViewer,
+    /// Models opened in windows of their own.
+    model_windows: Vec<ModelWindow>,
     model: ModelStatus,
     meshes: MeshStore,
     turntable: Turntable,
@@ -177,6 +180,7 @@ impl App {
             index: None,
             renderer: Renderer::new(&rs.device, &rs.adapter),
             viewer: ModelViewer::new(),
+            model_windows: Vec::new(),
             model: ModelStatus::Idle,
             meshes: MeshStore::new(rs.device.clone(), cc.egui_ctx.clone()),
             turntable: Turntable::default(),
@@ -299,6 +303,33 @@ impl App {
             self.navigate(entry.path);
             return;
         }
+        if meshes::viewable(entry.kind) {
+            self.open_model_window(entry);
+            return;
+        }
+        self.open_with_default_app(&entry);
+    }
+
+    /// Shows a model in a window of its own; one that is already open comes to the front.
+    fn open_model_window(&mut self, entry: Entry) {
+        match self.model_windows.iter_mut().find(|w| w.path() == entry.path) {
+            Some(window) => window.raise(),
+            None => {
+                let mut window = ModelWindow::new(entry);
+                if let Some(hook) = &mut self.screenshot {
+                    if !hook.measure.is_empty() {
+                        window.script_measure(std::mem::take(&mut hook.measure));
+                    }
+                    if let Some(view) = hook.window_view.take() {
+                        window.script_view(&view);
+                    }
+                }
+                self.model_windows.push(window);
+            }
+        }
+    }
+
+    fn open_with_default_app(&mut self, entry: &Entry) {
         // Files inside archives are extracted first so other programs can open them.
         match meshgrove_core::archive::materialize(&entry.path) {
             Ok(file) => {
@@ -307,6 +338,47 @@ impl App {
                 }
             }
             Err(e) => log::warn!("cannot extract {}: {e}", entry.path.display()),
+        }
+    }
+
+    /// Hands the models among `files` to the slicer (several at once if it allows).
+    fn open_in_slicer(&mut self, files: Vec<PathBuf>) {
+        let models: Vec<PathBuf> =
+            files.into_iter().filter(|p| Kind::from_file_name(&listing::file_name(p)).is_sliceable()).collect();
+        let Some(slicer) = &self.slicer else { return };
+        if models.is_empty() {
+            return;
+        }
+        let message = match actions::open_in_slicer(slicer, &models) {
+            Ok(actions::SlicerOpened::Started) => t!("toast.slicer_started", name = slicer.name, count = models.len()),
+            Ok(actions::SlicerOpened::HandedOver) => {
+                t!("toast.slicer_handed_over", name = slicer.name, count = models.len())
+            }
+            Err(e) => t!("toast.slicer_failed", name = slicer.name, error = e.to_string()),
+        };
+        self.toast(message.into_owned());
+    }
+
+    /// Draws the model windows; handles what they ask for and forgets the closed ones.
+    fn show_model_windows(&mut self, ctx: &egui::Context, rs: &egui_wgpu::RenderState) {
+        if self.model_windows.is_empty() {
+            return;
+        }
+        let mut actions = Vec::new();
+        let mut cx = WindowContext {
+            meshes: &mut self.meshes,
+            render_state: rs,
+            renderer: &self.renderer,
+            bed: self.bed.as_ref(),
+            slicer: self.slicer.as_ref().map(|s| s.name.as_str()),
+            icon: model_window::icon(crate::app_icon),
+        };
+        self.model_windows.retain_mut(|window| window.show(ctx, &mut cx, &mut actions));
+        for action in actions {
+            match action {
+                WindowAction::OpenInSlicer(path) => self.open_in_slicer(vec![path]),
+                WindowAction::Message(message) => self.toast(message),
+            }
         }
     }
 
@@ -561,26 +633,13 @@ impl App {
     fn handle_action(&mut self, ctx: &egui::Context, action: Action) {
         match action {
             Action::Open(index) => self.open_entry(index),
-            Action::ShowInFolder(index) => self.show_in_folder(index),
-            Action::OpenInSlicer => {
-                let files: Vec<PathBuf> = self.selected_paths();
-                let models: Vec<PathBuf> = files
-                    .into_iter()
-                    .filter(|p| meshgrove_core::Kind::from_file_name(&listing::file_name(p)).is_sliceable())
-                    .collect();
-                if let Some(slicer) = &self.slicer {
-                    let message = match actions::open_in_slicer(slicer, &models) {
-                        Ok(actions::SlicerOpened::Started) => {
-                            t!("toast.slicer_started", name = slicer.name, count = models.len())
-                        }
-                        Ok(actions::SlicerOpened::HandedOver) => {
-                            t!("toast.slicer_handed_over", name = slicer.name, count = models.len())
-                        }
-                        Err(e) => t!("toast.slicer_failed", name = slicer.name, error = e.to_string()),
-                    };
-                    self.toast(message.into_owned());
+            Action::OpenWithDefaultApp(index) => {
+                if let Some(entry) = self.entries().get(index).cloned() {
+                    self.open_with_default_app(&entry);
                 }
             }
+            Action::ShowInFolder(index) => self.show_in_folder(index),
+            Action::OpenInSlicer => self.open_in_slicer(self.selected_paths()),
             Action::ShowInFileManager => {
                 if let Err(e) = actions::show_in_file_manager(&self.selected_paths()) {
                     self.toast(t!("toast.file_manager_failed", error = e.to_string()).into_owned());
@@ -1185,6 +1244,7 @@ impl App {
             },
             note: NoteEditor { enabled: self.menu.can_tag, text: &mut self.note_input, mixed: self.note_mixed },
             bed: self.bed.as_ref(),
+            slicer: self.slicer.as_ref().map(|s| s.name.as_str()),
             thumb,
             model: &self.model,
             plates: self.plates.as_ref().map_or(&[][..], |(_, p)| p.as_slice()),
@@ -1209,6 +1269,9 @@ impl App {
         }
         if let Some(message) = out.message {
             self.toast(message);
+        }
+        if out.open_in_slicer {
+            self.open_in_slicer(self.selected_paths());
         }
     }
 }
@@ -1382,6 +1445,7 @@ impl eframe::App for App {
         let info = AppInfo { gpu: &self.gpu_name, db_path: &self.db_path };
         let changes = self.settings.show(&ctx, &self.config, self.slicer.as_ref(), self.bed.as_ref(), info);
         self.apply_settings(changes);
+        self.show_model_windows(&ctx, &rs);
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {

@@ -3,6 +3,7 @@ pub mod duplicates;
 pub mod gallery;
 pub mod icons;
 pub mod layout;
+pub mod model_window;
 pub mod offscreen;
 pub mod settings;
 pub mod sidebar;

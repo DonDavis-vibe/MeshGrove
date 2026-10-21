@@ -36,8 +36,11 @@ pub enum Thumb {
 }
 
 pub enum Action {
-    /// Double-click / Enter on an entry (index into the shown entries).
+    /// Double-click / Enter on an entry (index into the shown entries): folders and archives are
+    /// entered, models get a window of their own, other files open in their default app.
     Open(usize),
+    /// Open a model with the system's default app (usually a slicer) instead.
+    OpenWithDefaultApp(usize),
     /// Go to the folder that contains a search or "include subfolders" result.
     ShowInFolder(usize),
     /// The following act on the selection.
@@ -282,6 +285,7 @@ impl Gallery {
                         }
                         let show_folders = self.show_folders;
                         let sliceable = entries[entry].kind.is_sliceable();
+                        let viewable = crate::meshes::viewable(entries[entry].kind);
                         response.context_menu(|ui| {
                             let mut item = |ui: &mut Ui, text: std::borrow::Cow<str>, act: Action| {
                                 if ui.button(text).clicked() {
@@ -290,6 +294,9 @@ impl Gallery {
                                 }
                             };
                             item(ui, t!("menu.open"), Action::Open(entry));
+                            if viewable {
+                                item(ui, t!("menu.open_with_default_app"), Action::OpenWithDefaultApp(entry));
+                            }
                             if sliceable && let Some(slicer) = &menu.slicer {
                                 item(ui, t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);
                             }

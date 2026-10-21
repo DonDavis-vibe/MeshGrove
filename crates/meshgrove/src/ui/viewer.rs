@@ -42,6 +42,11 @@ pub struct ModelViewer {
     dirty: bool,
     measure: Option<Measure>,
     saving: Option<Receiver<Result<PathBuf, String>>>,
+    /// Test hook: measuring points to place once the triangles are loaded, as fractions of the
+    /// view (0..1 from the top left).
+    scripted_picks: Vec<egui::Vec2>,
+    /// Test hook: a standard view (`top`, `front`, …) to show once the model is there.
+    scripted_view: Option<String>,
 }
 
 impl ModelViewer {
@@ -54,7 +59,21 @@ impl ModelViewer {
             dirty: true,
             measure: None,
             saving: None,
+            scripted_picks: Vec::new(),
+            scripted_view: None,
         }
+    }
+
+    /// Test hook: shows a standard view (`top`, `front`, …) as soon as the model is there.
+    pub fn script_view(&mut self, name: &str) {
+        self.scripted_view = Some(format!("viewer.view_{name}"));
+    }
+
+    /// Test hook: starts measuring and places these points (fractions of the view) as soon as
+    /// the model's triangles are there.
+    pub fn script_measure(&mut self, picks: Vec<egui::Vec2>) {
+        self.measure = Some(Measure::default());
+        self.scripted_picks = picks;
     }
 
     /// Shows `mesh`; the camera is reset only when it is a different model.
@@ -99,6 +118,12 @@ impl ModelViewer {
             );
             return message;
         };
+        if let Some(key) = self.scripted_view.take()
+            && let Some(&(_, az, el)) = PRESETS.iter().find(|(k, ..)| *k == key)
+        {
+            self.view = ViewParams { azimuth_deg: az, elevation_deg: el, ..orbit_view() };
+            self.dirty = true;
+        }
         let (w, h) = pixel_size(ui.ctx(), rect);
         if w < 8 || h < 8 {
             return message;
@@ -114,6 +139,11 @@ impl ModelViewer {
 
         if response.clicked() && self.measure.is_some() {
             self.pick(&mesh, rect, response.interact_pointer_pos());
+        }
+        if !self.scripted_picks.is_empty() && self.measure.as_ref().is_some_and(|m| m.triangles.is_some()) {
+            for at in std::mem::take(&mut self.scripted_picks) {
+                self.pick(&mesh, rect, Some(rect.min + at * rect.size()));
+            }
         }
         self.paint_measure(ui, &mesh, rect);
         if let Some(m) = self.toolbar(ui, rect, rs, renderer, &mesh) {
