@@ -3638,6 +3638,7 @@ dependencies = [
  "sys-locale",
  "trash",
  "wgpu",
+ "wl-clipboard-rs",
 ]
 
 [[package]]
@@ -3663,6 +3664,7 @@ dependencies = [
  "quick-xml 0.42.0",
  "rusqlite",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "toml 1.1.8+spec-1.1.0",

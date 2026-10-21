@@ -117,6 +117,17 @@ pub fn corner_badge(p: &Painter, r: Rect, label: &str, bg: Color32, fg: Color32)
     p.galley(rect.min + pad, galley, fg);
 }
 
+/// Small badge in the lower-right corner (e.g. the print bed check).
+pub fn bottom_right_badge(p: &Painter, r: Rect, label: &str, bg: Color32, fg: Color32) {
+    let font = FontId::proportional(10.5);
+    let galley = p.layout_no_wrap(label.to_owned(), font, fg);
+    let pad = vec2(5.0, 2.0);
+    let size = galley.size() + 2.0 * pad;
+    let rect = Rect::from_min_size(pos2(r.max.x - size.x - 4.0, r.max.y - size.y - 4.0), size);
+    p.rect(rect, 4.0, bg, Stroke::NONE, StrokeKind::Inside);
+    p.galley(rect.min + pad, galley, fg);
+}
+
 /// Short label for the file icon: upper-case extension, at most five characters.
 pub fn extension_label(name: &str) -> String {
     match name.rsplit_once('.') {

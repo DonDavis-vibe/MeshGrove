@@ -1,10 +1,12 @@
-//! Settings window: language, library folders, slicer, cache.
+//! Settings window: language, library folders, slicer, printer, backups, cache.
 
 use std::path::{Path, PathBuf};
 
 use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
 use stlb_core::config::{Config, Slicer};
+use stlb_core::printer::Bed;
+use stlb_core::userdata;
 
 use crate::i18n;
 
@@ -14,6 +16,11 @@ pub enum SettingsChange {
     RemoveRoot(PathBuf),
     /// `None`: detect the slicer automatically.
     Slicer(Option<Slicer>),
+    /// `None`: take the printer selected in the slicer.
+    Printer(Option<Bed>),
+    Export(PathBuf),
+    Import(PathBuf),
+    OpenBackups,
     ClearCache,
 }
 
@@ -29,6 +36,10 @@ pub struct SettingsDialog {
     root_input: String,
     root_error: Option<String>,
     slicer_form: Option<(String, String, String)>,
+    /// Name and X/Y/Z as typed.
+    printer_form: Option<[String; 4]>,
+    printer_error: bool,
+    import_input: String,
     cache_size: Option<u64>,
     cache_rx: Option<Receiver<u64>>,
 }
@@ -54,8 +65,13 @@ fn dir_size(dir: &Path) -> u64 {
 }
 
 impl SettingsDialog {
-    pub fn open(&mut self, active_slicer: Option<&Slicer>) {
+    pub fn open(&mut self, active_slicer: Option<&Slicer>, bed: Option<&Bed>) {
         self.open = true;
+        self.printer_form = Some(printer_form(bed));
+        self.printer_error = false;
+        if self.import_input.is_empty() {
+            self.import_input = export_path().display().to_string();
+        }
         self.slicer_form = Some(match active_slicer {
             Some(s) => (
                 s.name.clone(),
@@ -81,6 +97,7 @@ impl SettingsDialog {
         ctx: &egui::Context,
         config: &Config,
         slicer: Option<&Slicer>,
+        bed: Option<&Bed>,
         info: AppInfo,
     ) -> Vec<SettingsChange> {
         let mut changes = Vec::new();
@@ -110,6 +127,10 @@ impl SettingsDialog {
                     self.library(ui, config, &mut changes);
                     ui.separator();
                     self.slicer(ui, config, slicer, &mut changes);
+                    ui.separator();
+                    self.printer(ui, config, bed, &mut changes);
+                    ui.separator();
+                    self.user_data(ui, &mut changes);
                     ui.separator();
                     self.storage(ui, &mut changes);
                     ui.separator();
@@ -214,6 +235,89 @@ impl SettingsDialog {
         }
     }
 
+    fn printer(&mut self, ui: &mut Ui, config: &Config, active: Option<&Bed>, changes: &mut Vec<SettingsChange>) {
+        ui.label(RichText::new(t!("settings.printer")).strong());
+        let status = match (active, &config.printer) {
+            (Some(b), None) => t!("settings.printer_detected", name = b.name),
+            (Some(b), Some(_)) => t!("settings.printer_custom", name = b.name),
+            (None, _) => t!("settings.printer_none"),
+        };
+        ui.weak(status);
+        let mut detect = false;
+        let form = self.printer_form.get_or_insert_with(|| printer_form(active));
+        egui::Grid::new("printer_form").num_columns(2).show(ui, |ui| {
+            ui.label(t!("settings.printer_name"));
+            ui.add(egui::TextEdit::singleline(&mut form[0]).desired_width(320.0));
+            ui.end_row();
+            ui.label(t!("settings.printer_volume"));
+            ui.horizontal(|ui| {
+                for (i, axis) in ["X", "Y", "Z"].iter().enumerate() {
+                    ui.label(*axis);
+                    ui.add(egui::TextEdit::singleline(&mut form[i + 1]).desired_width(56.0));
+                }
+                ui.label("mm");
+            });
+            ui.end_row();
+        });
+        ui.horizontal(|ui| {
+            if ui.button(t!("settings.apply")).clicked() {
+                let mm = |s: &str| s.trim().replace(',', ".").parse::<f32>().ok().filter(|v| *v > 0.0);
+                match (mm(&form[1]), mm(&form[2]), mm(&form[3])) {
+                    (Some(x), Some(y), Some(z)) => {
+                        let name = match form[0].trim() {
+                            "" => t!("settings.printer_default_name").into_owned(),
+                            name => name.to_owned(),
+                        };
+                        changes.push(SettingsChange::Printer(Some(Bed { name, x, y, z })));
+                        self.printer_error = false;
+                    }
+                    _ => self.printer_error = true,
+                }
+            }
+            if ui.button(t!("settings.printer_auto")).on_hover_text(t!("settings.printer_auto_hint")).clicked() {
+                changes.push(SettingsChange::Printer(None));
+                detect = true;
+            }
+        });
+        if self.printer_error {
+            ui.colored_label(ui.visuals().error_fg_color, t!("settings.printer_invalid"));
+        }
+        if detect {
+            self.printer_form = Some(printer_form(Bed::detect().as_ref()));
+            self.printer_error = false;
+        }
+    }
+
+    fn user_data(&mut self, ui: &mut Ui, changes: &mut Vec<SettingsChange>) {
+        ui.label(RichText::new(t!("settings.user_data")).strong());
+        ui.weak(t!("settings.user_data_hint"));
+        let backups = userdata::backup_dir().map(|d| userdata::backups(&d)).unwrap_or_default();
+        ui.horizontal(|ui| {
+            match backups.last().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().into_owned()) {
+                Some(last) => ui.label(t!(
+                    "settings.backups",
+                    count = backups.len(),
+                    last = last.trim_start_matches("user-data-")
+                )),
+                None => ui.label(t!("settings.backups_none")),
+            };
+            if ui.button(t!("settings.open_folder")).clicked() {
+                changes.push(SettingsChange::OpenBackups);
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui.button(t!("settings.export")).on_hover_text(export_path().display().to_string()).clicked() {
+                changes.push(SettingsChange::Export(export_path()));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut self.import_input).desired_width(320.0));
+            if ui.button(t!("settings.import")).on_hover_text(t!("settings.import_hint")).clicked() {
+                changes.push(SettingsChange::Import(PathBuf::from(self.import_input.trim())));
+            }
+        });
+    }
+
     fn storage(&mut self, ui: &mut Ui, changes: &mut Vec<SettingsChange>) {
         ui.label(RichText::new(t!("settings.storage")).strong());
         ui.horizontal(|ui| {
@@ -227,6 +331,24 @@ impl SettingsDialog {
             }
         });
     }
+}
+
+fn printer_form(bed: Option<&Bed>) -> [String; 4] {
+    match bed {
+        Some(b) => [b.name.clone(), mm(b.x), mm(b.y), mm(b.z)],
+        None => Default::default(),
+    }
+}
+
+fn mm(value: f32) -> String {
+    if value.fract() == 0.0 { format!("{value:.0}") } else { i18n::decimal(value) }
+}
+
+/// `~/Dokumente/stl-browser-tags-notizen-2026-10-21.json` (the XDG documents folder).
+pub fn export_path() -> PathBuf {
+    let dir = dirs::document_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from("."));
+    let today = userdata::date(std::time::SystemTime::now());
+    dir.join(format!("{}-{today}.json", t!("settings.export_file")))
 }
 
 fn about(ui: &mut Ui, info: &AppInfo) {

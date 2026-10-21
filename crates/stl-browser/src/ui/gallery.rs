@@ -12,6 +12,7 @@ use stlb_core::Kind;
 use stlb_core::cache::{ThumbCache, ThumbMeta};
 use stlb_core::config::SortKey;
 use stlb_core::listing::{self, Entry};
+use stlb_core::printer::{self, Bed, Fit};
 
 use super::icons;
 use super::turntable::HoveredTile;
@@ -43,6 +44,8 @@ pub enum Action {
     OpenInSlicer,
     ShowInFileManager,
     CopyPaths,
+    /// Copy the files themselves (Ctrl+C), for pasting in Dolphin or the slicer.
+    CopyFiles,
     EditTags,
     Trash,
 }
@@ -95,9 +98,15 @@ pub struct Gallery {
     pub show_folders: bool,
     /// A tile was being dragged last frame: the wheel then zooms its preview, not the grid.
     tile_dragged: bool,
+    /// Printer bed that model tiles are checked against.
+    pub bed: Option<Bed>,
 }
 
 impl Gallery {
+    pub fn with_bed(bed: Option<Bed>) -> Gallery {
+        Gallery { bed, ..Default::default() }
+    }
+
     /// New contents. Thumbnails already loaded for files that are still shown are kept,
     /// so refreshing a folder does not flicker; everything else is queued.
     pub fn set_entries(&mut self, entries: &[Entry], mosaics: HashMap<usize, Vec<Entry>>, service: &ThumbService) {
@@ -288,6 +297,7 @@ impl Gallery {
                                 item(ui, t!("menu.show_in_folder"), Action::ShowInFolder(entry));
                             }
                             item(ui, t!("menu.show_in_file_manager"), Action::ShowInFileManager);
+                            item(ui, t!("menu.copy_files"), Action::CopyFiles);
                             item(ui, t!("menu.copy_path"), Action::CopyPaths);
                             if menu.can_tag {
                                 item(ui, t!("menu.edit_tags"), Action::EditTags);
@@ -371,6 +381,10 @@ impl Gallery {
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::A)) {
             self.marked = self.shown.iter().copied().collect();
         }
+        // Ctrl+C arrives as a copy event, not as a key press.
+        if self.selected.is_some() && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy))) {
+            return Some(Action::CopyFiles);
+        }
         if ui.input(|i| i.key_pressed(Key::Enter)) {
             return self.selected.map(Action::Open);
         }
@@ -440,6 +454,24 @@ impl Gallery {
             let label = icons::extension_label(&entry.name);
             icons::badge(&painter, img, &label, Color32::from_black_alpha(150), Color32::from_gray(230));
         }
+        let fit = self.bed_fit(entry, index);
+        match fit {
+            Some((Fit::Rotated(angle), _)) => {
+                let label = format!("↻ {}°", super::details::angle(angle));
+                icons::bottom_right_badge(
+                    &painter,
+                    img,
+                    &label,
+                    visuals.warn_fg_color.linear_multiply(0.9),
+                    Color32::BLACK,
+                );
+            }
+            Some((Fit::TooBig(_), _)) => {
+                let label = t!("bed.badge_too_big");
+                icons::bottom_right_badge(&painter, img, &label, visuals.error_fg_color, Color32::WHITE);
+            }
+            _ => {}
+        }
 
         let wrap = |rows| TextWrapping {
             max_width: w - 4.0,
@@ -472,10 +504,25 @@ impl Gallery {
         if let Some(n) = self.duplicates.get(&entry.path) {
             tooltip += &format!("\n{}", t!("gallery.duplicate_hint", count = n));
         }
+        if let Some((fit @ (Fit::Rotated(_) | Fit::TooBig(_)), bed)) = &fit {
+            tooltip += &format!("\n{}", super::details::fit_text(*fit, bed));
+        }
         if let Some(Thumb::Failed(error)) = self.thumb(index) {
             tooltip += &format!("\n⚠ {error}");
         }
         response.on_hover_text_at_pointer(tooltip)
+    }
+
+    /// How a model tile's size (known once its thumbnail facts are in) fits the printer bed.
+    fn bed_fit(&self, entry: &Entry, index: usize) -> Option<(Fit, &Bed)> {
+        let bed = self.bed.as_ref()?;
+        if !entry.kind.is_model() {
+            return None;
+        }
+        match self.thumb(index)? {
+            Thumb::Ready(_, meta) => Some((printer::fit(meta.size_mm?, bed), bed)),
+            _ => None,
+        }
     }
 }
 

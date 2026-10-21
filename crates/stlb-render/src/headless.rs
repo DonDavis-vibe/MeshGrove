@@ -1,7 +1,7 @@
 use image::RgbaImage;
 use stlb_core::Mesh;
 
-use crate::renderer::{Renderer, ViewParams};
+use crate::renderer::{GpuMesh, Renderer, ViewParams};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RenderError {
@@ -59,21 +59,36 @@ impl HeadlessRenderer {
     /// Renders `mesh` into a `size`×`size` image with straight (non-premultiplied) alpha.
     pub fn render(&self, mesh: &Mesh, size: u32, view: &ViewParams) -> Result<RgbaImage, RenderError> {
         let gpu_mesh = self.renderer.upload(&self.device, mesh).ok_or(RenderError::EmptyMesh)?;
-        let target = self.renderer.create_target(&self.device, size, size, wgpu::TextureUsages::COPY_SRC);
+        self.renderer.render_image(&self.device, &self.queue, &gpu_mesh, view, size, size)
+    }
+}
+
+impl Renderer {
+    /// Draws an uploaded mesh into a new `width`×`height` image (straight alpha) and waits for
+    /// it — thumbnails, and picture export from the viewer.
+    pub fn render_image(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mesh: &GpuMesh,
+        view: &ViewParams,
+        width: u32,
+        height: u32,
+    ) -> Result<RgbaImage, RenderError> {
+        let target = self.create_target(device, width, height, wgpu::TextureUsages::COPY_SRC);
 
         // Rows in a texture→buffer copy must be padded to 256 bytes.
         let unpadded = target.width * 4;
         let padded = unpadded.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("stlb readback"),
             size: padded as u64 * target.height as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
 
-        let mut encoder =
-            self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("stlb thumbnail") });
-        self.renderer.draw(&self.queue, &mut encoder, &target, &gpu_mesh, view);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("stlb image") });
+        self.draw(queue, &mut encoder, &target, mesh, view);
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &target.color,
@@ -87,13 +102,13 @@ impl HeadlessRenderer {
             },
             wgpu::Extent3d { width: target.width, height: target.height, depth_or_array_layers: 1 },
         );
-        self.queue.submit([encoder.finish()]);
+        queue.submit([encoder.finish()]);
 
         let (tx, rx) = std::sync::mpsc::channel();
         readback.map_async(wgpu::MapMode::Read, .., move |result| {
             let _ = tx.send(result);
         });
-        self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| RenderError::Readback(e.to_string()))?;
+        device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| RenderError::Readback(e.to_string()))?;
         rx.recv()
             .map_err(|e| RenderError::Readback(e.to_string()))?
             .map_err(|e| RenderError::Readback(e.to_string()))?;

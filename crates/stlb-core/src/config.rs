@@ -84,6 +84,8 @@ pub struct Config {
     pub language: Option<String>,
     /// `None`: detect an installed slicer at startup.
     pub slicer: Option<Slicer>,
+    /// Printer for the bed check; `None`: take the one selected in the slicer.
+    pub printer: Option<crate::printer::Bed>,
 }
 
 impl Default for Config {
@@ -97,6 +99,7 @@ impl Default for Config {
             sort_descending: false,
             language: None,
             slicer: None,
+            printer: None,
         }
     }
 }

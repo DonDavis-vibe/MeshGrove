@@ -15,13 +15,21 @@ so it runs natively on Wayland and NVIDIA without a web view.
 - **3MF:** slicer plate pictures with filament colours (Bambu Studio, OrcaSlicer, Anycubic,
   Elegoo, Creality Print, PrusaSlicer); multi-plate projects show one plate at a time.
 - **STEP** through OpenCascade in a separate helper process (crash-safe, cached).
-- **3D viewer** next to the grid; **hover turntable** spins the model in its tile (drag to turn,
-  wheel with a button held to zoom).
+- **3D viewer** next to the grid with standard views (front, top, …), point-to-point
+  **measuring** in mm and **picture export** (PNG); **hover turntable** spins the model in its
+  tile (drag to turn, wheel with a button held to zoom).
+- **Print bed check:** reads the printer selected in Anycubic Slicer Next / OrcaSlicer /
+  Bambu Studio (or takes your own build volume) and marks models that only fit when turned
+  (↻ 41°) or are too big (✕).
 - **Library index** (SQLite): instant search across all library folders (`dragon ext:3mf
-  tag:pirate`), tags that follow file content through renames, **duplicate detection** (exact
-  copies and same geometry, rotation-independent) with a keep suggestion.
+  tag:pirate`), **tags and notes** that follow file content through renames (the search finds
+  note text too), **duplicate detection** (exact copies and same geometry, rotation-independent)
+  with a keep suggestion.
+- **Backups of tags and notes:** a daily JSON backup (last 7 kept) in
+  `~/.local/share/stl-browser/backups`, plus export/import in the settings.
 - **Actions:** open in your slicer (auto-detects Anycubic Slicer Next, OrcaSlicer, PrusaSlicer,
-  Bambu Studio), show in Dolphin, copy path, move to trash (blocked on read-only drives).
+  Bambu Studio), **Ctrl+C copies the files** for pasting in Dolphin, show in Dolphin, copy
+  path, move to trash (blocked on read-only drives).
 - **Dolphin integration:** the same renderer provides thumbnails for Dolphin and file dialogs.
 - **German and English** UI (follows the system language).
 
@@ -59,8 +67,10 @@ scripts/ui-screenshot.sh out.png 8 /path/to/models   # UI screenshot in a headle
 ## Deutsch
 
 **STL-Browser** zeigt 3D-Druck-Dateien wie ein Dateimanager Fotos: STL, 3MF, STEP, Modelle in
-Archiven und PDFs mit echter Vorschau. Dazu kommen 3D-Ansicht, Drehvorschau beim Darüberfahren,
-Bibliothekssuche, Tags, Duplikaterkennung, „In Anycubic Slicer öffnen“ und Vorschauen in Dolphin.
+Archiven und PDFs mit echter Vorschau. Dazu kommen 3D-Ansicht mit Messen und Bildexport,
+Drehvorschau beim Darüberfahren, Druckbett-Check für den Drucker aus dem Slicer, Bibliothekssuche,
+Tags und Notizen (mit täglicher Sicherung), Duplikaterkennung, „In Anycubic Slicer öffnen“,
+Kopieren mit Strg+C und Vorschauen in Dolphin.
 Installation ohne Root: `packaging/install.sh` (Entfernen: `packaging/install.sh --uninstall`).
 Die Oberfläche folgt der Systemsprache (Deutsch/Englisch) und lässt sich in den Einstellungen
 umstellen.

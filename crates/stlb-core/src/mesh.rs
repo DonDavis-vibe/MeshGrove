@@ -102,9 +102,51 @@ impl Mesh {
     }
 }
 
+/// Distance along the ray (`dir` normalised) to the nearest triangle of a triangle soup
+/// (`[a, b, c, a, b, c, …]`), or `None` if it misses (Möller–Trumbore, both faces).
+pub fn ray_hit(soup: &[[f32; 3]], origin: Vec3, dir: Vec3) -> Option<f32> {
+    let mut best = f32::INFINITY;
+    for tri in soup.as_chunks::<3>().0 {
+        let a = Vec3::from(tri[0]);
+        let (e1, e2) = (Vec3::from(tri[1]) - a, Vec3::from(tri[2]) - a);
+        let p = dir.cross(e2);
+        let det = e1.dot(p);
+        if det == 0.0 {
+            continue;
+        }
+        let inv = 1.0 / det;
+        let s = origin - a;
+        let u = s.dot(p) * inv;
+        if !(0.0..=1.0).contains(&u) {
+            continue;
+        }
+        let q = s.cross(e1);
+        let v = dir.dot(q) * inv;
+        if v < 0.0 || u + v > 1.0 {
+            continue;
+        }
+        let t = e2.dot(q) * inv;
+        if t > 0.0 && t < best {
+            best = t;
+        }
+    }
+    best.is_finite().then_some(best)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rays_hit_the_nearest_face() {
+        let soup = Mesh::cube(10.0).to_soup(); // 0..10 on every axis
+        let hit = ray_hit(&soup, Vec3::new(5.0, -20.0, 5.0), Vec3::Y).unwrap();
+        assert!((hit - 20.0).abs() < 1e-4, "front face at y = 0: {hit}");
+        let inside = ray_hit(&soup, Vec3::new(5.0, 5.0, 5.0), -Vec3::Z).unwrap();
+        assert!((inside - 5.0).abs() < 1e-4);
+        assert_eq!(ray_hit(&soup, Vec3::new(50.0, -20.0, 5.0), Vec3::Y), None);
+        assert_eq!(ray_hit(&soup, Vec3::new(5.0, -20.0, 5.0), -Vec3::Y), None, "pointing away");
+    }
 
     #[test]
     fn cube_bounds_and_soup() {

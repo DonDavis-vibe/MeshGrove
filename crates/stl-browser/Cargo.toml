@@ -25,3 +25,4 @@ image.workspace = true
 dirs.workspace = true
 notify.workspace = true
 trash.workspace = true
+wl-clipboard-rs.workspace = true

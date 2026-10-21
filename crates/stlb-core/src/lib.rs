@@ -10,9 +10,11 @@ pub mod fsinfo;
 pub mod listing;
 pub mod loaders;
 pub mod mesh;
+pub mod printer;
 pub mod query;
 pub mod scan;
 pub mod thumbnail;
+pub mod userdata;
 
 pub use formats::Kind;
 pub use mesh::{Aabb, Mesh};

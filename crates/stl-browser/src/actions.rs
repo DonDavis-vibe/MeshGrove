@@ -60,6 +60,27 @@ pub fn show_in_file_manager(paths: &[PathBuf]) -> io::Result<()> {
     }
 }
 
+/// Puts the files on the Wayland clipboard so they can be pasted into Dolphin, a slicer or a
+/// chat (`text/uri-list` plus GNOME's variant, and the plain paths as text). Archive members
+/// are extracted first. Blocks while extracting, so call it off the UI thread.
+pub fn copy_files(paths: &[PathBuf]) -> Result<usize, String> {
+    use wl_clipboard_rs::copy::{MimeSource, MimeType, Options, Source};
+    let files: Vec<PathBuf> =
+        paths.iter().map(|p| archive::materialize(p)).collect::<io::Result<_>>().map_err(|e| e.to_string())?;
+    let uris: Vec<String> = files.iter().map(|p| file_uri(p)).collect();
+    let text: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
+    let source =
+        |data: String, mime: MimeType| MimeSource { source: Source::Bytes(data.into_bytes().into()), mime_type: mime };
+    // Plain text first: the extra text types the library adds fall back to the first text source.
+    let sources = vec![
+        source(text.join("\n"), MimeType::Text),
+        source(uris.iter().map(|u| format!("{u}\r\n")).collect(), MimeType::Specific("text/uri-list".into())),
+        source(format!("copy\n{}", uris.join("\n")), MimeType::Specific("x-special/gnome-copied-files".into())),
+    ];
+    Options::new().copy_multi(sources).map_err(|e| e.to_string())?;
+    Ok(files.len())
+}
+
 /// `file://` URI with everything but unreserved characters and `/` percent-encoded.
 pub fn file_uri(path: &Path) -> String {
     use std::os::unix::ffi::OsStrExt;

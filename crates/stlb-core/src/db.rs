@@ -12,10 +12,11 @@ use crate::cache::{ThumbCache, ThumbMeta};
 use crate::formats::Kind;
 use crate::listing::Entry;
 use crate::query::Query;
+use crate::userdata::{UserData, UserEntry};
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 /// The index proper: a cache of the disk, rebuilt when its layout changes.
 const INDEX_SCHEMA: &str = "
 CREATE TABLE dirs (
@@ -60,6 +61,13 @@ CREATE TABLE IF NOT EXISTS file_tags (
     PRIMARY KEY (content_hash, tag_id)
 );
 CREATE INDEX IF NOT EXISTS file_tags_tag ON file_tags(tag_id);
+CREATE TABLE IF NOT EXISTS notes (
+    content_hash TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    -- lower-case copy for search
+    search TEXT NOT NULL,
+    updated_ns INTEGER NOT NULL
+);
 ";
 
 /// Files that share content (exact copies) or geometry (re-exports, moved/rotated copies).
@@ -128,12 +136,12 @@ impl Library {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version != SCHEMA_VERSION {
-            if version != 1 {
+            if version == 0 || version > SCHEMA_VERSION {
                 // The index is only a cache of the disk: rebuild it instead of migrating.
                 conn.execute_batch("DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS dirs;")?;
                 conn.execute_batch(INDEX_SCHEMA)?;
             }
-            conn.execute_batch(TAGS_SCHEMA)?; // v1 → v2 only added the tag tables
+            conn.execute_batch(TAGS_SCHEMA)?; // v2 added tags, v3 notes; the index tables are unchanged
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Library { conn })
@@ -294,7 +302,12 @@ impl Library {
         let mut args: Vec<String> = Vec::new();
         for term in &query.terms {
             args.push(format!("%{}%", escape_like(term)));
-            sql += &format!(" AND f.search LIKE ?{} ESCAPE '\\'", args.len());
+            let n = args.len();
+            // A word may also appear in the file's note.
+            sql += &format!(
+                " AND (f.search LIKE ?{n} ESCAPE '\\'
+                   OR f.content_hash IN (SELECT content_hash FROM notes WHERE search LIKE ?{n} ESCAPE '\\'))"
+            );
         }
         for tag in &query.tags {
             args.push(tag.clone());
@@ -435,6 +448,97 @@ impl Library {
              GROUP BY t.id ORDER BY t.name COLLATE NOCASE",
         )?;
         stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize)))?.collect()
+    }
+
+    /// Sets (or with an empty text removes) the note of the files at `paths`.
+    pub fn set_note(&mut self, paths: &[PathBuf], text: &str) -> Result<(), Error> {
+        let text = text.trim();
+        for path in paths {
+            let Some(hash) = self.ensure_content_hash(path)? else { continue };
+            if text.is_empty() {
+                self.conn.execute("DELETE FROM notes WHERE content_hash = ?1", [hash])?;
+            } else {
+                self.conn.execute(
+                    "INSERT INTO notes (content_hash, text, search, updated_ns) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(content_hash) DO UPDATE SET text = excluded.text, search = excluded.search,
+                         updated_ns = excluded.updated_ns",
+                    params![hash, text, text.to_lowercase(), nanos(Some(SystemTime::now()))],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The common note of `paths`; `mixed` when the files carry different notes.
+    pub fn notes_of(&self, paths: &[PathBuf]) -> Result<(Option<String>, bool), Error> {
+        let mut notes = Vec::new();
+        for path in paths {
+            let note = match self.content_hash_of(path)? {
+                Some(hash) => self
+                    .conn
+                    .query_row("SELECT text FROM notes WHERE content_hash = ?1", [hash], |r| r.get::<_, String>(0))
+                    .optional()?,
+                None => None,
+            };
+            notes.push(note);
+        }
+        let first = notes.first().cloned().flatten();
+        let mixed = notes.iter().any(|n| *n != notes[0]);
+        Ok((if mixed { None } else { first }, mixed))
+    }
+
+    /// Tags and notes, keyed by content, with the current paths of those files for reference.
+    pub fn export_user_data(&self) -> Result<UserData, Error> {
+        let mut entries: std::collections::BTreeMap<String, UserEntry> = std::collections::BTreeMap::new();
+        fn entry(entries: &mut std::collections::BTreeMap<String, UserEntry>, hash: String) -> &mut UserEntry {
+            entries.entry(hash.clone()).or_insert_with(|| UserEntry { content_hash: hash, ..Default::default() })
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT ft.content_hash, t.name FROM file_tags ft JOIN tags t ON t.id = ft.tag_id ORDER BY t.name",
+        )?;
+        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let (hash, tag) = row?;
+            entry(&mut entries, hash).tags.push(tag);
+        }
+        let mut stmt = self.conn.prepare("SELECT content_hash, text FROM notes")?;
+        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let (hash, text) = row?;
+            entry(&mut entries, hash).note = Some(text);
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT d.path, f.name FROM files f JOIN dirs d ON d.id = f.dir_id WHERE f.content_hash = ?1")?;
+        for e in entries.values_mut() {
+            for row in stmt.query_map([&e.content_hash], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+                let (dir, name) = row?;
+                e.files.push(format!("{dir}/{name}"));
+            }
+        }
+        Ok(UserData::new(entries.into_values().collect()))
+    }
+
+    /// Merges exported tags and notes: tags are added, a note only fills a file without one.
+    /// Returns how many entries were applied.
+    pub fn import_user_data(&mut self, data: &UserData) -> Result<usize, Error> {
+        let tx = self.conn.transaction()?;
+        for e in &data.entries {
+            for tag in e.tags.iter().map(|t| t.trim()).filter(|t| !t.is_empty()) {
+                tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", [tag])?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO file_tags (content_hash, tag_id)
+                     SELECT ?1, id FROM tags WHERE name = ?2 COLLATE NOCASE",
+                    params![e.content_hash, tag],
+                )?;
+            }
+            if let Some(note) = e.note.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                tx.execute(
+                    "INSERT OR IGNORE INTO notes (content_hash, text, search, updated_ns) VALUES (?1, ?2, ?3, ?4)",
+                    params![e.content_hash, note, note.to_lowercase(), nanos(Some(SystemTime::now()))],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(data.entries.len())
     }
 
     /// Groups of duplicate models, the ones wasting most space first.
@@ -684,6 +788,41 @@ mod tests {
     }
 
     #[test]
+    fn notes_are_searchable_and_exported_with_tags() {
+        let mut lib = library();
+        let minis = Path::new("/lib/3D_druck/minis");
+        let meta = |hash: &str| ThumbMeta { content_hash: Some(hash.into()), ..Default::default() };
+        lib.store_meta(&minis.join("Knight.stl"), "k", &meta("h-knight")).unwrap();
+        lib.store_meta(&minis.join("box_lid.3mf"), "k", &meta("h-lid")).unwrap();
+        let knight = [minis.join("Knight.stl")];
+        lib.set_note(&knight, "  0,12 mm Schichthöhe, Tree-Support  ").unwrap();
+        lib.tag(&knight, "bemalt").unwrap();
+        assert_eq!(lib.notes_of(&knight).unwrap(), (Some("0,12 mm Schichthöhe, Tree-Support".into()), false));
+        let both = [minis.join("Knight.stl"), minis.join("box_lid.3mf")];
+        assert_eq!(lib.notes_of(&both).unwrap(), (None, true));
+        assert_eq!(
+            names(&lib.search(&query::parse("schichthöhe"), 9).unwrap()),
+            ["Knight.stl"],
+            "found via the note"
+        );
+
+        let data = lib.export_user_data().unwrap();
+        assert_eq!(data.entries.len(), 1);
+        assert_eq!(data.entries[0].files, ["/lib/3D_druck/minis/Knight.stl"]);
+        let json = serde_json::to_string(&data).unwrap();
+
+        // Fresh library with the same file content: import brings tags and note back.
+        let mut fresh = library();
+        fresh.store_meta(&minis.join("Knight.stl"), "k", &meta("h-knight")).unwrap();
+        assert_eq!(fresh.import_user_data(&serde_json::from_str(&json).unwrap()).unwrap(), 1);
+        assert_eq!(fresh.tags_of(&knight).unwrap(), [("bemalt".into(), 1)]);
+        assert_eq!(fresh.notes_of(&knight).unwrap().0.as_deref(), Some("0,12 mm Schichthöhe, Tree-Support"));
+
+        lib.set_note(&knight, "").unwrap();
+        assert_eq!(lib.notes_of(&knight).unwrap(), (None, false));
+    }
+
+    #[test]
     fn duplicate_groups_exact_and_geometry() {
         let mut lib = library();
         let root = Path::new("/lib/3D_druck");
@@ -720,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    fn v1_index_is_upgraded_keeping_its_contents() {
+    fn old_index_versions_are_upgraded_keeping_their_contents() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("library.db");
         {

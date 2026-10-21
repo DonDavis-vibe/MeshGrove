@@ -274,6 +274,22 @@ impl Renderer {
     }
 }
 
+/// The ray from the camera through a point of the view (`ndc` −1..1, y up), in the mesh's
+/// recentred coordinates: (origin, normalised direction). For picking points on the model.
+pub fn view_ray(bounds: &Aabb, view: &ViewParams, aspect: f32, ndc: Vec2) -> (Vec3, Vec3) {
+    let inv = Camera::fit(bounds, view, aspect).view_proj.inverse();
+    let near = inv.project_point3(Vec3::new(ndc.x, ndc.y, 0.0));
+    let far = inv.project_point3(Vec3::new(ndc.x, ndc.y, 1.0));
+    (near, (far - near).normalize())
+}
+
+/// Where a point of the mesh (recentred coordinates) appears in the view, in NDC (y up);
+/// `None` when it is behind the camera.
+pub fn project_point(bounds: &Aabb, view: &ViewParams, aspect: f32, point: Vec3) -> Option<Vec2> {
+    let clip = Camera::fit(bounds, view, aspect).view_proj * point.extend(1.0);
+    (clip.w > 1e-6).then(|| Vec2::new(clip.x / clip.w, clip.y / clip.w))
+}
+
 /// Uploads a mesh; needs only the device, so it can run on a background thread.
 pub fn upload_mesh(device: &wgpu::Device, mesh: &Mesh) -> Option<GpuMesh> {
     let bounds = mesh.bounds()?;
@@ -443,6 +459,22 @@ mod tests {
             assert!((db - da).abs() < da * 1e-5, "zoomed at az {az}: {da} vs {db}");
             assert!(da < rod().radius() * 6.0, "camera too far away: {da}");
         }
+    }
+
+    #[test]
+    fn rays_and_projection_agree() {
+        let b = rod();
+        let view = ViewParams { azimuth_deg: 40.0, elevation_deg: 20.0, framing: Framing::Orbit, ..Default::default() };
+        let corner = Vec3::new(100.0, -5.0, 10.0);
+        let ndc = project_point(&b, &view, 1.5, corner).unwrap();
+        assert!(ndc.abs().max_element() < 1.0, "corner in view: {ndc}");
+        let (origin, dir) = view_ray(&b, &view, 1.5, ndc);
+        // The ray through the corner's screen position passes the corner.
+        let along = (corner - origin).dot(dir);
+        assert!((origin + dir * along - corner).length() < 1e-2);
+        // Straight through the centre of the view hits the pivot line.
+        let (o, d) = view_ray(&b, &view, 1.5, Vec2::ZERO);
+        assert!((o + d * (b.center() - o).dot(d) - b.center()).length() < 1e-2);
     }
 
     #[test]

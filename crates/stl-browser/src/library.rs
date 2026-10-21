@@ -12,7 +12,7 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
 use notify::{EventKind, RecursiveMode, Watcher};
 use stlb_core::cache::ThumbMeta;
 use stlb_core::db::{Counts, Library};
-use stlb_core::scan;
+use stlb_core::{scan, userdata};
 
 use crate::thumbs::Job;
 
@@ -22,14 +22,25 @@ const SETTLE: Duration = Duration::from_millis(1500);
 /// per-user instance limit is easily exhausted on a busy desktop), rarely otherwise.
 const RESCAN_WITHOUT_WATCHER: Duration = Duration::from_secs(60);
 const RESCAN_WITH_WATCHER: Duration = Duration::from_secs(600);
+/// Daily backups of tags and notes kept in `userdata::backup_dir()`.
+const KEEP_BACKUPS: usize = 7;
 
 pub enum LibEvent {
     /// A scan finished; the contents of these folders changed.
     Scanned { changed: Vec<PathBuf> },
     /// Files whose thumbnail facts are missing or stale, to process in the background.
     Pending(Vec<Job>),
-    /// Tags were added or removed.
-    TagsChanged,
+    /// Tags or notes were changed (by the user or an import).
+    UserDataChanged,
+    /// Result of an export or import, for a message.
+    Transfer(Result<Transfer, String>),
+}
+
+pub enum Transfer {
+    /// Tags and notes of this many files were written to the file.
+    Exported(PathBuf, usize),
+    /// Entries read from an export and merged into the library.
+    Imported(usize),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -45,6 +56,11 @@ enum Cmd {
     StoreMeta(PathBuf, String, ThumbMeta),
     Tag(Vec<PathBuf>, String),
     Untag(Vec<PathBuf>, String),
+    SetNote(Vec<PathBuf>, String),
+    Export(PathBuf),
+    Import(PathBuf),
+    /// Answered once everything sent before is stored (and backed up).
+    Flush(Sender<()>),
 }
 
 pub struct LibraryService {
@@ -86,6 +102,28 @@ impl LibraryService {
 
     pub fn untag(&self, paths: Vec<PathBuf>, tag: String) {
         let _ = self.tx.send(Cmd::Untag(paths, tag));
+    }
+
+    pub fn set_note(&self, paths: Vec<PathBuf>, text: String) {
+        let _ = self.tx.send(Cmd::SetNote(paths, text));
+    }
+
+    /// Writes all tags and notes to a JSON file.
+    pub fn export(&self, path: PathBuf) {
+        let _ = self.tx.send(Cmd::Export(path));
+    }
+
+    /// Merges tags and notes from an exported JSON file.
+    pub fn import(&self, path: PathBuf) {
+        let _ = self.tx.send(Cmd::Import(path));
+    }
+
+    /// Waits (at most `timeout`) until earlier commands are done — before the app quits.
+    pub fn flush(&self, timeout: Duration) {
+        let (done, wait) = crossbeam_channel::bounded(1);
+        if self.tx.send(Cmd::Flush(done)).is_ok() {
+            let _ = wait.recv_timeout(timeout);
+        }
     }
 
     /// Files were changed by the app itself (e.g. moved to the trash): rescan their folders.
@@ -153,6 +191,7 @@ impl Worker {
                     }
                     let starts: Vec<(PathBuf, PathBuf)> = self.roots.iter().map(|r| (r.clone(), r.clone())).collect();
                     self.scan(&mut lib, &starts, false);
+                    backup(&lib);
                     next_full = Instant::now() + interval;
                 }
                 Ok(Cmd::Changed(paths)) => {
@@ -167,15 +206,37 @@ impl Worker {
                     if let Err(e) = lib.tag(&paths, &tag) {
                         log::warn!("tagging failed: {e}");
                     }
-                    let _ = self.events.send(LibEvent::TagsChanged);
-                    self.ctx.request_repaint();
+                    self.send(LibEvent::UserDataChanged);
                 }
                 Ok(Cmd::Untag(paths, tag)) => {
                     if let Err(e) = lib.untag(&paths, &tag) {
                         log::warn!("removing tag failed: {e}");
                     }
-                    let _ = self.events.send(LibEvent::TagsChanged);
-                    self.ctx.request_repaint();
+                    self.send(LibEvent::UserDataChanged);
+                }
+                Ok(Cmd::SetNote(paths, text)) => {
+                    if let Err(e) = lib.set_note(&paths, &text) {
+                        log::warn!("saving note failed: {e}");
+                    }
+                    self.send(LibEvent::UserDataChanged);
+                }
+                Ok(Cmd::Export(path)) => {
+                    let result = lib.export_user_data().map_err(|e| e.to_string()).and_then(|data| {
+                        userdata::write(&data, &path).map_err(|e| e.to_string())?;
+                        Ok(Transfer::Exported(path, data.entries.len()))
+                    });
+                    self.send(LibEvent::Transfer(result));
+                }
+                Ok(Cmd::Import(path)) => {
+                    let result = userdata::read(&path).map_err(|e| e.to_string()).and_then(|data| {
+                        lib.import_user_data(&data).map(Transfer::Imported).map_err(|e| e.to_string())
+                    });
+                    self.send(LibEvent::Transfer(result));
+                    self.send(LibEvent::UserDataChanged);
+                }
+                Ok(Cmd::Flush(done)) => {
+                    backup(&lib);
+                    let _ = done.send(());
                 }
                 Ok(Cmd::StoreMeta(path, key, meta)) => {
                     if let Err(e) = lib.store_meta(&path, &key, &meta) {
@@ -187,6 +248,7 @@ impl Worker {
                     dirty.clear();
                     let starts: Vec<(PathBuf, PathBuf)> = self.roots.iter().map(|r| (r.clone(), r.clone())).collect();
                     self.scan(&mut lib, &starts, false);
+                    backup(&lib);
                     next_full = Instant::now() + interval;
                 }
                 Err(RecvTimeoutError::Timeout) => {
@@ -200,7 +262,10 @@ impl Worker {
                         .collect();
                     self.scan(&mut lib, &starts, true);
                 }
-                Err(RecvTimeoutError::Disconnected) => return,
+                Err(RecvTimeoutError::Disconnected) => {
+                    backup(&lib);
+                    return;
+                }
             }
         }
     }
@@ -235,6 +300,11 @@ impl Worker {
         self.refresh_counts(lib);
     }
 
+    fn send(&self, event: LibEvent) {
+        let _ = self.events.send(event);
+        self.ctx.request_repaint();
+    }
+
     fn refresh_counts(&self, lib: &Library) {
         if let Ok(counts) = lib.counts() {
             self.status.lock().unwrap().counts = counts;
@@ -246,6 +316,21 @@ impl Worker {
         log::error!("library index unavailable: {error}");
         self.status.lock().unwrap().error = Some(error);
         self.ctx.request_repaint();
+    }
+}
+
+/// Today's backup of tags and notes (only written when they changed since the last one).
+fn backup(lib: &Library) {
+    let Some(dir) = userdata::backup_dir() else { return };
+    let today = userdata::date(std::time::SystemTime::now());
+    let result = lib
+        .export_user_data()
+        .map_err(|e| e.to_string())
+        .and_then(|data| userdata::rolling_backup(&data, &dir, &today, KEEP_BACKUPS).map_err(|e| e.to_string()));
+    match result {
+        Ok(Some(path)) => log::info!("backed up tags and notes to {}", path.display()),
+        Ok(None) => {}
+        Err(e) => log::warn!("backup of tags and notes failed: {e}"),
     }
 }
 

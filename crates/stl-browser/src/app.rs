@@ -3,33 +3,36 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use crossbeam_channel::{Receiver, bounded};
+use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use egui::{Button, Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use stlb_core::cache::{ThumbCache, ThumbMeta};
 use stlb_core::config::{Config, Slicer, SortKey};
 use stlb_core::db::Library;
 use stlb_core::listing::{self, Entry};
+use stlb_core::printer::Bed;
 use stlb_core::{Kind, query};
 use stlb_render::Renderer;
 
 use crate::actions;
 use crate::i18n;
-use crate::library::{LibEvent, LibraryService};
+use crate::library::{LibEvent, LibraryService, Transfer};
 use crate::meshes::{self, MeshState, MeshStore};
 use crate::nav::{Listing, Navigator};
 use crate::thumbs::{ThumbResult, ThumbService};
-use crate::ui::details::{self, DetailsContext, ModelStatus, TagEditor};
+use crate::ui::details::{self, DetailsContext, ModelStatus, NoteEditor, TagEditor};
 use crate::ui::duplicates::{self, DupAction, GroupInfo};
 use crate::ui::gallery::{Action, Arrange, Gallery, MenuContext};
 use crate::ui::settings::{AppInfo, SettingsChange, SettingsDialog};
 use crate::ui::sidebar::{LibraryInfo, Sidebar, SidebarAction};
 use crate::ui::turntable::Turntable;
-use crate::ui::viewer::ModelViewer;
+use crate::ui::viewer::{MeshSource, ModelViewer};
 
 /// Wait this long after the selection settles before loading a model into the viewer,
 /// so arrowing through a folder of 200 MB miniatures doesn't load every one of them.
 const VIEWER_DEBOUNCE: Duration = Duration::from_millis(250);
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(150);
+/// A note is saved this long after the last keystroke.
+const NOTE_DEBOUNCE: Duration = Duration::from_millis(800);
 const TILE_RANGE: std::ops::RangeInclusive<f32> = 96.0..=384.0;
 const MAX_RESULTS: usize = 5000;
 /// Texture uploads per frame; more would stutter when a whole folder comes out of the cache at once.
@@ -99,6 +102,13 @@ pub struct App {
     tags_dirty: bool,
     tag_input: String,
     focus_tags: bool,
+    /// Note of the selection as shown in the editor; saved shortly after the last keystroke.
+    note_input: String,
+    note_mixed: bool,
+    note_edited: Option<Instant>,
+    note_dirty: bool,
+    /// Printer bed for the size check (from the settings or the slicer).
+    bed: Option<Bed>,
     /// Duplicate groups in the library (for the sidebar) and when to recount them.
     duplicate_groups: usize,
     duplicates_due: Option<Instant>,
@@ -107,6 +117,8 @@ pub struct App {
     trash_rx: Option<Receiver<TrashResult>>,
     /// Short message in the status bar (result of an action) and when it was set.
     toast: Option<(String, Instant)>,
+    /// Messages from actions that finish on a thread (e.g. copying files).
+    messages: (Sender<String>, Receiver<String>),
     settings: SettingsDialog,
 }
 
@@ -126,6 +138,10 @@ impl App {
         match &slicer {
             Some(s) => log::info!("slicer: {} ({})", s.name, s.program.display()),
             None => log::info!("no slicer found; models open with the default application"),
+        }
+        let bed = config.printer.clone().or_else(Bed::detect);
+        if let Some(b) = &bed {
+            log::info!("printer bed: {} ({} × {} × {} mm)", b.name, b.x, b.y, b.z);
         }
         let cache = ThumbCache::new(ThumbCache::default_location().context("no cache directory")?);
         let db_path = Library::default_location().context("no data directory")?;
@@ -151,7 +167,7 @@ impl App {
             nav: Navigator::new(cc.egui_ctx.clone(), start_dir),
             view: View::Folder,
             sidebar: Sidebar::new(),
-            gallery: Gallery::default(),
+            gallery: Gallery::with_bed(bed.clone()),
             thumbs: ThumbService::new(cc.egui_ctx.clone(), cache),
             library,
             db_path,
@@ -183,12 +199,18 @@ impl App {
             tags_dirty: true,
             tag_input: String::new(),
             focus_tags: false,
+            note_input: String::new(),
+            note_mixed: false,
+            note_edited: None,
+            note_dirty: true,
+            bed,
             duplicate_groups: 0,
             duplicates_due: Some(Instant::now()),
             last_processed: 0,
             trash_confirm: None,
             trash_rx: None,
             toast: None,
+            messages: unbounded(),
             settings: SettingsDialog::default(),
             config,
             config_error,
@@ -299,6 +321,14 @@ impl App {
         }
     }
 
+    /// Reads the current folder again; the selected file stays selected.
+    fn reload(&mut self) {
+        if matches!(self.view, View::Folder) && self.select_after_load.is_none() {
+            self.select_after_load = self.selected_entry().map(|e| e.path.clone());
+        }
+        self.nav.reload();
+    }
+
     fn on_listing_arrived(&mut self) {
         if matches!(self.view, View::Search(_)) {
             return; // the folder changed underneath the results; it is shown when the search ends
@@ -403,7 +433,7 @@ impl App {
                         continue; // periodic safety-net scan found nothing new
                     }
                     if changed.iter().any(|d| d == self.nav.current()) {
-                        self.nav.reload();
+                        self.reload();
                     } else if matches!(self.view, View::Folder) {
                         self.refresh_gallery(false); // the index may now know the folders' contents
                     }
@@ -416,7 +446,20 @@ impl App {
                     self.duplicates_due = Some(Instant::now());
                     self.tags_dirty = true;
                 }
-                LibEvent::TagsChanged => self.tags_dirty = true,
+                LibEvent::UserDataChanged => self.tags_dirty = true,
+                LibEvent::Transfer(result) => {
+                    let message = match result {
+                        Ok(Transfer::Exported(path, n)) => {
+                            t!("toast.exported", count = n, path = path.display().to_string())
+                        }
+                        Ok(Transfer::Imported(n)) => {
+                            self.note_dirty = true;
+                            t!("toast.imported", count = n)
+                        }
+                        Err(e) => t!("toast.transfer_failed", error = e),
+                    };
+                    self.toast(message.into_owned());
+                }
             }
         }
     }
@@ -434,6 +477,8 @@ impl App {
     fn update_selection_facts(&mut self) {
         let paths = self.selected_paths();
         if paths != self.menu_for {
+            self.save_note(); // belongs to the previous selection
+            self.note_dirty = true;
             self.menu = MenuContext {
                 slicer: self.slicer.as_ref().map(|s| s.name.clone()),
                 trash_blocked: actions::trash_blocked(&paths),
@@ -447,6 +492,22 @@ impl App {
         {
             self.all_tags = index.all_tags().unwrap_or_default();
             self.selection_tags = index.tags_of(&self.menu_for).unwrap_or_default();
+        }
+        if self.note_edited.is_none()
+            && std::mem::take(&mut self.note_dirty)
+            && let Some(index) = &self.index
+        {
+            let (note, mixed) = index.notes_of(&self.menu_for).unwrap_or_default();
+            self.note_input = note.unwrap_or_default();
+            self.note_mixed = mixed;
+        }
+    }
+
+    /// Stores an edited note for the files it was typed for.
+    fn save_note(&mut self) {
+        if self.note_edited.take().is_some() && self.menu.can_tag {
+            self.library.set_note(self.menu_for.clone(), self.note_input.clone());
+            self.note_mixed = false;
         }
     }
 
@@ -522,6 +583,24 @@ impl App {
                 ctx.copy_text(text.join("\n"));
                 self.toast(t!("toast.copied", count = paths.len()).into_owned());
             }
+            Action::CopyFiles => {
+                let paths = self.selected_paths();
+                let (tx, ctx) = (self.messages.0.clone(), ctx.clone());
+                std::thread::spawn(move || {
+                    let message = match actions::copy_files(&paths) {
+                        Ok(n) => t!("toast.files_copied", count = n),
+                        Err(e) => {
+                            // No Wayland data-control support: at least the paths as text.
+                            log::warn!("copying files failed: {e}");
+                            let text: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+                            ctx.copy_text(text.join("\n"));
+                            t!("toast.copied", count = paths.len())
+                        }
+                    };
+                    let _ = tx.send(message.into_owned());
+                    ctx.request_repaint();
+                });
+            }
             Action::EditTags => self.focus_tags = true,
             Action::Trash => self.request_trash(self.selected_paths()),
         }
@@ -561,6 +640,25 @@ impl App {
                         .as_ref()
                         .map_or_else(|| t!("settings.slicer_none").into_owned(), |s| s.name.clone());
                     self.toast(t!("toast.slicer_set", name = name).into_owned());
+                }
+                SettingsChange::Printer(bed) => {
+                    self.config.printer = bed.clone();
+                    self.bed = bed.or_else(Bed::detect);
+                    self.gallery.bed = self.bed.clone();
+                    let name =
+                        self.bed.as_ref().map_or_else(|| t!("settings.printer_none").into_owned(), |b| b.name.clone());
+                    self.toast(t!("toast.printer_set", name = name).into_owned());
+                }
+                SettingsChange::Export(path) => {
+                    self.save_note();
+                    self.library.export(path);
+                }
+                SettingsChange::Import(path) => self.library.import(path),
+                SettingsChange::OpenBackups => {
+                    if let Some(dir) = stlb_core::userdata::backup_dir() {
+                        let _ = std::fs::create_dir_all(&dir);
+                        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+                    }
                 }
                 SettingsChange::ClearCache => {
                     if let Some(dir) = crate::ui::settings::cache_dir() {
@@ -672,7 +770,8 @@ impl App {
             }
             MeshState::Ready(loaded) => {
                 let loaded = loaded.clone();
-                self.viewer.set_mesh(Some(loaded.mesh));
+                let source = MeshSource { path: path.clone(), kind, plate: self.viewer_plate };
+                self.viewer.set_mesh(Some((loaded.mesh, source)));
                 if self.plates.as_ref().is_none_or(|(p, _)| *p != path) {
                     let textures = loaded
                         .info
@@ -709,10 +808,10 @@ impl App {
             self.request_trash(paths);
         }
         if pressed(Modifiers::COMMAND, Key::Comma) {
-            self.settings.open(self.slicer.as_ref());
+            self.settings.open(self.slicer.as_ref(), self.bed.as_ref());
         }
         if pressed(Modifiers::NONE, Key::F5) {
-            self.nav.reload();
+            self.reload();
             self.sidebar.refresh();
         }
         if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::F) {
@@ -767,14 +866,14 @@ impl App {
                 self.nav.up();
             }
             if nav_button(ui, "🔄", true, t!("nav.reload")) {
-                self.nav.reload();
+                self.reload();
                 self.sidebar.refresh();
             }
             ui.separator();
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button(RichText::new("⚙").size(16.0)).on_hover_text(t!("settings.open")).clicked() {
-                    self.settings.open(self.slicer.as_ref());
+                    self.settings.open(self.slicer.as_ref(), self.bed.as_ref());
                 }
                 self.view_menu(ui);
                 self.search_field(ui);
@@ -1022,6 +1121,9 @@ impl eframe::App for App {
         }
         self.poll_flatten();
         self.poll_trash();
+        while let Ok(message) = self.messages.1.try_recv() {
+            self.toast(message);
+        }
         self.library_events();
         self.update_selection_facts();
         self.update_duplicates();
@@ -1038,11 +1140,18 @@ impl eframe::App for App {
                 ctx.request_repaint_after(SEARCH_DEBOUNCE);
             }
         }
+        if let Some(edited) = self.note_edited {
+            if edited.elapsed() >= NOTE_DEBOUNCE {
+                self.save_note();
+            } else {
+                ctx.request_repaint_after(NOTE_DEBOUNCE);
+            }
+        }
         self.meshes.begin_frame();
         self.update_viewer(&ctx);
         if let Some(hook) = &mut self.screenshot {
             if std::mem::take(&mut hook.settings) {
-                self.settings.open(self.slicer.as_ref());
+                self.settings.open(self.slicer.as_ref(), self.bed.as_ref());
             }
             let hook = self.screenshot.as_mut().expect("checked above");
             if hook.duplicates && self.index.is_some() && self.duplicate_groups > 0 {
@@ -1127,6 +1236,12 @@ impl eframe::App for App {
                             input: &mut self.tag_input,
                             focus: focus_tags,
                         },
+                        note: NoteEditor {
+                            enabled: self.menu.can_tag,
+                            text: &mut self.note_input,
+                            mixed: self.note_mixed,
+                        },
+                        bed: self.bed.as_ref(),
                         thumb,
                         model: &self.model,
                         plates: self.plates.as_ref().map_or(&[][..], |(_, p)| p.as_slice()),
@@ -1146,11 +1261,17 @@ impl eframe::App for App {
         if let Some(tag) = details_out.remove_tag {
             self.library.untag(self.menu_for.clone(), tag);
         }
+        if details_out.note_changed {
+            self.note_edited = Some(Instant::now());
+        }
+        if let Some(message) = details_out.message {
+            self.toast(message);
+        }
 
         egui::CentralPanel::default().show(ui, |ui| self.central(ui, &rs));
 
         let info = AppInfo { gpu: &self.gpu_name, db_path: &self.db_path };
-        let changes = self.settings.show(&ctx, &self.config, self.slicer.as_ref(), info);
+        let changes = self.settings.show(&ctx, &self.config, self.slicer.as_ref(), self.bed.as_ref(), info);
         self.apply_settings(changes);
     }
 
@@ -1161,6 +1282,8 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        self.save_note();
+        self.library.flush(Duration::from_secs(3));
         self.save_config();
     }
 }

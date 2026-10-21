@@ -5,4 +5,6 @@ mod headless;
 mod renderer;
 
 pub use headless::{HeadlessRenderer, RenderError};
-pub use renderer::{COLOR_FORMAT, Framing, GpuMesh, RenderTarget, Renderer, ViewParams, upload_mesh};
+pub use renderer::{
+    COLOR_FORMAT, Framing, GpuMesh, RenderTarget, Renderer, ViewParams, project_point, upload_mesh, view_ray,
+};

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use egui::{Grid, Key, RichText, Ui};
 use stlb_core::Kind;
 use stlb_core::listing::Entry;
+use stlb_core::printer::{self, Bed, Fit};
 use stlb_render::Renderer;
 
 use super::gallery::Thumb;
@@ -29,11 +30,22 @@ pub struct TagEditor<'a> {
     pub focus: bool,
 }
 
+/// The selection's note (shared by all selected files, or `mixed`).
+pub struct NoteEditor<'a> {
+    pub enabled: bool,
+    pub text: &'a mut String,
+    pub mixed: bool,
+}
+
 #[derive(Default)]
 pub struct DetailsOutput {
     pub clicked_plate: Option<usize>,
     pub add_tag: Option<String>,
     pub remove_tag: Option<String>,
+    /// The note text was edited this frame.
+    pub note_changed: bool,
+    /// Result of a viewer tool (picture saved, …) for the status bar.
+    pub message: Option<String>,
 }
 
 pub struct DetailsContext<'a> {
@@ -41,6 +53,8 @@ pub struct DetailsContext<'a> {
     /// Number and total size of the selected files (the multi-selection, or just `entry`).
     pub selection: (usize, u64),
     pub tags: TagEditor<'a>,
+    pub note: NoteEditor<'a>,
+    pub bed: Option<&'a Bed>,
     pub thumb: Option<&'a Thumb>,
     pub model: &'a ModelStatus,
     /// Plate previews of a 3MF project (plate number, texture).
@@ -77,7 +91,7 @@ pub fn show(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
                 ModelStatus::Failed(e) => {
                     child.centered_and_justified(|ui| ui.colored_label(ui.visuals().error_fg_color, e));
                 }
-                _ => cx.viewer.ui(&mut child, cx.render_state, cx.renderer),
+                _ => out.message = cx.viewer.ui(&mut child, cx.render_state, cx.renderer),
             }
             ui.weak(t!("viewer.hint"));
         } else if entry.kind == Kind::Image
@@ -87,7 +101,7 @@ pub fn show(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
         }
 
         ui.add_space(8.0);
-        facts(ui, entry, cx.thumb, cx.model);
+        facts(ui, entry, cx.thumb, cx.model, cx.bed);
         if !cx.plates.is_empty() {
             let active = match cx.model {
                 ModelStatus::Ready(info) => info.plate,
@@ -96,6 +110,7 @@ pub fn show(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
             out.clicked_plate = plates(ui, cx.plates, active);
         }
         tag_editor(ui, cx.tags, count, &mut out);
+        note_editor(ui, cx.note, &mut out);
         ui.add_space(6.0);
         ui.add(egui::Label::new(RichText::new(entry.path.display().to_string()).small().weak()).wrap());
     });
@@ -151,7 +166,42 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, count: usize, out: &mut DetailsOut
     }
 }
 
-fn facts(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, model: &ModelStatus) {
+fn note_editor(ui: &mut Ui, ed: NoteEditor<'_>, out: &mut DetailsOutput) {
+    if !ed.enabled {
+        return; // the tag section already explains that this needs the library
+    }
+    ui.add_space(10.0);
+    ui.label(RichText::new(t!("notes.title")).weak());
+    let hint = if ed.mixed { t!("notes.mixed_hint") } else { t!("notes.hint") };
+    let field = egui::TextEdit::multiline(ed.text).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY);
+    out.note_changed = ui.add(field).changed();
+}
+
+/// "45" or "22,5" — rotation angles for the bed check.
+pub fn angle(degrees: f32) -> String {
+    if degrees.fract() == 0.0 { format!("{degrees:.0}") } else { i18n::decimal(degrees) }
+}
+
+/// "passt auf Anycubic Kobra S1", "passt nur gedreht (45°) …", "zu groß für …: X +12,0 mm".
+pub fn fit_text(fit: Fit, bed: &Bed) -> String {
+    match fit {
+        Fit::Fits => t!("bed.fits", bed = bed.name),
+        Fit::Rotated(a) => t!("bed.rotated", bed = bed.name, angle = angle(a)),
+        Fit::TooBig(over) => {
+            let parts: Vec<String> = ["X", "Y", "Z"]
+                .iter()
+                .zip(over)
+                .filter(|(_, mm)| *mm > 0.0)
+                .map(|(axis, mm)| format!("{axis} +{} mm", i18n::decimal(mm)))
+                .collect();
+            let over = if parts.is_empty() { t!("bed.diagonal").into_owned() } else { parts.join(", ") };
+            t!("bed.too_big", bed = bed.name, over = over)
+        }
+    }
+    .into_owned()
+}
+
+fn facts(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, model: &ModelStatus, bed: Option<&Bed>) {
     Grid::new("details_facts").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         fact(ui, &t!("details.type"), &kind_name(entry.kind));
         if !entry.is_dir() {
@@ -172,6 +222,17 @@ fn facts(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, model: &ModelStatus)
         let triangles = info.map(|i| i.triangles).or_else(|| meta.and_then(|m| m.triangles));
         if let Some(size) = size {
             fact(ui, &t!("details.dimensions"), &i18n::dimensions(size));
+            if let Some(bed) = bed {
+                let fit = printer::fit(size.to_array(), bed);
+                ui.label(RichText::new(t!("bed.label")).weak());
+                let text = fit_text(fit, bed);
+                match fit {
+                    Fit::Fits => ui.add(egui::Label::new(format!("✔ {text}")).wrap()),
+                    Fit::Rotated(_) => ui.colored_label(ui.visuals().warn_fg_color, format!("↻ {text}")),
+                    Fit::TooBig(_) => ui.colored_label(ui.visuals().error_fg_color, format!("✕ {text}")),
+                };
+                ui.end_row();
+            }
         }
         if let Some(triangles) = triangles {
             fact(ui, &t!("details.triangles"), &i18n::count(triangles));

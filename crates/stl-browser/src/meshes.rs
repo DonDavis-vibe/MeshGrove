@@ -168,9 +168,22 @@ fn ready_bytes(state: &MeshState) -> Option<usize> {
 }
 
 fn load(path: &Path, kind: Kind, plate: Option<usize>, device: &wgpu::Device) -> Result<Loaded, String> {
+    let (mesh, info) = read(path, kind, plate)?;
+    finish(mesh, info, device)
+}
+
+/// The model's triangles on the CPU (for measuring), as a soup in the same recentred
+/// coordinates as its `GpuMesh`.
+pub fn load_triangles(path: &Path, kind: Kind, plate: Option<usize>) -> Result<Vec<[f32; 3]>, String> {
+    let (mesh, _) = read(path, kind, plate)?;
+    let center = mesh.bounds().ok_or_else(|| t!("error.empty_model").into_owned())?.center();
+    Ok(mesh.to_soup().into_iter().map(|p| (glam::Vec3::from(p) - center).to_array()).collect())
+}
+
+fn read(path: &Path, kind: Kind, plate: Option<usize>) -> Result<(stlb_core::Mesh, ModelInfo), String> {
     if kind == Kind::Step {
         let mesh = loaders::step::load(path).map_err(|e| e.to_string())?;
-        return finish(mesh, ModelInfo::plain(), device);
+        return Ok((mesh, ModelInfo::plain()));
     }
     let bytes = stlb_core::archive::read(path).map_err(|e| e.to_string())?;
     let (mesh, info) = match kind {
@@ -197,8 +210,7 @@ fn load(path: &Path, kind: Kind, plate: Option<usize>, device: &wgpu::Device) ->
         }
         _ => (loaders::load_mesh(kind, &bytes).map_err(|e| e.to_string())?, ModelInfo::plain()),
     };
-    drop(bytes);
-    finish(mesh, info, device)
+    Ok((mesh, info))
 }
 
 fn finish(mesh: stlb_core::Mesh, mut info: ModelInfo, device: &wgpu::Device) -> Result<Loaded, String> {

@@ -4,6 +4,8 @@
 //! `STLB_POINTER=x,y` additionally pins the mouse pointer (logical points) to test hover effects,
 //! `STLB_SEARCH=query` starts with a library search, `STLB_HOLD=1` holds the left button down
 //! at the pointer from 0.7 s on and `STLB_WHEEL=dy` turns the mouse wheel there for half a second after 1 s.
+//! `STLB_CLICKS=x,y;x,y;…` clicks those points one after the other, from 3 s on, every 0.8 s,
+//! and `STLB_TYPE=text` types the text after the last click.
 
 use std::time::{Duration, Instant};
 
@@ -11,6 +13,10 @@ pub struct ScreenshotHook {
     pub pointer: Option<egui::Pos2>,
     hold: bool,
     wheel: f32,
+    clicks: Vec<egui::Pos2>,
+    next_click: usize,
+    typing: Option<String>,
+    release: Option<egui::Pos2>,
     started: Instant,
     pressed: bool,
     pub search: Option<String>,
@@ -29,10 +35,12 @@ impl ScreenshotHook {
     pub fn from_env() -> Option<ScreenshotHook> {
         let path = std::env::var("STLB_SCREENSHOT").ok()?;
         let delay = std::env::var("STLB_SCREENSHOT_DELAY").ok().and_then(|s| s.parse().ok()).unwrap_or(8.0);
-        let pointer = std::env::var("STLB_POINTER").ok().and_then(|s| {
+        let point = |s: &str| {
             let (x, y) = s.split_once(',')?;
             Some(egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?))
-        });
+        };
+        let pointer = std::env::var("STLB_POINTER").ok().and_then(|s| point(&s));
+        let clicks = std::env::var("STLB_CLICKS").map(|s| s.split(';').filter_map(point).collect()).unwrap_or_default();
         let search = std::env::var("STLB_SEARCH").ok();
         let hold = std::env::var_os("STLB_HOLD").is_some();
         let flatten = std::env::var_os("STLB_FLATTEN").is_some();
@@ -43,6 +51,10 @@ impl ScreenshotHook {
             pointer,
             hold,
             wheel,
+            clicks,
+            next_click: 0,
+            release: None,
+            typing: std::env::var("STLB_TYPE").ok(),
             started: Instant::now(),
             pressed: false,
             search,
@@ -87,7 +99,9 @@ impl ScreenshotHook {
 impl ScreenshotHook {
     /// Replaces real pointer input with the scripted one.
     pub fn inject(&mut self, raw: &mut egui::RawInput) {
-        let Some(pos) = self.pointer else { return };
+        if self.pointer.is_none() && self.clicks.is_empty() {
+            return;
+        }
         raw.events.retain(|e| {
             !matches!(
                 e,
@@ -97,8 +111,32 @@ impl ScreenshotHook {
                     | egui::Event::MouseWheel { .. }
             )
         });
-        raw.events.push(egui::Event::PointerMoved(pos));
         let t = self.started.elapsed().as_secs_f32();
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        if let Some(pos) = self.release.take() {
+            raw.events.push(button(pos, false));
+        } else if let Some(&pos) = self.clicks.get(self.next_click)
+            && t >= 3.0 + 0.8 * self.next_click as f32
+        {
+            self.next_click += 1;
+            self.pointer = Some(pos);
+            raw.events.push(egui::Event::PointerMoved(pos));
+            raw.events.push(button(pos, true));
+            self.release = Some(pos);
+        }
+        if self.next_click == self.clicks.len()
+            && t >= 3.0 + 0.8 * self.clicks.len() as f32
+            && let Some(text) = self.typing.take()
+        {
+            raw.events.push(egui::Event::Text(text));
+        }
+        let Some(pos) = self.pointer else { return };
+        raw.events.push(egui::Event::PointerMoved(pos));
         // Press only once the gallery is on screen, so the press lands on a tile.
         if self.hold && !self.pressed && t >= 0.7 {
             self.pressed = true;
