@@ -1,0 +1,12 @@
+[package]
+name = "meshgrove-thumbnailer"
+description = "Freedesktop thumbnailer (Dolphin, file dialogs) for STL, 3MF and STEP, sharing Meshgrove's renderer and cache"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+meshgrove-core.workspace = true
+meshgrove-render.workspace = true
+image.workspace = true

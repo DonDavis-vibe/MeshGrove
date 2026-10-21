@@ -4,13 +4,13 @@
 #
 #   scripts/ui-screenshot.sh out.png [delay-seconds] [app arguments…]
 #
-# Test hooks read from the environment: STLB_POINTER=x,y, STLB_SEARCH=query, and the usual
+# Test hooks read from the environment: MESHGROVE_POINTER=x,y, MESHGROVE_SEARCH=query, and the usual
 # XDG_CONFIG_HOME / XDG_DATA_HOME / XDG_CACHE_HOME to keep test state away from real settings.
 set -euo pipefail
 out=$(realpath -m "$1")
 delay=${2:-8}
 shift $(( $# >= 2 ? 2 : $# ))
-app=${STLB_APP:-$(realpath "$(dirname "$0")/../target/release/stl-browser")}
+app=${MESHGROVE_APP:-$(realpath "$(dirname "$0")/../target/release/meshgrove")}
 session=$(mktemp --suffix=.sh)
 trap 'rm -f "$session"' EXIT
 {
@@ -20,8 +20,8 @@ trap 'rm -f "$session"' EXIT
     echo
 } > "$session"
 chmod +x "$session"
-export STLB_SCREENSHOT="$out" STLB_SCREENSHOT_DELAY="$delay"
+export MESHGROVE_SCREENSHOT="$out" MESHGROVE_SCREENSHOT_DELAY="$delay"
 env -u DISPLAY timeout $(( ${delay%.*} + 60 )) \
-    kwin_wayland --virtual --width 1400 --height 860 --socket "stlb-test-$$" --no-lockscreen \
-    --exit-with-session "$session" 2>&1 | grep -E 'stl_browser|panicked' || true
+    kwin_wayland --virtual --width 1400 --height 860 --socket "meshgrove-test-$$" --no-lockscreen \
+    --exit-with-session "$session" 2>&1 | grep -E 'meshgrove|panicked' || true
 test -f "$out" && echo "screenshot: $out"

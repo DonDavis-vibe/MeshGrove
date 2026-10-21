@@ -1,11 +1,11 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/stlb-core",
-    "crates/stlb-render",
-    "crates/stl-browser",
-    "crates/stlb-step",
-    "crates/stl-browser-thumbnailer",
+    "crates/meshgrove-core",
+    "crates/meshgrove-render",
+    "crates/meshgrove",
+    "crates/meshgrove-step",
+    "crates/meshgrove-thumbnailer",
 ]
 
 [workspace.package]
@@ -17,8 +17,8 @@ description = "Native gallery for 3D-print files (STL, 3MF, STEP) with live prev
 keywords = ["stl", "3mf", "3d-printing", "gallery", "egui"]
 
 [workspace.dependencies]
-stlb-core = { path = "crates/stlb-core" }
-stlb-render = { path = "crates/stlb-render" }
+meshgrove-core = { path = "crates/meshgrove-core" }
+meshgrove-render = { path = "crates/meshgrove-render" }
 
 anyhow = "1.0"
 thiserror = "2.0"

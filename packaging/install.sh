@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds and installs the STL browser for the current user (no root needed):
-#   ~/.local/bin                     stl-browser, stlb-step-mesher, stl-browser-thumbnailer
+# Builds and installs Meshgrove for the current user (no root needed):
+#   ~/.local/bin                     meshgrove, meshgrove-step-mesher, meshgrove-thumbnailer
 #   ~/.local/share/applications      menu entry
 #   ~/.local/share/icons             icon
 #   ~/.local/share/mime              model/step file type
@@ -13,6 +13,15 @@ cd "$(dirname "$0")/.."
 BIN="${XDG_BIN_HOME:-$HOME/.local/bin}"
 DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
 FILES=(
+    "$BIN/meshgrove" "$BIN/meshgrove-step-mesher" "$BIN/meshgrove-thumbnailer"
+    "$DATA/applications/meshgrove.desktop"
+    "$DATA/icons/hicolor/scalable/apps/meshgrove.svg"
+    "$DATA/mime/packages/meshgrove-step.xml"
+    "$DATA/thumbnailers/meshgrove.thumbnailer"
+)
+
+# Files of the former name "STL-Browser" (settings and index move over on the first start).
+LEGACY=(
     "$BIN/stl-browser" "$BIN/stlb-step-mesher" "$BIN/stl-browser-thumbnailer"
     "$DATA/applications/stl-browser.desktop"
     "$DATA/icons/hicolor/scalable/apps/stl-browser.svg"
@@ -28,26 +37,27 @@ refresh() {
 }
 
 if [[ "${1:-}" == "--uninstall" ]]; then
-    rm -f "${FILES[@]}"
+    rm -f "${FILES[@]}" "${LEGACY[@]}"
     refresh
-    echo "STL browser removed. Settings (~/.config/stl-browser), index (~/.local/share/stl-browser) and cache (~/.cache/stl-browser) were kept."
+    echo "Meshgrove removed. Settings (~/.config/meshgrove), index (~/.local/share/meshgrove) and cache (~/.cache/meshgrove) were kept."
     exit 0
 fi
 
-cargo build --release -p stl-browser -p stlb-step -p stl-browser-thumbnailer
-install -Dm755 target/release/stl-browser "$BIN/stl-browser"
-install -Dm755 target/release/stlb-step-mesher "$BIN/stlb-step-mesher"
-install -Dm755 target/release/stl-browser-thumbnailer "$BIN/stl-browser-thumbnailer"
-install -Dm644 packaging/stl-browser.svg "$DATA/icons/hicolor/scalable/apps/stl-browser.svg"
-install -Dm644 packaging/mime/stl-browser-step.xml "$DATA/mime/packages/stl-browser-step.xml"
+cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
+install -Dm755 target/release/meshgrove "$BIN/meshgrove"
+install -Dm755 target/release/meshgrove-step-mesher "$BIN/meshgrove-step-mesher"
+install -Dm755 target/release/meshgrove-thumbnailer "$BIN/meshgrove-thumbnailer"
+install -Dm644 packaging/meshgrove.svg "$DATA/icons/hicolor/scalable/apps/meshgrove.svg"
+install -Dm644 packaging/mime/meshgrove-step.xml "$DATA/mime/packages/meshgrove-step.xml"
+rm -f "${LEGACY[@]}"
 mkdir -p "$DATA/applications" "$DATA/thumbnailers"
-sed "s|@BIN@|$BIN|g" packaging/stl-browser.desktop > "$DATA/applications/stl-browser.desktop"
-sed "s|@BIN@|$BIN|g" packaging/stl-browser.thumbnailer > "$DATA/thumbnailers/stl-browser.thumbnailer"
+sed "s|@BIN@|$BIN|g" packaging/meshgrove.desktop > "$DATA/applications/meshgrove.desktop"
+sed "s|@BIN@|$BIN|g" packaging/meshgrove.thumbnailer > "$DATA/thumbnailers/meshgrove.thumbnailer"
 refresh
 # Old "no preview possible" markers would keep Dolphin from asking our thumbnailer.
 rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/thumbnails/fail"
 cat <<MSG
-Installed. Start "STL-Browser" from the application menu.
+Installed. Start "Meshgrove" from the application menu.
 Dolphin previews: Settings → Configure Dolphin → Interface → Previews: enable the STL/3MF/STEP
 entries (if listed) and raise "Skip previews for remote files above"/"local files above" for big
 models, then reopen the folder.

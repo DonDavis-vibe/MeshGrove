@@ -27,6 +27,6 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests (render tests on lavapipe)
         env:
-          STLB_REQUIRE_GPU: "1"
+          MESHGROVE_REQUIRE_GPU: "1"
           WGPU_BACKEND: vulkan
         run: cargo test --workspace

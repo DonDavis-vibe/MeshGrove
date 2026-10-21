@@ -1,4 +1,4 @@
-# STL Browser
+# Meshgrove
 
 A fast, native gallery for 3D-print files on Linux. Browse your model folders the way a file
 manager browses photos — every **STL, 3MF and STEP** file, every model inside **ZIP/7z/RAR**
@@ -26,7 +26,7 @@ so it runs natively on Wayland and NVIDIA without a web view.
   note text too), **duplicate detection** (exact copies and same geometry, rotation-independent)
   with a keep suggestion.
 - **Backups of tags and notes:** a daily JSON backup (last 7 kept) in
-  `~/.local/share/stl-browser/backups`, plus export/import in the settings.
+  `~/.local/share/meshgrove/backups`, plus export/import in the settings.
 - **Actions:** open in your slicer (auto-detects Anycubic Slicer Next, OrcaSlicer, PrusaSlicer,
   Bambu Studio), **Ctrl+C copies the files** for pasting in Dolphin, show in Dolphin, copy
   path, move to trash (blocked on read-only drives).
@@ -52,21 +52,21 @@ For previews in Dolphin: *Settings → Configure Dolphin → Interface → Previ
 
 ```bash
 cargo test --workspace          # unit, loader, database and GPU render tests
-cargo run --release -p stl-browser -- /path/to/models
+cargo run --release -p meshgrove -- /path/to/models
 scripts/ui-screenshot.sh out.png 8 /path/to/models   # UI screenshot in a headless nested KWin
 ```
 
 | Crate | Purpose |
 |---|---|
-| `stlb-core` | file formats (STL, 3MF, STEP, archives, images, PDF), library index, scanner, search, duplicates, thumbnail cache |
-| `stlb-render` | wgpu mesh renderer shared by thumbnails, viewer, turntable and thumbnailer |
-| `stlb-step` | `stlb-step-mesher`: STEP → STL with OpenCascade |
-| `stl-browser` | the egui application |
-| `stl-browser-thumbnailer` | freedesktop thumbnailer for Dolphin and file dialogs |
+| `meshgrove-core` | file formats (STL, 3MF, STEP, archives, images, PDF), library index, scanner, search, duplicates, thumbnail cache |
+| `meshgrove-render` | wgpu mesh renderer shared by thumbnails, viewer, turntable and thumbnailer |
+| `meshgrove-step` | `meshgrove-step-mesher`: STEP → STL with OpenCascade |
+| `meshgrove` | the egui application |
+| `meshgrove-thumbnailer` | freedesktop thumbnailer for Dolphin and file dialogs |
 
 ## Deutsch
 
-**STL-Browser** zeigt 3D-Druck-Dateien wie ein Dateimanager Fotos: STL, 3MF, STEP, Modelle in
+**Meshgrove** zeigt 3D-Druck-Dateien wie ein Dateimanager Fotos: STL, 3MF, STEP, Modelle in
 Archiven und PDFs mit echter Vorschau. Dazu kommen 3D-Ansicht mit Messen und Bildexport,
 Drehvorschau beim Darüberfahren, Druckbett-Check für den Drucker aus dem Slicer, Bibliothekssuche,
 Tags und Notizen (mit täglicher Sicherung), Duplikaterkennung, „In Anycubic Slicer öffnen“,

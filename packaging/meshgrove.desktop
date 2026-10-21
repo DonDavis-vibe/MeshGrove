@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Meshgrove
+GenericName=3D Model Browser
+GenericName[de]=3D-Modell-Browser
+Comment=Browse 3D-print files (STL, 3MF, STEP) with live previews
+Comment[de]=3D-Druck-Dateien (STL, 3MF, STEP) mit Vorschau durchsuchen
+Exec=@BIN@/meshgrove %f
+Icon=meshgrove
+Terminal=false
+Categories=Graphics;3DGraphics;Viewer;
+MimeType=model/stl;model/3mf;model/step;
+Keywords=STL;3MF;STEP;3D;print;slicer;Drucker;
+StartupWMClass=meshgrove

@@ -2211,6 +2211,84 @@ dependencies = [
 ]
 
 [[package]]
+name = "meshgrove"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "crossbeam-channel",
+ "dirs",
+ "eframe",
+ "egui",
+ "egui-wgpu",
+ "env_logger",
+ "glam",
+ "image",
+ "log",
+ "meshgrove-core",
+ "meshgrove-render",
+ "notify",
+ "rust-i18n",
+ "sys-locale",
+ "trash",
+ "wgpu",
+ "wl-clipboard-rs",
+]
+
+[[package]]
+name = "meshgrove-core"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "compress-tools",
+ "dirs",
+ "fast-float2",
+ "glam",
+ "image",
+ "png",
+ "quick-xml 0.42.0",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "toml 1.1.8+spec-1.1.0",
+ "zip",
+]
+
+[[package]]
+name = "meshgrove-render"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "env_logger",
+ "glam",
+ "image",
+ "log",
+ "meshgrove-core",
+ "pollster",
+ "thiserror 2.0.21",
+ "wgpu",
+]
+
+[[package]]
+name = "meshgrove-step"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
+name = "meshgrove-thumbnailer"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "meshgrove-core",
+ "meshgrove-render",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3615,84 +3693,6 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
-name = "stl-browser"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "crossbeam-channel",
- "dirs",
- "eframe",
- "egui",
- "egui-wgpu",
- "env_logger",
- "glam",
- "image",
- "log",
- "notify",
- "rust-i18n",
- "stlb-core",
- "stlb-render",
- "sys-locale",
- "trash",
- "wgpu",
- "wl-clipboard-rs",
-]
-
-[[package]]
-name = "stl-browser-thumbnailer"
-version = "0.1.0"
-dependencies = [
- "image",
- "stlb-core",
- "stlb-render",
-]
-
-[[package]]
-name = "stlb-core"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "compress-tools",
- "dirs",
- "fast-float2",
- "glam",
- "image",
- "png",
- "quick-xml 0.42.0",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "toml 1.1.8+spec-1.1.0",
- "zip",
-]
-
-[[package]]
-name = "stlb-render"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytemuck",
- "env_logger",
- "glam",
- "image",
- "log",
- "pollster",
- "stlb-core",
- "thiserror 2.0.21",
- "wgpu",
-]
-
-[[package]]
-name = "stlb-step"
-version = "0.1.0"
-dependencies = [
- "cc",
-]
 
 [[package]]
 name = "syn"

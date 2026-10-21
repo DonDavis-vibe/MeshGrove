@@ -1,4 +1,0 @@
-[Thumbnailer Entry]
-TryExec=@BIN@/stl-browser-thumbnailer
-Exec=@BIN@/stl-browser-thumbnailer -s %s %i %o
-MimeType=model/stl;model/x.stl-binary;model/x.stl-ascii;application/sla;model/3mf;application/vnd.ms-3mfdocument;model/step;
