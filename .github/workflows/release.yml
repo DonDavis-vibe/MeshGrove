@@ -60,7 +60,7 @@ jobs:
         shell: bash
         run: |
           root=$(cygpath -m "$RUNNER_TEMP/vcpkg")
-          status() { cat "$root/installed/vcpkg/status" 2>/dev/null | sha256sum; }
+          status() { sha256sum "$root/installed/vcpkg/status" 2>/dev/null || true; }
           before=$(status)
           result=0
           packaging/vcpkg/install.sh "$root" "$TRIPLET" || result=$?
@@ -178,7 +178,7 @@ jobs:
         id: vcpkg
         run: |
           root="$RUNNER_TEMP/vcpkg"
-          status() { cat "$root/installed/vcpkg/status" 2>/dev/null | shasum -a 256; }
+          status() { shasum -a 256 "$root/installed/vcpkg/status" 2>/dev/null || true; }
           before=$(status)
           result=0
           packaging/vcpkg/install.sh "$root" arm64-osx-meshgrove x64-osx-meshgrove || result=$?
@@ -274,7 +274,7 @@ jobs:
         id: vcpkg
         run: |
           root="$RUNNER_TEMP/vcpkg"
-          status() { cat "$root/installed/vcpkg/status" 2>/dev/null | sha256sum; }
+          status() { sha256sum "$root/installed/vcpkg/status" 2>/dev/null || true; }
           before=$(status)
           result=0
           packaging/vcpkg/install.sh "$root" "$TRIPLET" || result=$?
