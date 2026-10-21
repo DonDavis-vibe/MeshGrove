@@ -1,0 +1,50 @@
+name: Bug report
+description: Something does not work or looks wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time! Deutsch ist auch in Ordnung.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Meshgrove version
+      description: Settings → About → Version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - Windows
+        - macOS
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System details
+      description: Distribution and desktop (e.g. Fedora 44, KDE Plasma, Wayland), graphics card and driver
+      placeholder: "Fedora 44, KDE Plasma 6 (Wayland), NVIDIA RTX 3070 Ti, driver 595"
+  - type: textarea
+    id: log
+    attributes:
+      label: Log output
+      description: Start Meshgrove from a terminal with `RUST_LOG=meshgrove=debug meshgrove` and paste what it prints around the problem.
+      render: text
+  - type: textarea
+    id: file
+    attributes:
+      label: Sample file
+      description: If a model shows wrongly, attach it (zipped) or link to it, if you are allowed to share it.

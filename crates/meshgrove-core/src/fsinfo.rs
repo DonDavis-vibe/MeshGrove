@@ -63,17 +63,17 @@ mod tests {
 
     const MOUNTS: &str = "\
 /dev/sdd3 / btrfs rw,relatime 0 0
-/dev/sdc2 /run/media/davis/366609AE66096FC3 fuseblk ro,noatime,user_id=0 0 0
-/dev/sdb1 /run/media/davis/My\\040Drive ext4 rw,relatime 0 0
+/dev/sdc2 /run/media/maker/1A2B3C4D5E6F7A8B fuseblk ro,noatime,user_id=0 0 0
+/dev/sdb1 /run/media/maker/My\\040Drive ext4 rw,relatime 0 0
 /dev/sdx /mnt/rofs ext4 rw,errors=remount-ro 0 0";
 
     #[test]
     fn longest_matching_mount_decides() {
         let ro = |p: &str| mount_is_read_only(MOUNTS, Path::new(p));
-        assert!(ro("/run/media/davis/366609AE66096FC3/3D_druck/a.stl"));
-        assert!(!ro("/home/davis/model.stl"));
-        assert!(!ro("/run/media/davis/My Drive/x.stl"), "escaped spaces in mount points");
+        assert!(ro("/run/media/maker/1A2B3C4D5E6F7A8B/prints/a.stl"));
+        assert!(!ro("/home/maker/model.stl"));
+        assert!(!ro("/run/media/maker/My Drive/x.stl"), "escaped spaces in mount points");
         assert!(!ro("/mnt/rofs/x"), "'remount-ro' is not the 'ro' flag");
-        assert!(!ro("/run/media/davis/366609AE66096FC3x/y"), "sibling with a longer name");
+        assert!(!ro("/run/media/maker/1A2B3C4D5E6F7A8Bx/y"), "sibling with a longer name");
     }
 }
