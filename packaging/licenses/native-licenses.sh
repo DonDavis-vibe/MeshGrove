@@ -20,8 +20,9 @@ case "${1:-}" in
         printf '\n# Native libraries\n\nThese C and C++ libraries are built into this package.\n'
         for dir in "$root/share/"*/; do
             port=$(basename "$dir")
-            # vcpkg's build helpers and the system OpenGL stub are not part of the programs.
-            if [[ -f "$dir/copyright" && "$port" != vcpkg-* && "$port" != opengl ]]; then
+            # vcpkg's build helpers and the OpenGL stub and header registries that OpenCascade's
+            # build pulls in are not part of the programs.
+            if [[ -f "$dir/copyright" && "$port" != vcpkg-* && "$port" != opengl && "$port" != *-registry ]]; then
                 section "$port (vcpkg)" "$dir/copyright"
             fi
             if [[ "$port" == opencascade ]]; then
