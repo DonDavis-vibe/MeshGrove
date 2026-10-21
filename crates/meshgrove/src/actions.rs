@@ -10,7 +10,8 @@ use meshgrove_core::{archive, fsinfo};
 /// How the slicer got the files.
 pub enum SlicerOpened {
     Started,
-    /// An already open slicer window took them.
+    /// An already open slicer window took them (Linux only so far).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     HandedOver,
 }
 
