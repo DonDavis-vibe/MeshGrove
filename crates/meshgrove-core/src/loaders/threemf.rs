@@ -11,6 +11,7 @@ use image::RgbaImage;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
+use super::texture::NEUTRAL;
 use super::{LoadError, paint};
 use crate::mesh::Mesh;
 
@@ -49,10 +50,6 @@ pub struct Filament {
     pub material: Option<String>,
 }
 
-/// Triangles without a colour of their own in an otherwise coloured model (the renderer's
-/// default model colour, light grey).
-const NEUTRAL: [u8; 4] = [204, 209, 217, 255];
-
 /// Parses the model. Multi-plate slicer projects show their first plate, matching the
 /// plate picture used as thumbnail; see [`parse_plate`] for the others. Painted triangles keep
 /// their part's colour, so the triangle count matches the file (facts, duplicate detection).
@@ -80,7 +77,8 @@ fn load(bytes: &[u8], plate: Option<usize>, split_paint: bool) -> Result<ThreeMf
     let (title, designer, application) = (meta("Title"), meta("Designer"), meta("Application"));
     let build = root.build.clone();
 
-    let mut out = Mesh { positions: Vec::new(), indices: Some(Vec::new()), colors: Some(Vec::new()) };
+    let mut out =
+        Mesh { positions: Vec::new(), indices: Some(Vec::new()), colors: Some(Vec::new()), vertex_colors: None };
     let on_plate: Vec<&BuildItem> = build.iter().filter(|i| wanted.is_none_or(|ids| ids.contains(&i.object))).collect();
     // Objects parked outside every plate would leave nothing to show: then show them all.
     let (items, shown) = if on_plate.is_empty() { (build.iter().collect(), None) } else { (on_plate, shown) };

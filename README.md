@@ -4,7 +4,7 @@
 
 <p align="center">
   <b>A fast, native gallery for your 3D-print files.</b><br>
-  Browse STL, 3MF and STEP models like photos: real previews for every model, every archive and every PDF.
+  Browse STL, 3MF, STEP, OBJ and glTF models like photos: real previews for every model, every archive and every PDF.
 </p>
 
 <p align="center">
@@ -87,7 +87,7 @@ What makes it different from other model managers:
 
 | Area | What you get |
 |---|---|
-| **Gallery** | Thumbnails for STL, 3MF, STEP, images and PDFs; folder and archive tiles show a 2×2 mosaic of what is inside; resizable tiles; sort by name, date, size or type; "models only"; "include subfolders" (all files below a folder in one grid); multi-selection |
+| **Gallery** | Thumbnails for STL, 3MF, STEP, OBJ, PLY, glTF/GLB, images and PDFs; folder and archive tiles show a 2×2 mosaic of what is inside; resizable tiles; sort by name, date, size or type; "models only"; "include subfolders" (all files below a folder in one grid); multi-selection |
 | **Hover turntable** | Point at a model tile and the model spins in place. Drag to turn it yourself, and turn the wheel while dragging to zoom |
 | **3D viewer** | Orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **picture export** as a 2048 px PNG |
 | **3MF projects** | Embedded slicer plate pictures (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); click a plate picture to see that plate in 3D; **multi-colour**: filament colours per object and part, painted models (multi-material painting) and 3MF material colours in the viewer and in rendered previews; filament swatches on tiles and in the details; title, designer and application from the metadata |
@@ -223,7 +223,7 @@ package does not yet include STEP support.
   opens, Backspace or Alt+↑ goes up, Alt+← / Alt+→ go back and forward.
 - **Tile size:** Ctrl + mouse wheel, Ctrl + `+` / `-`, or the slider in the *View* menu.
 - **View menu:** sort by name, modified date, size or type (ascending or descending); *3D models
-  only* hides everything except STL/3MF/STEP (folders stay so you can navigate); *Include
+  only* hides everything except 3D models (folders stay so you can navigate); *Include
   subfolders* lists every file below the current folder in one grid, each with its folder
   name under it.
 - **Filter the folder:** type into the search field (Ctrl+F) with the 📁 scope selected to
@@ -312,7 +312,7 @@ type. Results come from all library folders at once.
 | `dragon` | files whose name, folder path or note contains "dragon" (case-insensitive) |
 | `castle tower` | files containing both words, anywhere |
 | `"castle tower"` | the exact phrase |
-| `ext:3mf` (also `type:` / `typ:`) | only 3MF files; works with `stl`, `step`, `zip`, `pdf`, `png` … |
+| `ext:3mf` (also `type:` / `typ:`) | only 3MF files; works with `stl`, `step`, `obj`, `ply`, `glb`, `zip`, `pdf`, `png` … |
 | `tag:painted` | only files with that tag |
 | `tag:"to print"` | tags with spaces |
 | `dragon ext:stl tag:painted` | all conditions combined |
@@ -368,8 +368,9 @@ to the trash* cleans up a group after a confirmation. Tiles everywhere in the ga
 
 ### Working with your slicer and other apps
 
-- **Open in slicer** (context menu): opens the selected models, several at once if you like.
-  Files inside archives are extracted to a cache folder first. Meshgrove finds these slicers
+- **Open in slicer** (context menu): opens the selected models, several at once if you like
+  (STL, 3MF, STEP and OBJ; the slicers do not open PLY and glTF). Files inside archives are
+  extracted to a cache folder first. Meshgrove finds these slicers
   automatically:
 
   | System | Detected |
@@ -423,7 +424,7 @@ read-only) and disables the action with an explanation.
 ### Thumbnails in Dolphin and file dialogs (Linux)
 
 `install.sh` also registers a freedesktop thumbnailer, so Dolphin, the KDE and GTK file
-dialogs and other file managers show the same previews for STL, 3MF and STEP files. In
+dialogs and other file managers show the same previews for STL, 3MF, STEP, OBJ, PLY and glTF files. In
 Dolphin, enable them once: *Settings → Configure Dolphin → Interface → Previews*. Tick the
 3D-model entries if they are listed, and raise *Skip previews for local files above* for big
 models. Then reopen the folder. The thumbnailer shares Meshgrove's cache, so files you have
@@ -459,6 +460,9 @@ Ctrl means ⌘ Cmd on macOS.
 | STL | `.stl` | ✔ | ✔ | Binary and ASCII; binary files that start with "solid" are recognised correctly |
 | 3MF | `.3mf` | ✔ | ✔ | Embedded slicer picture first (blank plates are skipped), otherwise rendered; components, transforms, units, Production extension (`p:path`), multiple build plates, filament, paint and material colours |
 | STEP | `.step`, `.stp` | ✔ | ✔ | Needs the OpenCascade helper `meshgrove-step-mesher`; tessellated once, then cached |
+| OBJ | `.obj` | ✔ | ✔ | Colours from the `.mtl` next to it (diffuse colour or texture) and vertex colours; read as millimetres like the slicers do |
+| PLY | `.ply` | ✔ | ✔ | ASCII and binary; vertex and face colours (scans, MeshLab); point clouds without faces are not shown |
+| glTF | `.glb`, `.gltf` | ✔ | ✔ | All meshes of the scene with base colours, vertex colours and textures; external buffers and textures are read from next to the file. glTF counts in **metres**, so a model 1 unit wide shows as 1000 mm |
 | Archives | `.zip`, `.7z`, `.rar`, `.tar`, `.tar.gz`, `.tgz`, … | Mosaic | Members | Browsed like folders through libarchive |
 | Images | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | ✔ | – | Shown large in the details panel |
 | PDF | `.pdf` | First page | – | Needs `pdftoppm` from poppler |
@@ -649,7 +653,7 @@ Meshgrove is a Cargo workspace of five crates:
 
 | Crate | Purpose |
 |---|---|
-| [`meshgrove-core`](crates/meshgrove-core) | Everything without a window or GPU: file formats (STL, 3MF, STEP, archives, images, PDF), the SQLite library index, scanner, search syntax, duplicate signatures, tags, notes and backups, thumbnail cache, settings, printer profiles |
+| [`meshgrove-core`](crates/meshgrove-core) | Everything without a window or GPU: file formats (STL, 3MF, STEP, OBJ, PLY, glTF, archives, images, PDF), the SQLite library index, scanner, search syntax, duplicate signatures, tags, notes and backups, thumbnail cache, settings, printer profiles |
 | [`meshgrove-render`](crates/meshgrove-render) | The wgpu mesh renderer, shared by thumbnails (headless), the 3D viewer, the hover turntable and the Dolphin thumbnailer |
 | [`meshgrove`](crates/meshgrove) | The egui application |
 | [`meshgrove-step`](crates/meshgrove-step) | `meshgrove-step-mesher`: STEP → STL with OpenCascade, as a separate process |
@@ -661,7 +665,7 @@ How work flows through the app:
 flowchart LR
     UI["UI thread<br/>(egui)"] -- "visible tiles, hover" --> Q["Thumbnail queue<br/>visible first"]
     Q --> IO["Reader thread<br/>one at a time, HDD-friendly"]
-    IO --> P["Parser pool<br/>STL · 3MF · archives"]
+    IO --> P["Parser pool<br/>STL · 3MF · OBJ · PLY · glTF · archives"]
     P -- "STEP" --> S["meshgrove-step-mesher<br/>(own process)"]
     P --> G["GPU thread<br/>headless wgpu render"]
     G --> C[("Preview cache<br/>PNG + facts")]

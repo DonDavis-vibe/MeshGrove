@@ -12,4 +12,14 @@
     <glob pattern="*.stp"/>
     <glob pattern="*.p21"/>
   </mime-type>
+  <!-- shared-mime-info knows no PLY type; OBJ and glTF have theirs (model/obj, model/gltf-*). -->
+  <mime-type type="model/x-ply">
+    <comment>PLY 3D model</comment>
+    <comment xml:lang="de">PLY-3D-Modell</comment>
+    <magic priority="60">
+      <match type="string" offset="0" value="ply\n"/>
+      <match type="string" offset="0" value="ply\r\n"/>
+    </magic>
+    <glob pattern="*.ply"/>
+  </mime-type>
 </mime-info>

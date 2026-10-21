@@ -1,5 +1,5 @@
-//! Spike A: render a cube (or any STL/3MF given as argument) headless to a PNG. 3MF files are
-//! drawn like the viewer shows them: first plate, filament colours and paint.
+//! Spike A: render a cube (or any model file given as argument) headless to a PNG. 3MF files
+//! are drawn like the viewer shows them: first plate, filament colours and paint.
 //!
 //!     cargo run -p meshgrove-render --example render_cube -- [model.stl|-] [out.png] [size]
 
@@ -16,7 +16,9 @@ fn main() -> anyhow::Result<()> {
             let bytes = std::fs::read(path).with_context(|| format!("reading {path}"))?;
             match Kind::from_path(path.as_ref()) {
                 Kind::ThreeMf => threemf::parse_plate(&bytes, None)?.mesh,
-                kind => loaders::load_mesh(kind, &bytes)?,
+                kind => loaders::load_mesh_with(kind, &bytes, &|name| {
+                    meshgrove_core::archive::read_sibling(path.as_ref(), name)
+                })?,
             }
         }
         None => Mesh::cube(20.0),

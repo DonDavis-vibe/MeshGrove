@@ -13,7 +13,7 @@ use meshgrove_render::{GpuMesh, upload_mesh};
 
 /// Kinds the viewer and turntable can show.
 pub fn viewable(kind: Kind) -> bool {
-    matches!(kind, Kind::Stl | Kind::ThreeMf | Kind::Step)
+    kind.is_model()
 }
 
 const VRAM_BUDGET: usize = 1536 << 20;
@@ -212,7 +212,11 @@ fn read(path: &Path, kind: Kind, plate: Option<usize>) -> Result<(meshgrove_core
             };
             (model.mesh, info)
         }
-        _ => (loaders::load_mesh(kind, &bytes).map_err(|e| e.to_string())?, ModelInfo::plain()),
+        _ => {
+            // OBJ materials and textures, glTF buffers: read from next to the model.
+            let sibling = |name: &str| meshgrove_core::archive::read_sibling(path, name);
+            (loaders::load_mesh_with(kind, &bytes, &sibling).map_err(|e| e.to_string())?, ModelInfo::plain())
+        }
     };
     Ok((mesh, info))
 }

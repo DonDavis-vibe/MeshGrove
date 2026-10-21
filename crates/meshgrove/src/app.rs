@@ -562,7 +562,7 @@ impl App {
                 let files: Vec<PathBuf> = self.selected_paths();
                 let models: Vec<PathBuf> = files
                     .into_iter()
-                    .filter(|p| meshgrove_core::Kind::from_file_name(&listing::file_name(p)).is_model())
+                    .filter(|p| meshgrove_core::Kind::from_file_name(&listing::file_name(p)).is_sliceable())
                     .collect();
                 if let Some(slicer) = &self.slicer {
                     let message = match actions::open_in_slicer(slicer, &models) {

@@ -4,7 +4,7 @@
 
 <p align="center">
   <b>Eine schnelle, native Galerie für deine 3D-Druck-Dateien.</b><br>
-  STL-, 3MF- und STEP-Modelle durchblättern wie Fotos: echte Vorschauen für jedes Modell, jedes Archiv und jedes PDF.
+  STL-, 3MF-, STEP-, OBJ- und glTF-Modelle durchblättern wie Fotos: echte Vorschauen für jedes Modell, jedes Archiv und jedes PDF.
 </p>
 
 <p align="center">
@@ -88,7 +88,7 @@ Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 
 | Bereich | Was du bekommst |
 |---|---|
-| **Galerie** | Vorschauen für STL, 3MF, STEP, Bilder und PDFs; Ordner- und Archiv-Kacheln zeigen ein 2×2-Mosaik ihres Inhalts; Kachelgröße einstellbar; Sortieren nach Name, Datum, Größe oder Typ; „Nur 3D-Modelle“; „Unterordner einbeziehen“ (alle Dateien unter einem Ordner in einem Raster); Mehrfachauswahl |
+| **Galerie** | Vorschauen für STL, 3MF, STEP, OBJ, PLY, glTF/GLB, Bilder und PDFs; Ordner- und Archiv-Kacheln zeigen ein 2×2-Mosaik ihres Inhalts; Kachelgröße einstellbar; Sortieren nach Name, Datum, Größe oder Typ; „Nur 3D-Modelle“; „Unterordner einbeziehen“ (alle Dateien unter einem Ordner in einem Raster); Mehrfachauswahl |
 | **Drehvorschau** | Mit der Maus über eine Modell-Kachel fahren, und das Modell dreht sich. Ziehen dreht es von Hand, Mausrad beim Ziehen zoomt |
 | **3D-Viewer** | Drehen, Verschieben und Zoomen um einen festen Drehpunkt (das Modell springt beim Drehen nie); Standardansichten (vorne, hinten, links, rechts, oben, unten, schräg); **Messen zwischen zwei Punkten in mm**; **Bildexport** als PNG mit 2048 px |
 | **3MF-Projekte** | Eingebettete Plattenbilder der Slicer (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); Klick auf ein Plattenbild zeigt diese Platte in 3D; **mehrfarbig**: Filamentfarben pro Objekt und Teil, bemalte Modelle (Multi-Material-Bemalung) und 3MF-Materialfarben im Viewer und in selbst gerenderten Vorschauen; Filament-Farbfelder auf Kacheln und in den Details; Titel, Designer und Programm aus den Metadaten |
@@ -229,7 +229,7 @@ STEP-Unterstützung.
   Alt+→ gehen zurück und vor.
 - **Kachelgröße:** Strg + Mausrad, Strg + `+` / `-` oder der Regler im Menü *Ansicht*.
 - **Menü Ansicht:** Sortieren nach Name, Änderungsdatum, Größe oder Typ (auf- oder absteigend);
-  *Nur 3D-Modelle* blendet alles außer STL/3MF/STEP aus (Ordner bleiben zum Navigieren
+  *Nur 3D-Modelle* blendet alles außer 3D-Modellen aus (Ordner bleiben zum Navigieren
   sichtbar); *Unterordner einbeziehen* zeigt alle Dateien unterhalb des aktuellen Ordners in
   einem Raster, jeweils mit dem Ordnernamen darunter.
 - **Ordner filtern:** Mit dem 📁-Bereich gewählt ins Suchfeld tippen (Strg+F), um den aktuellen
@@ -321,7 +321,7 @@ und tippen. Die Treffer kommen aus allen Bibliotheksordnern zugleich.
 | `drache` | Dateien, deren Name, Ordnerpfad oder Notiz „drache“ enthält (Groß-/Kleinschreibung egal) |
 | `castle tower` | Dateien, die beide Wörter enthalten, egal wo |
 | `"castle tower"` | genau diese Wortfolge |
-| `ext:3mf` (auch `type:` / `typ:`) | nur 3MF-Dateien; funktioniert mit `stl`, `step`, `zip`, `pdf`, `png` … |
+| `ext:3mf` (auch `type:` / `typ:`) | nur 3MF-Dateien; funktioniert mit `stl`, `step`, `obj`, `ply`, `glb`, `zip`, `pdf`, `png` … |
 | `tag:bemalt` | nur Dateien mit diesem Tag |
 | `tag:"zu drucken"` | Tags mit Leerzeichen |
 | `drache ext:stl tag:bemalt` | alle Bedingungen zusammen |
@@ -380,7 +380,8 @@ Galerie tragen Dateien mit Duplikaten eine `2×`/`3×`-Markierung.
 ### Zusammenarbeit mit Slicer und anderen Programmen
 
 - **In Slicer öffnen** (Kontextmenü): öffnet die ausgewählten Modelle, gern mehrere auf
-  einmal. Dateien aus Archiven werden vorher in einen Cache-Ordner entpackt. Diese Slicer
+  einmal (STL, 3MF, STEP und OBJ; PLY und glTF öffnen die Slicer nicht). Dateien aus Archiven
+  werden vorher in einen Cache-Ordner entpackt. Diese Slicer
   findet Meshgrove von selbst:
 
   | System | Erkannt |
@@ -438,8 +439,8 @@ Erklärung.
 ### Vorschauen in Dolphin und Dateidialogen (Linux)
 
 `install.sh` richtet auch einen freedesktop-Thumbnailer ein. Dolphin, die Dateidialoge von KDE
-und GTK und andere Dateimanager zeigen dann dieselben Vorschauen für STL-, 3MF- und
-STEP-Dateien. In Dolphin einmal einschalten: *Einstellungen → Dolphin einrichten → Oberfläche →
+und GTK und andere Dateimanager zeigen dann dieselben Vorschauen für STL-, 3MF-,
+STEP-, OBJ-, PLY- und glTF-Dateien. In Dolphin einmal einschalten: *Einstellungen → Dolphin einrichten → Oberfläche →
 Vorschauen*. Dort die 3D-Modell-Einträge anhaken, falls sie aufgeführt sind, und für große
 Modelle die Größengrenze für Vorschauen lokaler Dateien erhöhen. Danach den Ordner neu öffnen. Der
 Thumbnailer teilt sich den Cache mit Meshgrove, also erscheinen Dateien, die du schon in der
@@ -475,6 +476,9 @@ Strg heißt auf macOS ⌘ Cmd.
 | STL | `.stl` | ✔ | ✔ | Binär und ASCII; Binärdateien, die mit „solid“ beginnen, werden richtig erkannt |
 | 3MF | `.3mf` | ✔ | ✔ | Zuerst das eingebettete Slicer-Bild (leere Platten werden übersprungen), sonst gerendert; Komponenten, Transformationen, Einheiten, Production-Erweiterung (`p:path`), mehrere Druckplatten, Filament-, Bemalungs- und Materialfarben |
 | STEP | `.step`, `.stp` | ✔ | ✔ | Braucht den OpenCascade-Helfer `meshgrove-step-mesher`; einmal vernetzt, dann zwischengespeichert |
+| OBJ | `.obj` | ✔ | ✔ | Farben aus der `.mtl` daneben (Grundfarbe oder Textur) und Vertex-Farben; wie bei den Slicern in Millimetern gelesen |
+| PLY | `.ply` | ✔ | ✔ | ASCII und binär; Vertex- und Flächenfarben (Scans, MeshLab); Punktwolken ohne Flächen werden nicht gezeigt |
+| glTF | `.glb`, `.gltf` | ✔ | ✔ | Alle Netze der Szene mit Grundfarben, Vertex-Farben und Texturen; externe Puffer und Texturen werden neben der Datei gelesen. glTF rechnet in **Metern**, ein Modell mit 1 Einheit Breite erscheint also als 1000 mm |
 | Archive | `.zip`, `.7z`, `.rar`, `.tar`, `.tar.gz`, `.tgz`, … | Mosaik | Inhalt | Wie Ordner durchsuchbar, über libarchive |
 | Bilder | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | ✔ | – | In der Detailansicht groß angezeigt |
 | PDF | `.pdf` | Erste Seite | – | Braucht `pdftoppm` von poppler |
@@ -671,7 +675,7 @@ Meshgrove ist ein Cargo-Workspace aus fünf Crates:
 
 | Crate | Aufgabe |
 |---|---|
-| [`meshgrove-core`](crates/meshgrove-core) | Alles ohne Fenster und Grafikkarte: Dateiformate (STL, 3MF, STEP, Archive, Bilder, PDF), der SQLite-Bibliotheks-Index, Scanner, Suchsyntax, Duplikat-Signaturen, Tags, Notizen und Sicherungen, Vorschau-Cache, Einstellungen, Druckerprofile |
+| [`meshgrove-core`](crates/meshgrove-core) | Alles ohne Fenster und Grafikkarte: Dateiformate (STL, 3MF, STEP, OBJ, PLY, glTF, Archive, Bilder, PDF), der SQLite-Bibliotheks-Index, Scanner, Suchsyntax, Duplikat-Signaturen, Tags, Notizen und Sicherungen, Vorschau-Cache, Einstellungen, Druckerprofile |
 | [`meshgrove-render`](crates/meshgrove-render) | Der wgpu-Renderer, gemeinsam für Vorschauen (ohne Fenster), 3D-Viewer, Drehvorschau und den Dolphin-Thumbnailer |
 | [`meshgrove`](crates/meshgrove) | Die egui-Anwendung |
 | [`meshgrove-step`](crates/meshgrove-step) | `meshgrove-step-mesher`: STEP → STL mit OpenCascade, als eigener Prozess |
@@ -683,7 +687,7 @@ Wie die Arbeit durch die App läuft:
 flowchart LR
     UI["UI-Thread<br/>(egui)"] -- "sichtbare Kacheln, Maus" --> Q["Vorschau-Warteschlange<br/>Sichtbares zuerst"]
     Q --> IO["Lese-Thread<br/>eins nach dem anderen, festplattenschonend"]
-    IO --> P["Einlese-Pool<br/>STL · 3MF · Archive"]
+    IO --> P["Einlese-Pool<br/>STL · 3MF · OBJ · PLY · glTF · Archive"]
     P -- "STEP" --> S["meshgrove-step-mesher<br/>(eigener Prozess)"]
     P --> G["GPU-Thread<br/>wgpu-Rendering ohne Fenster"]
     G --> C[("Vorschau-Cache<br/>PNG + Fakten")]

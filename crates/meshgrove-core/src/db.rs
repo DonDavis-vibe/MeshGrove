@@ -16,7 +16,7 @@ use crate::userdata::{UserData, UserEntry};
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 /// The index proper: a cache of the disk, rebuilt when its layout changes.
 const INDEX_SCHEMA: &str = "
 CREATE TABLE dirs (
@@ -140,6 +140,14 @@ impl Library {
                 // The index is only a cache of the disk: rebuild it instead of migrating.
                 conn.execute_batch("DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS dirs;")?;
                 conn.execute_batch(INDEX_SCHEMA)?;
+            } else if version < 4 {
+                // v4 knows OBJ, PLY and glTF; unchanged folders are not rescanned, so reclassify.
+                for (kind, ext) in [("obj", "obj"), ("ply", "ply"), ("gltf", "glb"), ("gltf", "gltf")] {
+                    conn.execute(
+                        "UPDATE files SET kind = ?1, meta_key = NULL WHERE kind = 'other' AND name LIKE '%.' || ?2",
+                        params![kind, ext],
+                    )?;
+                }
             }
             conn.execute_batch(TAGS_SCHEMA)?; // v2 added tags, v3 notes; the index tables are unchanged
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -850,10 +858,26 @@ mod tests {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(INDEX_SCHEMA).unwrap();
             conn.execute("INSERT INTO dirs (path, parent, mtime_ns) VALUES ('/r', NULL, 1)", []).unwrap();
+            for name in ["Scan.PLY", "fig.glb", "notes.txt"] {
+                conn.execute(
+                    "INSERT INTO files (dir_id, name, kind, size, mtime_ns, search) VALUES (1, ?1, 'other', 1, 1, ?1)",
+                    [name],
+                )
+                .unwrap();
+            }
             conn.pragma_update(None, "user_version", 1).unwrap();
         }
         let mut lib = Library::open(&path).unwrap();
         assert_eq!(lib.dir_mtime(Path::new("/r")), Some(1), "index kept");
+        let kinds: Vec<String> = lib
+            .conn
+            .prepare("SELECT kind FROM files ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(kinds, ["ply", "gltf", "other"], "new model formats reclassified");
         lib.update_dir(Path::new("/r"), Path::new("/r"), 2, &[file("/r", "a.stl", 1, 1)], &[]).unwrap();
         lib.store_meta(Path::new("/r/a.stl"), "k", &ThumbMeta { content_hash: Some("h".into()), ..Default::default() })
             .unwrap();

@@ -281,7 +281,7 @@ impl Gallery {
                             action = Some(Action::Open(entry));
                         }
                         let show_folders = self.show_folders;
-                        let is_model = entries[entry].kind.is_model();
+                        let sliceable = entries[entry].kind.is_sliceable();
                         response.context_menu(|ui| {
                             let mut item = |ui: &mut Ui, text: std::borrow::Cow<str>, act: Action| {
                                 if ui.button(text).clicked() {
@@ -290,7 +290,7 @@ impl Gallery {
                                 }
                             };
                             item(ui, t!("menu.open"), Action::Open(entry));
-                            if is_model && let Some(slicer) = &menu.slicer {
+                            if sliceable && let Some(slicer) = &menu.slicer {
                                 item(ui, t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);
                             }
                             if show_folders {

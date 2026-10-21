@@ -10,6 +10,9 @@ pub struct Mesh {
     /// One sRGB colour per triangle (filament or material colours of 3MF projects);
     /// `None` for plain meshes, which the renderer draws in its model colour.
     pub colors: Option<Vec<[u8; 4]>>,
+    /// One sRGB colour per entry of `positions` (vertex colours, textures of OBJ/PLY/glTF),
+    /// blended across each triangle. Per-triangle `colors` win when both are present.
+    pub vertex_colors: Option<Vec<[u8; 4]>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -79,10 +82,22 @@ impl Mesh {
         }
     }
 
-    /// Per-vertex colours matching [`Mesh::to_soup`] (each triangle's colour three times).
+    /// Per-vertex colours matching [`Mesh::to_soup`]: each triangle's colour three times, or
+    /// the vertex colours of its corners.
     pub fn soup_colors(&self) -> Option<Vec<[u8; 4]>> {
-        let colors = self.colors.as_ref()?;
-        Some(colors.iter().take(self.triangle_count()).flat_map(|&c| [c; 3]).collect())
+        if let Some(colors) = &self.colors {
+            return Some(colors.iter().take(self.triangle_count()).flat_map(|&c| [c; 3]).collect());
+        }
+        let colors = self.vertex_colors.as_ref().filter(|c| c.len() == self.positions.len())?;
+        Some(match &self.indices {
+            None => colors.clone(),
+            Some(idx) => idx.iter().map(|&i| colors[i as usize]).collect(),
+        })
+    }
+
+    /// Whether the mesh brings colours of its own.
+    pub fn is_colored(&self) -> bool {
+        self.colors.is_some() || self.vertex_colors.is_some()
     }
 
     /// Axis-aligned cube from (0,0,0) to (size,size,size), 12 triangles, outward winding.
@@ -107,7 +122,7 @@ impl Mesh {
             1, 2, 6,  1, 6, 5, // right (+X)
             3, 0, 4,  3, 4, 7, // left (-X)
         ];
-        Mesh { positions, indices: Some(indices), colors: None }
+        Mesh { positions, indices: Some(indices), colors: None, vertex_colors: None }
     }
 }
 
@@ -164,7 +179,7 @@ mod tests {
         let b = cube.bounds().unwrap();
         assert_eq!(b.size(), Vec3::splat(10.0));
         assert_eq!(b.center(), Vec3::splat(5.0));
-        let soup = Mesh { positions: cube.to_soup(), indices: None, colors: None };
+        let soup = Mesh { positions: cube.to_soup(), indices: None, colors: None, vertex_colors: None };
         assert_eq!(soup.triangle_count(), 12);
         assert_eq!(soup.triangle(3), cube.triangle(3));
     }
@@ -175,6 +190,7 @@ mod tests {
             positions: vec![[0.0, 0.0, 0.0], [f32::NAN, 1.0, 1.0], [2.0, 3.0, 4.0]],
             indices: None,
             colors: None,
+            vertex_colors: None,
         };
         let b = mesh.bounds().unwrap();
         assert_eq!(b.max, Vec3::new(2.0, 3.0, 4.0));
