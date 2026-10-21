@@ -68,6 +68,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
 
+      # The licenses of everything built into the programs travel with every package.
+      - name: Third-party licenses
+        shell: bash
+        run: |
+          cargo install cargo-about --version 0.9.2 --locked --features cli
+          cargo about generate -c packaging/licenses/about.toml packaging/licenses/about.hbs -o THIRD-PARTY-LICENSES.md
+          case "${{ runner.os }}" in
+            Windows) packaging/licenses/native-licenses.sh windows >> THIRD-PARTY-LICENSES.md ;;
+            macOS) packaging/licenses/native-licenses.sh macos >> THIRD-PARTY-LICENSES.md ;;
+          esac
+          grep -c '^## ' THIRD-PARTY-LICENSES.md
+
       - name: Version
         shell: bash
         run: echo "VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_ENV"
@@ -78,7 +90,7 @@ jobs:
           dir="Meshgrove-$VERSION-${{ matrix.package }}"
           mkdir -p "$dir/bin"
           cp target/release/{meshgrove,meshgrove-step-mesher,meshgrove-thumbnailer} "$dir/bin/"
-          cp -r packaging README.md LICENSE "$dir/"
+          cp -r packaging README.md LICENSE THIRD-PARTY-LICENSES.md "$dir/"
           tar czf "$dir.tar.gz" "$dir"
 
       - name: Package (Windows)
@@ -87,7 +99,7 @@ jobs:
         run: |
           dir="Meshgrove-$VERSION-${{ matrix.package }}"
           mkdir -p "$dir"
-          cp target/release/meshgrove.exe target/release/meshgrove-step-mesher.exe README.md LICENSE "$dir/"
+          cp target/release/meshgrove.exe target/release/meshgrove-step-mesher.exe README.md LICENSE THIRD-PARTY-LICENSES.md "$dir/"
           7z a "$dir.zip" "$dir"
 
       - name: Package (macOS)
@@ -104,10 +116,15 @@ jobs:
               || sips -z $double $double "packaging/icons/meshgrove-1024.png" --out "meshgrove.iconset/icon_${size}x${size}@2x.png"
           done
           iconutil -c icns meshgrove.iconset -o "$app/Contents/Resources/meshgrove.icns"
+          cp LICENSE THIRD-PARTY-LICENSES.md "$app/Contents/Resources/"
           # Ship Homebrew's libarchive (and what it needs) inside the app.
           dylibbundler -od -b -x "$app/Contents/MacOS/meshgrove" -d "$app/Contents/libs/" -p @executable_path/../libs/
           codesign --force --deep --sign - "$app"
-          ditto -c -k --keepParent "$app" "Meshgrove-$VERSION-${{ matrix.package }}.zip"
+          dir="Meshgrove-$VERSION-${{ matrix.package }}"
+          mkdir -p "$dir"
+          mv "$app" "$dir/"
+          cp README.md LICENSE THIRD-PARTY-LICENSES.md "$dir/"
+          ditto -c -k --keepParent "$dir" "$dir.zip"
 
       - uses: actions/upload-artifact@v4
         with:

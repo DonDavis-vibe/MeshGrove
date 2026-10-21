@@ -12,7 +12,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/Lizenz-GPL--3.0--or--later-blue" alt="Lizenz: GPL-3.0-or-later"></a>
   <img src="https://img.shields.io/badge/Plattformen-Linux%20%7C%20Windows%20%7C%20macOS-informational" alt="Plattformen: Linux, Windows, macOS">
   <img src="https://img.shields.io/badge/gebaut%20mit-Rust-orange" alt="Gebaut mit Rust">
-  <a href="https://ko-fi.com/don_davis"><img src="https://img.shields.io/badge/Ko--fi-Meshgrove%20unterst%C3%BCtzen-FF5E5B?logo=ko-fi&logoColor=white" alt="Meshgrove auf Ko-fi unterstützen"></a>
+  <a href="https://ko-fi.com/don_davis"><img src="https://img.shields.io/badge/Ko--fi-Trinkgeld%20geben-FF5E5B?logo=ko-fi&logoColor=white" alt="Trinkgeld auf Ko-fi geben"></a>
 </p>
 
 <p align="center">
@@ -56,7 +56,7 @@
 - [Entwicklung](#entwicklung)
 - [Ausblick](#ausblick)
 - [Mitmachen](#mitmachen)
-- [Unterstützen](#unterstützen)
+- [Trinkgeld](#trinkgeld)
 - [Danksagung](#danksagung)
 - [Lizenz](#lizenz)
 
@@ -752,14 +752,14 @@ Beispieldatei hilft sehr, wenn ein Modell falsch dargestellt wird, sofern du sie
 
 Für Code: Vor einem Pull Request `cargo fmt`, `cargo clippy` und `cargo test` ausführen.
 Kommentare und Bezeichner bleiben englisch. Neuer sichtbarer Text läuft über `t!("…")`, mit
-Einträgen in beiden Sprachdateien.
+Einträgen in beiden Sprachdateien. Mit dem Einreichen eines Beitrags stimmst du zu, dass er
+unter denselben Bedingungen wie Meshgrove lizenziert wird (GPL-3.0-or-later).
 
-## Unterstützen
+## Trinkgeld
 
 Meshgrove ist kostenlos und bleibt es. Wenn es dir Zeit spart oder Ordnung in deine
-Druckbibliothek bringt und du Danke sagen möchtest, kannst du die Entwicklung auf
-**[Ko-fi](https://ko-fi.com/don_davis)** unterstützen. Fehlermeldungen, Ideen und ein ⭐ auf
-GitHub helfen genauso.
+Druckbibliothek bringt, kannst du auf **[Ko-fi](https://ko-fi.com/don_davis)** ein Trinkgeld
+dalassen. Fehlermeldungen, Ideen und ein ⭐ auf GitHub sind genauso willkommen.
 
 ## Danksagung
 
@@ -797,4 +797,14 @@ ZWECK. Details stehen in der [GNU General Public License](LICENSE). Rechtlich ve
 der englische Lizenztext.
 
 Der STEP-Helfer nutzt OpenCascade (LGPL-2.1 mit Ausnahme) als eigenes Programm; für
-PDF-Vorschauen wird `pdftoppm` von poppler (GPL) als externes Programm aufgerufen.
+PDF-Vorschauen wird `pdftoppm` von poppler (GPL) als externes Programm aufgerufen. Die Lizenzen
+aller Bibliotheken und Schriften, die in das Programm eingebaut sind, stehen in
+`THIRD-PARTY-LICENSES.md`, die jedem Release-Paket beiliegt.
+
+Anycubic, OrcaSlicer, Bambu Studio, PrusaSlicer, KDE, Dolphin, Windows und macOS sind Marken
+ihrer jeweiligen Inhaber. Meshgrove ist ein unabhängiges Projekt und steht mit ihnen in keiner
+Verbindung.
+
+[Impressum](https://redneck-design.de/impressum.html) und
+[Datenschutzerklärung](https://redneck-design.de/datenschutz.html) von German Redneck
+Engineering.

@@ -12,7 +12,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue" alt="License: GPL-3.0-or-later"></a>
   <img src="https://img.shields.io/badge/platforms-Linux%20%7C%20Windows%20%7C%20macOS-informational" alt="Platforms: Linux, Windows, macOS">
   <img src="https://img.shields.io/badge/made%20with-Rust-orange" alt="Made with Rust">
-  <a href="https://ko-fi.com/don_davis"><img src="https://img.shields.io/badge/Ko--fi-support%20Meshgrove-FF5E5B?logo=ko-fi&logoColor=white" alt="Support Meshgrove on Ko-fi"></a>
+  <a href="https://ko-fi.com/don_davis"><img src="https://img.shields.io/badge/Ko--fi-leave%20a%20tip-FF5E5B?logo=ko-fi&logoColor=white" alt="Leave a tip on Ko-fi"></a>
 </p>
 
 <p align="center">
@@ -56,7 +56,7 @@
 - [Development](#development)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
-- [Support](#support)
+- [Tip jar](#tip-jar)
 - [Credits](#credits)
 - [License](#license)
 
@@ -729,14 +729,14 @@ helps a lot when a model shows wrongly, if you are allowed to share it.
 
 For code: run `cargo fmt`, `cargo clippy` and `cargo test` before opening a pull request, and
 keep comments and identifiers in English. New user-visible text goes through `t!("…")`, with
-entries in both locale files.
+entries in both locale files. By submitting a contribution you agree that it is licensed under
+the same terms as Meshgrove (GPL-3.0-or-later).
 
-## Support
+## Tip jar
 
-Meshgrove is free and stays free. If it saves you time or tidies up your print library and you
-would like to say thanks, you can support its development on
-**[Ko-fi](https://ko-fi.com/don_davis)**. Bug reports, ideas and a ⭐ on GitHub help just as
-much.
+Meshgrove is free and stays free. If it saves you time or tidies up your print library, you can
+leave a tip on **[Ko-fi](https://ko-fi.com/don_davis)**. Bug reports, ideas and a ⭐ on GitHub
+are just as welcome.
 
 ## Credits
 
@@ -772,4 +772,14 @@ without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
 the [GNU General Public License](LICENSE) for more details.
 
 The STEP helper uses OpenCascade (LGPL-2.1 with an exception) as a separate program; PDF
-previews call poppler's `pdftoppm` (GPL) as an external program.
+previews call poppler's `pdftoppm` (GPL) as an external program. The licenses of all libraries
+and fonts built into the program are listed in `THIRD-PARTY-LICENSES.md`, which comes with every
+release package.
+
+Anycubic, OrcaSlicer, Bambu Studio, PrusaSlicer, KDE, Dolphin, Windows and macOS are trademarks
+of their respective owners. Meshgrove is an independent project and is not affiliated with or
+endorsed by them.
+
+Legal notice and privacy policy of German Redneck Engineering:
+[Impressum](https://redneck-design.de/impressum.html) ·
+[Datenschutz](https://redneck-design.de/datenschutz.html)
