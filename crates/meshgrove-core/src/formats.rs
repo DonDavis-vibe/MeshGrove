@@ -7,6 +7,10 @@ pub enum Kind {
     Stl,
     ThreeMf,
     Step,
+    Obj,
+    Ply,
+    /// glTF 2.0, `.glb` or `.gltf`.
+    Gltf,
     Archive,
     Image,
     Pdf,
@@ -32,6 +36,9 @@ impl Kind {
             "stl" => Kind::Stl,
             "3mf" => Kind::ThreeMf,
             "step" | "stp" => Kind::Step,
+            "obj" => Kind::Obj,
+            "ply" => Kind::Ply,
+            "glb" | "gltf" => Kind::Gltf,
             "zip" | "7z" | "rar" | "tar" | "tgz" => Kind::Archive,
             "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" => Kind::Image,
             "pdf" => Kind::Pdf,
@@ -46,6 +53,9 @@ impl Kind {
             Kind::Stl => "stl",
             Kind::ThreeMf => "3mf",
             Kind::Step => "step",
+            Kind::Obj => "obj",
+            Kind::Ply => "ply",
+            Kind::Gltf => "gltf",
             Kind::Archive => "archive",
             Kind::Image => "image",
             Kind::Pdf => "pdf",
@@ -59,6 +69,9 @@ impl Kind {
             "stl" => Kind::Stl,
             "3mf" => Kind::ThreeMf,
             "step" => Kind::Step,
+            "obj" => Kind::Obj,
+            "ply" => Kind::Ply,
+            "gltf" => Kind::Gltf,
             "archive" => Kind::Archive,
             "image" => Kind::Image,
             "pdf" => Kind::Pdf,
@@ -68,7 +81,13 @@ impl Kind {
 
     /// Files that become a 3D mesh (rendered thumbnail, viewer, hover turntable, duplicate geometry).
     pub fn is_model(self) -> bool {
-        matches!(self, Kind::Stl | Kind::ThreeMf | Kind::Step)
+        matches!(self, Kind::Stl | Kind::ThreeMf | Kind::Step | Kind::Obj | Kind::Ply | Kind::Gltf)
+    }
+
+    /// Models the slicers open (Bambu Studio, OrcaSlicer, Anycubic Slicer Next, PrusaSlicer);
+    /// PLY and glTF only show in Meshgrove.
+    pub fn is_sliceable(self) -> bool {
+        matches!(self, Kind::Stl | Kind::ThreeMf | Kind::Step | Kind::Obj)
     }
 }
 
@@ -86,10 +105,25 @@ mod tests {
         assert_eq!(Kind::from_file_name("IMG_20260704.jpg"), Kind::Image);
         assert_eq!(Kind::from_file_name("Regelwerk.pdf"), Kind::Pdf);
         assert_eq!(Kind::from_file_name("notes"), Kind::Other);
+        assert_eq!(Kind::from_file_name("scan.PLY"), Kind::Ply);
+        assert_eq!(Kind::from_file_name("figure.glb"), Kind::Gltf);
+        assert_eq!(Kind::from_file_name("figure.gltf"), Kind::Gltf);
+        assert_eq!(Kind::from_file_name("part.obj"), Kind::Obj);
         assert!(Kind::Step.is_model() && !Kind::Archive.is_model());
-        for k in
-            [Kind::Folder, Kind::Stl, Kind::ThreeMf, Kind::Step, Kind::Archive, Kind::Image, Kind::Pdf, Kind::Other]
-        {
+        assert!(Kind::Gltf.is_model() && !Kind::Gltf.is_sliceable() && Kind::Obj.is_sliceable());
+        for k in [
+            Kind::Folder,
+            Kind::Stl,
+            Kind::ThreeMf,
+            Kind::Step,
+            Kind::Obj,
+            Kind::Ply,
+            Kind::Gltf,
+            Kind::Archive,
+            Kind::Image,
+            Kind::Pdf,
+            Kind::Other,
+        ] {
             assert_eq!(Kind::parse(k.as_str()), k);
         }
     }

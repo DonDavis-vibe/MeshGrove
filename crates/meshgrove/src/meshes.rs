@@ -13,7 +13,7 @@ use meshgrove_render::{GpuMesh, upload_mesh};
 
 /// Kinds the viewer and turntable can show.
 pub fn viewable(kind: Kind) -> bool {
-    matches!(kind, Kind::Stl | Kind::ThreeMf | Kind::Step)
+    kind.is_model()
 }
 
 const VRAM_BUDGET: usize = 1536 << 20;
@@ -31,6 +31,8 @@ pub struct ModelInfo {
     /// The build plate this mesh shows, for multi-plate slicer projects.
     pub plate: Option<usize>,
     pub plate_count: usize,
+    /// Filaments the shown plate prints with (slicer projects).
+    pub filaments: Vec<threemf::Filament>,
 }
 
 impl ModelInfo {
@@ -45,6 +47,7 @@ impl ModelInfo {
             plates: Vec::new(),
             plate: None,
             plate_count: 0,
+            filaments: Vec::new(),
         }
     }
 }
@@ -143,6 +146,12 @@ impl MeshStore {
         &slot.state
     }
 
+    /// Drops the loaded models whose path matches, so they load again (after a setting that
+    /// changes how they are read).
+    pub fn forget_where(&mut self, matches: impl Fn(&Path) -> bool) {
+        self.slots.retain(|(path, _), slot| matches!(slot.state, MeshState::Loading) || !matches(path));
+    }
+
     fn evict(&mut self) {
         let mut used: usize = self.slots.values().filter_map(|s| ready_bytes(&s.state)).sum();
         while used > VRAM_BUDGET {
@@ -197,7 +206,7 @@ fn read(path: &Path, kind: Kind, plate: Option<usize>) -> Result<(meshgrove_core
                 })
                 .collect();
             let info = ModelInfo {
-                triangles: 0,
+                triangles: model.triangles,
                 size_mm: glam::Vec3::ZERO,
                 title: model.title,
                 designer: model.designer,
@@ -205,16 +214,24 @@ fn read(path: &Path, kind: Kind, plate: Option<usize>) -> Result<(meshgrove_core
                 plates,
                 plate: model.plate,
                 plate_count: model.plates.len(),
+                filaments: model.filaments,
             };
             (model.mesh, info)
         }
-        _ => (loaders::load_mesh(kind, &bytes).map_err(|e| e.to_string())?, ModelInfo::plain()),
+        _ => {
+            // OBJ materials and textures, glTF buffers: read from next to the model.
+            let sibling = |name: &str| meshgrove_core::archive::read_sibling(path, name);
+            (loaders::load_mesh_with(kind, &bytes, &sibling).map_err(|e| e.to_string())?, ModelInfo::plain())
+        }
     };
     Ok((mesh, info))
 }
 
 fn finish(mesh: meshgrove_core::Mesh, mut info: ModelInfo, device: &wgpu::Device) -> Result<Loaded, String> {
-    info.triangles = mesh.triangle_count();
+    // 3MF files report their own count: split paint must not inflate it.
+    if info.triangles == 0 {
+        info.triangles = mesh.triangle_count();
+    }
     info.size_mm = mesh.bounds().map(|b| b.size()).unwrap_or_default();
     let gpu = upload_mesh(device, &mesh).ok_or_else(|| t!("error.empty_model").into_owned())?;
     Ok(Loaded { mesh: Arc::new(gpu), info: Arc::new(info) })

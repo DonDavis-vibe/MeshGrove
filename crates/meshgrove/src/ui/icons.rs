@@ -128,6 +128,30 @@ pub fn bottom_right_badge(p: &Painter, r: Rect, label: &str, bg: Color32, fg: Co
     p.galley(rect.min + pad, galley, fg);
 }
 
+/// Filament colours of a slicer project as a row of dots in the upper-left corner.
+pub fn filament_dots(p: &Painter, r: Rect, colors: &[[u8; 3]]) {
+    const MAX: usize = 8;
+    let (radius, gap, pad) = (4.5, 3.0, vec2(4.0, 3.0));
+    let shown = colors.len().min(MAX);
+    let more = (colors.len() > MAX).then(|| {
+        p.layout_no_wrap(format!("+{}", colors.len() - MAX), FontId::proportional(9.5), Color32::from_gray(230))
+    });
+    let dots_w = shown as f32 * (2.0 * radius + gap) - gap;
+    let more_w = more.as_ref().map_or(0.0, |g| g.size().x + gap);
+    let size = vec2(dots_w + more_w, 2.0 * radius) + 2.0 * pad;
+    let rect = Rect::from_min_size(r.min + vec2(4.0, 4.0), size);
+    p.rect(rect, size.y / 2.0, Color32::from_black_alpha(150), Stroke::NONE, StrokeKind::Inside);
+    let ring = Stroke::new(1.0, Color32::from_white_alpha(90));
+    for (i, &[red, green, blue]) in colors.iter().take(MAX).enumerate() {
+        let center = rect.min + pad + vec2(radius + i as f32 * (2.0 * radius + gap), radius);
+        p.circle(center, radius, Color32::from_rgb(red, green, blue), ring);
+    }
+    if let Some(galley) = more {
+        let at = pos2(rect.min.x + pad.x + dots_w + gap, rect.center().y - galley.size().y / 2.0);
+        p.galley(at, galley, Color32::from_gray(230));
+    }
+}
+
 /// Short label for the file icon: upper-case extension, at most five characters.
 pub fn extension_label(name: &str) -> String {
     match name.rsplit_once('.') {

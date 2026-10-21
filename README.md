@@ -4,7 +4,7 @@
 
 <p align="center">
   <b>A fast, native gallery for your 3D-print files.</b><br>
-  Browse STL, 3MF and STEP models like photos: real previews for every model, every archive and every PDF.
+  Browse STL, 3MF, STEP, OBJ and glTF models like photos: real previews for every model, every archive and every PDF.
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
 
 ---
 
-![Meshgrove showing a folder of household prints, with a toothbrush holder in the 3D viewer](docs/images/screenshot-hero.png)
+![Meshgrove showing a folder of multi-colour models, with a painted 3MF logo open in a model window of its own](docs/images/screenshot-hero.png)
 
 ## Contents
 
@@ -87,10 +87,10 @@ What makes it different from other model managers:
 
 | Area | What you get |
 |---|---|
-| **Gallery** | Thumbnails for STL, 3MF, STEP, images and PDFs; folder and archive tiles show a 2×2 mosaic of what is inside; resizable tiles; sort by name, date, size or type; "models only"; "include subfolders" (all files below a folder in one grid); multi-selection |
+| **Gallery** | Thumbnails for STL, 3MF, STEP, OBJ, PLY, glTF/GLB, images and PDFs; folder and archive tiles show a 2×2 mosaic of what is inside; resizable tiles; sort by name, date, size or type; "models only"; "include subfolders" (all files below a folder in one grid); multi-selection |
 | **Hover turntable** | Point at a model tile and the model spins in place. Drag to turn it yourself, and turn the wheel while dragging to zoom |
-| **3D viewer** | Orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **picture export** as a 2048 px PNG |
-| **3MF projects** | Embedded slicer plate pictures (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); click a plate picture to see that plate in 3D; title, designer and application from the metadata |
+| **3D viewer** | In the side panel, or **double-click a model for a window of its own** (resizable, several at once, with "open in slicer"); orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **picture export** as a 2048 px PNG |
+| **3MF projects** | Embedded slicer plate pictures (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); click a plate picture to see that plate in 3D; **multi-colour**: filament colours per object and part, painted models (multi-material painting) and 3MF material colours in the viewer and in rendered previews; filament swatches on tiles and in the details; title, designer and application from the metadata |
 | **STEP / STP** | CAD files are tessellated by OpenCascade in a separate helper process, so a broken file cannot crash the app; results are cached |
 | **Archives** | Open ZIP, 7z, RAR and TAR like folders; every model inside gets a preview; files are extracted only when another program needs them |
 | **Library** | Index (SQLite) of all library folders; instant search such as `dragon ext:3mf tag:painted`; changes on disk are picked up automatically |
@@ -108,15 +108,22 @@ models, so you can navigate by looking instead of reading names.
 
 ![Folder mosaics of a model library](docs/images/screenshot-folders.png)
 
+**Models in their colours.** Multi-colour 3MF projects show the filament of every part and
+their painted areas, plain 3MF files their material colours, and OBJ, PLY and glTF their vertex
+colours and textures. Tiles get a dot per filament; the details list slot and material.
+
+![A painted 3MF logo in the viewer with its two filaments, next to a textured GLB and 3MF tiles with filament dots](docs/images/screenshot-colours.png)
+
 **One search for the whole library.** Here `body` finds every model with "body" in its name,
 from four different folders.
 
 ![Library search for "body" with eleven results](docs/images/screenshot-search.png)
 
-**Measure directly on the model.** Click two points on the surface to get the distance in mm,
-with the difference along each axis.
+**Every model in a window of its own.** Double-click a model to open it next to the gallery, as
+large as you like and with the same tools. Here it measures a coaster holder: click two points
+on the surface to get the distance in mm, with the difference along each axis.
 
-![Measuring a coaster: 74.5 mm](docs/images/screenshot-measure.png)
+![A coaster holder in its own window next to the main window, measured at 79.3 mm](docs/images/screenshot-window.png)
 
 **Duplicate finder.** Exact copies and identical geometry, grouped, with a suggestion which
 copy to keep and one click to move the others to the trash.
@@ -212,7 +219,7 @@ Building takes a few minutes and works on any distribution.
    SmartScreen may warn because the program is not signed: choose *More info → Run anyway*.
 2. The installer needs no admin rights: it installs for your user, or for all users if you
    choose so on its first page. It adds a Start menu entry, optionally a desktop shortcut, and
-   Meshgrove under *Open with* for STL, 3MF and STEP files. Remove it under *Settings → Apps*.
+   Meshgrove under *Open with* for STL, 3MF, STEP, OBJ, PLY and glTF files. Remove it under *Settings → Apps*.
 3. Optional, for PDF previews: install [poppler](https://github.com/oschwartz10612/poppler-windows)
    and make sure `pdftoppm.exe` is on your `PATH`.
 
@@ -249,12 +256,12 @@ unpack it anywhere and start `meshgrove.exe`.
 
 ### Browsing the gallery
 
-- **Navigate** with double-click (folders and archives open, files open in their default
-  app), the breadcrumb, the sidebar, or the keyboard: arrow keys move the selection, Enter
+- **Navigate** with double-click (folders and archives open, models open in a window of their
+  own, other files in their default app), the breadcrumb, the sidebar, or the keyboard: arrow keys move the selection, Enter
   opens, Backspace or Alt+↑ goes up, Alt+← / Alt+→ go back and forward.
 - **Tile size:** Ctrl + mouse wheel, Ctrl + `+` / `-`, or the slider in the *View* menu.
 - **View menu:** sort by name, modified date, size or type (ascending or descending); *3D models
-  only* hides everything except STL/3MF/STEP (folders stay so you can navigate); *Include
+  only* hides everything except 3D models (folders stay so you can navigate); *Include
   subfolders* lists every file below the current folder in one grid, each with its folder
   name under it.
 - **Filter the folder:** type into the search field (Ctrl+F) with the 📁 scope selected to
@@ -270,7 +277,10 @@ unpack it anywhere and start `meshgrove.exe`.
 
 ### The 3D viewer and its tools
 
-The right panel shows the selected model in 3D.
+The right panel shows the selected model in 3D. **Double-click a model** (or press Enter) to
+open it in a window of its own: it can be made as large as the screen, several models can be
+open side by side, each with its own camera, and the window has the same tools, the model's
+facts and an *Open in slicer* button. Esc or the close button closes it.
 
 | Action | Mouse |
 |---|---|
@@ -298,6 +308,20 @@ The buttons above the view:
 pictures of all plates below the facts. Click a plate picture to show that plate in the
 viewer.
 
+**Multi-colour 3MF projects** show their colours in the viewer, the hover turntable and the
+previews Meshgrove renders itself:
+
+- each object and part in the colour of the filament the slicer assigned to it (Bambu Studio,
+  OrcaSlicer, Anycubic Slicer Next, PrusaSlicer)
+- painted models: multi-material painting (`paint_color` / `mmu_segmentation`) is decoded
+  into the painted areas
+- plain 3MF files with standard material colours (`basematerials`, `colorgroup`), as CAD
+  programs write them
+- modifiers, negative volumes and support blockers are not drawn, just as they are not printed
+
+Tiles of slicer projects show a dot per filament colour, and the details list the filaments
+with their slot number and material.
+
 ### The details panel
 
 Below the viewer you find:
@@ -305,8 +329,8 @@ Below the viewer you find:
 - type, file size and modification date
 - **dimensions** in mm (X × Y × Z) and the **triangle** count
 - the **print bed** result (see [Print bed check](#print-bed-check))
-- for 3MF: title, designer, the application that wrote it, and whether the preview comes from
-  the slicer's embedded picture
+- for 3MF: title, designer, the application that wrote it, the **filaments** (colour, slot and
+  material) and whether the preview comes from the slicer's embedded picture
 - **tags** and the **note** (for files in the library)
 - the full path
 
@@ -329,7 +353,7 @@ type. Results come from all library folders at once.
 | `dragon` | files whose name, folder path or note contains "dragon" (case-insensitive) |
 | `castle tower` | files containing both words, anywhere |
 | `"castle tower"` | the exact phrase |
-| `ext:3mf` (also `type:` / `typ:`) | only 3MF files; works with `stl`, `step`, `zip`, `pdf`, `png` … |
+| `ext:3mf` (also `type:` / `typ:`) | only 3MF files; works with `stl`, `step`, `obj`, `ply`, `glb`, `zip`, `pdf`, `png` … |
 | `tag:painted` | only files with that tag |
 | `tag:"to print"` | tags with spaces |
 | `dragon ext:stl tag:painted` | all conditions combined |
@@ -385,9 +409,10 @@ to the trash* cleans up a group after a confirmation. Tiles everywhere in the ga
 
 ### Working with your slicer and other apps
 
-- **Open in slicer** (context menu): opens the selected models, several at once if you like.
-  Files inside archives are extracted to a cache folder first. Meshgrove finds these slicers
-  automatically:
+- **Open in slicer** (context menu, the button in the details panel or in a model window):
+  opens the selected models, several at once if you like (STL, 3MF, STEP and OBJ; the slicers
+  do not open PLY and glTF). Files inside archives are extracted to a cache folder first.
+  Meshgrove finds these slicers automatically:
 
   | System | Detected |
   |---|---|
@@ -407,7 +432,8 @@ to the trash* cleans up a group after a confirmation. Tiles everywhere in the ga
   Dolphin, Explorer or Finder, into many slicers, or into a chat. Archive members are
   extracted first. *Copy path* puts the paths as text instead.
 - **Show in file manager:** opens Dolphin/Nautilus, Explorer or Finder with the files selected.
-- **Open** (double-click on a file): opens it in the system's default application.
+- **Open with default app** (context menu): opens a model in the system's default application,
+  for example the slicer registered for STL files; other files open there with a double-click.
 
 ### Archives (ZIP, 7z, RAR, TAR)
 
@@ -440,8 +466,8 @@ read-only) and disables the action with an explanation.
 ### Thumbnails in Dolphin and file dialogs (Linux)
 
 The .deb and .rpm packages and `install.sh` register a freedesktop thumbnailer, so Dolphin,
-the KDE and GTK file dialogs and other file managers show the same previews for STL, 3MF and
-STEP files. In
+the KDE and GTK file dialogs and other file managers show the same previews for STL, 3MF,
+STEP, OBJ, PLY and glTF files. In
 Dolphin, enable them once: *Settings → Configure Dolphin → Interface → Previews*. Tick the
 3D-model entries if they are listed, and raise *Skip previews for local files above* for big
 models. Then reopen the folder. The thumbnailer shares Meshgrove's cache, so files you have
@@ -454,7 +480,8 @@ Ctrl means ⌘ Cmd on macOS.
 | Keys | Action |
 |---|---|
 | ← → ↑ ↓, Home, End | Move the selection |
-| Enter | Open the selected folder, archive or file |
+| Enter | Open the selected folder or archive; a model in its own window; other files in their default app |
+| Esc (in a model window) | Close the window |
 | Backspace, Alt+↑ | Parent folder |
 | Alt+←, Alt+→ | Back, forward |
 | F5 | Reload the folder |
@@ -475,8 +502,11 @@ Ctrl means ⌘ Cmd on macOS.
 | Type | Extensions | Preview | 3D viewer | Notes |
 |---|---|---|---|---|
 | STL | `.stl` | ✔ | ✔ | Binary and ASCII; binary files that start with "solid" are recognised correctly |
-| 3MF | `.3mf` | ✔ | ✔ | Embedded slicer picture first (blank plates are skipped), otherwise rendered; components, transforms, units, Production extension (`p:path`), multiple build plates |
+| 3MF | `.3mf` | ✔ | ✔ | Embedded slicer picture first (blank plates are skipped), otherwise rendered; components, transforms, units, Production extension (`p:path`), multiple build plates, filament, paint and material colours |
 | STEP | `.step`, `.stp` | ✔ | ✔ | Needs the OpenCascade helper `meshgrove-step-mesher`; tessellated once, then cached |
+| OBJ | `.obj` | ✔ | ✔ | Colours from the `.mtl` next to it (diffuse colour or texture) and vertex colours; read as millimetres like the slicers do |
+| PLY | `.ply` | ✔ | ✔ | ASCII and binary; vertex and face colours (scans, MeshLab); point clouds without faces are not shown |
+| glTF | `.glb`, `.gltf` | ✔ | ✔ | All meshes of the scene with base colours, vertex colours and textures; external buffers and textures are read from next to the file. glTF counts in **metres**, so a model 1 unit wide shows as 1000 mm; for models meant in millimetres (AI generators, many exports) choose *Settings → 3D models → Millimetres* |
 | Archives | `.zip`, `.7z`, `.rar`, `.tar`, `.tar.gz`, `.tgz`, … | Mosaic | Members | Browsed like folders through libarchive |
 | Images | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | ✔ | – | Shown large in the details panel |
 | PDF | `.pdf` | First page | – | Needs `pdftoppm` from poppler |
@@ -485,7 +515,7 @@ Ctrl means ⌘ Cmd on macOS.
 ## Settings and files on disk
 
 Everything can be changed in the settings window (⚙ at the top right, or Ctrl+,): language,
-library folders, slicer, printer, backups, and the preview cache (with its size and a *Clear
+library folders, slicer, printer, the unit of glTF models, backups, and the preview cache (with its size and a *Clear
 cache* button). The *About* section lists the exact paths on your system.
 
 | What | Linux | Windows | macOS |
@@ -674,7 +704,7 @@ Meshgrove is a Cargo workspace of five crates:
 
 | Crate | Purpose |
 |---|---|
-| [`meshgrove-core`](crates/meshgrove-core) | Everything without a window or GPU: file formats (STL, 3MF, STEP, archives, images, PDF), the SQLite library index, scanner, search syntax, duplicate signatures, tags, notes and backups, thumbnail cache, settings, printer profiles |
+| [`meshgrove-core`](crates/meshgrove-core) | Everything without a window or GPU: file formats (STL, 3MF, STEP, OBJ, PLY, glTF, archives, images, PDF), the SQLite library index, scanner, search syntax, duplicate signatures, tags, notes and backups, thumbnail cache, settings, printer profiles |
 | [`meshgrove-render`](crates/meshgrove-render) | The wgpu mesh renderer, shared by thumbnails (headless), the 3D viewer, the hover turntable and the Dolphin thumbnailer |
 | [`meshgrove`](crates/meshgrove) | The egui application |
 | [`meshgrove-step`](crates/meshgrove-step) | `meshgrove-step-mesher`: STEP → STL with OpenCascade, as a separate process |
@@ -686,7 +716,7 @@ How work flows through the app:
 flowchart LR
     UI["UI thread<br/>(egui)"] -- "visible tiles, hover" --> Q["Thumbnail queue<br/>visible first"]
     Q --> IO["Reader thread<br/>one at a time, HDD-friendly"]
-    IO --> P["Parser pool<br/>STL · 3MF · archives"]
+    IO --> P["Parser pool<br/>STL · 3MF · OBJ · PLY · glTF · archives"]
     P -- "STEP" --> S["meshgrove-step-mesher<br/>(own process)"]
     P --> G["GPU thread<br/>headless wgpu render"]
     G --> C[("Preview cache<br/>PNG + facts")]
@@ -733,7 +763,9 @@ folders to keep test runs away from your real settings:
 | `MESHGROVE_SCREENSHOT=out.png`, `MESHGROVE_SCREENSHOT_DELAY=8` | Save the window after the delay and quit |
 | `MESHGROVE_POINTER=x,y` | Pin the pointer, e.g. to test the hover turntable |
 | `MESHGROVE_HOLD=1`, `MESHGROVE_WHEEL=dy` | Hold the button / turn the wheel at the pointer |
-| `MESHGROVE_CLICKS=x,y;x,y` | Click these points one after another (from 3 s, every 0.8 s) |
+| `MESHGROVE_CLICKS=x,y;x,y` | Click these points one after another (from 3 s, every 0.8 s); `x,y*2` double-clicks |
+| `MESHGROVE_MEASURE=fx,fy;fx,fy` | Measure between these points (fractions of the view) in the first model window |
+| `MESHGROVE_WINDOW_VIEW=top` | Start the first model window in a standard view (`front`, `left`, …) |
 | `MESHGROVE_TYPE=text` | Type text after the clicks |
 | `MESHGROVE_SEARCH=query` | Start with a library search |
 | `MESHGROVE_FLATTEN=1` | Start with "include subfolders" |

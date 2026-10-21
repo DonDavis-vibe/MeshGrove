@@ -16,7 +16,9 @@ use crate::userdata::{UserData, UserEntry};
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
+/// `kind` values of model files ([`Kind::is_model`]) for SQL `IN (…)` lists.
+const MODEL_KINDS: &str = "'stl', '3mf', 'step', 'obj', 'ply', 'gltf'";
 /// The index proper: a cache of the disk, rebuilt when its layout changes.
 const INDEX_SCHEMA: &str = "
 CREATE TABLE dirs (
@@ -140,6 +142,14 @@ impl Library {
                 // The index is only a cache of the disk: rebuild it instead of migrating.
                 conn.execute_batch("DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS dirs;")?;
                 conn.execute_batch(INDEX_SCHEMA)?;
+            } else if version < 4 {
+                // v4 knows OBJ, PLY and glTF; unchanged folders are not rescanned, so reclassify.
+                for (kind, ext) in [("obj", "obj"), ("ply", "ply"), ("gltf", "glb"), ("gltf", "gltf")] {
+                    conn.execute(
+                        "UPDATE files SET kind = ?1, meta_key = NULL WHERE kind = 'other' AND name LIKE '%.' || ?2",
+                        params![kind, ext],
+                    )?;
+                }
             }
             conn.execute_batch(TAGS_SCHEMA)?; // v2 added tags, v3 notes; the index tables are unchanged
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -278,10 +288,10 @@ impl Library {
 
     /// Models, images and PDFs whose thumbnail facts are missing or out of date, for background processing.
     pub fn needing_meta(&self) -> Result<Vec<(Entry, String)>, Error> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare(&format!(
             "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns, f.meta_key FROM files f JOIN dirs d ON d.id = f.dir_id
-             WHERE f.kind IN ('stl', '3mf', 'step', 'image', 'pdf') ORDER BY d.path, f.name",
-        )?;
+             WHERE f.kind IN ({MODEL_KINDS}, 'image', 'pdf') ORDER BY d.path, f.name"
+        ))?;
         let rows = stmt.query_map([], |r| Ok((entry_from_row(r)?, r.get::<_, Option<String>>(5)?)))?;
         let mut out = Vec::new();
         for row in rows {
@@ -330,11 +340,11 @@ impl Library {
     /// files directly inside before those in subfolders.
     pub fn folder_preview(&self, dir: &Path, n: usize) -> Result<Vec<Entry>, Error> {
         let Some(d) = path_str(dir) else { return Ok(Vec::new()) };
-        let mut stmt = self.conn.prepare_cached(
+        let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns FROM files f JOIN dirs d ON d.id = f.dir_id
-             WHERE (d.path = ?1 OR (d.path > ?2 AND d.path < ?3)) AND f.kind IN ('stl', '3mf', 'step', 'image')
-             ORDER BY (f.kind = 'image'), (d.path = ?1) DESC, d.path, f.name COLLATE NOCASE LIMIT ?4",
-        )?;
+             WHERE (d.path = ?1 OR (d.path > ?2 AND d.path < ?3)) AND f.kind IN ({MODEL_KINDS}, 'image')
+             ORDER BY (f.kind = 'image'), (d.path = ?1) DESC, d.path, f.name COLLATE NOCASE LIMIT ?4"
+        ))?;
         stmt.query_map(params![d, format!("{d}/"), format!("{d}0"), n as i64], entry_from_row)?.collect()
     }
 
@@ -548,20 +558,23 @@ impl Library {
         for (exact, keys_sql, files_sql) in [
             (
                 true,
-                "SELECT content_hash FROM files WHERE content_hash IS NOT NULL AND kind IN ('stl', '3mf', 'step')
-                 GROUP BY content_hash HAVING COUNT(*) > 1",
+                format!(
+                    "SELECT content_hash FROM files WHERE content_hash IS NOT NULL AND kind IN ({MODEL_KINDS})
+                     GROUP BY content_hash HAVING COUNT(*) > 1"
+                ),
                 format!("{select} WHERE f.content_hash = ?1 ORDER BY d.path, f.name"),
             ),
             (
                 false,
                 // Same geometry but not all byte-identical (re-exports, other formats, moved parts).
                 "SELECT geo_sig FROM files WHERE geo_sig IS NOT NULL
-                 GROUP BY geo_sig HAVING COUNT(DISTINCT content_hash) > 1",
+                 GROUP BY geo_sig HAVING COUNT(DISTINCT content_hash) > 1"
+                    .to_owned(),
                 format!("{select} WHERE f.geo_sig = ?1 ORDER BY d.path, f.name"),
             ),
         ] {
             let keys: Vec<String> =
-                self.conn.prepare(keys_sql)?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+                self.conn.prepare(&keys_sql)?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
             let mut stmt = self.conn.prepare(&files_sql)?;
             for key in keys {
                 let files = stmt.query_map([key], entry_from_row)?.collect::<Result<Vec<_>, _>>()?;
@@ -574,11 +587,13 @@ impl Library {
 
     pub fn counts(&self) -> Result<Counts, Error> {
         self.conn.query_row(
-            "SELECT COUNT(*),
-                    COALESCE(SUM(kind IN ('stl', '3mf', 'step')), 0),
-                    COALESCE(SUM(meta_key IS NOT NULL), 0),
-                    COALESCE(SUM(kind IN ('stl', '3mf', 'step', 'image', 'pdf')), 0)
-             FROM files",
+            &format!(
+                "SELECT COUNT(*),
+                        COALESCE(SUM(kind IN ({MODEL_KINDS})), 0),
+                        COALESCE(SUM(meta_key IS NOT NULL), 0),
+                        COALESCE(SUM(kind IN ({MODEL_KINDS}, 'image', 'pdf')), 0)
+                 FROM files"
+            ),
             [],
             |r| {
                 Ok(Counts {
@@ -843,6 +858,25 @@ mod tests {
     }
 
     #[test]
+    fn model_kinds_list_matches_the_formats() {
+        let listed: Vec<Kind> = MODEL_KINDS.split(", ").map(|k| Kind::parse(k.trim_matches('\''))).collect();
+        let all = [
+            Kind::Folder,
+            Kind::Stl,
+            Kind::ThreeMf,
+            Kind::Step,
+            Kind::Obj,
+            Kind::Ply,
+            Kind::Gltf,
+            Kind::Archive,
+            Kind::Image,
+            Kind::Pdf,
+            Kind::Other,
+        ];
+        assert_eq!(listed, all.into_iter().filter(|k| k.is_model()).collect::<Vec<_>>());
+    }
+
+    #[test]
     fn old_index_versions_are_upgraded_keeping_their_contents() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("library.db");
@@ -850,10 +884,26 @@ mod tests {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(INDEX_SCHEMA).unwrap();
             conn.execute("INSERT INTO dirs (path, parent, mtime_ns) VALUES ('/r', NULL, 1)", []).unwrap();
+            for name in ["Scan.PLY", "fig.glb", "notes.txt"] {
+                conn.execute(
+                    "INSERT INTO files (dir_id, name, kind, size, mtime_ns, search) VALUES (1, ?1, 'other', 1, 1, ?1)",
+                    [name],
+                )
+                .unwrap();
+            }
             conn.pragma_update(None, "user_version", 1).unwrap();
         }
         let mut lib = Library::open(&path).unwrap();
         assert_eq!(lib.dir_mtime(Path::new("/r")), Some(1), "index kept");
+        let kinds: Vec<String> = lib
+            .conn
+            .prepare("SELECT kind FROM files ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(kinds, ["ply", "gltf", "other"], "new model formats reclassified");
         lib.update_dir(Path::new("/r"), Path::new("/r"), 2, &[file("/r", "a.stl", 1, 1)], &[]).unwrap();
         lib.store_meta(Path::new("/r/a.stl"), "k", &ThumbMeta { content_hash: Some("h".into()), ..Default::default() })
             .unwrap();

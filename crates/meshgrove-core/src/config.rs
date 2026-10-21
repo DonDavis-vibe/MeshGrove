@@ -2,6 +2,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -143,6 +144,38 @@ fn detect_slicer() -> Option<Slicer> {
     None
 }
 
+/// What one glTF unit stands for. The glTF standard says metres, but generated models (AI
+/// tools, models normalised to ±1) and many hobby exports mean millimetres.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GltfUnit {
+    #[default]
+    Metres,
+    Millimetres,
+}
+
+impl GltfUnit {
+    /// Millimetres per glTF unit.
+    pub fn scale(self) -> f32 {
+        match self {
+            GltfUnit::Metres => 1000.0,
+            GltfUnit::Millimetres => 1.0,
+        }
+    }
+}
+
+/// The glTF unit of this process. The glTF loader and the thumbnail cache key read it; the app
+/// and the thumbnailer set it from [`Config::gltf_unit`].
+static GLTF_MILLIMETRES: AtomicBool = AtomicBool::new(false);
+
+pub fn set_gltf_unit(unit: GltfUnit) {
+    GLTF_MILLIMETRES.store(unit == GltfUnit::Millimetres, Ordering::Relaxed);
+}
+
+pub fn gltf_unit() -> GltfUnit {
+    if GLTF_MILLIMETRES.load(Ordering::Relaxed) { GltfUnit::Millimetres } else { GltfUnit::Metres }
+}
+
 /// Gallery sort order (folders always come first).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -171,6 +204,8 @@ pub struct Config {
     pub slicer: Option<Slicer>,
     /// Printer for the bed check; `None`: take the one selected in the slicer.
     pub printer: Option<crate::printer::Bed>,
+    /// What one glTF unit stands for.
+    pub gltf_unit: GltfUnit,
 }
 
 impl Default for Config {
@@ -185,6 +220,7 @@ impl Default for Config {
             language: None,
             slicer: None,
             printer: None,
+            gltf_unit: GltfUnit::Metres,
         }
     }
 }
@@ -274,6 +310,9 @@ mod tests {
         let cfg: Config = toml::from_str("library_roots = [\"/data/3D_druck\"]\n").unwrap();
         assert_eq!(cfg.library_roots, vec![PathBuf::from("/data/3D_druck")]);
         assert_eq!(cfg.tile_size, 160.0);
+        assert_eq!(cfg.gltf_unit, GltfUnit::Metres);
+        let mm: Config = toml::from_str("gltf_unit = \"millimetres\"\n").unwrap();
+        assert_eq!(mm.gltf_unit.scale(), 1.0);
         let text = toml::to_string_pretty(&cfg).unwrap();
         assert_eq!(toml::from_str::<Config>(&text).unwrap(), cfg);
     }

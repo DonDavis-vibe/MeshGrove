@@ -88,6 +88,34 @@ pub fn read(path: &Path) -> io::Result<Vec<u8>> {
     }
 }
 
+/// Files models refer to that are no models themselves: OBJ materials, glTF buffers.
+fn is_model_resource(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("mtl") || ext.eq_ignore_ascii_case("bin"))
+}
+
+/// A file a model refers to (`textures/skin.png`, `../shared.mtl`), relative to the model's
+/// folder — next to a plain file or inside the same archive. Absolute paths are refused: a
+/// model file has no business pointing anywhere else.
+pub fn read_sibling(model: &Path, name: &str) -> Option<Vec<u8>> {
+    let name = name.trim().replace('\\', "/");
+    if name.is_empty() || name.starts_with('/') || name.contains(':') {
+        return None;
+    }
+    let mut path = model.parent()?.to_path_buf();
+    for part in name.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if !path.pop() {
+                    return None;
+                }
+            }
+            part => path.push(part),
+        }
+    }
+    read(&path).ok()
+}
+
 struct Extracted {
     archive: PathBuf,
     modified: Option<SystemTime>,
@@ -121,7 +149,9 @@ pub fn read_member(archive: &Path, member: &str) -> io::Result<Vec<u8>> {
 fn unpack_all(archive: &Path) -> io::Result<HashMap<String, Arc<Vec<u8>>>> {
     let wanted = |name: &str, size: u64| {
         size <= MAX_CACHED_MEMBER
-            && matches!(Kind::from_file_name(name), Kind::Stl | Kind::ThreeMf | Kind::Step | Kind::Image | Kind::Pdf)
+            && (matches!(Kind::from_file_name(name), Kind::Image | Kind::Pdf)
+                || Kind::from_file_name(name).is_model()
+                || is_model_resource(name))
     };
     let mut iter = compress_tools::ArchiveIteratorBuilder::new(File::open(archive)?)
         .decoder(lossy)
@@ -215,6 +245,29 @@ pub(crate) mod tests {
         let e = entries(&zip).unwrap();
         assert_eq!(e[0].kind, Kind::Stl);
         assert_eq!(e[0].path, member_path);
+    }
+
+    #[test]
+    fn siblings_next_to_files_and_inside_archives() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("tex")).unwrap();
+        std::fs::write(dir.path().join("tex/skin.png"), b"png").unwrap();
+        std::fs::write(dir.path().join("a.mtl"), b"mtl").unwrap();
+        let model = dir.path().join("models/a.obj");
+        assert_eq!(read_sibling(&model, "../tex/skin.png").as_deref(), Some(&b"png"[..]));
+        assert_eq!(read_sibling(&dir.path().join("a.obj"), "./a.mtl").as_deref(), Some(&b"mtl"[..]));
+        assert_eq!(read_sibling(&dir.path().join("a.obj"), "tex\\skin.png").as_deref(), Some(&b"png"[..]));
+        let absolute = dir.path().join("a.mtl").display().to_string();
+        assert_eq!(read_sibling(&dir.path().join("a.obj"), &absolute), None, "absolute paths are refused");
+
+        let zip = dir.path().join("pack3.zip");
+        make_zip(&zip);
+        let inside = zip.join("minis/orc.obj");
+        assert_eq!(read_sibling(&inside, "../readme.txt").as_deref(), Some(&b"hello"[..]));
+        assert_eq!(
+            read_sibling(&inside, "orc.stl").map(|b| b.len()),
+            read(&zip.join("minis/orc.stl")).ok().map(|b| b.len())
+        );
     }
 
     #[test]

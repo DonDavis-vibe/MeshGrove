@@ -8,8 +8,12 @@ use std::time::SystemTime;
 
 use image::RgbaImage;
 
+use crate::config::GltfUnit;
+
 /// Bump whenever thumbnails would look different (camera, lighting, size), to invalidate the cache.
 pub const RENDER_VERSION: u32 = 1;
+/// 3MF previews gained colours and filament facts in version 2; other kinds kept their previews.
+const RENDER_VERSION_3MF: u32 = 2;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ThumbMeta {
@@ -19,6 +23,8 @@ pub struct ThumbMeta {
     pub geo_sig: Option<String>,
     /// The picture is the preview a slicer/CAD program stored in the file, not our own render.
     pub embedded: bool,
+    /// Filament colours (sRGB) a slicer project prints with.
+    pub filaments: Vec<[u8; 3]>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,9 +50,22 @@ impl ThumbCache {
 
     /// Identity of one rendered thumbnail: changes when the file (or an archive entry in it) changes.
     pub fn key(path: &Path, size: u64, modified: Option<SystemTime>, entry: Option<&str>) -> String {
+        Self::key_in(path, size, modified, entry, crate::config::gltf_unit())
+    }
+
+    fn key_in(path: &Path, size: u64, modified: Option<SystemTime>, entry: Option<&str>, unit: GltfUnit) -> String {
         let nanos = modified.and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
         let mut h = blake3::Hasher::new();
-        h.update(format!("{RENDER_VERSION}\0{}\0{size}\0{nanos}\0{}", path.display(), entry.unwrap_or("")).as_bytes());
+        // An archive member's own name decides, not the archive's.
+        let name = entry.map(Path::new).unwrap_or(path);
+        let ext = name.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+        let version = match ext.as_deref() {
+            Some("3mf") => RENDER_VERSION_3MF.to_string(),
+            // glTF sizes follow the unit setting; metres keep the plain version.
+            Some("glb" | "gltf") if unit == GltfUnit::Millimetres => format!("{RENDER_VERSION}mm"),
+            _ => RENDER_VERSION.to_string(),
+        };
+        h.update(format!("{version}\0{}\0{size}\0{nanos}\0{}", path.display(), entry.unwrap_or("")).as_bytes());
         h.finalize().to_hex()[..32].to_string()
     }
 
@@ -88,6 +107,7 @@ const KEY_SIZE: &str = "stlb:size_mm";
 const KEY_CONTENT: &str = "stlb:content_hash";
 const KEY_GEO: &str = "stlb:geo_sig";
 const KEY_SOURCE: &str = "stlb:source";
+const KEY_FILAMENTS: &str = "stlb:filaments";
 
 fn encode(thumb: &Thumbnail) -> io::Result<Vec<u8>> {
     let mut out = Vec::new();
@@ -102,6 +122,12 @@ fn encode(thumb: &Thumbnail) -> io::Result<Vec<u8>> {
         (KEY_CONTENT, m.content_hash.clone()),
         (KEY_GEO, m.geo_sig.clone()),
         (KEY_SOURCE, m.embedded.then(|| "embedded".to_owned())),
+        (
+            KEY_FILAMENTS,
+            (!m.filaments.is_empty()).then(|| {
+                m.filaments.iter().map(|[r, g, b]| format!("{r:02X}{g:02X}{b:02X}")).collect::<Vec<_>>().join(" ")
+            }),
+        ),
     ];
     for (k, v) in texts {
         if let Some(v) = v {
@@ -136,6 +162,15 @@ fn decode(bytes: &[u8]) -> Result<Thumbnail, png::DecodingError> {
             KEY_CONTENT => meta.content_hash = Some(text.to_owned()),
             KEY_GEO => meta.geo_sig = Some(text.to_owned()),
             KEY_SOURCE => meta.embedded = text == "embedded",
+            KEY_FILAMENTS => {
+                meta.filaments = text
+                    .split(' ')
+                    .filter_map(|h| {
+                        let byte = |i: usize| u8::from_str_radix(h.get(i..i + 2)?, 16).ok();
+                        Some([byte(0)?, byte(2)?, byte(4)?])
+                    })
+                    .collect();
+            }
             _ => {}
         }
     }
@@ -163,6 +198,7 @@ mod tests {
             content_hash: Some("abc".into()),
             geo_sig: Some("12|2.4e3|...".into()),
             embedded: true,
+            filaments: vec![[255, 0, 0], [0, 128, 255]],
         };
         cache.store(&key, &Thumbnail { image: image.clone(), meta: meta.clone() }).unwrap();
         let back = cache.load(&key).unwrap().unwrap();
@@ -184,5 +220,9 @@ mod tests {
         assert_ne!(k, ThumbCache::key(p, 100, Some(t + Duration::from_nanos(100)), None));
         assert_ne!(k, ThumbCache::key(p, 100, Some(t), Some("inner.stl")));
         assert_ne!(k, ThumbCache::key(Path::new("/lib/other.stl"), 100, Some(t), None));
+        // The glTF unit setting changes glTF facts, so their keys; other files keep theirs.
+        let key = |p: &str, unit| ThumbCache::key_in(Path::new(p), 100, Some(t), None, unit);
+        assert_ne!(key("/lib/a.glb", GltfUnit::Metres), key("/lib/a.glb", GltfUnit::Millimetres));
+        assert_eq!(key("/lib/a.stl", GltfUnit::Metres), key("/lib/a.stl", GltfUnit::Millimetres));
     }
 }

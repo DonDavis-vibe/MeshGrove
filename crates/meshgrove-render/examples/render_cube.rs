@@ -1,16 +1,26 @@
-//! Spike A: render a cube (or any STL given as argument) headless to a PNG.
+//! Spike A: render a cube (or any model file given as argument) headless to a PNG. 3MF files
+//! are drawn like the viewer shows them: first plate, filament colours and paint.
 //!
 //!     cargo run -p meshgrove-render --example render_cube -- [model.stl|-] [out.png] [size]
 
 use anyhow::Context;
-use meshgrove_core::{Mesh, loaders::stl};
+use meshgrove_core::loaders::{self, threemf};
+use meshgrove_core::{Kind, Mesh};
 use meshgrove_render::{HeadlessRenderer, ViewParams};
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mesh = match args.first().filter(|a| !a.is_empty() && *a != "-") {
-        Some(path) => stl::parse(&std::fs::read(path).with_context(|| format!("reading {path}"))?)?,
+        Some(path) => {
+            let bytes = std::fs::read(path).with_context(|| format!("reading {path}"))?;
+            match Kind::from_path(path.as_ref()) {
+                Kind::ThreeMf => threemf::parse_plate(&bytes, None)?.mesh,
+                kind => loaders::load_mesh_with(kind, &bytes, &|name| {
+                    meshgrove_core::archive::read_sibling(path.as_ref(), name)
+                })?,
+            }
+        }
         None => Mesh::cube(20.0),
     };
     let out = args.get(1).map(String::as_str).unwrap_or("cube.png");

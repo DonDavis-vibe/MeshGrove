@@ -31,6 +31,7 @@ fn main() -> eframe::Result {
         }
     };
     i18n::init(config.language.as_deref());
+    meshgrove_core::config::set_gltf_unit(config.gltf_unit);
 
     // Optional argument: a folder to open, or a file to open its folder with it selected.
     let start = std::env::args_os()
@@ -59,7 +60,7 @@ fn main() -> eframe::Result {
 }
 
 /// Window and taskbar icon (Windows, X11, macOS Dock while running).
-fn app_icon() -> egui::IconData {
+pub(crate) fn app_icon() -> egui::IconData {
     let png = include_bytes!("../../../packaging/icons/meshgrove-256.png");
     let image = image::load_from_memory(png).expect("bundled icon is a valid PNG").into_rgba8();
     egui::IconData { width: image.width(), height: image.height(), rgba: image.into_raw() }
