@@ -310,7 +310,15 @@ impl App {
     fn open_model_window(&mut self, entry: Entry) {
         match self.model_windows.iter_mut().find(|w| w.path() == entry.path) {
             Some(window) => window.raise(),
-            None => self.model_windows.push(ModelWindow::new(entry)),
+            None => {
+                let mut window = ModelWindow::new(entry);
+                if let Some(hook) = &mut self.screenshot
+                    && !hook.measure.is_empty()
+                {
+                    window.script_measure(std::mem::take(&mut hook.measure));
+                }
+                self.model_windows.push(window);
+            }
         }
     }
 

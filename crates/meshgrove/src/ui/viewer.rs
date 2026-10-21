@@ -42,6 +42,9 @@ pub struct ModelViewer {
     dirty: bool,
     measure: Option<Measure>,
     saving: Option<Receiver<Result<PathBuf, String>>>,
+    /// Test hook: measuring points to place once the triangles are loaded, as fractions of the
+    /// view (0..1 from the top left).
+    scripted_picks: Vec<egui::Vec2>,
 }
 
 impl ModelViewer {
@@ -54,7 +57,15 @@ impl ModelViewer {
             dirty: true,
             measure: None,
             saving: None,
+            scripted_picks: Vec::new(),
         }
+    }
+
+    /// Test hook: starts measuring and places these points (fractions of the view) as soon as
+    /// the model's triangles are there.
+    pub fn script_measure(&mut self, picks: Vec<egui::Vec2>) {
+        self.measure = Some(Measure::default());
+        self.scripted_picks = picks;
     }
 
     /// Shows `mesh`; the camera is reset only when it is a different model.
@@ -114,6 +125,11 @@ impl ModelViewer {
 
         if response.clicked() && self.measure.is_some() {
             self.pick(&mesh, rect, response.interact_pointer_pos());
+        }
+        if !self.scripted_picks.is_empty() && self.measure.as_ref().is_some_and(|m| m.triangles.is_some()) {
+            for at in std::mem::take(&mut self.scripted_picks) {
+                self.pick(&mesh, rect, Some(rect.min + at * rect.size()));
+            }
         }
         self.paint_measure(ui, &mesh, rect);
         if let Some(m) = self.toolbar(ui, rect, rs, renderer, &mesh) {

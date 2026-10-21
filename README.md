@@ -119,10 +119,11 @@ from four different folders.
 
 ![Library search for "body" with eleven results](docs/images/screenshot-search.png)
 
-**Measure directly on the model.** Click two points on the surface to get the distance in mm,
-with the difference along each axis.
+**Every model in a window of its own.** Double-click a model to open it next to the gallery, as
+large as you like and with the same tools. Here it measures a coaster holder: click two points
+on the surface to get the distance in mm, with the difference along each axis.
 
-![Measuring a coaster: 74.5 mm](docs/images/screenshot-measure.png)
+![A coaster holder in its own window next to the main window, measured at 79.3 mm](docs/images/screenshot-window.png)
 
 **Duplicate finder.** Exact copies and identical geometry, grouped, with a suggestion which
 copy to keep and one click to move the others to the trash.
@@ -723,7 +724,8 @@ folders to keep test runs away from your real settings:
 | `MESHGROVE_SCREENSHOT=out.png`, `MESHGROVE_SCREENSHOT_DELAY=8` | Save the window after the delay and quit |
 | `MESHGROVE_POINTER=x,y` | Pin the pointer, e.g. to test the hover turntable |
 | `MESHGROVE_HOLD=1`, `MESHGROVE_WHEEL=dy` | Hold the button / turn the wheel at the pointer |
-| `MESHGROVE_CLICKS=x,y;x,y` | Click these points one after another (from 3 s, every 0.8 s) |
+| `MESHGROVE_CLICKS=x,y;x,y` | Click these points one after another (from 3 s, every 0.8 s); `x,y*2` double-clicks |
+| `MESHGROVE_MEASURE=fx,fy;fx,fy` | Measure between these points (fractions of the view) in the first model window |
 | `MESHGROVE_TYPE=text` | Type text after the clicks |
 | `MESHGROVE_SEARCH=query` | Start with a library search |
 | `MESHGROVE_FLATTEN=1` | Start with "include subfolders" |

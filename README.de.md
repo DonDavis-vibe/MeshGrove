@@ -121,10 +121,12 @@ aus vier verschiedenen Ordnern.
 
 ![Bibliothekssuche nach „body“ mit elf Treffern](docs/images/screenshot-search.png)
 
-**Direkt am Modell messen.** Zwei Punkte auf der Oberfläche anklicken, und du bekommst den
-Abstand in mm und die Differenz entlang jeder Achse.
+**Jedes Modell im eigenen Fenster.** Ein Doppelklick öffnet ein Modell neben der Galerie, so
+groß du willst und mit denselben Werkzeugen. Hier wird ein Untersetzer-Halter vermessen: Zwei
+Punkte auf der Oberfläche anklicken, und du bekommst den Abstand in mm und die Differenz entlang
+jeder Achse.
 
-![Messung an einem Untersetzer: 74,5 mm](docs/images/screenshot-measure.png)
+![Ein Untersetzer-Halter im eigenen Fenster neben dem Hauptfenster, gemessen: 79,3 mm](docs/images/screenshot-window.png)
 
 **Duplikate finden.** Exakte Kopien und gleiche Geometrie, gruppiert, mit Vorschlag, welche
 Kopie bleiben soll, und einem Klick, um die anderen in den Papierkorb zu legen.
@@ -747,7 +749,8 @@ Test-Hooks (Umgebungsvariablen) steuern die Sitzung. Eigene `XDG_CONFIG_HOME`,
 | `MESHGROVE_SCREENSHOT=out.png`, `MESHGROVE_SCREENSHOT_DELAY=8` | Fenster nach der Wartezeit speichern und beenden |
 | `MESHGROVE_POINTER=x,y` | Mauszeiger festhalten, etwa für die Drehvorschau |
 | `MESHGROVE_HOLD=1`, `MESHGROVE_WHEEL=dy` | Taste gedrückt halten / Mausrad am Zeiger drehen |
-| `MESHGROVE_CLICKS=x,y;x,y` | Diese Punkte nacheinander anklicken (ab 3 s, alle 0,8 s) |
+| `MESHGROVE_CLICKS=x,y;x,y` | Diese Punkte nacheinander anklicken (ab 3 s, alle 0,8 s); `x,y*2` klickt doppelt |
+| `MESHGROVE_MEASURE=fx,fy;fx,fy` | Im ersten Modell-Fenster zwischen diesen Punkten messen (Anteile der Ansicht) |
 | `MESHGROVE_TYPE=text` | Nach den Klicks Text tippen |
 | `MESHGROVE_SEARCH=suche` | Mit einer Bibliothekssuche starten |
 | `MESHGROVE_FLATTEN=1` | Mit „Unterordner einbeziehen“ starten |

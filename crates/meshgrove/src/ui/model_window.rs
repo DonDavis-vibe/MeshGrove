@@ -59,6 +59,11 @@ impl ModelWindow {
         &self.entry.path
     }
 
+    /// Test hook: measure between these points of the view (see [`ModelViewer::script_measure`]).
+    pub fn script_measure(&mut self, picks: Vec<egui::Vec2>) {
+        self.viewer.script_measure(picks);
+    }
+
     /// Brings the window to the front.
     pub fn raise(&mut self) {
         self.focus = true;

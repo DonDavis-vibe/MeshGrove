@@ -6,6 +6,8 @@
 //! at the pointer from 0.7 s on and `MESHGROVE_WHEEL=dy` turns the mouse wheel there for half a second after 1 s.
 //! `MESHGROVE_CLICKS=x,y;x,y;…` clicks those points one after the other, from 3 s on, every 0.8 s
 //! (`x,y*2` double-clicks), and `MESHGROVE_TYPE=text` types the text after the last click.
+//! `MESHGROVE_MEASURE=fx,fy;fx,fy` measures between those points (fractions of the view) in the
+//! first model window that opens, which the hook's input cannot reach.
 
 use std::time::{Duration, Instant};
 
@@ -21,6 +23,8 @@ pub struct ScreenshotHook {
     started: Instant,
     pressed: bool,
     pub search: Option<String>,
+    /// Measuring points for the first model window.
+    pub measure: Vec<egui::Vec2>,
     /// `MESHGROVE_FLATTEN=1`: start with "include subfolders" on.
     pub flatten: bool,
     /// `MESHGROVE_VIEW=duplicates`: open the duplicates view once the index is ready.
@@ -48,6 +52,9 @@ impl ScreenshotHook {
         let clicks =
             std::env::var("MESHGROVE_CLICKS").map(|s| s.split(';').filter_map(click).collect()).unwrap_or_default();
         let search = std::env::var("MESHGROVE_SEARCH").ok();
+        let measure = std::env::var("MESHGROVE_MEASURE")
+            .map(|s| s.split(';').filter_map(point).map(|p| p.to_vec2()).collect())
+            .unwrap_or_default();
         let hold = std::env::var_os("MESHGROVE_HOLD").is_some();
         let flatten = std::env::var_os("MESHGROVE_FLATTEN").is_some();
         let duplicates = std::env::var("MESHGROVE_VIEW").is_ok_and(|v| v == "duplicates");
@@ -64,6 +71,7 @@ impl ScreenshotHook {
             started: Instant::now(),
             pressed: false,
             search,
+            measure,
             flatten,
             duplicates,
             settings,
