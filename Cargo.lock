@@ -2282,7 +2282,7 @@ dependencies = [
 
 [[package]]
 name = "meshgrove"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2309,7 +2309,7 @@ dependencies = [
 
 [[package]]
 name = "meshgrove-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "blake3",
@@ -2334,7 +2334,7 @@ dependencies = [
 
 [[package]]
 name = "meshgrove-render"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2350,14 +2350,14 @@ dependencies = [
 
 [[package]]
 name = "meshgrove-step"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "meshgrove-thumbnailer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "image",
  "meshgrove-core",
