@@ -10,6 +10,7 @@ use stlb_core::cache::{ThumbCache, ThumbMeta};
 use stlb_core::listing::Entry;
 
 use super::icons;
+use super::turntable::HoveredTile;
 use crate::thumbs::{self, Job, ThumbResult, ThumbService};
 
 const SPACING: f32 = 8.0;
@@ -34,6 +35,14 @@ pub enum Thumb {
 pub enum Action {
     /// Double-click / Enter on an entry (index into the folder's entries).
     Open(usize),
+}
+
+pub struct GalleryOutput {
+    pub action: Option<Action>,
+    /// Model tile under the pointer, for the hover turntable.
+    pub hovered: Option<HoveredTile>,
+    /// The visible part of the grid (for clipping overlays).
+    pub viewport: Rect,
 }
 
 #[derive(Default)]
@@ -106,7 +115,7 @@ impl Gallery {
         }
     }
 
-    pub fn show(&mut self, ui: &mut Ui, entries: &[Entry], tile: f32, service: &ThumbService) -> Option<Action> {
+    pub fn show(&mut self, ui: &mut Ui, entries: &[Entry], tile: f32, service: &ThumbService) -> GalleryOutput {
         let label_h = 2.0 * ui.ctx().fonts_mut(|f| f.row_height(&FontId::proportional(LABEL_FONT))) + 4.0;
         let avail = ui.available_width();
         let cols = (((avail + SPACING) / (tile + SPACING)).floor() as usize).max(1);
@@ -132,6 +141,7 @@ impl Gallery {
 
         ui.spacing_mut().item_spacing = vec2(SPACING, SPACING);
         let mut visible = HashSet::new();
+        let mut hovered = None;
         let output = area.show_rows(ui, tile_h, rows, |ui, row_range| {
             for row in row_range {
                 let row_entries: Vec<usize> = self.shown.iter().skip(row * cols).take(cols).copied().collect();
@@ -147,6 +157,16 @@ impl Gallery {
                         if response.double_clicked() {
                             action = Some(Action::Open(entry));
                         }
+                        let e = &entries[entry];
+                        if response.hovered() && crate::meshes::viewable(e.kind) {
+                            let selected = self.selected == Some(entry);
+                            hovered = Some(HoveredTile {
+                                path: e.path.clone(),
+                                kind: e.kind,
+                                image_rect: image_rect(response.rect),
+                                background: tile_background(ui.visuals(), selected, true),
+                            });
+                        }
                     }
                 });
             }
@@ -158,7 +178,7 @@ impl Gallery {
             service.set_visible(|k| visible.contains(k));
             self.visible = visible;
         }
-        action
+        GalleryOutput { action, hovered, viewport: output.inner_rect }
     }
 
     fn keyboard(&mut self, ui: &Ui, cols: usize) -> Option<Action> {
@@ -208,16 +228,9 @@ impl Gallery {
         let visuals = ui.visuals();
         let selected = self.selected == Some(index);
         let painter = ui.painter_at(rect);
-        let bg = if selected {
-            visuals.selection.bg_fill.linear_multiply(0.55)
-        } else if response.hovered() {
-            visuals.widgets.hovered.weak_bg_fill
-        } else {
-            Color32::TRANSPARENT
-        };
-        painter.rect_filled(rect, 6.0, bg);
+        painter.rect_filled(rect, 6.0, tile_background(visuals, selected, response.hovered()));
 
-        let img = Rect::from_min_size(rect.min + vec2(PAD, PAD), vec2(w - 2.0 * PAD, w - 2.0 * PAD));
+        let img = image_rect(rect);
         let ink = visuals.text_color();
         let paper = visuals.widgets.inactive.bg_fill;
         match (entry.kind, self.thumb(index)) {
@@ -255,6 +268,22 @@ impl Gallery {
         };
         response.on_hover_text_at_pointer(tooltip)
     }
+}
+
+fn tile_background(visuals: &egui::Visuals, selected: bool, hovered: bool) -> Color32 {
+    if selected {
+        visuals.selection.bg_fill.linear_multiply(0.55)
+    } else if hovered {
+        visuals.widgets.hovered.weak_bg_fill
+    } else {
+        Color32::TRANSPARENT
+    }
+}
+
+/// The square thumbnail area at the top of a tile.
+fn image_rect(tile: Rect) -> Rect {
+    let side = tile.width() - 2.0 * PAD;
+    Rect::from_min_size(tile.min + vec2(PAD, PAD), vec2(side, side))
 }
 
 /// Indices of the entries matching the filter text (case-insensitive) and the model-only switch.

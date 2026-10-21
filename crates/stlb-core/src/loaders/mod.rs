@@ -1,5 +1,6 @@
 pub mod image;
 pub mod stl;
+pub mod threemf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
@@ -11,4 +12,13 @@ pub enum LoadError {
     Malformed(String),
     #[error("image: {0}")]
     Image(#[from] ::image::ImageError),
+}
+
+/// Geometry of any supported model file.
+pub fn load_mesh(kind: crate::Kind, bytes: &[u8]) -> Result<crate::Mesh, LoadError> {
+    match kind {
+        crate::Kind::Stl => stl::parse(bytes),
+        crate::Kind::ThreeMf => Ok(threemf::parse(bytes)?.mesh),
+        other => Err(LoadError::Malformed(format!("{other:?} is not a mesh format"))),
+    }
 }

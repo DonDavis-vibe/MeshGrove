@@ -17,6 +17,8 @@ pub struct ThumbMeta {
     pub size_mm: Option<[f32; 3]>,
     pub content_hash: Option<String>,
     pub geo_sig: Option<String>,
+    /// The picture is the preview a slicer/CAD program stored in the file, not our own render.
+    pub embedded: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +86,7 @@ const KEY_TRIANGLES: &str = "stlb:triangles";
 const KEY_SIZE: &str = "stlb:size_mm";
 const KEY_CONTENT: &str = "stlb:content_hash";
 const KEY_GEO: &str = "stlb:geo_sig";
+const KEY_SOURCE: &str = "stlb:source";
 
 fn encode(thumb: &Thumbnail) -> io::Result<Vec<u8>> {
     let mut out = Vec::new();
@@ -97,6 +100,7 @@ fn encode(thumb: &Thumbnail) -> io::Result<Vec<u8>> {
         (KEY_SIZE, m.size_mm.map(|[x, y, z]| format!("{x} {y} {z}"))),
         (KEY_CONTENT, m.content_hash.clone()),
         (KEY_GEO, m.geo_sig.clone()),
+        (KEY_SOURCE, m.embedded.then(|| "embedded".to_owned())),
     ];
     for (k, v) in texts {
         if let Some(v) = v {
@@ -130,6 +134,7 @@ fn decode(bytes: &[u8]) -> Result<Thumbnail, png::DecodingError> {
             }
             KEY_CONTENT => meta.content_hash = Some(text.to_owned()),
             KEY_GEO => meta.geo_sig = Some(text.to_owned()),
+            KEY_SOURCE => meta.embedded = text == "embedded",
             _ => {}
         }
     }
@@ -156,6 +161,7 @@ mod tests {
             size_mm: Some([20.5, 10.0, 5.25]),
             content_hash: Some("abc".into()),
             geo_sig: Some("12|2.4e3|...".into()),
+            embedded: true,
         };
         cache.store(&key, &Thumbnail { image: image.clone(), meta: meta.clone() }).unwrap();
         let back = cache.load(&key).unwrap().unwrap();

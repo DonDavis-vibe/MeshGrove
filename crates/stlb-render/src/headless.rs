@@ -30,7 +30,10 @@ impl HeadlessRenderer {
     }
 
     async fn new_async() -> Result<HeadlessRenderer, RenderError> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+        // Vulkan (lavapipe in CI) is all we need; skipping GL avoids EGL noise at shutdown.
+        desc.backends = wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY);
+        let instance = wgpu::Instance::new(desc);
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,

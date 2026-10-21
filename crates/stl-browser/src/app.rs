@@ -3,28 +3,26 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use crossbeam_channel::{Receiver, bounded};
 use egui::{Button, Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use stlb_core::cache::ThumbCache;
 use stlb_core::config::Config;
 use stlb_core::listing;
-use stlb_core::{Kind, loaders::stl};
-use stlb_render::{GpuMesh, Renderer, upload_mesh};
+use stlb_render::Renderer;
 
 use crate::i18n;
+use crate::meshes::{self, MeshState, MeshStore};
 use crate::nav::{Listing, Navigator};
 use crate::thumbs::ThumbService;
 use crate::ui::details::{self, DetailsContext, ModelStatus};
 use crate::ui::gallery::{Action, Gallery};
 use crate::ui::sidebar::{Sidebar, SidebarAction};
+use crate::ui::turntable::Turntable;
 use crate::ui::viewer::ModelViewer;
 
 /// Wait this long after the selection settles before loading a model into the viewer,
 /// so arrowing through a folder of 200 MB miniatures doesn't load every one of them.
 const VIEWER_DEBOUNCE: Duration = Duration::from_millis(250);
 const TILE_RANGE: std::ops::RangeInclusive<f32> = 96.0..=384.0;
-
-type ModelResult = (PathBuf, Result<(GpuMesh, usize, glam::Vec3), String>);
 
 pub struct App {
     config: Config,
@@ -36,9 +34,13 @@ pub struct App {
     renderer: Renderer,
     viewer: ModelViewer,
     model: ModelStatus,
-    model_path: Option<PathBuf>,
-    model_rx: Option<Receiver<ModelResult>>,
+    meshes: MeshStore,
+    turntable: Turntable,
+    /// Plate preview textures of the model in the viewer.
+    plates: Option<(PathBuf, Vec<(usize, egui::TextureHandle)>)>,
     selection_changed: Instant,
+    /// Build plate shown in the viewer for multi-plate projects (`None` = default plate).
+    viewer_plate: Option<usize>,
     last_selected: Option<usize>,
     filter: String,
     focus_filter: bool,
@@ -83,9 +85,11 @@ impl App {
             renderer: Renderer::new(&rs.device, &rs.adapter),
             viewer: ModelViewer::new(),
             model: ModelStatus::Idle,
-            model_path: None,
-            model_rx: None,
+            meshes: MeshStore::new(rs.device.clone(), cc.egui_ctx.clone()),
+            turntable: Turntable::default(),
+            plates: None,
             selection_changed: Instant::now(),
+            viewer_plate: None,
             last_selected: None,
             filter: String::new(),
             focus_filter: false,
@@ -129,63 +133,52 @@ impl App {
         }
     }
 
-    /// Keeps the 3D viewer in sync with the selection (debounced, one load at a time).
-    fn update_viewer(&mut self, ctx: &egui::Context, device: &wgpu::Device) {
+    /// Keeps the 3D viewer in sync with the selection (debounced, loads run in the mesh store).
+    fn update_viewer(&mut self, ctx: &egui::Context) {
         if self.gallery.selected != self.last_selected {
             self.last_selected = self.gallery.selected;
             self.selection_changed = Instant::now();
+            self.viewer_plate = None;
         }
-        if let Some(rx) = &self.model_rx
-            && let Ok((path, result)) = rx.try_recv()
-        {
-            self.model_rx = None;
-            if Some(&path) == self.model_path.as_ref() {
-                match result {
-                    Ok((mesh, triangles, size_mm)) => {
-                        self.viewer.set_mesh(Some(mesh));
-                        self.model = ModelStatus::Ready { triangles, size_mm };
-                    }
-                    Err(e) => self.model = ModelStatus::Failed(e),
-                }
-            }
-        }
-
-        let wanted = self.selected_entry().filter(|e| e.kind == Kind::Stl).map(|e| e.path.clone());
-        if wanted == self.model_path || self.model_rx.is_some() {
-            return;
-        }
-        let waited = self.selection_changed.elapsed();
-        if waited < VIEWER_DEBOUNCE {
-            ctx.request_repaint_after(VIEWER_DEBOUNCE - waited);
-            return;
-        }
-        self.viewer.set_mesh(None);
-        self.model_path = wanted.clone();
-        let Some(path) = wanted else {
+        let wanted = self.selected_entry().filter(|e| meshes::viewable(e.kind)).map(|e| (e.path.clone(), e.kind));
+        let Some((path, kind)) = wanted else {
+            self.viewer.set_mesh(None);
             self.model = ModelStatus::Idle;
             return;
         };
-        self.model = ModelStatus::Loading;
-        let (tx, rx) = bounded(1);
-        let (device, ctx) = (device.clone(), ctx.clone());
-        std::thread::Builder::new()
-            .name("viewer-load".into())
-            .spawn(move || {
-                let result = std::fs::read(&path)
-                    .map_err(|e| e.to_string())
-                    .and_then(|bytes| stl::parse(&bytes).map_err(|e| e.to_string()))
-                    .and_then(|mesh| {
-                        let size = mesh.bounds().map(|b| b.size()).unwrap_or_default();
-                        let triangles = mesh.triangle_count();
-                        upload_mesh(&device, &mesh)
-                            .map(|gpu| (gpu, triangles, size))
-                            .ok_or_else(|| t!("error.empty_model").into_owned())
-                    });
-                let _ = tx.send((path, result));
-                ctx.request_repaint();
-            })
-            .expect("spawning viewer loader");
-        self.model_rx = Some(rx);
+        let waited = self.selection_changed.elapsed();
+        if waited < VIEWER_DEBOUNCE {
+            ctx.request_repaint_after(VIEWER_DEBOUNCE - waited);
+            self.viewer.set_mesh(None);
+            self.model = ModelStatus::Loading;
+            return;
+        }
+        match self.meshes.request(&path, kind, self.viewer_plate) {
+            MeshState::Loading => {
+                self.viewer.set_mesh(None);
+                self.model = ModelStatus::Loading;
+            }
+            MeshState::Failed(e) => {
+                self.viewer.set_mesh(None);
+                self.model = ModelStatus::Failed(e.clone());
+            }
+            MeshState::Ready(loaded) => {
+                let loaded = loaded.clone();
+                self.viewer.set_mesh(Some(loaded.mesh));
+                if self.plates.as_ref().is_none_or(|(p, _)| *p != path) {
+                    let textures = loaded
+                        .info
+                        .plates
+                        .iter()
+                        .map(|(n, img)| {
+                            (*n, ctx.load_texture(format!("plate-{n}"), img.clone(), egui::TextureOptions::LINEAR))
+                        })
+                        .collect();
+                    self.plates = Some((path, textures));
+                }
+                self.model = ModelStatus::Ready(loaded.info);
+            }
+        }
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
@@ -326,7 +319,8 @@ impl eframe::App for App {
         }
         self.gallery.receive(&ctx, &self.thumbs);
         self.shortcuts(&ctx);
-        self.update_viewer(&ctx, &rs.device);
+        self.meshes.begin_frame();
+        self.update_viewer(&ctx);
         if let Some(hook) = &mut self.screenshot {
             hook.tick(&ctx);
         }
@@ -361,21 +355,28 @@ impl eframe::App for App {
             None => {}
         }
 
-        egui::Panel::right("details").default_size(340.0).show(ui, |ui| {
-            let entry = self.gallery.selected.and_then(|i| self.nav.entries().get(i));
-            let thumb = self.gallery.selected.and_then(|i| self.gallery.thumb(i));
-            details::show(
-                ui,
-                DetailsContext {
-                    entry,
-                    thumb,
-                    model: &self.model,
-                    viewer: &mut self.viewer,
-                    render_state: &rs,
-                    renderer: &self.renderer,
-                },
-            );
-        });
+        let clicked_plate = egui::Panel::right("details")
+            .default_size(340.0)
+            .show(ui, |ui| {
+                let entry = self.gallery.selected.and_then(|i| self.nav.entries().get(i));
+                let thumb = self.gallery.selected.and_then(|i| self.gallery.thumb(i));
+                details::show(
+                    ui,
+                    DetailsContext {
+                        entry,
+                        thumb,
+                        model: &self.model,
+                        plates: self.plates.as_ref().map_or(&[][..], |(_, p)| p.as_slice()),
+                        viewer: &mut self.viewer,
+                        render_state: &rs,
+                        renderer: &self.renderer,
+                    },
+                )
+            })
+            .inner;
+        if clicked_plate.is_some() {
+            self.viewer_plate = clicked_plate;
+        }
 
         egui::CentralPanel::default().show(ui, |ui| {
             match &self.nav.listing {
@@ -398,12 +399,19 @@ impl eframe::App for App {
             if zoom != 1.0 && ui.ui_contains_pointer() {
                 self.config.tile_size = (self.config.tile_size * zoom).clamp(*TILE_RANGE.start(), *TILE_RANGE.end());
             }
-            if let Some(Action::Open(index)) =
-                self.gallery.show(ui, self.nav.entries(), self.config.tile_size, &self.thumbs)
-            {
+            let output = self.gallery.show(ui, self.nav.entries(), self.config.tile_size, &self.thumbs);
+            if let Some(Action::Open(index)) = output.action {
                 self.open_entry(index);
             }
+            self.turntable.show(ui, output.hovered, output.viewport, &mut self.meshes, &rs, &self.renderer);
         });
+    }
+
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if let Some(pos) = self.screenshot.as_ref().and_then(|h| h.pointer) {
+            raw.events.retain(|e| !matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerGone));
+            raw.events.push(egui::Event::PointerMoved(pos));
+        }
     }
 
     fn on_exit(&mut self) {

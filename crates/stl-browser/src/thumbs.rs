@@ -36,7 +36,7 @@ pub enum ThumbResult {
 
 /// Which kinds get a picture (everything else shows an icon).
 pub fn has_thumbnail(kind: Kind) -> bool {
-    matches!(kind, Kind::Stl | Kind::Image)
+    matches!(kind, Kind::Stl | Kind::ThreeMf | Kind::Image)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -254,19 +254,18 @@ fn generate(job: &Job, bytes: &[u8], render_tx: &Sender<RenderRequest>) -> Resul
     match job.kind {
         Kind::Stl => {
             let mesh = loaders::stl::parse(bytes).map_err(|e| Failure::Permanent(e.to_string()))?;
-            let meta = ThumbMeta {
-                triangles: Some(mesh.triangle_count()),
-                size_mm: mesh.bounds().map(|b| b.size().to_array()),
-                content_hash: Some(dedupe::content_hash(bytes)),
-                geo_sig: dedupe::geo_signature(&mesh),
-            };
-            let (reply_tx, reply_rx) = bounded(1);
-            render_tx.send((mesh, reply_tx)).map_err(|_| Failure::Transient("renderer stopped".into()))?;
-            let image = reply_rx
-                .recv()
-                .map_err(|_| Failure::Transient("renderer stopped".into()))?
-                .map_err(Failure::Transient)?;
-            Ok(Thumbnail { image, meta })
+            let meta = mesh_meta(&mesh, bytes);
+            Ok(Thumbnail { image: render(mesh, render_tx)?, meta })
+        }
+        Kind::ThreeMf => {
+            // The slicer's own plate picture is free and shows filament colours; render only without one.
+            let parsed = loaders::threemf::parse(bytes);
+            let meta = parsed.as_ref().map(|m| mesh_meta(&m.mesh, bytes)).unwrap_or_default();
+            if let Some(image) = loaders::threemf::embedded_thumbnail(bytes, THUMB_PX) {
+                return Ok(Thumbnail { image, meta: ThumbMeta { embedded: true, ..meta } });
+            }
+            let model = parsed.map_err(|e| Failure::Permanent(e.to_string()))?;
+            Ok(Thumbnail { image: render(model.mesh, render_tx)?, meta })
         }
         Kind::Image => {
             let image = loaders::image::thumbnail(bytes, THUMB_PX).map_err(|e| Failure::Permanent(e.to_string()))?;
@@ -274,6 +273,22 @@ fn generate(job: &Job, bytes: &[u8], render_tx: &Sender<RenderRequest>) -> Resul
         }
         other => Err(Failure::Permanent(format!("no thumbnail support for {other:?}"))),
     }
+}
+
+fn mesh_meta(mesh: &Mesh, bytes: &[u8]) -> ThumbMeta {
+    ThumbMeta {
+        triangles: Some(mesh.triangle_count()),
+        size_mm: mesh.bounds().map(|b| b.size().to_array()),
+        content_hash: Some(dedupe::content_hash(bytes)),
+        geo_sig: dedupe::geo_signature(mesh),
+        embedded: false,
+    }
+}
+
+fn render(mesh: Mesh, render_tx: &Sender<RenderRequest>) -> Result<image::RgbaImage, Failure> {
+    let (reply_tx, reply_rx) = bounded(1);
+    render_tx.send((mesh, reply_tx)).map_err(|_| Failure::Transient("renderer stopped".into()))?;
+    reply_rx.recv().map_err(|_| Failure::Transient("renderer stopped".into()))?.map_err(Failure::Transient)
 }
 
 fn gpu_thread(requests: Receiver<RenderRequest>) {

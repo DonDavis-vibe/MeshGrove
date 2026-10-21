@@ -16,6 +16,8 @@ toml.workspace = true
 dirs.workspace = true
 png.workspace = true
 image.workspace = true
+zip.workspace = true
+quick-xml.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

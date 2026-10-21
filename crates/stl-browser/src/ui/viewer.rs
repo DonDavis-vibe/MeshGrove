@@ -1,24 +1,35 @@
-//! Interactive 3D view. The model is drawn by the shared `stlb_render::Renderer` into an
-//! offscreen texture (own MSAA + depth, independent of egui's pass) and shown as an egui image.
+//! Interactive 3D view of the selected model (orbit, pan, zoom), drawn by the shared renderer.
 
-use egui::{Color32, PointerButton, Rect, Sense, Ui, pos2};
-use stlb_render::{GpuMesh, RenderTarget, Renderer, ViewParams};
+use std::sync::Arc;
+
+use egui::{PointerButton, Rect, Sense, Ui};
+use stlb_render::{GpuMesh, Renderer, ViewParams};
+
+use super::offscreen::{OffscreenView, pixel_size};
 
 pub struct ModelViewer {
-    mesh: Option<GpuMesh>,
-    target: Option<(RenderTarget, egui::TextureId)>,
+    mesh: Option<Arc<GpuMesh>>,
+    offscreen: OffscreenView,
     view: ViewParams,
     dirty: bool,
 }
 
 impl ModelViewer {
     pub fn new() -> ModelViewer {
-        ModelViewer { mesh: None, target: None, view: ViewParams::default(), dirty: true }
+        ModelViewer { mesh: None, offscreen: OffscreenView::default(), view: ViewParams::default(), dirty: true }
     }
 
-    pub fn set_mesh(&mut self, mesh: Option<GpuMesh>) {
-        self.mesh = mesh;
-        self.reset_view();
+    /// Shows `mesh`; the camera is reset only when it is a different model.
+    pub fn set_mesh(&mut self, mesh: Option<Arc<GpuMesh>>) {
+        let same = match (&self.mesh, &mesh) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            self.mesh = mesh;
+            self.reset_view();
+        }
     }
 
     pub fn reset_view(&mut self) {
@@ -26,10 +37,9 @@ impl ModelViewer {
         self.dirty = true;
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, render_state: &egui_wgpu::RenderState, renderer: &Renderer) {
+    pub fn ui(&mut self, ui: &mut Ui, rs: &egui_wgpu::RenderState, renderer: &Renderer) {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         self.handle_input(ui, rect, &response);
-
         let Some(mesh) = &self.mesh else {
             ui.painter().text(
                 rect.center(),
@@ -40,47 +50,18 @@ impl ModelViewer {
             );
             return;
         };
-        let ppp = ui.ctx().pixels_per_point();
-        let (w, h) = ((rect.width() * ppp).round() as u32, (rect.height() * ppp).round() as u32);
+        let (w, h) = pixel_size(ui.ctx(), rect);
         if w < 8 || h < 8 {
             return;
         }
-
-        if self.target.as_ref().is_none_or(|(t, _)| t.width != w || t.height != h) {
-            let target = renderer.create_target(&render_state.device, w, h, wgpu::TextureUsages::TEXTURE_BINDING);
-            let mut egui_renderer = render_state.renderer.write();
-            let id = match &self.target {
-                Some((_, id)) => {
-                    egui_renderer.update_egui_texture_from_wgpu_texture(
-                        &render_state.device,
-                        &target.color_view,
-                        wgpu::FilterMode::Linear,
-                        *id,
-                    );
-                    *id
-                }
-                None => egui_renderer.register_native_texture(
-                    &render_state.device,
-                    &target.color_view,
-                    wgpu::FilterMode::Linear,
-                ),
-            };
-            self.target = Some((target, id));
+        if self.offscreen.ensure_size(rs, renderer, w, h) {
             self.dirty = true;
         }
-        let (target, texture_id) = self.target.as_ref().expect("created above");
-
         // Only re-render when something changed; the texture keeps the last frame.
-        if self.dirty {
-            let mut encoder = render_state
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("stlb viewer") });
-            renderer.draw(&render_state.queue, &mut encoder, target, mesh, &self.view);
-            render_state.queue.submit([encoder.finish()]);
-            self.dirty = false;
+        if std::mem::take(&mut self.dirty) {
+            self.offscreen.render(rs, renderer, mesh, &self.view);
         }
-        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-        ui.painter().image(*texture_id, rect, uv, Color32::WHITE);
+        self.offscreen.paint(ui.painter(), rect);
     }
 
     fn handle_input(&mut self, ui: &Ui, rect: Rect, response: &egui::Response) {

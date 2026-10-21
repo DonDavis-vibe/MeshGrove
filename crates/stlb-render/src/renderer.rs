@@ -57,6 +57,13 @@ pub struct GpuMesh {
     pub triangle_count: usize,
 }
 
+impl GpuMesh {
+    /// GPU memory used by the vertex buffers.
+    pub fn byte_size(&self) -> usize {
+        self.chunks.iter().map(|(_, count)| *count as usize * 12).sum()
+    }
+}
+
 /// Where one view gets drawn: an optional MSAA buffer, the resolved colour texture and depth.
 pub struct RenderTarget {
     pub width: u32,

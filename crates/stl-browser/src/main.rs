@@ -5,6 +5,7 @@ i18n!("locales", fallback = "en");
 
 mod app;
 mod i18n;
+mod meshes;
 mod nav;
 mod screenshot;
 mod thumbs;
