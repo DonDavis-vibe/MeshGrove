@@ -462,7 +462,7 @@ Ctrl means ⌘ Cmd on macOS.
 | STEP | `.step`, `.stp` | ✔ | ✔ | Needs the OpenCascade helper `meshgrove-step-mesher`; tessellated once, then cached |
 | OBJ | `.obj` | ✔ | ✔ | Colours from the `.mtl` next to it (diffuse colour or texture) and vertex colours; read as millimetres like the slicers do |
 | PLY | `.ply` | ✔ | ✔ | ASCII and binary; vertex and face colours (scans, MeshLab); point clouds without faces are not shown |
-| glTF | `.glb`, `.gltf` | ✔ | ✔ | All meshes of the scene with base colours, vertex colours and textures; external buffers and textures are read from next to the file. glTF counts in **metres**, so a model 1 unit wide shows as 1000 mm |
+| glTF | `.glb`, `.gltf` | ✔ | ✔ | All meshes of the scene with base colours, vertex colours and textures; external buffers and textures are read from next to the file. glTF counts in **metres**, so a model 1 unit wide shows as 1000 mm; for models meant in millimetres (AI generators, many exports) choose *Settings → 3D models → Millimetres* |
 | Archives | `.zip`, `.7z`, `.rar`, `.tar`, `.tar.gz`, `.tgz`, … | Mosaic | Members | Browsed like folders through libarchive |
 | Images | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | ✔ | – | Shown large in the details panel |
 | PDF | `.pdf` | First page | – | Needs `pdftoppm` from poppler |
@@ -471,7 +471,7 @@ Ctrl means ⌘ Cmd on macOS.
 ## Settings and files on disk
 
 Everything can be changed in the settings window (⚙ at the top right, or Ctrl+,): language,
-library folders, slicer, printer, backups, and the preview cache (with its size and a *Clear
+library folders, slicer, printer, the unit of glTF models, backups, and the preview cache (with its size and a *Clear
 cache* button). The *About* section lists the exact paths on your system.
 
 | What | Linux | Windows | macOS |

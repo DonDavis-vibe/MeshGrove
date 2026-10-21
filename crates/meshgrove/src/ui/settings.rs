@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
-use meshgrove_core::config::{Config, Slicer};
+use meshgrove_core::config::{Config, GltfUnit, Slicer};
 use meshgrove_core::printer::Bed;
 use meshgrove_core::userdata;
 
@@ -18,10 +18,27 @@ pub enum SettingsChange {
     Slicer(Option<Slicer>),
     /// `None`: take the printer selected in the slicer.
     Printer(Option<Bed>),
+    GltfUnit(GltfUnit),
     Export(PathBuf),
     Import(PathBuf),
     OpenBackups,
     ClearCache,
+}
+
+/// How model files without a fixed unit are read.
+fn models(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+    ui.label(RichText::new(t!("settings.models")).strong());
+    ui.horizontal(|ui| {
+        ui.label(t!("settings.gltf_unit"));
+        for (unit, label) in
+            [(GltfUnit::Metres, t!("settings.gltf_metres")), (GltfUnit::Millimetres, t!("settings.gltf_millimetres"))]
+        {
+            if ui.radio(config.gltf_unit == unit, label).clicked() && config.gltf_unit != unit {
+                changes.push(SettingsChange::GltfUnit(unit));
+            }
+        }
+    });
+    ui.weak(t!("settings.gltf_unit_hint"));
 }
 
 /// Facts shown in the "about" part.
@@ -129,6 +146,8 @@ impl SettingsDialog {
                     self.slicer(ui, config, slicer, &mut changes);
                     ui.separator();
                     self.printer(ui, config, bed, &mut changes);
+                    ui.separator();
+                    models(ui, config, &mut changes);
                     ui.separator();
                     self.user_data(ui, &mut changes);
                     ui.separator();

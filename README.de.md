@@ -478,7 +478,7 @@ Strg heißt auf macOS ⌘ Cmd.
 | STEP | `.step`, `.stp` | ✔ | ✔ | Braucht den OpenCascade-Helfer `meshgrove-step-mesher`; einmal vernetzt, dann zwischengespeichert |
 | OBJ | `.obj` | ✔ | ✔ | Farben aus der `.mtl` daneben (Grundfarbe oder Textur) und Vertex-Farben; wie bei den Slicern in Millimetern gelesen |
 | PLY | `.ply` | ✔ | ✔ | ASCII und binär; Vertex- und Flächenfarben (Scans, MeshLab); Punktwolken ohne Flächen werden nicht gezeigt |
-| glTF | `.glb`, `.gltf` | ✔ | ✔ | Alle Netze der Szene mit Grundfarben, Vertex-Farben und Texturen; externe Puffer und Texturen werden neben der Datei gelesen. glTF rechnet in **Metern**, ein Modell mit 1 Einheit Breite erscheint also als 1000 mm |
+| glTF | `.glb`, `.gltf` | ✔ | ✔ | Alle Netze der Szene mit Grundfarben, Vertex-Farben und Texturen; externe Puffer und Texturen werden neben der Datei gelesen. glTF rechnet in **Metern**, ein Modell mit 1 Einheit Breite erscheint also als 1000 mm; für Modelle in Millimetern (KI-Generatoren, viele Exporte) *Einstellungen → 3D-Modelle → Millimeter* wählen |
 | Archive | `.zip`, `.7z`, `.rar`, `.tar`, `.tar.gz`, `.tgz`, … | Mosaik | Inhalt | Wie Ordner durchsuchbar, über libarchive |
 | Bilder | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | ✔ | – | In der Detailansicht groß angezeigt |
 | PDF | `.pdf` | Erste Seite | – | Braucht `pdftoppm` von poppler |
@@ -487,7 +487,7 @@ Strg heißt auf macOS ⌘ Cmd.
 ## Einstellungen und Dateien auf der Platte
 
 Alles lässt sich im Einstellungsfenster ändern (⚙ oben rechts oder Strg+,): Sprache,
-Bibliotheksordner, Slicer, Drucker, Sicherungen und der Vorschau-Cache (mit Größe und *Cache
+Bibliotheksordner, Slicer, Drucker, die Einheit von glTF-Modellen, Sicherungen und der Vorschau-Cache (mit Größe und *Cache
 leeren*). Der Abschnitt *Über* nennt die genauen Pfade auf deinem System.
 
 | Was | Linux | Windows | macOS |

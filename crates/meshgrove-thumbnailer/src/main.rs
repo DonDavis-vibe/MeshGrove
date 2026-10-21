@@ -18,6 +18,10 @@ const CACHE_PX: u32 = 384;
 fn main() -> ExitCode {
     // Dolphin may ask for previews before the app has run once after the rename.
     meshgrove_core::config::migrate_legacy_dirs();
+    // glTF sizes (and with them the cache keys) follow the app's unit setting.
+    if let Ok(config) = meshgrove_core::config::Config::load() {
+        meshgrove_core::config::set_gltf_unit(config.gltf_unit);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (size, input, output) = match args.as_slice() {
         [flag, size, input, output] if flag == "-s" => (size.parse().unwrap_or(256), input, output),

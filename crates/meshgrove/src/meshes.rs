@@ -146,6 +146,12 @@ impl MeshStore {
         &slot.state
     }
 
+    /// Drops the loaded models whose path matches, so they load again (after a setting that
+    /// changes how they are read).
+    pub fn forget_where(&mut self, matches: impl Fn(&Path) -> bool) {
+        self.slots.retain(|(path, _), slot| matches!(slot.state, MeshState::Loading) || !matches(path));
+    }
+
     fn evict(&mut self) {
         let mut used: usize = self.slots.values().filter_map(|s| ready_bytes(&s.state)).sum();
         while used > VRAM_BUDGET {

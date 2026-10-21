@@ -8,6 +8,8 @@ use std::time::SystemTime;
 
 use image::RgbaImage;
 
+use crate::config::GltfUnit;
+
 /// Bump whenever thumbnails would look different (camera, lighting, size), to invalidate the cache.
 pub const RENDER_VERSION: u32 = 1;
 /// 3MF previews gained colours and filament facts in version 2; other kinds kept their previews.
@@ -48,12 +50,21 @@ impl ThumbCache {
 
     /// Identity of one rendered thumbnail: changes when the file (or an archive entry in it) changes.
     pub fn key(path: &Path, size: u64, modified: Option<SystemTime>, entry: Option<&str>) -> String {
+        Self::key_in(path, size, modified, entry, crate::config::gltf_unit())
+    }
+
+    fn key_in(path: &Path, size: u64, modified: Option<SystemTime>, entry: Option<&str>, unit: GltfUnit) -> String {
         let nanos = modified.and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
         let mut h = blake3::Hasher::new();
         // An archive member's own name decides, not the archive's.
         let name = entry.map(Path::new).unwrap_or(path);
-        let is_3mf = name.extension().is_some_and(|e| e.eq_ignore_ascii_case("3mf"));
-        let version = if is_3mf { RENDER_VERSION_3MF } else { RENDER_VERSION };
+        let ext = name.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+        let version = match ext.as_deref() {
+            Some("3mf") => RENDER_VERSION_3MF.to_string(),
+            // glTF sizes follow the unit setting; metres keep the plain version.
+            Some("glb" | "gltf") if unit == GltfUnit::Millimetres => format!("{RENDER_VERSION}mm"),
+            _ => RENDER_VERSION.to_string(),
+        };
         h.update(format!("{version}\0{}\0{size}\0{nanos}\0{}", path.display(), entry.unwrap_or("")).as_bytes());
         h.finalize().to_hex()[..32].to_string()
     }
@@ -209,5 +220,9 @@ mod tests {
         assert_ne!(k, ThumbCache::key(p, 100, Some(t + Duration::from_nanos(100)), None));
         assert_ne!(k, ThumbCache::key(p, 100, Some(t), Some("inner.stl")));
         assert_ne!(k, ThumbCache::key(Path::new("/lib/other.stl"), 100, Some(t), None));
+        // The glTF unit setting changes glTF facts, so their keys; other files keep theirs.
+        let key = |p: &str, unit| ThumbCache::key_in(Path::new(p), 100, Some(t), None, unit);
+        assert_ne!(key("/lib/a.glb", GltfUnit::Metres), key("/lib/a.glb", GltfUnit::Millimetres));
+        assert_eq!(key("/lib/a.stl", GltfUnit::Metres), key("/lib/a.stl", GltfUnit::Millimetres));
     }
 }

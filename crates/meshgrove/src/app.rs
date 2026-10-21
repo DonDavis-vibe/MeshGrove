@@ -654,6 +654,16 @@ impl App {
                         self.bed.as_ref().map_or_else(|| t!("settings.printer_none").into_owned(), |b| b.name.clone());
                     self.toast(t!("toast.printer_set", name = name).into_owned());
                 }
+                SettingsChange::GltfUnit(unit) => {
+                    self.config.gltf_unit = unit;
+                    meshgrove_core::config::set_gltf_unit(unit);
+                    // New sizes: reload shown glTF models, renew their facts and previews.
+                    let is_gltf = |p: &Path| Kind::from_file_name(&listing::file_name(p)) == Kind::Gltf;
+                    self.meshes.forget_where(is_gltf);
+                    self.library.set_roots(self.config.library_roots.clone());
+                    self.refresh_gallery(false);
+                    self.menu_for.clear();
+                }
                 SettingsChange::Export(path) => {
                     self.save_note();
                     self.library.export(path);

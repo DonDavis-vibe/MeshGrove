@@ -12,12 +12,18 @@ use gltf::mesh::Mode;
 
 use super::texture::{self, Texture};
 use super::{LoadError, Sibling};
+use crate::config::{self, GltfUnit};
 use crate::mesh::Mesh;
 
 /// Node trees deeper than this do not occur in real files; they guard against cycles.
 const MAX_DEPTH: usize = 64;
 
+/// Reads the model in the glTF unit of the settings ([`config::gltf_unit`]).
 pub fn parse(bytes: &[u8], sibling: Sibling) -> Result<Mesh, LoadError> {
+    parse_in(bytes, sibling, config::gltf_unit())
+}
+
+fn parse_in(bytes: &[u8], sibling: Sibling, unit: GltfUnit) -> Result<Mesh, LoadError> {
     let gltf::Gltf { document, blob } =
         gltf::Gltf::from_slice(bytes).map_err(|e| LoadError::Malformed(e.to_string()))?;
     let buffers: Vec<Option<Cow<[u8]>>> = document
@@ -35,12 +41,13 @@ pub fn parse(bytes: &[u8], sibling: Sibling) -> Result<Mesh, LoadError> {
     scene.out.indices = Some(Vec::new());
     scene.out.vertex_colors = Some(Vec::new());
 
-    // Metres → millimetres, +Y up → +Z up (and glTF's front, +Z, becomes our front, −Y):
-    // (x, y, z) → 1000 · (x, −z, y), exactly.
+    // Units → millimetres, +Y up → +Z up (and glTF's front, +Z, becomes our front, −Y):
+    // (x, y, z) → s · (x, −z, y), exactly.
+    let s = unit.scale();
     let root = Mat4::from_cols(
-        glam::Vec4::new(1000.0, 0.0, 0.0, 0.0),
-        glam::Vec4::new(0.0, 0.0, 1000.0, 0.0),
-        glam::Vec4::new(0.0, -1000.0, 0.0, 0.0),
+        glam::Vec4::new(s, 0.0, 0.0, 0.0),
+        glam::Vec4::new(0.0, 0.0, s, 0.0),
+        glam::Vec4::new(0.0, -s, 0.0, 0.0),
         glam::Vec4::W,
     );
     match document.default_scene().or_else(|| document.scenes().next()) {
@@ -259,12 +266,15 @@ pub(crate) mod tests {
     #[test]
     fn glb_in_millimetres_and_z_up() {
         let (json, bin) = quad_gltf("", "", &[]);
-        let mesh = parse(&glb(&json, &bin), &no_files).unwrap();
+        let mesh = parse_in(&glb(&json, &bin), &no_files, GltfUnit::Metres).unwrap();
         assert_eq!(mesh.triangle_count(), 2);
         let b = mesh.bounds().unwrap();
         // The quad spans X and glTF's Y (up), which becomes our Z.
         assert_eq!(b.size(), Vec3::new(1000.0, 0.0, 1000.0));
         assert!(mesh.vertex_colors.is_none(), "default white material says nothing");
+        // With the setting for models in millimetres.
+        let mm = parse_in(&glb(&json, &bin), &no_files, GltfUnit::Millimetres).unwrap();
+        assert_eq!(mm.bounds().unwrap().size(), Vec3::new(1.0, 0.0, 1.0));
     }
 
     #[test]

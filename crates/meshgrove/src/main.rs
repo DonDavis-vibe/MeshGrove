@@ -31,6 +31,7 @@ fn main() -> eframe::Result {
         }
     };
     i18n::init(config.language.as_deref());
+    meshgrove_core::config::set_gltf_unit(config.gltf_unit);
 
     // Optional argument: a folder to open, or a file to open its folder with it selected.
     let start = std::env::args_os()
