@@ -12,6 +12,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/Lizenz-GPL--3.0--or--later-blue" alt="Lizenz: GPL-3.0-or-later"></a>
   <img src="https://img.shields.io/badge/Plattformen-Linux%20%7C%20Windows%20%7C%20macOS-informational" alt="Plattformen: Linux, Windows, macOS">
   <img src="https://img.shields.io/badge/gebaut%20mit-Rust-orange" alt="Gebaut mit Rust">
+  <a href="https://ko-fi.com/don_davis"><img src="https://img.shields.io/badge/Ko--fi-Meshgrove%20unterst%C3%BCtzen-FF5E5B?logo=ko-fi&logoColor=white" alt="Meshgrove auf Ko-fi unterstützen"></a>
 </p>
 
 <p align="center">
@@ -55,6 +56,7 @@
 - [Entwicklung](#entwicklung)
 - [Ausblick](#ausblick)
 - [Mitmachen](#mitmachen)
+- [Unterstützen](#unterstützen)
 - [Danksagung](#danksagung)
 - [Lizenz](#lizenz)
 
@@ -751,6 +753,13 @@ Beispieldatei hilft sehr, wenn ein Modell falsch dargestellt wird, sofern du sie
 Für Code: Vor einem Pull Request `cargo fmt`, `cargo clippy` und `cargo test` ausführen.
 Kommentare und Bezeichner bleiben englisch. Neuer sichtbarer Text läuft über `t!("…")`, mit
 Einträgen in beiden Sprachdateien.
+
+## Unterstützen
+
+Meshgrove ist kostenlos und bleibt es. Wenn es dir Zeit spart oder Ordnung in deine
+Druckbibliothek bringt und du Danke sagen möchtest, kannst du die Entwicklung auf
+**[Ko-fi](https://ko-fi.com/don_davis)** unterstützen. Fehlermeldungen, Ideen und ein ⭐ auf
+GitHub helfen genauso.
 
 ## Danksagung
 

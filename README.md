@@ -12,6 +12,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue" alt="License: GPL-3.0-or-later"></a>
   <img src="https://img.shields.io/badge/platforms-Linux%20%7C%20Windows%20%7C%20macOS-informational" alt="Platforms: Linux, Windows, macOS">
   <img src="https://img.shields.io/badge/made%20with-Rust-orange" alt="Made with Rust">
+  <a href="https://ko-fi.com/don_davis"><img src="https://img.shields.io/badge/Ko--fi-support%20Meshgrove-FF5E5B?logo=ko-fi&logoColor=white" alt="Support Meshgrove on Ko-fi"></a>
 </p>
 
 <p align="center">
@@ -55,6 +56,7 @@
 - [Development](#development)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
+- [Support](#support)
 - [Credits](#credits)
 - [License](#license)
 
@@ -728,6 +730,13 @@ helps a lot when a model shows wrongly, if you are allowed to share it.
 For code: run `cargo fmt`, `cargo clippy` and `cargo test` before opening a pull request, and
 keep comments and identifiers in English. New user-visible text goes through `t!("…")`, with
 entries in both locale files.
+
+## Support
+
+Meshgrove is free and stays free. If it saves you time or tidies up your print library and you
+would like to say thanks, you can support its development on
+**[Ko-fi](https://ko-fi.com/don_davis)**. Bug reports, ideas and a ⭐ on GitHub help just as
+much.
 
 ## Credits
 
