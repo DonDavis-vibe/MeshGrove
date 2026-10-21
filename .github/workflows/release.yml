@@ -1,7 +1,12 @@
 name: Release
 
-# Pushing a tag like v0.1.0 builds Meshgrove for Linux, Windows and macOS and attaches the
-# packages to a GitHub release of that tag.
+# Pushing a tag like v0.1.0 builds and tests the Meshgrove packages and attaches them to a draft
+# GitHub release of that tag:
+#   Windows  Inno Setup installer and a portable zip
+#   macOS    universal DMG (Apple Silicon and Intel)
+#   Linux    AppImage; .deb for Ubuntu 24.04/26.04 and Debian 13; .rpm for Fedora 44
+# All of them include STEP support (OpenCascade). Started by hand (workflow_dispatch), the
+# workflow only builds and tests, and keeps the packages as workflow artifacts.
 on:
   push:
     tags: ["v*"]
@@ -11,139 +16,524 @@ env:
   CARGO_TERM_COLOR: always
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
-    name: ${{ matrix.name }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Linux x86_64
-            os: ubuntu-22.04
-            package: linux-x86_64
-          - name: Windows x64
-            os: windows-latest
-            package: windows-x64
-          - name: macOS Apple Silicon
-            os: macos-latest
-            package: macos-arm64
-    runs-on: ${{ matrix.os }}
+  # The Rust crates' licenses, the same for every package; each package job appends its native
+  # libraries.
+  licenses:
+    name: Third-party licenses
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: System packages (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-dev libxkbcommon-dev libwayland-dev pkg-config
-      - name: System packages (macOS)
-        if: runner.os == 'macOS'
-        run: brew install libarchive pkg-config dylibbundler
-      # libarchive takes ~25 minutes to build; the cache is saved right away so that a later
-      # failing step does not throw the build away.
-      - name: vcpkg cache (Windows)
-        id: vcpkg-cache
-        if: runner.os == 'Windows'
-        uses: actions/cache/restore@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-about --version 0.9.2 --locked --features cli
+      - run: |
+          cargo about generate -c packaging/licenses/about.toml packaging/licenses/about.hbs -o THIRD-PARTY-LICENSES.md
+          grep -c '^## ' THIRD-PARTY-LICENSES.md
+      - uses: actions/upload-artifact@v4
         with:
-          path: C:/vcpkg/installed
-          key: vcpkg-libarchive-x64-windows-static-v2
-      - name: libarchive (Windows, static through vcpkg)
-        if: runner.os == 'Windows'
+          name: licenses
+          path: THIRD-PARTY-LICENSES.md
+
+  windows:
+    name: Windows installer
+    needs: licenses
+    runs-on: windows-latest
+    env:
+      TRIPLET: x64-windows-static-meshgrove
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: licenses
+
+      # libarchive and OpenCascade, static, from vcpkg. Building them takes more than an hour, so
+      # the result is cached, and saved even when a later step (or one of the ports) fails.
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/vcpkg/installed
+          key: vcpkg-windows-${{ hashFiles('packaging/vcpkg/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: vcpkg-windows-${{ hashFiles('packaging/vcpkg/**') }}-
+      - name: libarchive and OpenCascade (vcpkg)
+        id: vcpkg
         shell: bash
         run: |
-          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
-          echo "VCPKGRS_TRIPLET=x64-windows-static" >> "$GITHUB_ENV"
-          "$VCPKG_INSTALLATION_ROOT/vcpkg" install libarchive:x64-windows-static
-      - name: Save vcpkg cache (Windows)
-        if: runner.os == 'Windows' && steps.vcpkg-cache.outputs.cache-hit != 'true'
+          root=$(cygpath -m "$RUNNER_TEMP/vcpkg")
+          status() { sha256sum "$root/installed/vcpkg/status" 2>/dev/null || true; }
+          before=$(status)
+          result=0
+          packaging/vcpkg/install.sh "$root" "$TRIPLET" || result=$?
+          [[ "$(status)" != "$before" ]] && echo "changed=true" >> "$GITHUB_OUTPUT"
+          installed="$root/installed/$TRIPLET"
+          {
+            echo "VCPKG_ROOT=$root"
+            echo "VCPKGRS_TRIPLET=$TRIPLET"
+            echo "OCCT_INCLUDE=$installed/include/opencascade"
+            echo "OCCT_LIB=$installed/lib"
+            echo "OCCT_STATIC=1"
+          } >> "$GITHUB_ENV"
+          exit $result
+      - if: always() && steps.vcpkg.outputs.changed == 'true'
         uses: actions/cache/save@v4
         with:
-          path: C:/vcpkg/installed
-          key: vcpkg-libarchive-x64-windows-static-v2
+          path: ${{ runner.temp }}/vcpkg/installed
+          key: vcpkg-windows-${{ hashFiles('packaging/vcpkg/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p meshgrove -p meshgrove-step
+
+      - name: Check the programs
+        shell: bash
+        run: |
+          vs=$("/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)
+          dumpbin=$(find "$(cygpath -u "$vs")/VC/Tools/MSVC" -path '*/Hostx64/x64/dumpbin.exe' | head -1)
+          for exe in meshgrove meshgrove-step-mesher; do
+            echo "== $exe.exe"
+            dlls=$("$dumpbin" -nologo -dependents "target/release/$exe.exe" | tr -d '\r' | grep -iE '^\s+\S+\.dll$' | tr -d ' ')
+            echo "$dlls"
+            # Windows' own DLLs only: no Visual C++ runtime, nothing that would have to be shipped.
+            if grep -iE '^(vcruntime|msvcp|ucrtbase|api-ms-win-crt|concrt|vcomp)' <<<"$dlls"; then
+              echo "::error::$exe.exe needs the Visual C++ runtime"; exit 1
+            fi
+            while read -r dll; do
+              [[ "$dll" == api-ms-win-* || -f "/c/Windows/System32/$dll" ]] || { echo "::error::$exe.exe needs $dll"; exit 1; }
+            done <<<"$dlls"
+          done
+          target/release/meshgrove-step-mesher.exe --write-test-cube cube.step
+          target/release/meshgrove-step-mesher.exe cube.step cube.stl
+          test "$(stat -c %s cube.stl)" -gt 84
+
+      - name: Package
+        shell: bash
+        run: |
+          packaging/licenses/native-licenses.sh vcpkg "$VCPKG_ROOT/installed/$TRIPLET" >> THIRD-PARTY-LICENSES.md
+          grep -c '^## ' THIRD-PARTY-LICENSES.md
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          dir="Meshgrove-$version-windows-x64-portable"
+          mkdir -p "$dir"
+          cp target/release/meshgrove.exe target/release/meshgrove-step-mesher.exe README.md THIRD-PARTY-LICENSES.md "$dir/"
+          cp LICENSE "$dir/LICENSE.txt"
+          7z a "$dir.zip" "$dir"
+      - name: Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $iscc = (Get-ChildItem 'C:\Program Files*\Inno Setup *\ISCC.exe' | Select-Object -First 1).FullName
+          & $iscc "/DAppVersion=$env:VERSION" "/DBinDir=$PWD\target\release" "/DOutputDir=$PWD" packaging\windows\meshgrove.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Test the installer
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem Meshgrove-*-setup.exe).FullName
+          Start-Process -Wait $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/LOG=setup.log'
+          $app = "$env:LOCALAPPDATA\Programs\Meshgrove"
+          foreach ($file in 'meshgrove.exe', 'meshgrove-step-mesher.exe', 'LICENSE.txt', 'THIRD-PARTY-LICENSES.md', 'unins000.exe') {
+            if (-not (Test-Path "$app\$file")) { Get-Content setup.log; throw "$file was not installed" }
+          }
+          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Meshgrove.lnk")) { throw 'no Start menu entry' }
+          foreach ($ext in '.stl', '.3mf', '.step', '.stp', '.obj', '.ply', '.glb', '.gltf') {
+            $progids = Get-ItemProperty "HKCU:\Software\Classes\$ext\OpenWithProgids"
+            if ($null -eq $progids.'Meshgrove.Model') { throw "no Open with entry for $ext" }
+          }
+          (Get-ItemProperty 'HKCU:\Software\Classes\Meshgrove.Model\shell\open\command').'(default)'
+          & "$app\meshgrove-step-mesher.exe" --write-test-cube "$env:RUNNER_TEMP\cube.step"
+          if ($LASTEXITCODE) { throw "test cube: $LASTEXITCODE" }
+          & "$app\meshgrove-step-mesher.exe" "$env:RUNNER_TEMP\cube.step" "$env:RUNNER_TEMP\cube.stl"
+          if ($LASTEXITCODE) { throw "STEP to STL: $LASTEXITCODE" }
+          Start-Process -Wait "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES'
+          # The uninstaller hands over to a copy of itself; wait for that one too.
+          for ($i = 0; $i -lt 60 -and (Test-Path "$app\meshgrove.exe"); $i++) { Start-Sleep 1 }
+          if (Test-Path "$app\meshgrove.exe") { throw 'the uninstaller left meshgrove.exe behind' }
+          if (Test-Path 'HKCU:\Software\Classes\Meshgrove.Model') { throw 'the uninstaller left the file type behind' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-windows
+          path: |
+            Meshgrove-*-setup.exe
+            Meshgrove-*-portable.zip
+
+  macos:
+    name: macOS DMG
+    needs: licenses
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: licenses
+      - run: brew install pkgconf
+
+      # Both architectures are built here on Apple Silicon; vcpkg cross-compiles the Intel half.
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/vcpkg/installed
+          key: vcpkg-macos-${{ hashFiles('packaging/vcpkg/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: vcpkg-macos-${{ hashFiles('packaging/vcpkg/**') }}-
+      - name: libarchive and OpenCascade (vcpkg)
+        id: vcpkg
+        run: |
+          root="$RUNNER_TEMP/vcpkg"
+          status() { shasum -a 256 "$root/installed/vcpkg/status" 2>/dev/null || true; }
+          before=$(status)
+          result=0
+          packaging/vcpkg/install.sh "$root" arm64-osx-meshgrove x64-osx-meshgrove || result=$?
+          [[ "$(status)" != "$before" ]] && echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "VCPKG_ROOT=$root" >> "$GITHUB_ENV"
+          exit $result
+      - if: always() && steps.vcpkg.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/vcpkg/installed
+          key: vcpkg-macos-${{ hashFiles('packaging/vcpkg/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (Apple Silicon and Intel)
+        run: |
+          for arch in aarch64:arm64 x86_64:x64; do
+            installed="$VCPKG_ROOT/installed/${arch#*:}-osx-meshgrove"
+            PKG_CONFIG_LIBDIR="$installed/lib/pkgconfig" PKG_CONFIG_ALLOW_CROSS=1 LIBARCHIVE_STATIC=1 \
+            OCCT_INCLUDE="$installed/include/opencascade" OCCT_LIB="$installed/lib" OCCT_STATIC=1 \
+            MACOSX_DEPLOYMENT_TARGET=11.0 \
+              cargo build --release --target "${arch%%:*}-apple-darwin" -p meshgrove -p meshgrove-step
+          done
+
+      - name: Package
+        run: |
+          packaging/licenses/native-licenses.sh vcpkg "$VCPKG_ROOT/installed/arm64-osx-meshgrove" >> THIRD-PARTY-LICENSES.md
+          grep -c '^## ' THIRD-PARTY-LICENSES.md
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          packaging/macos/package.sh "$version" target/aarch64-apple-darwin/release target/x86_64-apple-darwin/release .
+
+      - name: Test the DMG
+        run: |
+          # Rosetta runs the Intel half.
+          /usr/bin/pgrep -q oahd || sudo softwareupdate --install-rosetta --agree-to-license
+          hdiutil attach -nobrowse -mountpoint /tmp/meshgrove-dmg Meshgrove-*-macos-universal.dmg
+          app=/tmp/meshgrove-dmg/Meshgrove.app
+          ls -la /tmp/meshgrove-dmg "$app/Contents/MacOS" "$app/Contents/Resources"
+          codesign --verify --strict --verbose "$app"
+          for program in meshgrove meshgrove-step-mesher; do
+            binary="$app/Contents/MacOS/$program"
+            lipo -archs "$binary"
+            [[ "$(lipo -archs "$binary")" == *x86_64* && "$(lipo -archs "$binary")" == *arm64* ]]
+            for arch in arm64 x86_64; do
+              otool -arch "$arch" -L "$binary"
+              # System libraries only: nothing from Homebrew or vcpkg left to ship.
+              if otool -arch "$arch" -L "$binary" | tail -n +2 | grep -vE '^\s+(/usr/lib/|/System/Library/)'; then
+                echo "::error::$program ($arch) links a library outside the system"; exit 1
+              fi
+              vtool -arch "$arch" -show-build "$binary" | grep -E 'minos|version' || true
+            done
+          done
+          for arch in arm64 x86_64; do
+            arch -$arch "$app/Contents/MacOS/meshgrove-step-mesher" --write-test-cube "/tmp/cube-$arch.step"
+            arch -$arch "$app/Contents/MacOS/meshgrove-step-mesher" "/tmp/cube-$arch.step" "/tmp/cube-$arch.stl"
+            test "$(stat -f %z "/tmp/cube-$arch.stl")" -gt 84
+          done
+          hdiutil detach /tmp/meshgrove-dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-macos
+          path: Meshgrove-*-macos-universal.dmg
+
+  appimage:
+    name: AppImage
+    needs: licenses
+    # The oldest supported Ubuntu: the AppImage runs on systems with its glibc (2.35) or newer.
+    runs-on: ubuntu-22.04
+    env:
+      TRIPLET: x64-linux-meshgrove
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: licenses
+      - name: System packages
+        # X11 and OpenGL headers for OpenCascade's visualization toolkits, which its STEP
+        # support depends on.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev pkg-config \
+            libgl-dev libegl-dev libx11-dev libxext-dev libxi-dev libxmu-dev libxt-dev
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/vcpkg/installed
+          key: vcpkg-linux-${{ hashFiles('packaging/vcpkg/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: vcpkg-linux-${{ hashFiles('packaging/vcpkg/**') }}-
+      - name: libarchive and OpenCascade (vcpkg)
+        id: vcpkg
+        run: |
+          root="$RUNNER_TEMP/vcpkg"
+          status() { sha256sum "$root/installed/vcpkg/status" 2>/dev/null || true; }
+          before=$(status)
+          result=0
+          packaging/vcpkg/install.sh "$root" "$TRIPLET" || result=$?
+          [[ "$(status)" != "$before" ]] && echo "changed=true" >> "$GITHUB_OUTPUT"
+          installed="$root/installed/$TRIPLET"
+          {
+            echo "VCPKG_ROOT=$root"
+            echo "PKG_CONFIG_PATH=$installed/lib/pkgconfig"
+            echo "LIBARCHIVE_STATIC=1"
+            echo "OCCT_INCLUDE=$installed/include/opencascade"
+            echo "OCCT_LIB=$installed/lib"
+            echo "OCCT_STATIC=1"
+          } >> "$GITHUB_ENV"
+          exit $result
+      - if: always() && steps.vcpkg.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/vcpkg/installed
+          key: vcpkg-linux-${{ hashFiles('packaging/vcpkg/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
 
-      # The licenses of everything built into the programs travel with every package.
-      - name: Third-party licenses
-        shell: bash
+      - name: Check the programs
         run: |
-          cargo install cargo-about --version 0.9.2 --locked --features cli
-          cargo about generate -c packaging/licenses/about.toml packaging/licenses/about.hbs -o THIRD-PARTY-LICENSES.md
-          case "${{ runner.os }}" in
-            Windows) packaging/licenses/native-licenses.sh windows >> THIRD-PARTY-LICENSES.md ;;
-            macOS) packaging/licenses/native-licenses.sh macos >> THIRD-PARTY-LICENSES.md ;;
-          esac
-          grep -c '^## ' THIRD-PARTY-LICENSES.md
-
-      - name: Version
-        shell: bash
-        run: echo "VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_ENV"
-
-      - name: Package (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          dir="Meshgrove-$VERSION-${{ matrix.package }}"
-          mkdir -p "$dir/bin"
-          cp target/release/{meshgrove,meshgrove-step-mesher,meshgrove-thumbnailer} "$dir/bin/"
-          cp -r packaging README.md LICENSE THIRD-PARTY-LICENSES.md "$dir/"
-          tar czf "$dir.tar.gz" "$dir"
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          dir="Meshgrove-$VERSION-${{ matrix.package }}"
-          mkdir -p "$dir"
-          cp target/release/meshgrove.exe target/release/meshgrove-step-mesher.exe README.md LICENSE THIRD-PARTY-LICENSES.md "$dir/"
-          7z a "$dir.zip" "$dir"
-
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          app="Meshgrove.app"
-          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" meshgrove.iconset
-          cp target/release/meshgrove target/release/meshgrove-step-mesher "$app/Contents/MacOS/"
-          sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
-          for size in 16 32 128 256 512; do
-            cp "packaging/icons/meshgrove-$size.png" "meshgrove.iconset/icon_${size}x${size}.png"
-            double=$((size * 2))
-            cp "packaging/icons/meshgrove-$double.png" "meshgrove.iconset/icon_${size}x${size}@2x.png" 2>/dev/null \
-              || sips -z $double $double "packaging/icons/meshgrove-1024.png" --out "meshgrove.iconset/icon_${size}x${size}@2x.png"
+          for program in meshgrove meshgrove-step-mesher meshgrove-thumbnailer; do
+            echo "== $program"
+            ldd "target/release/$program"
+            # The base system's libraries only, which an AppImage takes from the host.
+            if ldd "target/release/$program" | grep -vE '^\s+(linux-vdso|/lib64/ld-linux|lib(c|m|dl|rt|pthread|gcc_s|stdc\+\+)\.so)'; then
+              echo "::error::$program needs a library that the AppImage would have to bundle"; exit 1
+            fi
           done
-          iconutil -c icns meshgrove.iconset -o "$app/Contents/Resources/meshgrove.icns"
-          cp LICENSE THIRD-PARTY-LICENSES.md "$app/Contents/Resources/"
-          # Ship Homebrew's libarchive (and what it needs) inside the app.
-          dylibbundler -od -b -x "$app/Contents/MacOS/meshgrove" -d "$app/Contents/libs/" -p @executable_path/../libs/
-          codesign --force --deep --sign - "$app"
-          dir="Meshgrove-$VERSION-${{ matrix.package }}"
-          mkdir -p "$dir"
-          mv "$app" "$dir/"
-          cp README.md LICENSE THIRD-PARTY-LICENSES.md "$dir/"
-          ditto -c -k --keepParent "$dir" "$dir.zip"
+          objdump -T target/release/meshgrove-step-mesher target/release/meshgrove | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
+          target/release/meshgrove-step-mesher --write-test-cube /tmp/cube.step
+          target/release/meshgrove-step-mesher /tmp/cube.step /tmp/cube.stl
+          test "$(stat -c %s /tmp/cube.stl)" -gt 84
+
+      - name: Package
+        run: |
+          packaging/licenses/native-licenses.sh vcpkg "$VCPKG_ROOT/installed/$TRIPLET" >> THIRD-PARTY-LICENSES.md
+          grep -c '^## ' THIRD-PARTY-LICENSES.md
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          tools="$RUNNER_TEMP/appimage-tools"
+          mkdir -p "$tools"
+          curl -fsSL -o "$tools/appimagetool" https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          curl -fsSL -o "$tools/runtime" https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          sha256sum -c - <<EOF
+          ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $tools/appimagetool
+          2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  $tools/runtime
+          EOF
+          chmod +x "$tools/appimagetool"
+          packaging/linux/stage.sh target/release "$RUNNER_TEMP/stage"
+          APPIMAGETOOL="$tools/appimagetool" APPIMAGE_RUNTIME="$tools/runtime" \
+            packaging/linux/appimage.sh "$RUNNER_TEMP/stage" "$version" .
+
+      - name: Test the AppImage
+        run: |
+          appimage=$(realpath Meshgrove-*-x86_64.AppImage)
+          cd "$RUNNER_TEMP"
+          "$appimage" --appimage-extract >/dev/null
+          ls -la squashfs-root squashfs-root/usr/bin
+          squashfs-root/usr/bin/meshgrove-step-mesher --write-test-cube /tmp/cube2.step
+          squashfs-root/usr/bin/meshgrove-step-mesher /tmp/cube2.step /tmp/cube2.stl
+          test -f squashfs-root/usr/share/doc/meshgrove/THIRD-PARTY-LICENSES.md
+          test -f squashfs-root/usr/share/doc/meshgrove/LICENSE
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.package }}
-          path: |
-            Meshgrove-*.tar.gz
-            Meshgrove-*.zip
+          name: package-appimage
+          path: Meshgrove-*-x86_64.AppImage
 
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+  # The .deb and .rpm use the distribution's libarchive and OpenCascade, so each is built on
+  # (and only installs on) the release it is made for.
+  deb:
+    name: .deb (${{ matrix.distro }})
+    needs: licenses
     runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { distro: ubuntu24.04, image: "ubuntu:24.04" }
+          - { distro: ubuntu26.04, image: "ubuntu:26.04" }
+          - { distro: debian13, image: "debian:13" }
+    steps:
+      - name: System packages
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates curl build-essential pkg-config dpkg-dev \
+            libarchive-dev libxkbcommon-dev libwayland-dev \
+            libocct-data-exchange-dev libocct-modeling-algorithms-dev libocct-modeling-data-dev libocct-foundation-dev
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: licenses
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.distro }}
+      - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
+      - name: Package
+        run: |
+          target/release/meshgrove-step-mesher --write-test-cube /tmp/cube.step
+          packaging/licenses/native-licenses.sh system >> THIRD-PARTY-LICENSES.md
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          packaging/linux/stage.sh target/release /tmp/stage
+          packaging/linux/deb.sh /tmp/stage "$version" "${{ matrix.distro }}" .
+          dpkg-deb --info meshgrove_*.deb
+          dpkg-deb --contents meshgrove_*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-deb-${{ matrix.distro }}
+          path: meshgrove_*.deb
+
+  # Installs each .deb on a fresh system: proves that its dependencies are complete.
+  deb-test:
+    name: Test .deb (${{ matrix.distro }})
+    needs: deb
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { distro: ubuntu24.04, image: "ubuntu:24.04" }
+          - { distro: ubuntu26.04, image: "ubuntu:26.04" }
+          - { distro: debian13, image: "debian:13" }
     steps:
       - uses: actions/download-artifact@v4
         with:
+          name: package-deb-${{ matrix.distro }}
+      - name: Install and run
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y ./meshgrove_*.deb
+          for program in meshgrove meshgrove-step-mesher meshgrove-thumbnailer; do
+            if ldd "/usr/bin/$program" | grep 'not found'; then exit 1; fi
+          done
+          meshgrove-step-mesher --write-test-cube /tmp/cube.step
+          meshgrove-step-mesher /tmp/cube.step /tmp/cube.stl
+          test "$(stat -c %s /tmp/cube.stl)" -gt 84
+          ls -la /usr/share/applications/meshgrove.desktop /usr/share/thumbnailers/meshgrove.thumbnailer \
+            /usr/share/mime/packages/meshgrove-step.xml /usr/share/icons/hicolor/256x256/apps/meshgrove.png \
+            /usr/share/doc/meshgrove
+          apt-get remove -y meshgrove
+          test ! -e /usr/bin/meshgrove
+
+  rpm:
+    name: .rpm (Fedora 44)
+    needs: licenses
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - name: System packages
+        run: |
+          dnf install -y git gcc gcc-c++ pkgconf-pkg-config rpm-build \
+            libarchive-devel opencascade-devel libxkbcommon-devel wayland-devel
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: licenses
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: fedora44
+      - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
+      - name: Package
+        run: |
+          target/release/meshgrove-step-mesher --write-test-cube /tmp/cube.step
+          packaging/licenses/native-licenses.sh system >> THIRD-PARTY-LICENSES.md
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          packaging/linux/stage.sh target/release /tmp/stage
+          rpmbuild -bb --define "_topdir /tmp/rpmbuild" --define "stage /tmp/stage" --define "pkgversion $version" \
+            packaging/linux/meshgrove.spec
+          cp /tmp/rpmbuild/RPMS/x86_64/meshgrove-*.rpm .
+          rpm -qpi meshgrove-*.rpm
+          rpm -qpR meshgrove-*.rpm
+          rpm -qpl meshgrove-*.rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-rpm-fedora44
+          path: meshgrove-*.rpm
+
+  rpm-test:
+    name: Test .rpm (Fedora 44)
+    needs: rpm
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: package-rpm-fedora44
+      - name: Install and run
+        run: |
+          dnf install -y ./meshgrove-*.rpm
+          for program in meshgrove meshgrove-step-mesher meshgrove-thumbnailer; do
+            if ldd "/usr/bin/$program" | grep 'not found'; then exit 1; fi
+          done
+          meshgrove-step-mesher --write-test-cube /tmp/cube.step
+          meshgrove-step-mesher /tmp/cube.step /tmp/cube.stl
+          test "$(stat -c %s /tmp/cube.stl)" -gt 84
+          rpm -V meshgrove
+          dnf remove -y meshgrove
+          test ! -e /usr/bin/meshgrove
+
+  # Windows, macOS and the AppImage carry OpenCascade (LGPL-2.1) in the STEP helper, so its
+  # source code goes onto the release page next to them.
+  occt-source:
+    name: OpenCascade source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          tag=$(sed -n 's/^VCPKG_TAG=//p' packaging/vcpkg/install.sh)
+          git clone -q --depth 1 --branch "$tag" --filter=blob:none --sparse https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg"
+          git -C "$RUNNER_TEMP/vcpkg" sparse-checkout set ports/opencascade
+          version=$(jq -r .version "$RUNNER_TEMP/vcpkg/ports/opencascade/vcpkg.json")
+          src="$RUNNER_TEMP/opencascade-$version-source"
+          mkdir -p "$src"
+          curl -fsSL "https://github.com/Open-Cascade-SAS/OCCT/archive/refs/tags/V${version//./_}.tar.gz" | tar xz -C "$src"
+          cp -r "$RUNNER_TEMP/vcpkg/ports/opencascade" "$src/vcpkg-port"
+          printf 'OpenCascade %s as built into the STEP helper of the Meshgrove packages for Windows,\nmacOS and the AppImage: the upstream source, and in vcpkg-port/ the vcpkg %s build\nfiles and patches applied to it (with the triplets in Meshgrove'"'"'s packaging/vcpkg).\n' \
+            "$version" "$tag" > "$src/README.txt"
+          tar czf "opencascade-$version-source.tar.gz" -C "$RUNNER_TEMP" "opencascade-$version-source"
+          ls -la opencascade-*-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-occt-source
+          path: opencascade-*-source.tar.gz
+
+  release:
+    needs: [windows, macos, appimage, deb-test, rpm-test, occt-source]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
           merge-multiple: true
+          path: dist
+      - name: Release notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          sed "s/@VERSION@/$version/g" packaging/release-notes.md > notes.md
+          printf '\n## Checksums (SHA-256)\n\n```text\n' >> notes.md
+          (cd dist && sha256sum *) >> notes.md
+          printf '```\n' >> notes.md
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: |
-            Meshgrove-*.tar.gz
-            Meshgrove-*.zip
+          body_path: notes.md
+          files: dist/*

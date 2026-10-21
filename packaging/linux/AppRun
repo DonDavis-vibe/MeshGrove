@@ -1,0 +1,4 @@
+#!/bin/sh
+# Starts Meshgrove inside the AppImage; the STEP helper sits next to it in usr/bin.
+here=$(dirname "$(readlink -f "$0")")
+exec "$here/usr/bin/meshgrove" "$@"

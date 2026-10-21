@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Appends the licenses of the C libraries that a release package ships inside the program
-# (Windows: static libarchive and its codecs from vcpkg; macOS: the dylibs bundled into the app).
-#   packaging/licenses/native-licenses.sh windows|macos >> THIRD-PARTY-LICENSES.md
+# Appends the licenses of the C/C++ libraries that a release package carries:
+#   packaging/licenses/native-licenses.sh vcpkg DIR >> THIRD-PARTY-LICENSES.md
+#       Windows, macOS, AppImage: libarchive, its codecs and OpenCascade, linked statically from
+#       vcpkg. DIR is vcpkg's installed/<triplet> folder.
+#   packaging/licenses/native-licenses.sh system >> THIRD-PARTY-LICENSES.md
+#       .deb and .rpm: these libraries come from the distribution instead.
 set -euo pipefail
 
 section() { # name, license file
@@ -10,31 +13,31 @@ section() { # name, license file
     printf '\n```\n'
 }
 
-printf '\n# Native libraries\n\nThese C libraries are built into this package.\n'
 case "${1:-}" in
-    windows)
-        triplet="${VCPKGRS_TRIPLET:-x64-windows-static}"
-        root="$VCPKG_ROOT"
+    vcpkg)
+        root=${2:?usage: $0 vcpkg DIR}
         command -v cygpath >/dev/null && root=$(cygpath -u "$root")   # Git Bash on Windows
-        for dir in "$root/installed/$triplet/share/"*/; do
+        printf '\n# Native libraries\n\nThese C and C++ libraries are built into this package.\n'
+        for dir in "$root/share/"*/; do
             port=$(basename "$dir")
-            if [[ -f "$dir/copyright" && "$port" != vcpkg-* ]]; then
+            # vcpkg's build helpers and the OpenGL stub and header registries that OpenCascade's
+            # build pulls in are not part of the programs.
+            if [[ -f "$dir/copyright" && "$port" != vcpkg-* && "$port" != opengl && "$port" != *-registry ]]; then
                 section "$port (vcpkg)" "$dir/copyright"
+            fi
+            if [[ "$port" == opencascade ]]; then
+                # LGPL: say where the source code of this very version is.
+                version=$(awk '$0 == "Package: opencascade" { p = 1 } p && /^Version:/ { print $2; exit }' \
+                    "$root/../vcpkg/status")
+                printf '\nOpenCascade %s is built into meshgrove-step-mesher. Its source code, with the vcpkg\nbuild files used, is attached to each Meshgrove release as `opencascade-%s-source.tar.gz`;\nupstream: https://github.com/Open-Cascade-SAS/OCCT\n' "$version" "$version"
             fi
         done
         ;;
-    macos)
-        for formula in libarchive libb2 lz4 xz zstd; do
-            prefix=$(brew --prefix "$formula")
-            for file in "$prefix"/{COPYING,LICENSE,COPYRIGHT}*; do
-                if [[ -f "$file" ]]; then
-                    section "$formula ($(basename "$file"))" "$file"
-                fi
-            done
-        done
+    system)
+        printf '\n# Native libraries\n\nlibarchive and OpenCascade come from the distribution'"'"'s own packages, under their\nlicenses as stated there.\n'
         ;;
     *)
-        echo "usage: $0 windows|macos" >&2
+        echo "usage: $0 vcpkg DIR | system" >&2
         exit 1
         ;;
 esac
