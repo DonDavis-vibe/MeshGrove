@@ -131,24 +131,65 @@ Kopie bleiben soll, und einem Klick, um die anderen in den Papierkorb zu legen.
 > neu. Sie werden automatisch gebaut und getestet, wurden aber im Alltag erst wenig benutzt.
 > Bitte [melde Probleme](https://github.com/DonDavis-vibe/MeshGrove/issues).
 
+Zu jedem [Release](https://github.com/DonDavis-vibe/MeshGrove/releases) gibt es fertige
+Pakete, alle mit STEP-Vorschauen. Bauen musst du nichts:
+
+| System | Download |
+|---|---|
+| Windows 10/11 (x64) | `Meshgrove-<version>-windows-x64-setup.exe` (Installer) oder `…-windows-x64-portable.zip` |
+| macOS 11 oder neuer (Apple Silicon und Intel) | `Meshgrove-<version>-macos-universal.dmg` |
+| Ubuntu 24.04 / 26.04, Debian 13 | `meshgrove_<version>-1_<release>_amd64.deb` |
+| Fedora 44 | `meshgrove-<version>-1.fc44.x86_64.rpm` |
+| Jedes andere Linux (x86_64) | `Meshgrove-<version>-x86_64.AppImage` |
+
 ### Linux
 
-#### Aus dem Quellcode (empfohlen)
+#### Pakete für Ubuntu, Debian und Fedora
 
-Das Bauen dauert ein paar Minuten und bringt alle Funktionen mit, auch die STEP-Vorschauen.
+Das Paket für deine Version herunterladen und installieren:
+
+```bash
+sudo apt install ./meshgrove_<version>-1_ubuntu24.04_amd64.deb   # Ubuntu, Debian
+sudo dnf install ./meshgrove-<version>-1.fc44.x86_64.rpm         # Fedora
+```
+
+Die Pakete nutzen libarchive und OpenCascade deines Systems. Sie richten den Menüeintrag, das
+Symbol, den Dateityp `model/step` und den
+[Vorschau-Dienst für Dolphin](#vorschauen-in-dolphin-und-dateidialogen-linux) und andere
+Dateimanager ein. Starte **Meshgrove** aus dem Anwendungsmenü oder mit `meshgrove`, auf Wunsch
+mit Ordner oder Datei: `meshgrove ~/3D-Modelle`. Systeme, die auf einer unterstützten Version
+aufbauen, nehmen deren Paket, etwa Linux Mint 22 das für Ubuntu 24.04. Ein Paket lässt sich nur
+auf der Version installieren, für die es gebaut ist; überall sonst nimm das AppImage. Entfernen
+mit `sudo apt remove meshgrove` oder `sudo dnf remove meshgrove`.
+
+#### AppImage (jede Distribution)
+
+```bash
+chmod +x Meshgrove-<version>-x86_64.AppImage
+./Meshgrove-<version>-x86_64.AppImage
+```
+
+Das AppImage bringt alles mit, auch die STEP-Unterstützung, und läuft auf x86_64-Distributionen
+mit glibc 2.35 oder neuer (Ubuntu 22.04, Debian 12 und alles Neuere). Einen Menüeintrag legt
+es nicht selbst an (das erledigen Werkzeuge wie
+[Gear Lever](https://flathub.org/apps/it.mijorus.gearlever) oder AppImageLauncher), und
+Vorschauen im Dateimanager bringt es nicht mit; dafür ein Paket oder den Eigenbau nehmen.
+
+#### Aus dem Quellcode
+
+Das Bauen dauert ein paar Minuten und klappt auf jeder Distribution.
 
 1. Rust und die Bibliotheken installieren:
 
    | Distribution | Befehl |
    |---|---|
    | Fedora / Nobara | `sudo dnf install rust cargo gcc-c++ libarchive-devel opencascade-devel poppler-utils` |
-   | Debian / Ubuntu | `sudo apt install cargo g++ pkg-config libarchive-dev libxkbcommon-dev libwayland-dev poppler-utils` |
+   | Debian / Ubuntu | `sudo apt install cargo g++ pkg-config libarchive-dev libxkbcommon-dev libwayland-dev libocct-data-exchange-dev poppler-utils` |
    | Arch / Manjaro | `sudo pacman -S rust gcc libarchive opencascade poppler` |
 
-   OpenCascade ist optional; ohne geht alles außer den STEP-Vorschauen. Es muss Version 7.8
-   oder neuer sein. Ubuntu 24.04 liefert 7.6, das erkennt der Build und lässt es weg; dort
-   gibt es dann alles außer STEP. Auch poppler ist optional und liefert nur die PDF-Vorschauen.
-   Ist das Rust deiner Distribution älter als 1.95, installiere ein aktuelles mit
+   OpenCascade (Version 7.5 oder neuer) ist optional; ohne geht alles außer den
+   STEP-Vorschauen. Auch poppler ist optional und liefert nur die PDF-Vorschauen. Ist das Rust
+   deiner Distribution älter als 1.95 (Ubuntu 24.04, Debian 13), installiere ein aktuelles mit
    [rustup](https://rustup.rs).
 
 2. Bauen und für deinen Benutzer installieren (ohne Root-Rechte):
@@ -161,46 +202,38 @@ Das Bauen dauert ein paar Minuten und bringt alle Funktionen mit, auch die STEP-
 
    Das Skript baut die Programme und legt sie in `~/.local/bin`. Dazu richtet es in
    `~/.local/share` den Menüeintrag, das Symbol, den Dateityp `model/step` und den
-   Vorschau-Dienst (Thumbnailer) ein. Starte **Meshgrove** aus dem Anwendungsmenü oder mit
-   `meshgrove`, auf Wunsch mit Ordner oder Datei: `meshgrove ~/3D-Modelle`.
+   Vorschau-Dienst (Thumbnailer) ein.
 
 3. Später aktualisieren mit `git pull && packaging/install.sh`. Entfernen mit
    `packaging/install.sh --uninstall`. Einstellungen, Index und Cache bleiben erhalten; wie du
    auch die löschst, steht unter
    [Einstellungen und Dateien auf der Platte](#einstellungen-und-dateien-auf-der-platte).
 
-#### Release-Paket
-
-Zu jedem [Release](https://github.com/DonDavis-vibe/MeshGrove/releases) gibt es ein
-`Meshgrove-<version>-linux-x86_64.tar.gz`. Entpacken und im Ordner `packaging/install.sh`
-ausführen: Das Skript installiert dann die mitgelieferten Programme, statt zu bauen. Das Paket
-braucht `libarchive` (auf den meisten Desktops vorhanden) und ist ohne OpenCascade gebaut; für
-STEP-Vorschauen braucht es den Build aus dem Quellcode.
-
 ### Windows
 
-1. `Meshgrove-<version>-windows-x64.zip` von den
-   [Releases](https://github.com/DonDavis-vibe/MeshGrove/releases) herunterladen.
-2. Irgendwohin entpacken, zum Beispiel nach `C:\Programme\Meshgrove`, und `meshgrove.exe`
-   starten. Windows SmartScreen warnt eventuell, weil das Programm nicht signiert ist: *Weitere
+1. `Meshgrove-<version>-windows-x64-setup.exe` von den
+   [Releases](https://github.com/DonDavis-vibe/MeshGrove/releases) herunterladen und ausführen.
+   Windows SmartScreen warnt eventuell, weil das Programm nicht signiert ist: *Weitere
    Informationen → Trotzdem ausführen*.
+2. Der Installer braucht keine Adminrechte: Er installiert für deinen Benutzer, oder für alle
+   Benutzer, wenn du das auf seiner ersten Seite wählst. Er legt einen Startmenü-Eintrag an, auf
+   Wunsch eine Desktop-Verknüpfung, und trägt Meshgrove unter *Öffnen mit* für STL-, 3MF- und
+   STEP-Dateien ein. Entfernen unter *Einstellungen → Apps*.
 3. Optional für PDF-Vorschauen: [poppler](https://github.com/oschwartz10612/poppler-windows)
    installieren und dafür sorgen, dass `pdftoppm.exe` im `PATH` liegt.
 
-Das Windows-Paket enthält noch keine STEP-Unterstützung, siehe [Ausblick](#ausblick).
+Lieber ohne Installation? `Meshgrove-<version>-windows-x64-portable.zip` enthält dieselben
+Programme: irgendwohin entpacken und `meshgrove.exe` starten.
 
 ### macOS
 
-1. `Meshgrove-<version>-macos-arm64.zip` (Apple Silicon) von den
-   [Releases](https://github.com/DonDavis-vibe/MeshGrove/releases) herunterladen, entpacken
-   und `Meshgrove.app` in *Programme* ziehen.
-2. Die App ist nicht notarisiert. Beim ersten Start mit Rechtsklick → *Öffnen* starten, oder
+1. `Meshgrove-<version>-macos-universal.dmg` von den
+   [Releases](https://github.com/DonDavis-vibe/MeshGrove/releases) herunterladen. Die App läuft
+   nativ auf Macs mit Apple Silicon und Intel ab macOS 11.
+2. Öffnen und **Meshgrove** auf *Programme* ziehen.
+3. Die App ist nicht notarisiert. Beim ersten Start mit Rechtsklick → *Öffnen* starten, oder
    einmal `xattr -dr com.apple.quarantine /Applications/Meshgrove.app` ausführen.
-3. Optional für PDF-Vorschauen: `brew install poppler`.
-
-Auf Intel-Macs bitte aus dem Quellcode bauen (siehe
-[Aus dem Quellcode bauen](#aus-dem-quellcode-bauen)). Das macOS-Paket enthält noch keine
-STEP-Unterstützung.
+4. Optional für PDF-Vorschauen: `brew install poppler`.
 
 ## Erste Schritte
 
@@ -422,9 +455,9 @@ Erklärung.
 
 ### Vorschauen in Dolphin und Dateidialogen (Linux)
 
-`install.sh` richtet auch einen freedesktop-Thumbnailer ein. Dolphin, die Dateidialoge von KDE
-und GTK und andere Dateimanager zeigen dann dieselben Vorschauen für STL-, 3MF- und
-STEP-Dateien. In Dolphin einmal einschalten: *Einstellungen → Dolphin einrichten → Oberfläche →
+Die .deb- und .rpm-Pakete und `install.sh` richten einen freedesktop-Thumbnailer ein. Dolphin,
+die Dateidialoge von KDE und GTK und andere Dateimanager zeigen dann dieselben Vorschauen für
+STL-, 3MF- und STEP-Dateien. In Dolphin einmal einschalten: *Einstellungen → Dolphin einrichten → Oberfläche →
 Vorschauen*. Dort die 3D-Modell-Einträge anhaken, falls sie aufgeführt sind, und für große
 Modelle die Größengrenze für Vorschauen lokaler Dateien erhöhen. Danach den Ordner neu öffnen. Der
 Thumbnailer teilt sich den Cache mit Meshgrove, also erscheinen Dateien, die du schon in der
@@ -554,13 +587,13 @@ Meshgrove ist für Sammlungen mit Tausenden Dateien auf ganz normalen Festplatte
 | Galerie, Viewer, Bibliothek, Tags, Notizen, Duplikate, Druckbett-Check | ✔ | ✔ | ✔ |
 | ZIP / 7z / RAR / TAR | ✔ | ✔ | ✔ |
 | PDF-Vorschauen | ✔ mit poppler | ✔ mit poppler | ✔ mit poppler |
-| STEP-Vorschauen | ✔ mit OpenCascade | Eigenbau mit OpenCascade | Eigenbau mit OpenCascade |
+| STEP-Vorschauen | ✔ alle Pakete; Eigenbau mit OpenCascade | ✔ | ✔ |
 | Dateien in die Zwischenablage kopieren | ✔ Wayland (X11: Pfade als Text) | ✔ | ✔ |
 | Im Dateimanager zeigen | ✔ D-Bus (Dolphin, Nautilus, …) | ✔ Explorer | ✔ Finder |
 | Slicer-Erkennung | ✔ | ✔ | ✔ |
 | Schreibgeschützte Laufwerke erkennen | ✔ | – | – |
-| Vorschauen im System-Dateimanager | ✔ freedesktop-Thumbnailer | – | – |
-| Menüeintrag und Symbol | ✔ `install.sh` | ✔ Symbol in `meshgrove.exe` | ✔ App-Bundle |
+| Vorschauen im System-Dateimanager | ✔ freedesktop-Thumbnailer (.deb, .rpm, `install.sh`) | – | – |
+| Menüeintrag und Symbol | ✔ .deb, .rpm, `install.sh` | ✔ Installer (Startmenü, *Öffnen mit*) | ✔ App-Bundle |
 
 ## Probleme und häufige Fragen
 
@@ -581,13 +614,13 @@ einen Ordner sofort neu.
 Die Vorschauen in Dolphins Einstellungen einschalten (siehe
 [Vorschauen in Dolphin](#vorschauen-in-dolphin-und-dateidialogen-linux)) und die
 Größengrenze erhöhen. `~/.cache/thumbnails/fail` löschen (das macht install.sh) und den Ordner
-neu öffnen. Von Hand testen:
-`~/.local/bin/meshgrove-thumbnailer -s 256 modell.stl /tmp/test.png`.
+neu öffnen. Von Hand testen: `meshgrove-thumbnailer -s 256 modell.stl /tmp/test.png`. Das
+AppImage bringt keinen Thumbnailer mit; dafür ein Paket oder den Eigenbau nehmen.
 
 **STEP-Dateien melden „built without OpenCascade“.**
-Der STEP-Helfer wurde ohne OpenCascade gebaut, oder mit einer Version älter als 7.8. Die
-Entwicklungsdateien von OpenCascade 7.8+ installieren (siehe [Installation](#linux)) und
-`packaging/install.sh` erneut ausführen.
+Das kommt nur beim Eigenbau vor: Der STEP-Helfer wurde ohne OpenCascade gebaut, oder mit einer
+Version älter als 7.5. Die Entwicklungsdateien von OpenCascade installieren (siehe
+[Aus dem Quellcode](#aus-dem-quellcode)) und `packaging/install.sh` erneut ausführen.
 
 **PDFs zeigen nur ein Symbol.**
 poppler installieren (`pdftoppm` muss im `PATH` liegen).
@@ -620,7 +653,7 @@ Nein. Modelldateien und Archive werden nie beschrieben.
 Du brauchst Rust 1.95 oder neuer und libarchive. OpenCascade (STEP) und poppler (PDF, nur zur
 Laufzeit) sind optional.
 
-**Linux:** siehe [Installation](#aus-dem-quellcode-empfohlen). Zum Entwickeln:
+**Linux:** siehe [Aus dem Quellcode](#aus-dem-quellcode). Zum Entwickeln:
 
 ```bash
 cargo run --release -p meshgrove -- ~/3D-Modelle
@@ -644,11 +677,19 @@ brew install libarchive pkg-config
 cargo build --release -p meshgrove -p meshgrove-step
 ```
 
-**STEP auf jedem System:** OpenCascade 7.8 oder neuer installieren (`dnf install
-opencascade-devel`, `brew install opencascade`, `vcpkg install opencascade`, …). Liegen die
-Header nicht in `/usr/include/opencascade`, zeigt `OCCT_INCLUDE` (und `OCCT_LIB` für den
-Bibliotheksordner) dem Build den Weg; dann `-p meshgrove-step` bauen. Der entstandene
-`meshgrove-step-mesher` muss neben dem Programm `meshgrove` oder im `PATH` liegen.
+**STEP auf jedem System:** OpenCascade 7.5 oder neuer installieren (`dnf install
+opencascade-devel`, `apt install libocct-data-exchange-dev`, `brew install opencascade`,
+`vcpkg install opencascade`, …). Liegen die Header nicht in `/usr/include/opencascade`, zeigt
+`OCCT_INCLUDE` (und `OCCT_LIB` für den Bibliotheksordner) dem Build den Weg; dann
+`-p meshgrove-step` bauen. Für ein statisches OpenCascade, etwa aus den statischen Triplets von
+vcpkg, zusätzlich `OCCT_STATIC=1` setzen. Der entstandene `meshgrove-step-mesher` muss neben dem
+Programm `meshgrove` oder im `PATH` liegen.
+
+**Release-Pakete:** [`.github/workflows/release.yml`](.github/workflows/release.yml) baut sie
+alle. Windows, macOS und das AppImage binden libarchive und OpenCascade statisch aus einem
+festgelegten vcpkg ein ([`packaging/vcpkg/install.sh`](packaging/vcpkg)); .deb und .rpm nutzen
+die Bibliotheken der Distribution. Die Skripte für die einzelnen Formate liegen in
+[`packaging`](packaging).
 
 ## Aufbau
 
@@ -733,8 +774,9 @@ existiert.
 
 Ideen und nächste Schritte, grob nach Reihenfolge:
 
-- [ ] STEP-Unterstützung in den Windows- und macOS-Paketen (OpenCascade in den Release-Builds)
-- [ ] Flatpak / AppImage für Linux, ein Installer für Windows, eine notarisierte macOS-App
+- [x] STEP-Unterstützung in allen Release-Paketen
+- [x] AppImage, .deb und .rpm für Linux, ein Installer für Windows, eine universelle DMG für macOS
+- [ ] Flatpak, eine notarisierte macOS-App
 - [ ] Mehr Formate: OBJ, PLY, G-Code-Vorschauen (eingebettete Bilder)
 - [ ] Sammlungen (handverlesene Sets über Ordner hinweg) und Druckstatus (gedruckt,
   misslungen, offen)
@@ -798,7 +840,9 @@ der englische Lizenztext.
 Der STEP-Helfer nutzt OpenCascade (LGPL-2.1 mit Ausnahme) als eigenes Programm; für
 PDF-Vorschauen wird `pdftoppm` von poppler (GPL) als externes Programm aufgerufen. Die Lizenzen
 aller Bibliotheken und Schriften, die in das Programm eingebaut sind, stehen in
-`THIRD-PARTY-LICENSES.md`, die jedem Release-Paket beiliegt.
+`THIRD-PARTY-LICENSES.md`, die jedem Release-Paket beiliegt. In den Paketen für Windows, macOS
+und im AppImage ist OpenCascade in den STEP-Helfer eingebaut; der Quellcode dieser
+OpenCascade-Version hängt an jedem Release.
 
 Anycubic, OrcaSlicer, Bambu Studio, PrusaSlicer, KDE, Dolphin, Windows und macOS sind Marken
 ihrer jeweiligen Inhaber. Meshgrove ist ein unabhängiges Projekt und steht mit ihnen in keiner

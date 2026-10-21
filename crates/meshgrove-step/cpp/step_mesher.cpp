@@ -7,6 +7,7 @@
 #include <STEPControl_Reader.hxx>
 #include <STEPControl_Writer.hxx>
 #include <Standard_Failure.hxx>
+#include <Standard_Version.hxx>
 #include <StlAPI_Writer.hxx>
 #include <TopoDS_Shape.hxx>
 
@@ -35,7 +36,11 @@ extern "C" int meshgrove_step_to_stl(const char* input, const char* output, doub
         if (!writer.Write(shape, output)) return 6;
         return 0;
     } catch (const Standard_Failure& e) {
+#if OCC_VERSION_MAJOR >= 8
+        std::fprintf(stderr, "OpenCascade: %s\n", e.what());
+#else
         std::fprintf(stderr, "OpenCascade: %s\n", e.GetMessageString());
+#endif
         return 7;
     } catch (...) {
         return 8;
