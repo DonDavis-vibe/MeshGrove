@@ -6,7 +6,7 @@
 Name:           meshgrove
 Version:        %{pkgversion}
 Release:        1%{?dist}
-Summary:        Native gallery for 3D-print files (STL, 3MF, STEP) with live previews
+Summary:        Gallery for 3D-print files (STL, 3MF, STEP, OBJ, PLY, glTF) with previews
 License:        GPL-3.0-or-later
 URL:            https://github.com/DonDavis-vibe/MeshGrove
 ExclusiveArch:  x86_64
@@ -17,10 +17,11 @@ Recommends:     poppler-utils
 
 %description
 Meshgrove browses folders of 3D-print files like a photo gallery: every STL,
-3MF and STEP model, every model inside ZIP, 7z and RAR archives and every PDF
-gets a real preview. It has a 3D viewer with measuring, a searchable library
-with tags and notes, a duplicate finder, a print bed check and hands files
-over to the slicer. Includes thumbnails for Dolphin and other file managers.
+3MF, STEP, OBJ, PLY and glTF model, every model inside ZIP, 7z and RAR
+archives and every PDF gets a real preview. It has a 3D viewer with
+measuring, a searchable library with tags and notes, a duplicate finder, a
+print bed check and hands files over to the slicer. Includes thumbnails for
+Dolphin and other file managers.
 
 %install
 cp -a %{stage}/. %{buildroot}/

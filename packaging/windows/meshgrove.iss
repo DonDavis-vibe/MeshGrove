@@ -65,7 +65,7 @@ Name: "{autoprograms}\Meshgrove"; Filename: "{app}\meshgrove.exe"
 Name: "{autodesktop}\Meshgrove"; Filename: "{app}\meshgrove.exe"; Tasks: desktopicon
 
 [Registry]
-; Meshgrove under "Open with" for STL, 3MF and STEP files; the default program stays as it is.
+; Meshgrove under "Open with" for its model formats; the default program stays as it is.
 Root: HKA; Subkey: "Software\Classes\Meshgrove.Model"; ValueType: string; ValueName: ""; ValueData: "{cm:ModelFile}"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Meshgrove.Model\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\meshgrove.exe,0"
 Root: HKA; Subkey: "Software\Classes\Meshgrove.Model\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\meshgrove.exe"" ""%1"""
@@ -73,6 +73,10 @@ Root: HKA; Subkey: "Software\Classes\.stl\OpenWithProgids"; ValueType: string; V
 Root: HKA; Subkey: "Software\Classes\.3mf\OpenWithProgids"; ValueType: string; ValueName: "Meshgrove.Model"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\.step\OpenWithProgids"; ValueType: string; ValueName: "Meshgrove.Model"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\.stp\OpenWithProgids"; ValueType: string; ValueName: "Meshgrove.Model"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.obj\OpenWithProgids"; ValueType: string; ValueName: "Meshgrove.Model"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.ply\OpenWithProgids"; ValueType: string; ValueName: "Meshgrove.Model"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.glb\OpenWithProgids"; ValueType: string; ValueName: "Meshgrove.Model"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.gltf\OpenWithProgids"; ValueType: string; ValueName: "Meshgrove.Model"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\Applications\meshgrove.exe"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "Meshgrove"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Applications\meshgrove.exe\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\meshgrove.exe,0"
 Root: HKA; Subkey: "Software\Classes\Applications\meshgrove.exe\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\meshgrove.exe"" ""%1"""
@@ -80,6 +84,10 @@ Root: HKA; Subkey: "Software\Classes\Applications\meshgrove.exe\SupportedTypes";
 Root: HKA; Subkey: "Software\Classes\Applications\meshgrove.exe\SupportedTypes"; ValueType: string; ValueName: ".3mf"; ValueData: ""
 Root: HKA; Subkey: "Software\Classes\Applications\meshgrove.exe\SupportedTypes"; ValueType: string; ValueName: ".step"; ValueData: ""
 Root: HKA; Subkey: "Software\Classes\Applications\meshgrove.exe\SupportedTypes"; ValueType: string; ValueName: ".stp"; ValueData: ""
+Root: HKA; Subkey: "Software\Classes\Applications\meshgrove.exe\SupportedTypes"; ValueType: string; ValueName: ".obj"; ValueData: ""
+Root: HKA; Subkey: "Software\Classes\Applications\meshgrove.exe\SupportedTypes"; ValueType: string; ValueName: ".ply"; ValueData: ""
+Root: HKA; Subkey: "Software\Classes\Applications\meshgrove.exe\SupportedTypes"; ValueType: string; ValueName: ".glb"; ValueData: ""
+Root: HKA; Subkey: "Software\Classes\Applications\meshgrove.exe\SupportedTypes"; ValueType: string; ValueName: ".gltf"; ValueData: ""
 
 [Run]
 Filename: "{app}\meshgrove.exe"; Description: "{cm:LaunchProgram,Meshgrove}"; Flags: nowait postinstall skipifsilent

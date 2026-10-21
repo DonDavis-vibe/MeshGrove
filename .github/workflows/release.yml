@@ -135,7 +135,7 @@ jobs:
             if (-not (Test-Path "$app\$file")) { Get-Content setup.log; throw "$file was not installed" }
           }
           if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Meshgrove.lnk")) { throw 'no Start menu entry' }
-          foreach ($ext in '.stl', '.3mf', '.step', '.stp') {
+          foreach ($ext in '.stl', '.3mf', '.step', '.stp', '.obj', '.ply', '.glb', '.gltf') {
             $progids = Get-ItemProperty "HKCU:\Software\Classes\$ext\OpenWithProgids"
             if ($null -eq $progids.'Meshgrove.Model') { throw "no Open with entry for $ext" }
           }
