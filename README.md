@@ -89,7 +89,7 @@ What makes it different from other model managers:
 |---|---|
 | **Gallery** | Thumbnails for STL, 3MF, STEP, OBJ, PLY, glTF/GLB, images and PDFs; folder and archive tiles show a 2×2 mosaic of what is inside; resizable tiles; sort by name, date, size or type; "models only"; "include subfolders" (all files below a folder in one grid); multi-selection |
 | **Hover turntable** | Point at a model tile and the model spins in place. Drag to turn it yourself, and turn the wheel while dragging to zoom |
-| **3D viewer** | Orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **picture export** as a 2048 px PNG |
+| **3D viewer** | In the side panel, or **double-click a model for a window of its own** (resizable, several at once, with "open in slicer"); orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **picture export** as a 2048 px PNG |
 | **3MF projects** | Embedded slicer plate pictures (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); click a plate picture to see that plate in 3D; **multi-colour**: filament colours per object and part, painted models (multi-material painting) and 3MF material colours in the viewer and in rendered previews; filament swatches on tiles and in the details; title, designer and application from the metadata |
 | **STEP / STP** | CAD files are tessellated by OpenCascade in a separate helper process, so a broken file cannot crash the app; results are cached |
 | **Archives** | Open ZIP, 7z, RAR and TAR like folders; every model inside gets a preview; files are extracted only when another program needs them |
@@ -224,8 +224,8 @@ package does not yet include STEP support.
 
 ### Browsing the gallery
 
-- **Navigate** with double-click (folders and archives open, files open in their default
-  app), the breadcrumb, the sidebar, or the keyboard: arrow keys move the selection, Enter
+- **Navigate** with double-click (folders and archives open, models open in a window of their
+  own, other files in their default app), the breadcrumb, the sidebar, or the keyboard: arrow keys move the selection, Enter
   opens, Backspace or Alt+↑ goes up, Alt+← / Alt+→ go back and forward.
 - **Tile size:** Ctrl + mouse wheel, Ctrl + `+` / `-`, or the slider in the *View* menu.
 - **View menu:** sort by name, modified date, size or type (ascending or descending); *3D models
@@ -245,7 +245,10 @@ package does not yet include STEP support.
 
 ### The 3D viewer and its tools
 
-The right panel shows the selected model in 3D.
+The right panel shows the selected model in 3D. **Double-click a model** (or press Enter) to
+open it in a window of its own: it can be made as large as the screen, several models can be
+open side by side, each with its own camera, and the window has the same tools, the model's
+facts and an *Open in slicer* button. Esc or the close button closes it.
 
 | Action | Mouse |
 |---|---|
@@ -374,10 +377,10 @@ to the trash* cleans up a group after a confirmation. Tiles everywhere in the ga
 
 ### Working with your slicer and other apps
 
-- **Open in slicer** (context menu): opens the selected models, several at once if you like
-  (STL, 3MF, STEP and OBJ; the slicers do not open PLY and glTF). Files inside archives are
-  extracted to a cache folder first. Meshgrove finds these slicers
-  automatically:
+- **Open in slicer** (context menu, the button in the details panel or in a model window):
+  opens the selected models, several at once if you like (STL, 3MF, STEP and OBJ; the slicers
+  do not open PLY and glTF). Files inside archives are extracted to a cache folder first.
+  Meshgrove finds these slicers automatically:
 
   | System | Detected |
   |---|---|
@@ -397,7 +400,8 @@ to the trash* cleans up a group after a confirmation. Tiles everywhere in the ga
   Dolphin, Explorer or Finder, into many slicers, or into a chat. Archive members are
   extracted first. *Copy path* puts the paths as text instead.
 - **Show in file manager:** opens Dolphin/Nautilus, Explorer or Finder with the files selected.
-- **Open** (double-click on a file): opens it in the system's default application.
+- **Open with default app** (context menu): opens a model in the system's default application,
+  for example the slicer registered for STL files; other files open there with a double-click.
 
 ### Archives (ZIP, 7z, RAR, TAR)
 
@@ -443,7 +447,8 @@ Ctrl means ⌘ Cmd on macOS.
 | Keys | Action |
 |---|---|
 | ← → ↑ ↓, Home, End | Move the selection |
-| Enter | Open the selected folder, archive or file |
+| Enter | Open the selected folder or archive; a model in its own window; other files in their default app |
+| Esc (in a model window) | Close the window |
 | Backspace, Alt+↑ | Parent folder |
 | Alt+←, Alt+→ | Back, forward |
 | F5 | Reload the folder |

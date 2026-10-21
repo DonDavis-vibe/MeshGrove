@@ -103,6 +103,7 @@ tags.remove_hint: "Tag entfernen"
 tags.only_library: "Tags gibt es für Dateien in der Bibliothek."
 
 menu.open_in_slicer: "In %{name} öffnen"
+menu.open_with_default_app: "Mit Standardprogramm öffnen"
 menu.show_in_file_manager: "Im Dateimanager zeigen"
 menu.copy_path: "Pfad kopieren"
 menu.edit_tags: "Tags bearbeiten …"

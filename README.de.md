@@ -90,7 +90,7 @@ Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 |---|---|
 | **Galerie** | Vorschauen für STL, 3MF, STEP, OBJ, PLY, glTF/GLB, Bilder und PDFs; Ordner- und Archiv-Kacheln zeigen ein 2×2-Mosaik ihres Inhalts; Kachelgröße einstellbar; Sortieren nach Name, Datum, Größe oder Typ; „Nur 3D-Modelle“; „Unterordner einbeziehen“ (alle Dateien unter einem Ordner in einem Raster); Mehrfachauswahl |
 | **Drehvorschau** | Mit der Maus über eine Modell-Kachel fahren, und das Modell dreht sich. Ziehen dreht es von Hand, Mausrad beim Ziehen zoomt |
-| **3D-Viewer** | Drehen, Verschieben und Zoomen um einen festen Drehpunkt (das Modell springt beim Drehen nie); Standardansichten (vorne, hinten, links, rechts, oben, unten, schräg); **Messen zwischen zwei Punkten in mm**; **Bildexport** als PNG mit 2048 px |
+| **3D-Viewer** | In der Seitenleiste, oder **Doppelklick auf ein Modell für ein eigenes Fenster** (frei vergrößerbar, mehrere gleichzeitig, mit „In Slicer öffnen“); Drehen, Verschieben und Zoomen um einen festen Drehpunkt (das Modell springt beim Drehen nie); Standardansichten (vorne, hinten, links, rechts, oben, unten, schräg); **Messen zwischen zwei Punkten in mm**; **Bildexport** als PNG mit 2048 px |
 | **3MF-Projekte** | Eingebettete Plattenbilder der Slicer (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); Klick auf ein Plattenbild zeigt diese Platte in 3D; **mehrfarbig**: Filamentfarben pro Objekt und Teil, bemalte Modelle (Multi-Material-Bemalung) und 3MF-Materialfarben im Viewer und in selbst gerenderten Vorschauen; Filament-Farbfelder auf Kacheln und in den Details; Titel, Designer und Programm aus den Metadaten |
 | **STEP / STP** | CAD-Dateien werden von OpenCascade in einem eigenen Hilfsprozess vernetzt, eine kaputte Datei kann die App also nicht abstürzen lassen; das Ergebnis wird zwischengespeichert |
 | **Archive** | ZIP, 7z, RAR und TAR öffnen wie Ordner; jedes enthaltene Modell bekommt eine Vorschau; entpackt wird nur, wenn ein anderes Programm die Datei braucht |
@@ -230,8 +230,8 @@ STEP-Unterstützung.
 
 ### Die Galerie
 
-- **Navigieren** per Doppelklick (Ordner und Archive öffnen sich, Dateien im
-  Standardprogramm), über die Pfadleiste, die Seitenleiste oder die Tastatur: Pfeiltasten
+- **Navigieren** per Doppelklick (Ordner und Archive öffnen sich, Modelle in einem eigenen
+  Fenster, andere Dateien im Standardprogramm), über die Pfadleiste, die Seitenleiste oder die Tastatur: Pfeiltasten
   bewegen die Auswahl, Enter öffnet, Rücktaste oder Alt+↑ geht eine Ebene hoch, Alt+← und
   Alt+→ gehen zurück und vor.
 - **Kachelgröße:** Strg + Mausrad, Strg + `+` / `-` oder der Regler im Menü *Ansicht*.
@@ -253,7 +253,10 @@ STEP-Unterstützung.
 
 ### Der 3D-Viewer und seine Werkzeuge
 
-Rechts siehst du das ausgewählte Modell in 3D.
+Rechts siehst du das ausgewählte Modell in 3D. Ein **Doppelklick auf ein Modell** (oder Enter)
+öffnet es in einem eigenen Fenster: Es lässt sich bildschirmgroß ziehen, mehrere Modelle können
+nebeneinander offen sein, jedes mit eigener Kamera, und das Fenster hat dieselben Werkzeuge, die
+Fakten des Modells und einen Knopf *In Slicer öffnen*. Esc oder das Schließen-Kreuz schließt es.
 
 | Aktion | Maus |
 |---|---|
@@ -386,10 +389,10 @@ Galerie tragen Dateien mit Duplikaten eine `2×`/`3×`-Markierung.
 
 ### Zusammenarbeit mit Slicer und anderen Programmen
 
-- **In Slicer öffnen** (Kontextmenü): öffnet die ausgewählten Modelle, gern mehrere auf
-  einmal (STL, 3MF, STEP und OBJ; PLY und glTF öffnen die Slicer nicht). Dateien aus Archiven
-  werden vorher in einen Cache-Ordner entpackt. Diese Slicer
-  findet Meshgrove von selbst:
+- **In Slicer öffnen** (Kontextmenü, Knopf in der Detailansicht oder im Modell-Fenster):
+  öffnet die ausgewählten Modelle, gern mehrere auf einmal (STL, 3MF, STEP und OBJ; PLY und
+  glTF öffnen die Slicer nicht). Dateien aus Archiven werden vorher in einen Cache-Ordner
+  entpackt. Diese Slicer findet Meshgrove von selbst:
 
   | System | Erkannt |
   |---|---|
@@ -411,7 +414,9 @@ Galerie tragen Dateien mit Duplikaten eine `2×`/`3×`-Markierung.
   stattdessen die Pfade als Text ab.
 - **Im Dateimanager zeigen:** öffnet Dolphin/Nautilus, den Explorer oder den Finder mit den
   Dateien markiert.
-- **Öffnen** (Doppelklick auf eine Datei): öffnet sie im Standardprogramm des Systems.
+- **Mit Standardprogramm öffnen** (Kontextmenü): öffnet ein Modell im Standardprogramm des
+  Systems, zum Beispiel dem Slicer, der für STL-Dateien eingetragen ist; andere Dateien öffnen
+  sich dort per Doppelklick.
 
 ### Archive (ZIP, 7z, RAR, TAR)
 
@@ -460,7 +465,8 @@ Strg heißt auf macOS ⌘ Cmd.
 | Tasten | Aktion |
 |---|---|
 | ← → ↑ ↓, Pos1, Ende | Auswahl bewegen |
-| Enter | Ausgewählten Ordner, Archiv oder Datei öffnen |
+| Enter | Ausgewählten Ordner oder Archiv öffnen; ein Modell im eigenen Fenster; andere Dateien im Standardprogramm |
+| Esc (im Modell-Fenster) | Fenster schließen |
 | Rücktaste, Alt+↑ | Übergeordneter Ordner |
 | Alt+←, Alt+→ | Zurück, vor |
 | F5 | Ordner neu laden |

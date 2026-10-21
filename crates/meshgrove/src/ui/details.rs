@@ -46,6 +46,8 @@ pub struct DetailsOutput {
     pub note_changed: bool,
     /// Result of a viewer tool (picture saved, …) for the status bar.
     pub message: Option<String>,
+    /// "Open in slicer" was clicked.
+    pub open_in_slicer: bool,
 }
 
 pub struct DetailsContext<'a> {
@@ -55,6 +57,8 @@ pub struct DetailsContext<'a> {
     pub tags: TagEditor<'a>,
     pub note: NoteEditor<'a>,
     pub bed: Option<&'a Bed>,
+    /// Name of the slicer models can be handed to.
+    pub slicer: Option<&'a str>,
     pub thumb: Option<&'a Thumb>,
     pub model: &'a ModelStatus,
     /// Plate previews of a 3MF project (plate number, texture).
@@ -94,6 +98,7 @@ pub fn show(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
                 _ => out.message = cx.viewer.ui(&mut child, cx.render_state, cx.renderer),
             }
             ui.weak(t!("viewer.hint"));
+            out.open_in_slicer = slicer_button(ui, entry.kind, cx.slicer);
         } else if entry.kind == Kind::Image
             && let Some(Thumb::Ready(texture, _)) = cx.thumb
         {
@@ -115,6 +120,13 @@ pub fn show(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
         ui.add(egui::Label::new(RichText::new(entry.path.display().to_string()).small().weak()).wrap());
     });
     out
+}
+
+/// "Open in Anycubic Slicer Next" for models a slicer opens; true when clicked.
+pub fn slicer_button(ui: &mut Ui, kind: Kind, slicer: Option<&str>) -> bool {
+    let Some(name) = slicer.filter(|_| kind.is_sliceable()) else { return false };
+    ui.add_space(6.0);
+    ui.add(egui::Button::new(t!("menu.open_in_slicer", name = name)).min_size(egui::vec2(0.0, 28.0))).clicked()
 }
 
 fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, count: usize, out: &mut DetailsOutput) {
@@ -201,7 +213,7 @@ pub fn fit_text(fit: Fit, bed: &Bed) -> String {
     .into_owned()
 }
 
-fn facts(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, model: &ModelStatus, bed: Option<&Bed>) {
+pub fn facts(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, model: &ModelStatus, bed: Option<&Bed>) {
     Grid::new("details_facts").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         fact(ui, &t!("details.type"), &kind_name(entry.kind));
         if !entry.is_dir() {
@@ -278,7 +290,7 @@ fn facts(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, model: &ModelStatus,
 }
 
 /// Plate pictures; clicking one shows that plate in the viewer. Returns the clicked plate.
-fn plates(ui: &mut Ui, plates: &[(usize, egui::TextureHandle)], active: Option<usize>) -> Option<usize> {
+pub fn plates(ui: &mut Ui, plates: &[(usize, egui::TextureHandle)], active: Option<usize>) -> Option<usize> {
     let mut clicked = None;
     ui.add_space(8.0);
     ui.label(RichText::new(t!("details.plates")).weak()).on_hover_text(t!("details.plates_hint"));
