@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- STEP CAD files are plain text, so without this they show up as text/plain. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="model/step">
+    <comment>STEP CAD model</comment>
+    <comment xml:lang="de">STEP-CAD-Modell</comment>
+    <sub-class-of type="text/plain"/>
+    <magic priority="60">
+      <match type="string" offset="0" value="ISO-10303-21;"/>
+    </magic>
+    <glob pattern="*.step"/>
+    <glob pattern="*.stp"/>
+    <glob pattern="*.p21"/>
+  </mime-type>
+</mime-info>

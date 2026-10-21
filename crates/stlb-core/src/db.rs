@@ -84,7 +84,7 @@ pub struct Counts {
     pub models: usize,
     /// Files whose thumbnail facts are stored.
     pub processed: usize,
-    /// Files that can have facts (models and images).
+    /// Files that can have facts (models, images, PDFs).
     pub processable: usize,
 }
 
@@ -268,11 +268,11 @@ impl Library {
         Ok(())
     }
 
-    /// Models and images whose thumbnail facts are missing or out of date, for background processing.
+    /// Models, images and PDFs whose thumbnail facts are missing or out of date, for background processing.
     pub fn needing_meta(&self) -> Result<Vec<(Entry, String)>, Error> {
         let mut stmt = self.conn.prepare(
             "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns, f.meta_key FROM files f JOIN dirs d ON d.id = f.dir_id
-             WHERE f.kind IN ('stl', '3mf', 'image') ORDER BY d.path, f.name",
+             WHERE f.kind IN ('stl', '3mf', 'step', 'image', 'pdf') ORDER BY d.path, f.name",
         )?;
         let rows = stmt.query_map([], |r| Ok((entry_from_row(r)?, r.get::<_, Option<String>>(5)?)))?;
         let mut out = Vec::new();
@@ -319,7 +319,7 @@ impl Library {
         let Some(d) = path_str(dir) else { return Ok(Vec::new()) };
         let mut stmt = self.conn.prepare_cached(
             "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns FROM files f JOIN dirs d ON d.id = f.dir_id
-             WHERE (d.path = ?1 OR (d.path > ?2 AND d.path < ?3)) AND f.kind IN ('stl', '3mf', 'image')
+             WHERE (d.path = ?1 OR (d.path > ?2 AND d.path < ?3)) AND f.kind IN ('stl', '3mf', 'step', 'image')
              ORDER BY (f.kind = 'image'), (d.path = ?1) DESC, d.path, f.name COLLATE NOCASE LIMIT ?4",
         )?;
         stmt.query_map(params![d, format!("{d}/"), format!("{d}0"), n as i64], entry_from_row)?.collect()
@@ -473,7 +473,7 @@ impl Library {
             "SELECT COUNT(*),
                     COALESCE(SUM(kind IN ('stl', '3mf', 'step')), 0),
                     COALESCE(SUM(meta_key IS NOT NULL), 0),
-                    COALESCE(SUM(kind IN ('stl', '3mf', 'image')), 0)
+                    COALESCE(SUM(kind IN ('stl', '3mf', 'step', 'image', 'pdf')), 0)
              FROM files",
             [],
             |r| {

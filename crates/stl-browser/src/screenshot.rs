@@ -18,6 +18,8 @@ pub struct ScreenshotHook {
     pub flatten: bool,
     /// `STLB_VIEW=duplicates`: open the duplicates view once the index is ready.
     pub duplicates: bool,
+    /// `STLB_VIEW=settings`: open the settings window.
+    pub settings: bool,
     path: String,
     at: Instant,
     requested: bool,
@@ -35,6 +37,7 @@ impl ScreenshotHook {
         let hold = std::env::var_os("STLB_HOLD").is_some();
         let flatten = std::env::var_os("STLB_FLATTEN").is_some();
         let duplicates = std::env::var("STLB_VIEW").is_ok_and(|v| v == "duplicates");
+        let settings = std::env::var("STLB_VIEW").is_ok_and(|v| v == "settings");
         let wheel = std::env::var("STLB_WHEEL").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0);
         Some(ScreenshotHook {
             pointer,
@@ -45,6 +48,7 @@ impl ScreenshotHook {
             search,
             flatten,
             duplicates,
+            settings,
             path,
             at: Instant::now() + Duration::from_secs_f32(delay),
             requested: false,

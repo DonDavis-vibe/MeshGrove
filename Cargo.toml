@@ -5,6 +5,7 @@ members = [
     "crates/stlb-render",
     "crates/stl-browser",
     "crates/stlb-step",
+    "crates/stl-browser-thumbnailer",
 ]
 
 [workspace.package]
@@ -12,6 +13,8 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
+description = "Native gallery for 3D-print files (STL, 3MF, STEP) with live previews"
+keywords = ["stl", "3mf", "3d-printing", "gallery", "egui"]
 
 [workspace.dependencies]
 stlb-core = { path = "crates/stlb-core" }

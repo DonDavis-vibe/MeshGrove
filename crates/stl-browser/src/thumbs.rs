@@ -16,7 +16,8 @@ use std::thread;
 
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use stlb_core::cache::{ThumbCache, ThumbMeta, Thumbnail};
-use stlb_core::{Kind, Mesh, dedupe, loaders};
+use stlb_core::thumbnail::ThumbError;
+use stlb_core::{Kind, Mesh};
 use stlb_render::{HeadlessRenderer, ViewParams};
 
 pub const THUMB_PX: u32 = 384;
@@ -45,10 +46,7 @@ pub enum ThumbResult {
     },
 }
 
-/// Which kinds get a picture (everything else shows an icon).
-pub fn has_thumbnail(kind: Kind) -> bool {
-    matches!(kind, Kind::Stl | Kind::ThreeMf | Kind::Step | Kind::Image | Kind::Pdf)
-}
+pub use stlb_core::thumbnail::supported as has_thumbnail;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stage {
@@ -192,7 +190,7 @@ impl ThumbService {
             spawn(&format!("thumb-worker-{i}"), move || {
                 for (job, generation, bytes) in work_rx {
                     let result = bytes
-                        .map_err(|e| Failure::Transient(e.to_string()))
+                        .map_err(|e| ThumbError::Transient(e.to_string()))
                         .and_then(|b| generate(&job, &b, &render_tx));
                     match result {
                         Ok(thumb) => {
@@ -204,11 +202,11 @@ impl ThumbService {
                         }
                         Err(failure) => {
                             let error = match failure {
-                                Failure::Permanent(e) => {
+                                ThumbError::Permanent(e) => {
                                     let _ = cache.store_failure(&job.key, &e);
                                     e
                                 }
-                                Failure::Transient(e) => e,
+                                ThumbError::Transient(e) => e,
                             };
                             log::info!("no thumbnail for {}: {error}", job.path.display());
                             shared.finish(&job, generation);
@@ -278,66 +276,15 @@ impl Drop for ThumbService {
     }
 }
 
-enum Failure {
-    /// The file itself is unusable; remembered in the cache until it changes.
-    Permanent(String),
-    /// Disk or GPU trouble; try again next time.
-    Transient(String),
+fn generate(job: &Job, bytes: &[u8], render_tx: &Sender<RenderRequest>) -> Result<Thumbnail, ThumbError> {
+    stlb_core::thumbnail::make(&job.path, job.kind, bytes, THUMB_PX, |mesh| render(mesh, render_tx))
 }
 
-fn generate(job: &Job, bytes: &[u8], render_tx: &Sender<RenderRequest>) -> Result<Thumbnail, Failure> {
-    match job.kind {
-        Kind::Stl => {
-            let mesh = loaders::stl::parse(bytes).map_err(|e| Failure::Permanent(e.to_string()))?;
-            let meta = mesh_meta(&mesh, bytes);
-            Ok(Thumbnail { image: render(mesh, render_tx)?, meta })
-        }
-        Kind::ThreeMf => {
-            // The slicer's own plate picture is free and shows filament colours; render only without one.
-            let parsed = loaders::threemf::parse(bytes);
-            let meta = parsed.as_ref().map(|m| mesh_meta(&m.mesh, bytes)).unwrap_or_default();
-            if let Some(image) = loaders::threemf::embedded_thumbnail(bytes, THUMB_PX) {
-                return Ok(Thumbnail { image, meta: ThumbMeta { embedded: true, ..meta } });
-            }
-            let model = parsed.map_err(|e| Failure::Permanent(e.to_string()))?;
-            Ok(Thumbnail { image: render(model.mesh, render_tx)?, meta })
-        }
-        Kind::Step => {
-            // Tessellated by the OpenCascade helper (cached); the bytes are only hashed.
-            let mesh = loaders::step::load(&job.path).map_err(|e| Failure::Permanent(e.to_string()))?;
-            let meta = mesh_meta(&mesh, bytes);
-            Ok(Thumbnail { image: render(mesh, render_tx)?, meta })
-        }
-        Kind::Pdf => {
-            let image = if bytes.is_empty() {
-                loaders::pdf::thumbnail_from_path(&job.path, THUMB_PX)
-            } else {
-                loaders::pdf::thumbnail_from_bytes(bytes, THUMB_PX)
-            };
-            Ok(Thumbnail { image: image.map_err(|e| Failure::Permanent(e.to_string()))?, meta: ThumbMeta::default() })
-        }
-        Kind::Image => {
-            let image = loaders::image::thumbnail(bytes, THUMB_PX).map_err(|e| Failure::Permanent(e.to_string()))?;
-            Ok(Thumbnail { image, meta: ThumbMeta::default() })
-        }
-        other => Err(Failure::Permanent(format!("no thumbnail support for {other:?}"))),
-    }
-}
-
-fn mesh_meta(mesh: &Mesh, bytes: &[u8]) -> ThumbMeta {
-    ThumbMeta {
-        triangles: Some(mesh.triangle_count()),
-        size_mm: mesh.bounds().map(|b| b.size().to_array()),
-        content_hash: Some(dedupe::content_hash(bytes)),
-        geo_sig: dedupe::geo_signature(mesh),
-        embedded: false,
-    }
-}
-
-fn render(mesh: Mesh, render_tx: &Sender<RenderRequest>) -> Result<image::RgbaImage, Failure> {
+/// Draws on the GPU thread and waits for the picture.
+fn render(mesh: Mesh, render_tx: &Sender<RenderRequest>) -> Result<image::RgbaImage, String> {
     let (reply_tx, reply_rx) = bounded(1);
-    render_tx.send((mesh, reply_tx)).map_err(|_| Failure::Transient("renderer stopped".into()))?;
-    reply_rx.recv().map_err(|_| Failure::Transient("renderer stopped".into()))?.map_err(Failure::Transient)
+    render_tx.send((mesh, reply_tx)).map_err(|_| "renderer stopped".to_owned())?;
+    reply_rx.recv().map_err(|_| "renderer stopped".to_owned())?
 }
 
 fn gpu_thread(requests: Receiver<RenderRequest>) {

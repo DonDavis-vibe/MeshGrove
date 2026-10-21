@@ -10,7 +10,7 @@ set -euo pipefail
 out=$(realpath -m "$1")
 delay=${2:-8}
 shift $(( $# >= 2 ? 2 : $# ))
-app=$(realpath "$(dirname "$0")/../target/release/stl-browser")
+app=${STLB_APP:-$(realpath "$(dirname "$0")/../target/release/stl-browser")}
 session=$(mktemp --suffix=.sh)
 trap 'rm -f "$session"' EXIT
 {

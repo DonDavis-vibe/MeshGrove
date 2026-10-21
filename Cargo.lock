@@ -3641,6 +3641,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "stl-browser-thumbnailer"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "stlb-core",
+ "stlb-render",
+]
+
+[[package]]
 name = "stlb-core"
 version = "0.1.0"
 dependencies = [

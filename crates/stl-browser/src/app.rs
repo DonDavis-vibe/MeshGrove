@@ -21,6 +21,7 @@ use crate::thumbs::{ThumbResult, ThumbService};
 use crate::ui::details::{self, DetailsContext, ModelStatus, TagEditor};
 use crate::ui::duplicates::{self, DupAction, GroupInfo};
 use crate::ui::gallery::{Action, Arrange, Gallery, MenuContext};
+use crate::ui::settings::{AppInfo, SettingsChange, SettingsDialog};
 use crate::ui::sidebar::{LibraryInfo, Sidebar, SidebarAction};
 use crate::ui::turntable::Turntable;
 use crate::ui::viewer::ModelViewer;
@@ -106,6 +107,7 @@ pub struct App {
     trash_rx: Option<Receiver<TrashResult>>,
     /// Short message in the status bar (result of an action) and when it was set.
     toast: Option<(String, Instant)>,
+    settings: SettingsDialog,
 }
 
 impl App {
@@ -187,6 +189,7 @@ impl App {
             trash_confirm: None,
             trash_rx: None,
             toast: None,
+            settings: SettingsDialog::default(),
             config,
             config_error,
         })
@@ -530,6 +533,46 @@ impl App {
         }
     }
 
+    fn apply_settings(&mut self, changes: Vec<SettingsChange>) {
+        for change in changes {
+            match change {
+                SettingsChange::Language(lang) => {
+                    i18n::init(lang.as_deref());
+                    self.config.language = lang;
+                }
+                SettingsChange::AddRoot(path) => {
+                    if !self.config.library_roots.contains(&path) {
+                        self.config.library_roots.push(path);
+                        self.library.set_roots(self.config.library_roots.clone());
+                    }
+                }
+                SettingsChange::RemoveRoot(path) => {
+                    self.config.library_roots.retain(|r| r != &path);
+                    self.library.set_roots(self.config.library_roots.clone());
+                }
+                SettingsChange::Slicer(slicer) => {
+                    self.config.slicer = slicer.clone();
+                    self.slicer = slicer.or_else(Slicer::detect);
+                    self.menu_for.clear();
+                    let name = self
+                        .slicer
+                        .as_ref()
+                        .map_or_else(|| t!("settings.slicer_none").into_owned(), |s| s.name.clone());
+                    self.toast(t!("toast.slicer_set", name = name).into_owned());
+                }
+                SettingsChange::ClearCache => {
+                    if let Some(dir) = crate::ui::settings::cache_dir() {
+                        for sub in ["thumbs", "step", "extracted"] {
+                            let _ = std::fs::remove_dir_all(dir.join(sub));
+                        }
+                    }
+                    self.toast(t!("toast.cache_cleared").into_owned());
+                }
+            }
+            self.save_config();
+        }
+    }
+
     fn toast(&mut self, message: String) {
         self.toast = Some((message, Instant::now()));
     }
@@ -663,6 +706,9 @@ impl App {
             let paths = self.selected_paths();
             self.request_trash(paths);
         }
+        if pressed(Modifiers::COMMAND, Key::Comma) {
+            self.settings.open(self.slicer.as_ref());
+        }
         if pressed(Modifiers::NONE, Key::F5) {
             self.nav.reload();
             self.sidebar.refresh();
@@ -725,6 +771,9 @@ impl App {
             ui.separator();
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button(RichText::new("⚙").size(16.0)).on_hover_text(t!("settings.open")).clicked() {
+                    self.settings.open(self.slicer.as_ref());
+                }
                 self.view_menu(ui);
                 self.search_field(ui);
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -990,6 +1039,10 @@ impl eframe::App for App {
         self.meshes.begin_frame();
         self.update_viewer(&ctx);
         if let Some(hook) = &mut self.screenshot {
+            if std::mem::take(&mut hook.settings) {
+                self.settings.open(self.slicer.as_ref());
+            }
+            let hook = self.screenshot.as_mut().expect("checked above");
             if hook.duplicates && self.index.is_some() && self.duplicate_groups > 0 {
                 hook.duplicates = false;
                 self.show_duplicates();
@@ -1093,6 +1146,10 @@ impl eframe::App for App {
         }
 
         egui::CentralPanel::default().show(ui, |ui| self.central(ui, &rs));
+
+        let info = AppInfo { gpu: &self.gpu_name, db_path: &self.db_path };
+        let changes = self.settings.show(&ctx, &self.config, self.slicer.as_ref(), info);
+        self.apply_settings(changes);
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {

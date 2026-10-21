@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages
+        # libarchive for archives, poppler for PDF previews, lavapipe (software Vulkan) for the
+        # GPU render tests. OpenCascade is left out: the STEP mesher then builds as a stub.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-dev poppler-utils mesa-vulkan-drivers \
+            libxkbcommon-dev libwayland-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests (render tests on lavapipe)
+        env:
+          STLB_REQUIRE_GPU: "1"
+          WGPU_BACKEND: vulkan
+        run: cargo test --workspace

@@ -1,0 +1,246 @@
+//! Settings window: language, library folders, slicer, cache.
+
+use std::path::{Path, PathBuf};
+
+use crossbeam_channel::{Receiver, bounded};
+use egui::{RichText, Ui};
+use stlb_core::config::{Config, Slicer};
+
+use crate::i18n;
+
+pub enum SettingsChange {
+    Language(Option<String>),
+    AddRoot(PathBuf),
+    RemoveRoot(PathBuf),
+    /// `None`: detect the slicer automatically.
+    Slicer(Option<Slicer>),
+    ClearCache,
+}
+
+/// Facts shown in the "about" part.
+pub struct AppInfo<'a> {
+    pub gpu: &'a str,
+    pub db_path: &'a Path,
+}
+
+#[derive(Default)]
+pub struct SettingsDialog {
+    pub open: bool,
+    root_input: String,
+    root_error: Option<String>,
+    slicer_form: Option<(String, String, String)>,
+    cache_size: Option<u64>,
+    cache_rx: Option<Receiver<u64>>,
+}
+
+/// Where the browser keeps rebuildable data.
+pub fn cache_dir() -> Option<PathBuf> {
+    Some(dirs::cache_dir()?.join("stl-browser"))
+}
+
+fn dir_size(dir: &Path) -> u64 {
+    let mut total = 0;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            match e.metadata() {
+                Ok(m) if m.is_dir() => stack.push(e.path()),
+                Ok(m) => total += m.len(),
+                Err(_) => {}
+            }
+        }
+    }
+    total
+}
+
+impl SettingsDialog {
+    pub fn open(&mut self, active_slicer: Option<&Slicer>) {
+        self.open = true;
+        self.slicer_form = Some(match active_slicer {
+            Some(s) => (
+                s.name.clone(),
+                s.program.display().to_string(),
+                s.workdir.as_ref().map(|d| d.display().to_string()).unwrap_or_default(),
+            ),
+            None => Default::default(),
+        });
+        self.refresh_cache_size();
+    }
+
+    fn refresh_cache_size(&mut self) {
+        let (tx, rx) = bounded(1);
+        std::thread::spawn(move || {
+            let _ = tx.send(cache_dir().map(|d| dir_size(&d)).unwrap_or(0));
+        });
+        self.cache_size = None;
+        self.cache_rx = Some(rx);
+    }
+
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        config: &Config,
+        slicer: Option<&Slicer>,
+        info: AppInfo,
+    ) -> Vec<SettingsChange> {
+        let mut changes = Vec::new();
+        if !self.open {
+            return changes;
+        }
+        if let Some(rx) = &self.cache_rx
+            && let Ok(size) = rx.try_recv()
+        {
+            self.cache_size = Some(size);
+            self.cache_rx = None;
+        }
+        let mut open = self.open;
+        let center = ctx.content_rect().center();
+        egui::Window::new(t!("settings.title"))
+            .open(&mut open)
+            .default_width(540.0)
+            .default_height(620.0)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(center)
+            .resizable(true)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.language(ui, config, &mut changes);
+                    ui.separator();
+                    self.library(ui, config, &mut changes);
+                    ui.separator();
+                    self.slicer(ui, config, slicer, &mut changes);
+                    ui.separator();
+                    self.storage(ui, &mut changes);
+                    ui.separator();
+                    about(ui, &info);
+                });
+            });
+        self.open = open;
+        changes
+    }
+
+    fn language(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+        ui.label(RichText::new(t!("settings.language")).strong());
+        ui.horizontal(|ui| {
+            for (value, label) in
+                [(None, t!("settings.language_auto")), (Some("de"), "Deutsch".into()), (Some("en"), "English".into())]
+            {
+                if ui.radio(config.language.as_deref() == value, label).clicked() {
+                    changes.push(SettingsChange::Language(value.map(str::to_owned)));
+                }
+            }
+        });
+    }
+
+    fn library(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+        ui.label(RichText::new(t!("settings.library")).strong());
+        ui.weak(t!("settings.library_hint"));
+        for root in &config.library_roots {
+            ui.horizontal(|ui| {
+                if ui.small_button("✕").on_hover_text(t!("sidebar.remove_root")).clicked() {
+                    changes.push(SettingsChange::RemoveRoot(root.clone()));
+                }
+                ui.label(root.display().to_string());
+            });
+        }
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut self.root_input).hint_text("/pfad/zum/ordner").desired_width(320.0));
+            if ui.button(t!("settings.add")).clicked() {
+                let path = PathBuf::from(self.root_input.trim());
+                if path.is_dir() {
+                    changes.push(SettingsChange::AddRoot(path));
+                    self.root_input.clear();
+                    self.root_error = None;
+                } else {
+                    self.root_error = Some(t!("settings.not_a_folder").into_owned());
+                }
+            }
+        });
+        if let Some(e) = &self.root_error {
+            ui.colored_label(ui.visuals().error_fg_color, e);
+        }
+    }
+
+    fn slicer(&mut self, ui: &mut Ui, config: &Config, active: Option<&Slicer>, changes: &mut Vec<SettingsChange>) {
+        ui.label(RichText::new(t!("settings.slicer")).strong());
+        let status = match (active, &config.slicer) {
+            (Some(s), None) => t!("settings.slicer_detected", name = s.name),
+            (Some(s), Some(_)) => t!("settings.slicer_custom", name = s.name),
+            (None, _) => t!("settings.slicer_none"),
+        };
+        ui.weak(status);
+        let mut detect = false;
+        let (name, program, workdir) = self.slicer_form.get_or_insert_with(Default::default);
+        egui::Grid::new("slicer_form").num_columns(2).show(ui, |ui| {
+            ui.label(t!("settings.slicer_name"));
+            ui.add(egui::TextEdit::singleline(name).desired_width(320.0));
+            ui.end_row();
+            ui.label(t!("settings.slicer_program"));
+            ui.add(egui::TextEdit::singleline(program).desired_width(320.0));
+            ui.end_row();
+            ui.label(t!("settings.slicer_workdir"));
+            ui.add(egui::TextEdit::singleline(workdir).desired_width(320.0));
+            ui.end_row();
+        });
+        ui.horizontal(|ui| {
+            if ui.button(t!("settings.apply")).clicked() && !program.trim().is_empty() {
+                // Keep the environment of a detected slicer with the same program (e.g. Anycubic's libraries).
+                let env = active
+                    .filter(|s| s.program == Path::new(program.trim()))
+                    .map(|s| s.env.clone())
+                    .unwrap_or_default();
+                changes.push(SettingsChange::Slicer(Some(Slicer {
+                    name: if name.trim().is_empty() { "Slicer".into() } else { name.trim().to_owned() },
+                    program: program.trim().into(),
+                    args: Vec::new(),
+                    env,
+                    workdir: (!workdir.trim().is_empty()).then(|| workdir.trim().into()),
+                })));
+            }
+            if ui.button(t!("settings.slicer_auto")).clicked() {
+                changes.push(SettingsChange::Slicer(None));
+                detect = true;
+            }
+        });
+        if detect {
+            self.slicer_form = Slicer::detect().map(|s| {
+                (
+                    s.name,
+                    s.program.display().to_string(),
+                    s.workdir.map(|d| d.display().to_string()).unwrap_or_default(),
+                )
+            });
+        }
+    }
+
+    fn storage(&mut self, ui: &mut Ui, changes: &mut Vec<SettingsChange>) {
+        ui.label(RichText::new(t!("settings.storage")).strong());
+        ui.horizontal(|ui| {
+            match self.cache_size {
+                Some(size) => ui.label(t!("settings.cache_size", size = i18n::file_size(size))),
+                None => ui.spinner(),
+            };
+            if ui.button(t!("settings.clear_cache")).on_hover_text(t!("settings.clear_cache_hint")).clicked() {
+                changes.push(SettingsChange::ClearCache);
+                self.refresh_cache_size();
+            }
+        });
+    }
+}
+
+fn about(ui: &mut Ui, info: &AppInfo) {
+    ui.label(RichText::new(t!("settings.about")).strong());
+    egui::Grid::new("about").num_columns(2).show(ui, |ui| {
+        let row = |ui: &mut Ui, k: std::borrow::Cow<str>, v: String| {
+            ui.weak(k);
+            ui.label(v);
+            ui.end_row();
+        };
+        row(ui, t!("settings.version"), env!("CARGO_PKG_VERSION").to_owned());
+        row(ui, t!("settings.gpu"), info.gpu.to_owned());
+        row(ui, t!("settings.config_file"), Config::path().map(|p| p.display().to_string()).unwrap_or_default());
+        row(ui, t!("settings.index_file"), info.db_path.display().to_string());
+        row(ui, t!("settings.cache_dir"), cache_dir().map(|p| p.display().to_string()).unwrap_or_default());
+    });
+}

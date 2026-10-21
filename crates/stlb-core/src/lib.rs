@@ -12,6 +12,7 @@ pub mod loaders;
 pub mod mesh;
 pub mod query;
 pub mod scan;
+pub mod thumbnail;
 
 pub use formats::Kind;
 pub use mesh::{Aabb, Mesh};

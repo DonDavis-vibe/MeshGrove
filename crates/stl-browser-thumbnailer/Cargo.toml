@@ -1,0 +1,12 @@
+[package]
+name = "stl-browser-thumbnailer"
+description = "Freedesktop thumbnailer (Dolphin, file dialogs) for STL, 3MF and STEP, sharing the STL browser's renderer and cache"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+stlb-core.workspace = true
+stlb-render.workspace = true
+image.workspace = true
