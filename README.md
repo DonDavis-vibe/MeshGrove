@@ -612,8 +612,8 @@ cargo run --release -p meshgrove -- ~/3D-Models
 # libarchive as a static library through vcpkg
 git clone https://github.com/microsoft/vcpkg C:\vcpkg
 C:\vcpkg\bootstrap-vcpkg.bat
-C:\vcpkg\vcpkg install libarchive:x64-windows-static-md
-$env:VCPKG_ROOT = "C:\vcpkg"; $env:VCPKGRS_TRIPLET = "x64-windows-static-md"
+C:\vcpkg\vcpkg install libarchive:x64-windows-static
+$env:VCPKG_ROOT = "C:\vcpkg"; $env:VCPKGRS_TRIPLET = "x64-windows-static"
 cargo build --release -p meshgrove -p meshgrove-step
 ```
 

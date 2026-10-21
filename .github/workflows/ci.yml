@@ -50,20 +50,20 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: C:/vcpkg/installed
-          key: vcpkg-libarchive-x64-windows-static-md-v1
+          key: vcpkg-libarchive-x64-windows-static-v2
       - name: libarchive (Windows, static through vcpkg)
         if: runner.os == 'Windows'
         shell: bash
         run: |
           echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
-          echo "VCPKGRS_TRIPLET=x64-windows-static-md" >> "$GITHUB_ENV"
-          "$VCPKG_INSTALLATION_ROOT/vcpkg" install libarchive:x64-windows-static-md
+          echo "VCPKGRS_TRIPLET=x64-windows-static" >> "$GITHUB_ENV"
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install libarchive:x64-windows-static
       - name: Save vcpkg cache (Windows)
         if: runner.os == 'Windows' && steps.vcpkg-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: C:/vcpkg/installed
-          key: vcpkg-libarchive-x64-windows-static-md-v1
+          key: vcpkg-libarchive-x64-windows-static-v2
 
       - uses: dtolnay/rust-toolchain@stable
         with:
