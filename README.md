@@ -16,7 +16,6 @@
 </p>
 
 <p align="center">
-  Developed by <b>Davis</b> · a project of <a href="https://redneck-design.de/"><b>German Redneck Engineering</b></a><br>
   <a href="README.de.md">🇩🇪 Deutsche Version</a>
 </p>
 

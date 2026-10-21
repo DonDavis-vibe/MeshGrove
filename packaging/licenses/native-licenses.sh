@@ -18,14 +18,18 @@ case "${1:-}" in
         command -v cygpath >/dev/null && root=$(cygpath -u "$root")   # Git Bash on Windows
         for dir in "$root/installed/$triplet/share/"*/; do
             port=$(basename "$dir")
-            [[ -f "$dir/copyright" && "$port" != vcpkg-* ]] && section "$port (vcpkg)" "$dir/copyright"
+            if [[ -f "$dir/copyright" && "$port" != vcpkg-* ]]; then
+                section "$port (vcpkg)" "$dir/copyright"
+            fi
         done
         ;;
     macos)
         for formula in libarchive libb2 lz4 xz zstd; do
             prefix=$(brew --prefix "$formula")
             for file in "$prefix"/{COPYING,LICENSE,COPYRIGHT}*; do
-                [[ -f "$file" ]] && section "$formula ($(basename "$file"))" "$file"
+                if [[ -f "$file" ]]; then
+                    section "$formula ($(basename "$file"))" "$file"
+                fi
             done
         done
         ;;
