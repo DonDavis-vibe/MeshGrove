@@ -1,0 +1,356 @@
+//! Background thumbnail pipeline, built for libraries on spinning disks:
+//!
+//! ```text
+//! queue ──► 2 cache-lookup threads (SSD) ──hit──► UI
+//!   │            └─miss─► queue (stage Generate)
+//!   └──► 1 disk reader (one file at a time, visible first) ──► 3 workers (parse / decode)
+//!                                                              └─► 1 GPU thread (render) ──► cache + UI
+//! ```
+//! Visible tiles always jump the queue; opening another folder drops everything not started yet.
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread;
+
+use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
+use stlb_core::cache::{ThumbCache, ThumbMeta, Thumbnail};
+use stlb_core::{Kind, Mesh, dedupe, loaders};
+use stlb_render::{HeadlessRenderer, ViewParams};
+
+pub const THUMB_PX: u32 = 384;
+const LOOKUP_THREADS: usize = 2;
+const WORKER_THREADS: usize = 3;
+
+#[derive(Debug, Clone)]
+pub struct Job {
+    pub key: String,
+    pub path: PathBuf,
+    pub kind: Kind,
+}
+
+pub enum ThumbResult {
+    Ready { key: String, image: egui::ColorImage, meta: ThumbMeta },
+    Failed { key: String, error: String },
+}
+
+/// Which kinds get a picture (everything else shows an icon).
+pub fn has_thumbnail(kind: Kind) -> bool {
+    matches!(kind, Kind::Stl | Kind::Image)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    Lookup,
+    Generate,
+}
+
+struct Queued {
+    job: Job,
+    stage: Stage,
+    order: usize,
+    visible: bool,
+}
+
+#[derive(Default)]
+struct Queue {
+    items: Vec<Queued>,
+    shutdown: bool,
+}
+
+struct Shared {
+    queue: Mutex<Queue>,
+    wake: Condvar,
+    generation: AtomicU64,
+    done: AtomicUsize,
+    total: AtomicUsize,
+    started: Mutex<std::time::Instant>,
+}
+
+impl Shared {
+    /// Blocks until a job of `stage` is available; visible tiles first, then folder order.
+    fn pop(&self, stage: Stage) -> Option<(Queued, u64)> {
+        let mut q = self.queue.lock().unwrap();
+        loop {
+            if q.shutdown {
+                return None;
+            }
+            let best = q
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_, it)| it.stage == stage)
+                .min_by_key(|(_, it)| (!it.visible, it.order))
+                .map(|(i, _)| i);
+            if let Some(i) = best {
+                return Some((q.items.swap_remove(i), self.generation.load(Ordering::SeqCst)));
+            }
+            q = self.wake.wait(q).unwrap();
+        }
+    }
+
+    fn requeue(&self, mut item: Queued, generation: u64, stage: Stage) {
+        let mut q = self.queue.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) == generation {
+            item.stage = stage;
+            q.items.push(item);
+            self.wake.notify_all();
+        }
+    }
+
+    fn finish(&self, generation: u64) {
+        if self.generation.load(Ordering::SeqCst) == generation {
+            let done = self.done.fetch_add(1, Ordering::SeqCst) + 1;
+            if done == self.total.load(Ordering::SeqCst) {
+                let secs = self.started.lock().unwrap().elapsed().as_secs_f32();
+                log::info!("all {done} thumbnails of this folder ready after {secs:.1} s");
+            }
+        }
+    }
+}
+
+type RenderRequest = (Mesh, Sender<Result<image::RgbaImage, String>>);
+
+pub struct ThumbService {
+    shared: Arc<Shared>,
+    results: Receiver<ThumbResult>,
+}
+
+impl ThumbService {
+    pub fn new(ctx: egui::Context, cache: ThumbCache) -> ThumbService {
+        let shared = Arc::new(Shared {
+            queue: Mutex::new(Queue::default()),
+            wake: Condvar::new(),
+            generation: AtomicU64::new(0),
+            done: AtomicUsize::new(0),
+            total: AtomicUsize::new(0),
+            started: Mutex::new(std::time::Instant::now()),
+        });
+        let (result_tx, results) = unbounded();
+        let send = move |r: ThumbResult| {
+            let _ = result_tx.send(r);
+            ctx.request_repaint();
+        };
+
+        for i in 0..LOOKUP_THREADS {
+            let (shared, cache, send) = (shared.clone(), cache.clone(), send.clone());
+            spawn(&format!("thumb-lookup-{i}"), move || {
+                while let Some((item, generation)) = shared.pop(Stage::Lookup) {
+                    match cache.load(&item.job.key) {
+                        Some(Ok(thumb)) => {
+                            send(ready(item.job.key.clone(), thumb));
+                            shared.finish(generation);
+                        }
+                        Some(Err(error)) => {
+                            send(ThumbResult::Failed { key: item.job.key.clone(), error });
+                            shared.finish(generation);
+                        }
+                        None => shared.requeue(item, generation, Stage::Generate),
+                    }
+                }
+            });
+        }
+
+        // A small buffer keeps the disk busy without piling up hundreds of MB of model data.
+        let (work_tx, work_rx) = bounded::<(Job, u64, std::io::Result<Vec<u8>>)>(2);
+        {
+            let shared = shared.clone();
+            spawn("thumb-reader", move || {
+                while let Some((item, generation)) = shared.pop(Stage::Generate) {
+                    let bytes = std::fs::read(&item.job.path);
+                    if work_tx.send((item.job, generation, bytes)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        let (render_tx, render_rx) = unbounded::<RenderRequest>();
+        spawn("thumb-gpu", move || gpu_thread(render_rx));
+
+        for i in 0..WORKER_THREADS {
+            let (shared, cache, send) = (shared.clone(), cache.clone(), send.clone());
+            let (work_rx, render_tx) = (work_rx.clone(), render_tx.clone());
+            spawn(&format!("thumb-worker-{i}"), move || {
+                for (job, generation, bytes) in work_rx {
+                    let result = bytes
+                        .map_err(|e| Failure::Transient(e.to_string()))
+                        .and_then(|b| generate(&job, &b, &render_tx));
+                    match result {
+                        Ok(thumb) => {
+                            if let Err(e) = cache.store(&job.key, &thumb) {
+                                log::warn!("thumbnail cache write failed: {e}");
+                            }
+                            send(ready(job.key, thumb));
+                        }
+                        Err(failure) => {
+                            let error = match failure {
+                                Failure::Permanent(e) => {
+                                    let _ = cache.store_failure(&job.key, &e);
+                                    e
+                                }
+                                Failure::Transient(e) => e,
+                            };
+                            log::info!("no thumbnail for {}: {error}", job.path.display());
+                            send(ThumbResult::Failed { key: job.key, error });
+                        }
+                    }
+                    shared.finish(generation);
+                }
+            });
+        }
+
+        ThumbService { shared, results }
+    }
+
+    /// Replaces all pending work (e.g. after opening another folder).
+    pub fn set_jobs(&self, jobs: Vec<Job>) {
+        let mut q = self.shared.queue.lock().unwrap();
+        self.shared.generation.fetch_add(1, Ordering::SeqCst);
+        self.shared.done.store(0, Ordering::SeqCst);
+        self.shared.total.store(jobs.len(), Ordering::SeqCst);
+        *self.shared.started.lock().unwrap() = std::time::Instant::now();
+        q.items = jobs
+            .into_iter()
+            .enumerate()
+            .map(|(order, job)| Queued { job, stage: Stage::Lookup, order, visible: false })
+            .collect();
+        self.shared.wake.notify_all();
+    }
+
+    /// Marks which jobs are on screen right now so they are served first.
+    pub fn set_visible(&self, is_visible: impl Fn(&str) -> bool) {
+        let mut q = self.shared.queue.lock().unwrap();
+        for item in &mut q.items {
+            item.visible = is_visible(&item.job.key);
+        }
+    }
+
+    pub fn try_recv(&self) -> Option<ThumbResult> {
+        self.results.try_recv().ok()
+    }
+
+    /// (finished, total) for the current folder.
+    pub fn progress(&self) -> (usize, usize) {
+        (self.shared.done.load(Ordering::SeqCst), self.shared.total.load(Ordering::SeqCst))
+    }
+}
+
+impl Drop for ThumbService {
+    fn drop(&mut self) {
+        self.shared.queue.lock().unwrap().shutdown = true;
+        self.shared.wake.notify_all();
+    }
+}
+
+enum Failure {
+    /// The file itself is unusable; remembered in the cache until it changes.
+    Permanent(String),
+    /// Disk or GPU trouble; try again next time.
+    Transient(String),
+}
+
+fn generate(job: &Job, bytes: &[u8], render_tx: &Sender<RenderRequest>) -> Result<Thumbnail, Failure> {
+    match job.kind {
+        Kind::Stl => {
+            let mesh = loaders::stl::parse(bytes).map_err(|e| Failure::Permanent(e.to_string()))?;
+            let meta = ThumbMeta {
+                triangles: Some(mesh.triangle_count()),
+                size_mm: mesh.bounds().map(|b| b.size().to_array()),
+                content_hash: Some(dedupe::content_hash(bytes)),
+                geo_sig: dedupe::geo_signature(&mesh),
+            };
+            let (reply_tx, reply_rx) = bounded(1);
+            render_tx.send((mesh, reply_tx)).map_err(|_| Failure::Transient("renderer stopped".into()))?;
+            let image = reply_rx
+                .recv()
+                .map_err(|_| Failure::Transient("renderer stopped".into()))?
+                .map_err(Failure::Transient)?;
+            Ok(Thumbnail { image, meta })
+        }
+        Kind::Image => {
+            let image = loaders::image::thumbnail(bytes, THUMB_PX).map_err(|e| Failure::Permanent(e.to_string()))?;
+            Ok(Thumbnail { image, meta: ThumbMeta::default() })
+        }
+        other => Err(Failure::Permanent(format!("no thumbnail support for {other:?}"))),
+    }
+}
+
+fn gpu_thread(requests: Receiver<RenderRequest>) {
+    let gpu = HeadlessRenderer::new().map_err(|e| e.to_string());
+    match &gpu {
+        Ok(gpu) => log::info!("thumbnail GPU: {} ({:?})", gpu.adapter_info.name, gpu.adapter_info.backend),
+        Err(e) => log::error!("no GPU for thumbnails: {e}"),
+    }
+    let view = ViewParams::default();
+    for (mesh, reply) in requests {
+        let result = match &gpu {
+            Ok(gpu) => gpu.render(&mesh, THUMB_PX, &view).map_err(|e| e.to_string()),
+            Err(e) => Err(e.clone()),
+        };
+        drop(mesh); // free large meshes before the next one arrives
+        let _ = reply.send(result);
+    }
+}
+
+fn ready(key: String, thumb: Thumbnail) -> ThumbResult {
+    let size = [thumb.image.width() as usize, thumb.image.height() as usize];
+    let image = egui::ColorImage::from_rgba_unmultiplied(size, thumb.image.as_raw());
+    ThumbResult::Ready { key, image, meta: thumb.meta }
+}
+
+fn spawn(name: &str, f: impl FnOnce() + Send + 'static) {
+    thread::Builder::new().name(name.into()).spawn(f).expect("spawning a thread");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shared_with(items: &[(&str, Stage, bool)]) -> Shared {
+        let items = items
+            .iter()
+            .enumerate()
+            .map(|(order, &(key, stage, visible))| Queued {
+                job: Job { key: key.into(), path: key.into(), kind: Kind::Stl },
+                stage,
+                order,
+                visible,
+            })
+            .collect();
+        Shared {
+            queue: Mutex::new(Queue { items, shutdown: false }),
+            wake: Condvar::new(),
+            generation: AtomicU64::new(0),
+            done: AtomicUsize::new(0),
+            total: AtomicUsize::new(0),
+            started: Mutex::new(std::time::Instant::now()),
+        }
+    }
+
+    fn pop_keys(shared: &Shared, stage: Stage, n: usize) -> Vec<String> {
+        (0..n).map(|_| shared.pop(stage).unwrap().0.job.key).collect()
+    }
+
+    #[test]
+    fn visible_jobs_first_then_folder_order() {
+        let shared = shared_with(&[
+            ("a", Stage::Lookup, false),
+            ("b", Stage::Lookup, false),
+            ("c", Stage::Lookup, true),
+            ("d", Stage::Generate, true),
+            ("e", Stage::Lookup, true),
+        ]);
+        assert_eq!(pop_keys(&shared, Stage::Lookup, 4), ["c", "e", "a", "b"]);
+        assert_eq!(pop_keys(&shared, Stage::Generate, 1), ["d"]);
+    }
+
+    #[test]
+    fn stale_requeue_is_dropped() {
+        let shared = shared_with(&[("a", Stage::Lookup, false)]);
+        let (item, generation) = shared.pop(Stage::Lookup).unwrap();
+        shared.generation.fetch_add(1, Ordering::SeqCst); // user opened another folder meanwhile
+        shared.requeue(item, generation, Stage::Generate);
+        assert!(shared.queue.lock().unwrap().items.is_empty());
+    }
+}

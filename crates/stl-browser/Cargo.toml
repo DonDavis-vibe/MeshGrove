@@ -19,3 +19,7 @@ env_logger.workspace = true
 anyhow.workspace = true
 rust-i18n.workspace = true
 sys-locale.workspace = true
+chrono.workspace = true
+crossbeam-channel.workspace = true
+image.workspace = true
+dirs.workspace = true

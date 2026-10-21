@@ -58,21 +58,9 @@ pub fn geo_signature(mesh: &Mesh) -> Option<String> {
             *e = 0.0;
         }
     }
-    let volume = if volume.abs() < 1e-6 * area.powf(1.5) {
-        0.0
-    } else {
-        volume.abs()
-    };
+    let volume = if volume.abs() < 1e-6 * area.powf(1.5) { 0.0 } else { volume.abs() };
 
-    Some(format!(
-        "{}|{:.3e}|{:.3e}|{:.3e},{:.3e},{:.3e}",
-        mesh.triangle_count(),
-        area,
-        volume,
-        eig[0],
-        eig[1],
-        eig[2]
-    ))
+    Some(format!("{}|{:.3e}|{:.3e}|{:.3e},{:.3e},{:.3e}", mesh.triangle_count(), area, volume, eig[0], eig[1], eig[2]))
 }
 
 fn outer(v: DVec3) -> DMat3 {
@@ -127,10 +115,7 @@ mod tests {
     fn identical_bytes_identical_hash() {
         let bytes = stl::write_binary(&box_mesh(20.0, 10.0, 5.0), "a");
         assert_eq!(content_hash(&bytes), content_hash(&bytes.clone()));
-        assert_ne!(
-            content_hash(&bytes),
-            content_hash(&stl::write_binary(&box_mesh(20.0, 10.0, 5.0), "b"))
-        );
+        assert_ne!(content_hash(&bytes), content_hash(&stl::write_binary(&box_mesh(20.0, 10.0, 5.0), "b")));
     }
 
     #[test]
@@ -146,16 +131,9 @@ mod tests {
     fn moved_and_rotated_copies_match() {
         let m = box_mesh(20.0, 10.0, 5.0);
         let sig = geo_signature(&m).unwrap();
-        let rot90 = transformed(
-            &m,
-            Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
-            Vec3::new(100.0, -50.0, 3.0),
-        );
-        let rot_odd = transformed(
-            &m,
-            Quat::from_axis_angle(Vec3::new(1.0, 2.0, 0.5).normalize(), 0.65),
-            Vec3::splat(7.0),
-        );
+        let rot90 = transformed(&m, Quat::from_rotation_z(std::f32::consts::FRAC_PI_2), Vec3::new(100.0, -50.0, 3.0));
+        let rot_odd =
+            transformed(&m, Quat::from_axis_angle(Vec3::new(1.0, 2.0, 0.5).normalize(), 0.65), Vec3::splat(7.0));
         assert_eq!(geo_signature(&rot90).unwrap(), sig);
         assert_eq!(geo_signature(&rot_odd).unwrap(), sig);
     }
@@ -174,19 +152,12 @@ mod tests {
     fn slightly_scaled_or_different_shapes_do_not_match() {
         let m = box_mesh(20.0, 10.0, 5.0);
         assert_ne!(geo_signature(&box_mesh(20.2, 10.1, 5.05)), geo_signature(&m));
-        assert_ne!(
-            geo_signature(&box_mesh(20.0, 5.0, 10.0).clone()),
-            geo_signature(&box_mesh(20.0, 20.0, 2.5))
-        );
+        assert_ne!(geo_signature(&box_mesh(20.0, 5.0, 10.0).clone()), geo_signature(&box_mesh(20.0, 20.0, 2.5)));
     }
 
     #[test]
     fn eigenvalues_of_known_matrix() {
-        let m = DMat3::from_cols(
-            DVec3::new(2.0, 1.0, 0.0),
-            DVec3::new(1.0, 2.0, 0.0),
-            DVec3::new(0.0, 0.0, 5.0),
-        );
+        let m = DMat3::from_cols(DVec3::new(2.0, 1.0, 0.0), DVec3::new(1.0, 2.0, 0.0), DVec3::new(0.0, 0.0, 5.0));
         let e = symmetric_eigenvalues(m);
         for (got, want) in e.iter().zip([1.0, 3.0, 5.0]) {
             assert!((got - want).abs() < 1e-9, "{e:?}");

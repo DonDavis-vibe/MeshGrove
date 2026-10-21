@@ -8,11 +8,7 @@ const HEADER_LEN: usize = 80;
 const RECORD_LEN: usize = 50;
 
 pub fn parse(bytes: &[u8]) -> Result<Mesh, LoadError> {
-    let mesh = if looks_binary(bytes) {
-        parse_binary(bytes)?
-    } else {
-        parse_ascii(bytes)?
-    };
+    let mesh = if looks_binary(bytes) { parse_binary(bytes)? } else { parse_ascii(bytes)? };
     if mesh.is_empty() {
         return Err(LoadError::Empty);
     }
@@ -50,10 +46,7 @@ fn parse_binary(bytes: &[u8]) -> Result<Mesh, LoadError> {
             positions.push([f(0), f(4), f(8)]);
         }
     }
-    Ok(Mesh {
-        positions,
-        indices: None,
-    })
+    Ok(Mesh { positions, indices: None })
 }
 
 fn parse_ascii(bytes: &[u8]) -> Result<Mesh, LoadError> {
@@ -64,9 +57,7 @@ fn parse_ascii(bytes: &[u8]) -> Result<Mesh, LoadError> {
             continue;
         }
         let mut coord = || -> Result<f32, LoadError> {
-            let t = tokens
-                .next()
-                .ok_or_else(|| LoadError::Malformed("vertex with fewer than 3 coordinates".into()))?;
+            let t = tokens.next().ok_or_else(|| LoadError::Malformed("vertex with fewer than 3 coordinates".into()))?;
             fast_float2::parse(t)
                 .map_err(|_| LoadError::Malformed(format!("bad number {:?}", String::from_utf8_lossy(t))))
         };
@@ -74,10 +65,7 @@ fn parse_ascii(bytes: &[u8]) -> Result<Mesh, LoadError> {
     }
     // Drop a dangling partial facet instead of rejecting the whole file.
     positions.truncate(positions.len() / 3 * 3);
-    Ok(Mesh {
-        positions,
-        indices: None,
-    })
+    Ok(Mesh { positions, indices: None })
 }
 
 /// Binary STL bytes for any mesh (used for the STEP mesh cache and test fixtures).
@@ -122,10 +110,7 @@ mod tests {
 
     fn cube_soup() -> Mesh {
         let cube = Mesh::cube(20.0);
-        Mesh {
-            positions: cube.to_soup(),
-            indices: None,
-        }
+        Mesh { positions: cube.to_soup(), indices: None }
     }
 
     #[test]
@@ -154,10 +139,7 @@ mod tests {
     fn ascii_with_scientific_notation_and_crlf() {
         let text = "solid x\r\nfacet normal 0 0 1\r\nouter loop\r\nvertex 0 0 0\r\nvertex 1.5e1 0 0\r\nvertex 0 -2E0 0\r\nendloop\r\nendfacet\r\nendsolid x\r\n";
         let mesh = parse(text.as_bytes()).unwrap();
-        assert_eq!(
-            mesh.positions,
-            vec![[0.0, 0.0, 0.0], [15.0, 0.0, 0.0], [0.0, -2.0, 0.0]]
-        );
+        assert_eq!(mesh.positions, vec![[0.0, 0.0, 0.0], [15.0, 0.0, 0.0], [0.0, -2.0, 0.0]]);
     }
 
     #[test]

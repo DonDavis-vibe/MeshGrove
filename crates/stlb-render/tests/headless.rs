@@ -34,10 +34,7 @@ fn cube_fills_and_centres_the_thumbnail() {
     let img = gpu.render(&Mesh::cube(20.0), 128, &ViewParams::default()).unwrap();
     let (cov, center) = coverage(&img);
     assert!((0.2..0.8).contains(&cov), "coverage {cov}");
-    assert!(
-        (center[0] - 0.5).abs() < 0.05 && (center[1] - 0.5).abs() < 0.05,
-        "centre {center:?}"
-    );
+    assert!((center[0] - 0.5).abs() < 0.05 && (center[1] - 0.5).abs() < 0.05, "centre {center:?}");
     // Corners stay transparent.
     assert_eq!(img.get_pixel(0, 0)[3], 0);
 }
@@ -52,8 +49,5 @@ fn long_thin_model_is_framed_too() {
     let img = gpu.render(&rod, 128, &ViewParams::default()).unwrap();
     let (cov, center) = coverage(&img);
     assert!(cov > 0.01, "rod must be visible, coverage {cov}");
-    assert!(
-        (center[0] - 0.5).abs() < 0.05 && (center[1] - 0.5).abs() < 0.05,
-        "centre {center:?}"
-    );
+    assert!((center[0] - 0.5).abs() < 0.05 && (center[1] - 0.5).abs() < 0.05, "centre {center:?}");
 }

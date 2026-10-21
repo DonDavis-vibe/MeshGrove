@@ -77,15 +77,8 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new(device: &wgpu::Device, adapter: &wgpu::Adapter) -> Renderer {
-        let sample_count = if adapter
-            .get_texture_format_features(COLOR_FORMAT)
-            .flags
-            .sample_count_supported(4)
-        {
-            4
-        } else {
-            1
-        };
+        let sample_count =
+            if adapter.get_texture_format_features(COLOR_FORMAT).flags.sample_count_supported(4) { 4 } else { 1 };
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("stlb mesh shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mesh.wgsl").into()),
@@ -134,10 +127,7 @@ impl Renderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: wgpu::MultisampleState {
-                count: sample_count,
-                ..Default::default()
-            },
+            multisample: wgpu::MultisampleState { count: sample_count, ..Default::default() },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
@@ -151,41 +141,11 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
-        Renderer {
-            pipeline,
-            bind_group_layout,
-            sample_count,
-        }
+        Renderer { pipeline, bind_group_layout, sample_count }
     }
 
     pub fn upload(&self, device: &wgpu::Device, mesh: &Mesh) -> Option<GpuMesh> {
-        let bounds = mesh.bounds()?;
-        let center = bounds.center();
-        let soup: Vec<[f32; 3]> = mesh
-            .to_soup()
-            .into_iter()
-            .map(|p| (Vec3::from(p) - center).to_array())
-            .collect();
-        let verts_per_chunk = (MAX_CHUNK_BYTES / 12) / 3 * 3;
-        let chunks = soup
-            .chunks(verts_per_chunk)
-            .map(|chunk| {
-                let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("stlb mesh vertices"),
-                    contents: bytemuck::cast_slice(chunk),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-                (buffer, chunk.len() as u32)
-            })
-            .collect();
-        Some(GpuMesh {
-            chunks,
-            bounds: Aabb {
-                min: bounds.min - center,
-                max: bounds.max - center,
-            },
-            triangle_count: mesh.triangle_count(),
-        })
+        upload_mesh(device, mesh)
     }
 
     /// `extra_usage` lets callers add e.g. `COPY_SRC` (readback) or `TEXTURE_BINDING` (egui).
@@ -196,11 +156,7 @@ impl Renderer {
         height: u32,
         extra_usage: wgpu::TextureUsages,
     ) -> RenderTarget {
-        let size = wgpu::Extent3d {
-            width: width.max(1),
-            height: height.max(1),
-            depth_or_array_layers: 1,
-        };
+        let size = wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 };
         let texture = |label, format, samples, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -213,28 +169,13 @@ impl Renderer {
                 view_formats: &[],
             })
         };
-        let color = texture(
-            "stlb color",
-            COLOR_FORMAT,
-            1,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | extra_usage,
-        );
+        let color = texture("stlb color", COLOR_FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | extra_usage);
         let msaa_view = (self.sample_count > 1).then(|| {
-            texture(
-                "stlb msaa",
-                COLOR_FORMAT,
-                self.sample_count,
-                wgpu::TextureUsages::RENDER_ATTACHMENT,
-            )
-            .create_view(&Default::default())
+            texture("stlb msaa", COLOR_FORMAT, self.sample_count, wgpu::TextureUsages::RENDER_ATTACHMENT)
+                .create_view(&Default::default())
         });
-        let depth_view = texture(
-            "stlb depth",
-            DEPTH_FORMAT,
-            self.sample_count,
-            wgpu::TextureUsages::RENDER_ATTACHMENT,
-        )
-        .create_view(&Default::default());
+        let depth_view = texture("stlb depth", DEPTH_FORMAT, self.sample_count, wgpu::TextureUsages::RENDER_ATTACHMENT)
+            .create_view(&Default::default());
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("stlb uniforms"),
             size: std::mem::size_of::<Uniforms>() as u64,
@@ -244,10 +185,7 @@ impl Renderer {
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("stlb uniforms"),
             layout: &self.bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniforms.as_entire_binding(),
-            }],
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() }],
         });
         RenderTarget {
             width: size.width,
@@ -295,19 +233,12 @@ impl Renderer {
                 resolve_target: resolve,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(clear),
-                    store: if resolve.is_some() {
-                        wgpu::StoreOp::Discard
-                    } else {
-                        wgpu::StoreOp::Store
-                    },
+                    store: if resolve.is_some() { wgpu::StoreOp::Discard } else { wgpu::StoreOp::Store },
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &target.depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Discard,
-                }),
+                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
                 stencil_ops: None,
             }),
             timestamp_writes: None,
@@ -323,6 +254,30 @@ impl Renderer {
     }
 }
 
+/// Uploads a mesh; needs only the device, so it can run on a background thread.
+pub fn upload_mesh(device: &wgpu::Device, mesh: &Mesh) -> Option<GpuMesh> {
+    let bounds = mesh.bounds()?;
+    let center = bounds.center();
+    let soup: Vec<[f32; 3]> = mesh.to_soup().into_iter().map(|p| (Vec3::from(p) - center).to_array()).collect();
+    let verts_per_chunk = (MAX_CHUNK_BYTES / 12) / 3 * 3;
+    let chunks = soup
+        .chunks(verts_per_chunk)
+        .map(|chunk| {
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("stlb mesh vertices"),
+                contents: bytemuck::cast_slice(chunk),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            (buffer, chunk.len() as u32)
+        })
+        .collect();
+    Some(GpuMesh {
+        chunks,
+        bounds: Aabb { min: bounds.min - center, max: bounds.max - center },
+        triangle_count: mesh.triangle_count(),
+    })
+}
+
 struct Camera {
     eye: Vec3,
     view_proj: Mat4,
@@ -335,10 +290,7 @@ impl Camera {
     /// Places the camera so the model's bounding box fills ~92 % of the view and is centred
     /// on screen, then applies the user's zoom and pan.
     fn fit(bounds: &Aabb, view: &ViewParams, aspect: f32) -> Camera {
-        let (az, el) = (
-            view.azimuth_deg.to_radians(),
-            view.elevation_deg.clamp(-89.5, 89.5).to_radians(),
-        );
+        let (az, el) = (view.azimuth_deg.to_radians(), view.elevation_deg.clamp(-89.5, 89.5).to_radians());
         let to_eye = Vec3::new(el.cos() * az.sin(), -el.cos() * az.cos(), el.sin());
         let forward = -to_eye;
         let right = forward.cross(Vec3::Z).normalize();
@@ -383,13 +335,7 @@ impl Camera {
         // wgpu NDC is Y-up with depth in [0, 1], i.e. the DirectX convention.
         let proj = glam::camera::rh::proj::directx::perspective(FOV_Y_DEG.to_radians(), aspect, near, far);
         let view_m = glam::camera::rh::view::look_at_mat4(eye, target, up);
-        Camera {
-            eye,
-            view_proj: proj * view_m,
-            right,
-            up,
-            forward,
-        }
+        Camera { eye, view_proj: proj * view_m, right, up, forward }
     }
 
     fn uniforms(&self, view: &ViewParams) -> Uniforms {
@@ -408,9 +354,5 @@ impl Camera {
 }
 
 fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
+    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
 }

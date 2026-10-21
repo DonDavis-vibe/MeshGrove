@@ -27,10 +27,16 @@ blake3 = "1.8"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 pollster = "1.0"
 wgpu = "30"
-egui = "0.37"
 egui-wgpu = "0.37"
-eframe = { version = "0.37", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts", "accesskit"] }
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts", "system_fonts", "accesskit"] }
+egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 rust-i18n = "4.2"
+serde = { version = "1.0", features = ["derive"] }
+toml = "1.1"
+dirs = "7.0"
+png = "0.18"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+crossbeam-channel = "0.5"
 sys-locale = "0.3"
 
 [profile.dev.package."*"]

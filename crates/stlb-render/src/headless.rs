@@ -50,20 +50,13 @@ impl HeadlessRenderer {
             .await
             .map_err(|e| RenderError::Device(e.to_string()))?;
         let renderer = Renderer::new(&device, &adapter);
-        Ok(HeadlessRenderer {
-            device,
-            queue,
-            renderer,
-            adapter_info: adapter.get_info(),
-        })
+        Ok(HeadlessRenderer { device, queue, renderer, adapter_info: adapter.get_info() })
     }
 
     /// Renders `mesh` into a `size`×`size` image with straight (non-premultiplied) alpha.
     pub fn render(&self, mesh: &Mesh, size: u32, view: &ViewParams) -> Result<RgbaImage, RenderError> {
         let gpu_mesh = self.renderer.upload(&self.device, mesh).ok_or(RenderError::EmptyMesh)?;
-        let target = self
-            .renderer
-            .create_target(&self.device, size, size, wgpu::TextureUsages::COPY_SRC);
+        let target = self.renderer.create_target(&self.device, size, size, wgpu::TextureUsages::COPY_SRC);
 
         // Rows in a texture→buffer copy must be padded to 256 bytes.
         let unpadded = target.width * 4;
@@ -75,9 +68,8 @@ impl HeadlessRenderer {
             mapped_at_creation: false,
         });
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("stlb thumbnail"),
-        });
+        let mut encoder =
+            self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("stlb thumbnail") });
         self.renderer.draw(&self.queue, &mut encoder, &target, &gpu_mesh, view);
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
@@ -88,17 +80,9 @@ impl HeadlessRenderer {
             },
             wgpu::TexelCopyBufferInfo {
                 buffer: &readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded),
-                    rows_per_image: None,
-                },
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: None },
             },
-            wgpu::Extent3d {
-                width: target.width,
-                height: target.height,
-                depth_or_array_layers: 1,
-            },
+            wgpu::Extent3d { width: target.width, height: target.height, depth_or_array_layers: 1 },
         );
         self.queue.submit([encoder.finish()]);
 
@@ -106,18 +90,14 @@ impl HeadlessRenderer {
         readback.map_async(wgpu::MapMode::Read, .., move |result| {
             let _ = tx.send(result);
         });
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| RenderError::Readback(e.to_string()))?;
+        self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| RenderError::Readback(e.to_string()))?;
         rx.recv()
             .map_err(|e| RenderError::Readback(e.to_string()))?
             .map_err(|e| RenderError::Readback(e.to_string()))?;
 
         let mut pixels = Vec::with_capacity((unpadded * target.height) as usize);
         {
-            let data = readback
-                .get_mapped_range(..)
-                .map_err(|e| RenderError::Readback(e.to_string()))?;
+            let data = readback.get_mapped_range(..).map_err(|e| RenderError::Readback(e.to_string()))?;
             for row in data.chunks_exact(padded as usize) {
                 pixels.extend_from_slice(&row[..unpadded as usize]);
             }

@@ -45,11 +45,7 @@ impl Mesh {
     pub fn triangle(&self, i: usize) -> [Vec3; 3] {
         let p = |k: usize| Vec3::from(self.positions[k]);
         match &self.indices {
-            Some(idx) => [
-                p(idx[3 * i] as usize),
-                p(idx[3 * i + 1] as usize),
-                p(idx[3 * i + 2] as usize),
-            ],
+            Some(idx) => [p(idx[3 * i] as usize), p(idx[3 * i + 1] as usize), p(idx[3 * i + 2] as usize)],
             None => [p(3 * i), p(3 * i + 1), p(3 * i + 2)],
         }
     }
@@ -102,10 +98,7 @@ impl Mesh {
             1, 2, 6,  1, 6, 5, // right (+X)
             3, 0, 4,  3, 4, 7, // left (-X)
         ];
-        Mesh {
-            positions,
-            indices: Some(indices),
-        }
+        Mesh { positions, indices: Some(indices) }
     }
 }
 
@@ -120,20 +113,14 @@ mod tests {
         let b = cube.bounds().unwrap();
         assert_eq!(b.size(), Vec3::splat(10.0));
         assert_eq!(b.center(), Vec3::splat(5.0));
-        let soup = Mesh {
-            positions: cube.to_soup(),
-            indices: None,
-        };
+        let soup = Mesh { positions: cube.to_soup(), indices: None };
         assert_eq!(soup.triangle_count(), 12);
         assert_eq!(soup.triangle(3), cube.triangle(3));
     }
 
     #[test]
     fn bounds_ignore_non_finite_vertices() {
-        let mesh = Mesh {
-            positions: vec![[0.0, 0.0, 0.0], [f32::NAN, 1.0, 1.0], [2.0, 3.0, 4.0]],
-            indices: None,
-        };
+        let mesh = Mesh { positions: vec![[0.0, 0.0, 0.0], [f32::NAN, 1.0, 1.0], [2.0, 3.0, 4.0]], indices: None };
         let b = mesh.bounds().unwrap();
         assert_eq!(b.max, Vec3::new(2.0, 3.0, 4.0));
         assert!(Mesh::default().bounds().is_none());

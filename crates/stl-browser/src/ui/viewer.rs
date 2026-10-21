@@ -13,12 +13,7 @@ pub struct ModelViewer {
 
 impl ModelViewer {
     pub fn new() -> ModelViewer {
-        ModelViewer {
-            mesh: None,
-            target: None,
-            view: ViewParams::default(),
-            dirty: true,
-        }
+        ModelViewer { mesh: None, target: None, view: ViewParams::default(), dirty: true }
     }
 
     pub fn set_mesh(&mut self, mesh: Option<GpuMesh>) {
@@ -46,10 +41,7 @@ impl ModelViewer {
             return;
         };
         let ppp = ui.ctx().pixels_per_point();
-        let (w, h) = (
-            (rect.width() * ppp).round() as u32,
-            (rect.height() * ppp).round() as u32,
-        );
+        let (w, h) = ((rect.width() * ppp).round() as u32, (rect.height() * ppp).round() as u32);
         if w < 8 || h < 8 {
             return;
         }
@@ -82,9 +74,7 @@ impl ModelViewer {
         if self.dirty {
             let mut encoder = render_state
                 .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("stlb viewer"),
-                });
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("stlb viewer") });
             renderer.draw(&render_state.queue, &mut encoder, target, mesh, &self.view);
             render_state.queue.submit([encoder.finish()]);
             self.dirty = false;

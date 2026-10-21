@@ -9,11 +9,7 @@ pub enum Lang {
 
 impl Lang {
     fn from_tag(tag: &str) -> Lang {
-        if tag.to_ascii_lowercase().starts_with("en") {
-            Lang::En
-        } else {
-            Lang::De
-        }
+        if tag.to_ascii_lowercase().starts_with("en") { Lang::En } else { Lang::De }
     }
 
     fn code(self) -> &'static str {
@@ -38,10 +34,7 @@ impl Lang {
 
 /// `override_tag` comes from the settings ("de"/"en"); `None` follows the system locale.
 pub fn init(override_tag: Option<&str>) {
-    let tag = override_tag
-        .map(str::to_owned)
-        .or_else(sys_locale::get_locale)
-        .unwrap_or_default();
+    let tag = override_tag.map(str::to_owned).or_else(sys_locale::get_locale).unwrap_or_default();
     rust_i18n::set_locale(Lang::from_tag(&tag).code());
 }
 
@@ -58,6 +51,13 @@ pub fn count(n: usize) -> String {
 /// "1,4 MB" (de) / "1.4 MB" (en), decimal units like Dolphin.
 pub fn file_size(bytes: u64) -> String {
     file_size_in(Lang::current(), bytes)
+}
+
+/// "21.10.2026 14:05" (de) / "2026-10-21 14:05" (en), local time.
+pub fn datetime(time: std::time::SystemTime) -> String {
+    let local: chrono::DateTime<chrono::Local> = time.into();
+    let pattern = if Lang::current() == Lang::De { "%d.%m.%Y %H:%M" } else { "%Y-%m-%d %H:%M" };
+    local.format(pattern).to_string()
 }
 
 /// "20,0 × 10,0 × 5,0 mm"
@@ -136,15 +136,7 @@ mod tests {
         };
         let de = keys(include_str!("../locales/de.yml"));
         let en = keys(include_str!("../locales/en.yml"));
-        assert_eq!(
-            de.difference(&en).collect::<Vec<_>>(),
-            Vec::<&String>::new(),
-            "missing in en.yml"
-        );
-        assert_eq!(
-            en.difference(&de).collect::<Vec<_>>(),
-            Vec::<&String>::new(),
-            "missing in de.yml"
-        );
+        assert_eq!(de.difference(&en).collect::<Vec<_>>(), Vec::<&String>::new(), "missing in en.yml");
+        assert_eq!(en.difference(&de).collect::<Vec<_>>(), Vec::<&String>::new(), "missing in de.yml");
     }
 }
