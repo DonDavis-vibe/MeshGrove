@@ -109,6 +109,13 @@ ersten Modelle. Du findest dich also über das Bild zurecht, statt Namen zu lese
 
 ![Ordner-Mosaike einer Modellbibliothek](docs/images/screenshot-folders.png)
 
+**Modelle in ihren Farben.** Mehrfarbige 3MF-Projekte zeigen das Filament jedes Teils und ihre
+bemalten Flächen, einfache 3MF-Dateien ihre Materialfarben, OBJ, PLY und glTF ihre
+Vertex-Farben und Texturen. Kacheln bekommen einen Punkt pro Filament, die Details nennen Slot
+und Material.
+
+![Ein bemaltes 3MF-Logo im Viewer mit seinen zwei Filamenten, daneben eine texturierte GLB und 3MF-Kacheln mit Filamentpunkten](docs/images/screenshot-colours.png)
+
 **Eine Suche für die ganze Bibliothek.** Hier findet `body` jedes Modell mit „body“ im Namen,
 aus vier verschiedenen Ordnern.
 

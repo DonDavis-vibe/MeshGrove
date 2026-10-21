@@ -108,6 +108,12 @@ models, so you can navigate by looking instead of reading names.
 
 ![Folder mosaics of a model library](docs/images/screenshot-folders.png)
 
+**Models in their colours.** Multi-colour 3MF projects show the filament of every part and
+their painted areas, plain 3MF files their material colours, and OBJ, PLY and glTF their vertex
+colours and textures. Tiles get a dot per filament; the details list slot and material.
+
+![A painted 3MF logo in the viewer with its two filaments, next to a textured GLB and 3MF tiles with filament dots](docs/images/screenshot-colours.png)
+
 **One search for the whole library.** Here `body` finds every model with "body" in its name,
 from four different folders.
 
