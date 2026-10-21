@@ -409,7 +409,9 @@ impl App {
                     }
                 }
                 LibEvent::Pending(jobs) => {
-                    log::info!("{} library files need thumbnails/facts", jobs.len());
+                    if !jobs.is_empty() {
+                        log::info!("{} library files need thumbnails/facts", jobs.len());
+                    }
                     self.thumbs.set_background(jobs);
                     self.duplicates_due = Some(Instant::now());
                     self.tags_dirty = true;
