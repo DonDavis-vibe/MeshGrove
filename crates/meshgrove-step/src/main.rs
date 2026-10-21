@@ -4,7 +4,9 @@
 //! loses that one preview. Exit codes: 1 usage, 2 unreadable STEP, 3 no shape, 4 empty shape,
 //! 5 meshing failed, 6 cannot write STL, 7/8 OpenCascade exception, 10 built without OpenCascade.
 
-use std::ffi::{CString, c_char, c_int};
+#[cfg(not(no_occt))]
+use std::ffi::{CString, c_char};
+use std::ffi::c_int;
 use std::process::ExitCode;
 
 #[cfg(not(no_occt))]

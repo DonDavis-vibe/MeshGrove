@@ -676,18 +676,12 @@ mod tests {
     fn search_by_words_folder_and_kind() {
         let lib = library();
         assert_eq!(names(&lib.search(&query::parse("knig"), 50).unwrap()), ["Knight.stl"]);
-        assert_eq!(
-            names(&lib.search(&query::parse("minis"), 50).unwrap()),
-            ["box_lid.3mf", "Knight.stl", "photo.jpg"]
-        );
+        assert_eq!(names(&lib.search(&query::parse("minis"), 50).unwrap()), ["box_lid.3mf", "Knight.stl", "photo.jpg"]);
         assert_eq!(names(&lib.search(&query::parse("minis ext:3mf"), 50).unwrap()), ["box_lid.3mf"]);
         // "_" is a literal underscore, not a LIKE wildcard; the root's own name is not searchable.
         assert_eq!(names(&lib.search(&query::parse("x_lid"), 50).unwrap()), ["box_lid.3mf"]);
         assert!(lib.search(&query::parse("3d_druck"), 50).unwrap().is_empty());
-        assert_eq!(
-            lib.search(&query::parse("knig"), 50).unwrap()[0].path,
-            Path::new("/lib/3D_druck/minis/Knight.stl")
-        );
+        assert_eq!(lib.search(&query::parse("knig"), 50).unwrap()[0].path, Path::new("/lib/3D_druck/minis/Knight.stl"));
     }
 
     #[test]
@@ -769,10 +763,7 @@ mod tests {
             root,
             minis,
             9,
-            &[
-                file("/lib/3D_druck/minis", "Knight_v2.stl", 100, 1),
-                file("/lib/3D_druck/minis", "box_lid.3mf", 50, 1),
-            ],
+            &[file("/lib/3D_druck/minis", "Knight_v2.stl", 100, 1), file("/lib/3D_druck/minis", "box_lid.3mf", 50, 1)],
             &[],
         )
         .unwrap();
@@ -800,11 +791,7 @@ mod tests {
         assert_eq!(lib.notes_of(&knight).unwrap(), (Some("0,12 mm Schichthöhe, Tree-Support".into()), false));
         let both = [minis.join("Knight.stl"), minis.join("box_lid.3mf")];
         assert_eq!(lib.notes_of(&both).unwrap(), (None, true));
-        assert_eq!(
-            names(&lib.search(&query::parse("schichthöhe"), 9).unwrap()),
-            ["Knight.stl"],
-            "found via the note"
-        );
+        assert_eq!(names(&lib.search(&query::parse("schichthöhe"), 9).unwrap()), ["Knight.stl"], "found via the note");
 
         let data = lib.export_user_data().unwrap();
         assert_eq!(data.entries.len(), 1);
@@ -831,10 +818,7 @@ mod tests {
             root,
             other,
             1,
-            &[
-                file("/lib/3D_druck/copies", "Knight.stl", 100, 1),
-                file("/lib/3D_druck/copies", "knight.3mf", 30, 1),
-            ],
+            &[file("/lib/3D_druck/copies", "Knight.stl", 100, 1), file("/lib/3D_druck/copies", "knight.3mf", 30, 1)],
             &[],
         )
         .unwrap();

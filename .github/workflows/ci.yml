@@ -37,9 +37,12 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install libarchive pkg-config
 
+      # libarchive takes ~25 minutes to build; the cache is saved right away so that a later
+      # failing step does not throw the build away.
       - name: vcpkg cache (Windows)
+        id: vcpkg-cache
         if: runner.os == 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: C:/vcpkg/installed
           key: vcpkg-libarchive-x64-windows-static-md-v1
@@ -50,6 +53,12 @@ jobs:
           echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
           echo "VCPKGRS_TRIPLET=x64-windows-static-md" >> "$GITHUB_ENV"
           "$VCPKG_INSTALLATION_ROOT/vcpkg" install libarchive:x64-windows-static-md
+      - name: Save vcpkg cache (Windows)
+        if: runner.os == 'Windows' && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: C:/vcpkg/installed
+          key: vcpkg-libarchive-x64-windows-static-md-v1
 
       - uses: dtolnay/rust-toolchain@stable
         with:

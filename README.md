@@ -96,7 +96,7 @@ What makes it different from other model managers:
 | **Tags and notes** | Tags and notes belong to the file *content*, so they survive renames and moves; the search finds note text too; daily automatic backups; export and import as JSON |
 | **Print bed check** | Reads the printer selected in Anycubic Slicer Next, OrcaSlicer or Bambu Studio (or takes your own build volume) and marks models that only fit when turned (↻ 41°) or are too big (✕) |
 | **Duplicates** | Finds exact copies and the same model saved differently (ASCII vs binary STL, STL vs 3MF, rotated or moved copies), suggests which copy to keep and can move the others to the trash |
-| **Slicer and apps** | "Open in slicer" for one or many models (auto-detects Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer); **Ctrl+C copies the files** for pasting into the file manager or slicer; "show in file manager"; open with the default app |
+| **Slicer and apps** | "Open in slicer" for one or many models (auto-detects Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer), into the slicer window that is already open where the slicer allows it; **Ctrl+C copies the files** for pasting into the file manager or slicer; "show in file manager"; open with the default app |
 | **Desktop integration** | Menu entry, icon, file associations; on Linux the same renderer also provides **thumbnails in Dolphin and file dialogs** |
 | **Languages** | English and German, following the system language (switchable in the settings) |
 
@@ -362,6 +362,12 @@ to the trash* cleans up a group after a confirmation. Tiles everywhere in the ga
   | Linux | Anycubic Slicer Next (in `~/opt/AnycubicSlicer`), OrcaSlicer, PrusaSlicer (system package or Flatpak), Bambu Studio (Flatpak) |
   | Windows | Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer in *Program Files* or the per-user *Programs* folder |
   | macOS | Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer in */Applications* or *~/Applications* |
+
+  **If the slicer is already open**, the files go into that window instead of a new one:
+  Meshgrove hands them to Anycubic Slicer Next and OrcaSlicer over D-Bus on Linux, and starts
+  PrusaSlicer in its single-instance mode. Only when no window is open does a new one start.
+  The status bar says which happened. (On macOS the system passes files to a running app
+  anyway; on Windows a new window opens for now.)
 
   Any other slicer (Cura, Simplify3D, ElegooSlicer, …) can be set in *Settings → Slicer*:
   give it a name, the program and optionally a working folder.

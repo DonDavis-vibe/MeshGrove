@@ -97,7 +97,7 @@ Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 | **Tags und Notizen** | Tags und Notizen hängen am *Inhalt* der Datei und überleben so Umbenennen und Verschieben; die Suche findet auch Notiztext; tägliche automatische Sicherung; Export und Import als JSON |
 | **Druckbett-Check** | Liest den in Anycubic Slicer Next, OrcaSlicer oder Bambu Studio gewählten Drucker (oder deinen eigenen Bauraum) und markiert Modelle, die nur gedreht passen (↻ 41°) oder zu groß sind (✕) |
 | **Duplikate** | Findet exakte Kopien und dasselbe Modell in anderer Form (ASCII- statt Binär-STL, STL statt 3MF, gedrehte oder verschobene Kopien), schlägt vor, welche Kopie bleiben soll, und kann die anderen in den Papierkorb legen |
-| **Slicer und Programme** | „In Slicer öffnen“ für ein oder viele Modelle (erkennt Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer); **Strg+C kopiert die Dateien** zum Einfügen im Dateimanager oder Slicer; „Im Dateimanager zeigen“; Öffnen mit dem Standardprogramm |
+| **Slicer und Programme** | „In Slicer öffnen“ für ein oder viele Modelle (erkennt Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer), ins schon offene Slicer-Fenster, wo der Slicer das erlaubt; **Strg+C kopiert die Dateien** zum Einfügen im Dateimanager oder Slicer; „Im Dateimanager zeigen“; Öffnen mit dem Standardprogramm |
 | **Desktop-Einbindung** | Menüeintrag, Symbol, Dateizuordnungen; unter Linux liefert derselbe Renderer auch **Vorschauen in Dolphin und Dateidialogen** |
 | **Sprachen** | Deutsch und Englisch, folgt der Systemsprache (in den Einstellungen umstellbar) |
 
@@ -372,6 +372,12 @@ Galerie tragen Dateien mit Duplikaten eine `2×`/`3×`-Markierung.
   | Linux | Anycubic Slicer Next (in `~/opt/AnycubicSlicer`), OrcaSlicer, PrusaSlicer (Systempaket oder Flatpak), Bambu Studio (Flatpak) |
   | Windows | Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer unter *Programme* oder im benutzereigenen *Programs*-Ordner |
   | macOS | Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer in */Programme* oder *~/Programme* |
+
+  **Ist der Slicer schon offen**, landen die Dateien in diesem Fenster statt in einem neuen:
+  Anycubic Slicer Next und OrcaSlicer bekommen sie unter Linux über D-Bus, PrusaSlicer wird in
+  seinem Einzelinstanz-Modus gestartet. Nur wenn kein Fenster offen ist, startet ein neues. Die
+  Statusleiste sagt, was passiert ist. (Unter macOS reicht das System Dateien ohnehin an eine
+  laufende App weiter; unter Windows öffnet sich vorerst ein neues Fenster.)
 
   Jeden anderen Slicer (Cura, Simplify3D, ElegooSlicer, …) richtest du unter *Einstellungen →
   Slicer* ein: Name, Programm und auf Wunsch ein Arbeitsordner.
