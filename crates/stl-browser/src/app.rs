@@ -1,20 +1,24 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
+use crossbeam_channel::{Receiver, bounded};
 use egui::{Button, Key, KeyboardShortcut, Modifiers, RichText, Ui};
-use stlb_core::cache::ThumbCache;
-use stlb_core::config::Config;
-use stlb_core::listing;
+use stlb_core::cache::{ThumbCache, ThumbMeta};
+use stlb_core::config::{Config, SortKey};
+use stlb_core::db::Library;
+use stlb_core::listing::{self, Entry};
+use stlb_core::query;
 use stlb_render::Renderer;
 
 use crate::i18n;
+use crate::library::{LibEvent, LibraryService};
 use crate::meshes::{self, MeshState, MeshStore};
 use crate::nav::{Listing, Navigator};
-use crate::thumbs::ThumbService;
+use crate::thumbs::{ThumbResult, ThumbService};
 use crate::ui::details::{self, DetailsContext, ModelStatus};
-use crate::ui::gallery::{Action, Gallery};
+use crate::ui::gallery::{Action, Arrange, Gallery};
 use crate::ui::sidebar::{Sidebar, SidebarAction};
 use crate::ui::turntable::Turntable;
 use crate::ui::viewer::ModelViewer;
@@ -22,15 +26,41 @@ use crate::ui::viewer::ModelViewer;
 /// Wait this long after the selection settles before loading a model into the viewer,
 /// so arrowing through a folder of 200 MB miniatures doesn't load every one of them.
 const VIEWER_DEBOUNCE: Duration = Duration::from_millis(250);
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(150);
 const TILE_RANGE: std::ops::RangeInclusive<f32> = 96.0..=384.0;
+const MAX_RESULTS: usize = 5000;
+/// Texture uploads per frame; more would stutter when a whole folder comes out of the cache at once.
+const UPLOADS_PER_FRAME: usize = 24;
+
+/// What the gallery shows.
+enum View {
+    /// The current folder, as listed by the navigator.
+    Folder,
+    /// Library search results.
+    Search(Vec<Entry>),
+    /// Every file below `root` ("include subfolders"); `None` while the folders are walked.
+    Flatten { root: PathBuf, entries: Option<Vec<Entry>> },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    Folder,
+    Library,
+}
 
 pub struct App {
     config: Config,
     config_error: Option<String>,
     nav: Navigator,
+    view: View,
     sidebar: Sidebar,
     gallery: Gallery,
     thumbs: ThumbService,
+    library: LibraryService,
+    db_path: PathBuf,
+    /// Read connection to the index (search, folder mosaics); the service owns the writer.
+    /// Opened after the first scan has created the index.
+    index: Option<Library>,
     renderer: Renderer,
     viewer: ModelViewer,
     model: ModelStatus,
@@ -42,8 +72,12 @@ pub struct App {
     /// Build plate shown in the viewer for multi-plate projects (`None` = default plate).
     viewer_plate: Option<usize>,
     last_selected: Option<usize>,
-    filter: String,
-    focus_filter: bool,
+    search: String,
+    scope: Scope,
+    search_changed: Option<Instant>,
+    focus_search: bool,
+    flatten: bool,
+    flatten_rx: Option<Receiver<(PathBuf, Vec<Entry>)>>,
     select_after_load: Option<PathBuf>,
     gpu_name: String,
     rate: RateMeter,
@@ -63,6 +97,8 @@ impl App {
         use_system_ui_font(&cc.egui_ctx);
 
         let cache = ThumbCache::new(ThumbCache::default_location().context("no cache directory")?);
+        let db_path = Library::default_location().context("no data directory")?;
+        let library = LibraryService::start(db_path.clone(), config.library_roots.clone(), cc.egui_ctx.clone());
         let (start_dir, select) = match start {
             Some(p) if p.is_file() => (p.parent().map(Path::to_path_buf).unwrap_or_default(), Some(p)),
             Some(p) => (p, None),
@@ -79,9 +115,13 @@ impl App {
         };
         Ok(App {
             nav: Navigator::new(cc.egui_ctx.clone(), start_dir),
+            view: View::Folder,
             sidebar: Sidebar::new(),
             gallery: Gallery::default(),
             thumbs: ThumbService::new(cc.egui_ctx.clone(), cache),
+            library,
+            db_path,
+            index: None,
             renderer: Renderer::new(&rs.device, &rs.adapter),
             viewer: ModelViewer::new(),
             model: ModelStatus::Idle,
@@ -91,8 +131,12 @@ impl App {
             selection_changed: Instant::now(),
             viewer_plate: None,
             last_selected: None,
-            filter: String::new(),
-            focus_filter: false,
+            search: String::new(),
+            scope: Scope::Folder,
+            search_changed: None,
+            focus_search: false,
+            flatten: false,
+            flatten_rx: None,
             select_after_load: select,
             gpu_name: rs.adapter.get_info().name,
             rate: RateMeter::default(),
@@ -109,27 +153,205 @@ impl App {
         }
     }
 
-    fn selected_entry(&self) -> Option<&listing::Entry> {
-        self.nav.entries().get(self.gallery.selected?)
+    /// The entries the gallery currently shows.
+    fn entries(&self) -> &[Entry] {
+        view_entries(&self.view, &self.nav)
+    }
+
+    fn selected_entry(&self) -> Option<&Entry> {
+        self.entries().get(self.gallery.selected?)
+    }
+
+    fn arrange(&self) -> Arrange {
+        let filter = if self.scope == Scope::Folder { self.search.clone() } else { String::new() };
+        Arrange {
+            filter,
+            only_models: self.config.only_models,
+            sort: self.config.sort_by,
+            descending: self.config.sort_descending,
+        }
+    }
+
+    /// Hands the current entries (and, in folder view, the folders' mosaics) to the gallery.
+    fn refresh_gallery(&mut self, reset: bool) {
+        let entries = self.entries().to_vec();
+        let mut mosaics = HashMap::new();
+        if let (View::Folder, Some(index)) = (&self.view, &self.index) {
+            for (i, e) in entries.iter().enumerate().filter(|(_, e)| e.is_dir()) {
+                let preview = index.folder_preview(&e.path, 4).unwrap_or_default();
+                if !preview.is_empty() {
+                    mosaics.insert(i, preview);
+                }
+            }
+        }
+        self.gallery.show_folders = !matches!(self.view, View::Folder);
+        self.gallery.set_entries(&entries, mosaics, &self.thumbs);
+        if reset {
+            self.gallery.reset_view();
+        }
+        let arrange = self.arrange();
+        self.gallery.apply_filter(&entries, &arrange);
+        if let Some(target) = self.select_after_load.take_if(|t| entries.iter().any(|e| e.path == *t)) {
+            self.gallery.select(entries.iter().position(|e| e.path == target));
+        }
+    }
+
+    fn reapply_filter(&mut self) {
+        let entries = self.entries().to_vec();
+        let arrange = self.arrange();
+        self.gallery.apply_filter(&entries, &arrange);
+    }
+
+    /// Leaves search results (and the search text) before navigating somewhere.
+    fn leave_search(&mut self) {
+        if matches!(self.view, View::Search(_)) || self.scope == Scope::Library {
+            self.search.clear();
+            self.search_changed = None;
+            self.view = View::Folder;
+        }
+    }
+
+    fn navigate(&mut self, path: PathBuf) {
+        self.leave_search();
+        self.nav.open(path);
     }
 
     fn open_entry(&mut self, index: usize) {
-        let Some(entry) = self.nav.entries().get(index).cloned() else {
-            return;
-        };
+        let Some(entry) = self.entries().get(index).cloned() else { return };
         if entry.is_dir() {
-            self.nav.open(entry.path);
+            self.navigate(entry.path);
         } else if let Err(e) = std::process::Command::new("xdg-open").arg(&entry.path).spawn() {
             log::warn!("xdg-open failed: {e}");
         }
     }
 
+    /// Opens the folder containing a search/flatten result, with the file selected.
+    fn show_in_folder(&mut self, index: usize) {
+        let Some(entry) = self.entries().get(index).cloned() else { return };
+        let Some(parent) = entry.path.parent().map(Path::to_path_buf) else { return };
+        self.flatten = false;
+        self.leave_search();
+        self.view = View::Folder;
+        self.select_after_load = Some(entry.path);
+        if parent == self.nav.current() {
+            self.nav.reload();
+        } else {
+            self.nav.open(parent);
+        }
+    }
+
     fn on_listing_arrived(&mut self) {
-        let entries = self.nav.entries().to_vec();
-        self.gallery.set_entries(&entries, &self.thumbs);
-        self.gallery.apply_filter(&entries, &self.filter, self.config.only_models);
-        if let Some(target) = self.select_after_load.take() {
-            self.gallery.selected = entries.iter().position(|e| e.path == target);
+        if matches!(self.view, View::Search(_)) {
+            return; // the folder changed underneath the results; it is shown when the search ends
+        }
+        if self.flatten {
+            self.start_flatten();
+        } else {
+            self.view = View::Folder;
+            self.refresh_gallery(true);
+        }
+    }
+
+    /// Walks every folder below the current one in the background.
+    fn start_flatten(&mut self) {
+        let root = self.nav.current().to_path_buf();
+        self.view = View::Flatten { root: root.clone(), entries: None };
+        self.gallery.set_entries(&[], HashMap::new(), &self.thumbs);
+        let arrange = self.arrange();
+        self.gallery.apply_filter(&[], &arrange);
+        let (tx, rx) = bounded(1);
+        self.flatten_rx = Some(rx);
+        std::thread::Builder::new()
+            .name("flatten".into())
+            .spawn(move || {
+                let mut files = Vec::new();
+                let mut stack = vec![root.clone()];
+                while let Some(dir) = stack.pop() {
+                    for e in listing::list_dir(&dir).unwrap_or_default() {
+                        if e.is_dir() {
+                            stack.push(e.path);
+                        } else if files.len() < MAX_RESULTS {
+                            files.push(e);
+                        }
+                    }
+                }
+                let _ = tx.send((root, files));
+            })
+            .expect("spawning flatten walker");
+    }
+
+    fn poll_flatten(&mut self) {
+        let Some(rx) = &self.flatten_rx else { return };
+        let Ok((root, files)) = rx.try_recv() else { return };
+        self.flatten_rx = None;
+        if let View::Flatten { root: wanted, entries } = &mut self.view
+            && *wanted == root
+        {
+            *entries = Some(files);
+            self.refresh_gallery(true);
+        }
+    }
+
+    fn run_search(&mut self) {
+        if self.search.trim().is_empty() {
+            if matches!(self.view, View::Search(_)) {
+                self.view = View::Folder;
+                self.on_listing_arrived();
+            }
+            return;
+        }
+        let results = match &self.index {
+            Some(index) => index.search(&query::parse(&self.search), MAX_RESULTS).unwrap_or_else(|e| {
+                log::warn!("search failed: {e}");
+                Vec::new()
+            }),
+            None => Vec::new(),
+        };
+        self.view = View::Search(results);
+        self.refresh_gallery(true);
+    }
+
+    /// Moves finished thumbnails into the gallery and their facts into the library index.
+    fn receive_thumbnails(&mut self, ctx: &egui::Context) {
+        let mut uploads = 0;
+        while uploads < UPLOADS_PER_FRAME {
+            let Some(result) = self.thumbs.try_recv() else { return };
+            match &result {
+                ThumbResult::Ready { job, image, meta } => {
+                    uploads += usize::from(image.is_some());
+                    self.library.store_meta(job.path.clone(), job.key.clone(), meta.clone());
+                }
+                ThumbResult::Failed { job, .. } => {
+                    self.library.store_meta(job.path.clone(), job.key.clone(), ThumbMeta::default());
+                }
+            }
+            self.gallery.accept(ctx, &result);
+        }
+        ctx.request_repaint(); // budget used up: more results may be waiting
+    }
+
+    fn library_events(&mut self) {
+        while let Some(event) = self.library.try_event() {
+            match event {
+                LibEvent::Scanned { changed } => {
+                    let first = self.index.is_none();
+                    if first {
+                        self.index = Library::open_reader(&self.db_path);
+                    }
+                    if changed.is_empty() && !first {
+                        continue; // periodic safety-net scan found nothing new
+                    }
+                    if changed.iter().any(|d| d == self.nav.current()) {
+                        self.nav.reload();
+                    } else if matches!(self.view, View::Folder) {
+                        self.refresh_gallery(false); // the index may now know the folders' contents
+                    }
+                }
+                LibEvent::Pending(jobs) => {
+                    log::info!("{} library files need thumbnails/facts", jobs.len());
+                    self.thumbs.set_background(jobs);
+                }
+            }
         }
     }
 
@@ -185,20 +407,28 @@ impl App {
         let typing = ctx.egui_wants_keyboard_input();
         let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
         if pressed(Modifiers::ALT, Key::ArrowLeft) {
+            self.leave_search();
             self.nav.back();
         }
         if pressed(Modifiers::ALT, Key::ArrowRight) {
+            self.leave_search();
             self.nav.forward();
         }
         if pressed(Modifiers::ALT, Key::ArrowUp) || (!typing && pressed(Modifiers::NONE, Key::Backspace)) {
+            self.leave_search();
             self.nav.up();
         }
         if pressed(Modifiers::NONE, Key::F5) {
             self.nav.reload();
             self.sidebar.refresh();
         }
+        if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::F) {
+            self.set_scope(Scope::Library);
+            self.focus_search = true;
+        }
         if pressed(Modifiers::COMMAND, Key::F) {
-            self.focus_filter = true;
+            self.set_scope(Scope::Folder);
+            self.focus_search = true;
         }
         if pressed(Modifiers::COMMAND, Key::Plus) || pressed(Modifiers::COMMAND, Key::Equals) {
             self.config.tile_size = (self.config.tile_size + 32.0).min(*TILE_RANGE.end());
@@ -208,18 +438,39 @@ impl App {
         }
     }
 
+    fn set_scope(&mut self, scope: Scope) {
+        if self.scope == scope {
+            return;
+        }
+        self.scope = scope;
+        match scope {
+            Scope::Library => self.search_changed = Some(Instant::now() - SEARCH_DEBOUNCE),
+            Scope::Folder => {
+                if matches!(self.view, View::Search(_)) {
+                    self.view = View::Folder;
+                    self.on_listing_arrived();
+                } else {
+                    self.reapply_filter();
+                }
+            }
+        }
+    }
+
     fn toolbar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             let nav_button = |ui: &mut Ui, icon: &str, enabled: bool, tip: std::borrow::Cow<str>| {
                 ui.add_enabled(enabled, Button::new(RichText::new(icon).size(16.0))).on_hover_text(tip).clicked()
             };
             if nav_button(ui, "⬅", self.nav.can_go_back(), t!("nav.back")) {
+                self.leave_search();
                 self.nav.back();
             }
             if nav_button(ui, "➡", self.nav.can_go_forward(), t!("nav.forward")) {
+                self.leave_search();
                 self.nav.forward();
             }
             if nav_button(ui, "⬆", self.nav.can_go_up(), t!("nav.up")) {
+                self.leave_search();
                 self.nav.up();
             }
             if nav_button(ui, "🔄", true, t!("nav.reload")) {
@@ -229,28 +480,8 @@ impl App {
             ui.separator();
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add(egui::Slider::new(&mut self.config.tile_size, TILE_RANGE).show_value(false))
-                    .on_hover_text(t!("gallery.tile_size"));
-                ui.label("🔍");
-                let mut changed = ui.checkbox(&mut self.config.only_models, t!("gallery.only_models")).changed();
-                let filter = ui.add(
-                    egui::TextEdit::singleline(&mut self.filter)
-                        .hint_text(t!("gallery.filter_hint"))
-                        .desired_width(180.0),
-                );
-                if std::mem::take(&mut self.focus_filter) {
-                    filter.request_focus();
-                }
-                if filter.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
-                    self.filter.clear();
-                    filter.surrender_focus();
-                    changed = true;
-                }
-                if changed || filter.changed() {
-                    let entries = self.nav.entries().to_vec();
-                    self.gallery.apply_filter(&entries, &self.filter, self.config.only_models);
-                }
-
+                self.view_menu(ui);
+                self.search_field(ui);
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     egui::ScrollArea::horizontal().id_salt("breadcrumb").show(ui, |ui| self.breadcrumb(ui));
                 });
@@ -258,7 +489,100 @@ impl App {
         });
     }
 
+    /// "Ansicht" menu: sorting, "models only", "include subfolders", tile size.
+    fn view_menu(&mut self, ui: &mut Ui) {
+        let mut changed = false;
+        let mut flatten = self.flatten;
+        ui.menu_button(format!("{} ▾", t!("view.menu")), |ui| {
+            ui.label(RichText::new(t!("gallery.sort")).weak());
+            let names = [
+                (SortKey::Name, t!("sort.name")),
+                (SortKey::Modified, t!("sort.modified")),
+                (SortKey::Size, t!("sort.size")),
+                (SortKey::Type, t!("sort.type")),
+            ];
+            for (key, name) in names {
+                changed |= ui.radio_value(&mut self.config.sort_by, key, name).changed();
+            }
+            changed |= ui.checkbox(&mut self.config.sort_descending, t!("gallery.descending")).changed();
+            ui.separator();
+            changed |= ui.checkbox(&mut self.config.only_models, t!("gallery.only_models")).changed();
+            ui.checkbox(&mut flatten, t!("gallery.flatten")).on_hover_text(t!("gallery.flatten_hint"));
+            ui.separator();
+            ui.label(RichText::new(t!("gallery.tile_size")).weak());
+            ui.add(egui::Slider::new(&mut self.config.tile_size, TILE_RANGE).show_value(false));
+        });
+        if flatten != self.flatten {
+            self.set_flatten(flatten);
+        }
+        if changed {
+            self.reapply_filter();
+        }
+    }
+
+    fn set_flatten(&mut self, on: bool) {
+        self.flatten = on;
+        self.leave_search();
+        if on {
+            self.start_flatten();
+        } else {
+            self.flatten_rx = None;
+            self.view = View::Folder;
+            self.refresh_gallery(true);
+        }
+    }
+
+    fn search_field(&mut self, ui: &mut Ui) {
+        let hint = match self.scope {
+            Scope::Folder => t!("search.folder_hint"),
+            Scope::Library => t!("search.library_hint"),
+        };
+        let field = ui.add(egui::TextEdit::singleline(&mut self.search).hint_text(hint).desired_width(220.0));
+        if std::mem::take(&mut self.focus_search) {
+            field.request_focus();
+        }
+        let mut changed = field.changed();
+        if field.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
+            self.search.clear();
+            field.surrender_focus();
+            changed = true;
+        }
+        let mut scope = self.scope;
+        ui.selectable_value(&mut scope, Scope::Library, "📚").on_hover_text(t!("search.scope_library"));
+        ui.selectable_value(&mut scope, Scope::Folder, "📁").on_hover_text(t!("search.scope_folder"));
+        if scope != self.scope {
+            self.set_scope(scope);
+        }
+        if changed {
+            match self.scope {
+                Scope::Folder => self.reapply_filter(),
+                Scope::Library => self.search_changed = Some(Instant::now()),
+            }
+        }
+    }
+
     fn breadcrumb(&mut self, ui: &mut Ui) {
+        match &self.view {
+            View::Search(results) => {
+                let text = t!("search.results", count = i18n::count(results.len()));
+                ui.label(RichText::new(format!("🔍 {text}")).strong());
+                if ui.button(t!("search.close")).clicked() {
+                    self.leave_search();
+                    self.on_listing_arrived();
+                }
+                return;
+            }
+            View::Flatten { entries, .. } => {
+                let text = match entries {
+                    Some(e) => t!("gallery.flatten_count", count = i18n::count(e.len())),
+                    None => t!("gallery.loading"),
+                };
+                if ui.button(format!("🗂 {text}  ✕")).on_hover_text(t!("gallery.flatten_off")).clicked() {
+                    self.set_flatten(false);
+                }
+            }
+            View::Folder => {}
+        }
         let current = self.nav.current().to_path_buf();
         let parts: Vec<PathBuf> =
             current.ancestors().map(Path::to_path_buf).collect::<Vec<_>>().into_iter().rev().collect();
@@ -273,14 +597,14 @@ impl App {
                 .clicked()
                 && !last
             {
-                self.nav.open(part.clone());
+                self.navigate(part.clone());
             }
         }
     }
 
     fn status_bar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            let entries = self.nav.entries();
+            let entries = self.entries();
             let models = entries.iter().filter(|e| e.kind.is_model()).count();
             ui.label(t!(
                 "status.items",
@@ -305,8 +629,60 @@ impl App {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.weak(t!("status.gpu", name = self.gpu_name));
+                ui.separator();
+                self.library_status(ui);
             });
         });
+    }
+
+    fn library_status(&self, ui: &mut Ui) {
+        if self.config.library_roots.is_empty() {
+            return;
+        }
+        let status = self.library.status();
+        if let Some(error) = &status.error {
+            ui.colored_label(ui.visuals().error_fg_color, t!("library.error", error = error));
+            return;
+        }
+        let c = status.counts;
+        if c.processed < c.processable {
+            ui.weak(t!("library.processing", done = i18n::count(c.processed), total = i18n::count(c.processable)));
+        }
+        ui.weak(t!("library.files", files = i18n::count(c.files), models = i18n::count(c.models)));
+        if status.scanning {
+            ui.spinner().on_hover_text(t!("library.scanning"));
+        }
+    }
+
+    fn central(&mut self, ui: &mut Ui, rs: &egui_wgpu::RenderState) {
+        let message = match (&self.view, &self.nav.listing) {
+            (View::Folder, Listing::Loading) | (View::Flatten { entries: None, .. }, _) => {
+                ui.centered_and_justified(|ui| ui.spinner().on_hover_text(t!("gallery.loading")));
+                return;
+            }
+            (View::Folder, Listing::Error(e)) => Some(t!("error.read_dir", error = e).into_owned()),
+            (View::Search(results), _) if results.is_empty() => {
+                Some(if self.index.is_none() { t!("search.unavailable") } else { t!("search.none") }.into_owned())
+            }
+            _ if self.entries().is_empty() => Some(t!("gallery.empty").into_owned()),
+            _ => None,
+        };
+        if let Some(message) = message {
+            ui.centered_and_justified(|ui| ui.weak(message));
+            return;
+        }
+        let zoom = ui.input(|i| i.zoom_delta());
+        if zoom != 1.0 && ui.ui_contains_pointer() {
+            self.config.tile_size = (self.config.tile_size * zoom).clamp(*TILE_RANGE.start(), *TILE_RANGE.end());
+        }
+        let entries = view_entries(&self.view, &self.nav);
+        let output = self.gallery.show(ui, entries, self.config.tile_size, &self.thumbs);
+        match output.action {
+            Some(Action::Open(index)) => self.open_entry(index),
+            Some(Action::ShowInFolder(index)) => self.show_in_folder(index),
+            None => {}
+        }
+        self.turntable.show(ui, output.hovered, output.viewport, &mut self.meshes, rs, &self.renderer);
     }
 }
 
@@ -317,11 +693,33 @@ impl eframe::App for App {
         if self.nav.poll() {
             self.on_listing_arrived();
         }
-        self.gallery.receive(&ctx, &self.thumbs);
+        self.poll_flatten();
+        self.library_events();
+        self.receive_thumbnails(&ctx);
         self.shortcuts(&ctx);
+        if let Some(changed) = self.search_changed {
+            if changed.elapsed() >= SEARCH_DEBOUNCE {
+                self.search_changed = None;
+                if self.scope == Scope::Library {
+                    self.run_search();
+                }
+            } else {
+                ctx.request_repaint_after(SEARCH_DEBOUNCE);
+            }
+        }
         self.meshes.begin_frame();
         self.update_viewer(&ctx);
         if let Some(hook) = &mut self.screenshot {
+            if hook.flatten && !matches!(self.nav.listing, Listing::Loading) {
+                hook.flatten = false;
+                self.set_flatten(true);
+            }
+            let hook = self.screenshot.as_mut().expect("checked above");
+            if let Some(query) = hook.search.take() {
+                self.scope = Scope::Library;
+                self.search = query;
+                self.search_changed = Some(Instant::now());
+            }
             hook.tick(&ctx);
         }
 
@@ -341,16 +739,18 @@ impl eframe::App for App {
             })
             .inner;
         match sidebar_action {
-            Some(SidebarAction::Navigate(path)) => self.nav.open(path),
+            Some(SidebarAction::Navigate(path)) => self.navigate(path),
             Some(SidebarAction::AddRoot(path)) => {
                 if !self.config.library_roots.contains(&path) {
                     self.config.library_roots.push(path);
                     self.save_config();
+                    self.library.set_roots(self.config.library_roots.clone());
                 }
             }
             Some(SidebarAction::RemoveRoot(path)) => {
                 self.config.library_roots.retain(|r| r != &path);
                 self.save_config();
+                self.library.set_roots(self.config.library_roots.clone());
             }
             None => {}
         }
@@ -358,7 +758,7 @@ impl eframe::App for App {
         let clicked_plate = egui::Panel::right("details")
             .default_size(340.0)
             .show(ui, |ui| {
-                let entry = self.gallery.selected.and_then(|i| self.nav.entries().get(i));
+                let entry = self.gallery.selected.and_then(|i| view_entries(&self.view, &self.nav).get(i));
                 let thumb = self.gallery.selected.and_then(|i| self.gallery.thumb(i));
                 details::show(
                     ui,
@@ -378,44 +778,26 @@ impl eframe::App for App {
             self.viewer_plate = clicked_plate;
         }
 
-        egui::CentralPanel::default().show(ui, |ui| {
-            match &self.nav.listing {
-                Listing::Loading => {
-                    ui.centered_and_justified(|ui| ui.spinner().on_hover_text(t!("gallery.loading")));
-                    return;
-                }
-                Listing::Error(e) => {
-                    let message = t!("error.read_dir", error = e);
-                    ui.centered_and_justified(|ui| ui.colored_label(ui.visuals().error_fg_color, message));
-                    return;
-                }
-                Listing::Ready(entries) if entries.is_empty() => {
-                    ui.centered_and_justified(|ui| ui.weak(t!("gallery.empty")));
-                    return;
-                }
-                Listing::Ready(_) => {}
-            }
-            let zoom = ui.input(|i| i.zoom_delta());
-            if zoom != 1.0 && ui.ui_contains_pointer() {
-                self.config.tile_size = (self.config.tile_size * zoom).clamp(*TILE_RANGE.start(), *TILE_RANGE.end());
-            }
-            let output = self.gallery.show(ui, self.nav.entries(), self.config.tile_size, &self.thumbs);
-            if let Some(Action::Open(index)) = output.action {
-                self.open_entry(index);
-            }
-            self.turntable.show(ui, output.hovered, output.viewport, &mut self.meshes, &rs, &self.renderer);
-        });
+        egui::CentralPanel::default().show(ui, |ui| self.central(ui, &rs));
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        if let Some(pos) = self.screenshot.as_ref().and_then(|h| h.pointer) {
-            raw.events.retain(|e| !matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerGone));
-            raw.events.push(egui::Event::PointerMoved(pos));
+        if let Some(hook) = &mut self.screenshot {
+            hook.inject(raw);
         }
     }
 
     fn on_exit(&mut self) {
         self.save_config();
+    }
+}
+
+/// Borrows only the view and the navigator, so other fields stay free for mutation.
+fn view_entries<'a>(view: &'a View, nav: &'a Navigator) -> &'a [Entry] {
+    match view {
+        View::Folder => nav.entries(),
+        View::Search(entries) => entries,
+        View::Flatten { entries, .. } => entries.as_deref().unwrap_or(&[]),
     }
 }
 

@@ -5,6 +5,17 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Gallery sort order (folders always come first).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SortKey {
+    #[default]
+    Name,
+    Modified,
+    Size,
+    Type,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -14,13 +25,23 @@ pub struct Config {
     /// Tile edge length in logical pixels.
     pub tile_size: f32,
     pub only_models: bool,
+    pub sort_by: SortKey,
+    pub sort_descending: bool,
     /// "de" / "en"; `None` follows the system language.
     pub language: Option<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { library_roots: Vec::new(), last_folder: None, tile_size: 160.0, only_models: false, language: None }
+        Config {
+            library_roots: Vec::new(),
+            last_folder: None,
+            tile_size: 160.0,
+            only_models: false,
+            sort_by: SortKey::Name,
+            sort_descending: false,
+            language: None,
+        }
     }
 }
 

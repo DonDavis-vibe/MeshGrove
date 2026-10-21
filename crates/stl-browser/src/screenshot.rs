@@ -1,12 +1,21 @@
 //! Test hook: `STLB_SCREENSHOT=out.png [STLB_SCREENSHOT_DELAY=8]` saves a picture of the
 //! window once the delay has passed (thumbnails had time to load) and then quits.
 //! Lets us check the UI from scripts and CI without capturing the user's desktop.
-//! `STLB_POINTER=x,y` additionally pins the mouse pointer (logical points) to test hover effects.
+//! `STLB_POINTER=x,y` additionally pins the mouse pointer (logical points) to test hover effects,
+//! `STLB_SEARCH=query` starts with a library search, `STLB_HOLD=1` holds the left button down
+//! at the pointer from 0.7 s on and `STLB_WHEEL=dy` turns the mouse wheel there for half a second after 1 s.
 
 use std::time::{Duration, Instant};
 
 pub struct ScreenshotHook {
     pub pointer: Option<egui::Pos2>,
+    hold: bool,
+    wheel: f32,
+    started: Instant,
+    pressed: bool,
+    pub search: Option<String>,
+    /// `STLB_FLATTEN=1`: start with "include subfolders" on.
+    pub flatten: bool,
     path: String,
     at: Instant,
     requested: bool,
@@ -20,7 +29,22 @@ impl ScreenshotHook {
             let (x, y) = s.split_once(',')?;
             Some(egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?))
         });
-        Some(ScreenshotHook { pointer, path, at: Instant::now() + Duration::from_secs_f32(delay), requested: false })
+        let search = std::env::var("STLB_SEARCH").ok();
+        let hold = std::env::var_os("STLB_HOLD").is_some();
+        let flatten = std::env::var_os("STLB_FLATTEN").is_some();
+        let wheel = std::env::var("STLB_WHEEL").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        Some(ScreenshotHook {
+            pointer,
+            hold,
+            wheel,
+            started: Instant::now(),
+            pressed: false,
+            search,
+            flatten,
+            path,
+            at: Instant::now() + Duration::from_secs_f32(delay),
+            requested: false,
+        })
     }
 
     pub fn tick(&mut self, ctx: &egui::Context) {
@@ -49,5 +73,42 @@ impl ScreenshotHook {
             ctx2.send_viewport_cmd(egui::ViewportCommand::Close);
         });
         ctx.request_repaint();
+    }
+}
+
+impl ScreenshotHook {
+    /// Replaces real pointer input with the scripted one.
+    pub fn inject(&mut self, raw: &mut egui::RawInput) {
+        let Some(pos) = self.pointer else { return };
+        raw.events.retain(|e| {
+            !matches!(
+                e,
+                egui::Event::PointerMoved(_)
+                    | egui::Event::PointerGone
+                    | egui::Event::PointerButton { .. }
+                    | egui::Event::MouseWheel { .. }
+            )
+        });
+        raw.events.push(egui::Event::PointerMoved(pos));
+        let t = self.started.elapsed().as_secs_f32();
+        // Press only once the gallery is on screen, so the press lands on a tile.
+        if self.hold && !self.pressed && t >= 0.7 {
+            self.pressed = true;
+            raw.events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        if self.wheel != 0.0 && (1.0..1.5).contains(&t) {
+            raw.events.push(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, self.wheel),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Wheel,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
     }
 }

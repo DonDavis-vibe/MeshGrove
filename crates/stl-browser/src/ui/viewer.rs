@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use egui::{PointerButton, Rect, Sense, Ui};
-use stlb_render::{GpuMesh, Renderer, ViewParams};
+use stlb_render::{Framing, GpuMesh, Renderer, ViewParams};
 
 use super::offscreen::{OffscreenView, pixel_size};
 
@@ -16,7 +16,7 @@ pub struct ModelViewer {
 
 impl ModelViewer {
     pub fn new() -> ModelViewer {
-        ModelViewer { mesh: None, offscreen: OffscreenView::default(), view: ViewParams::default(), dirty: true }
+        ModelViewer { mesh: None, offscreen: OffscreenView::default(), view: orbit_view(), dirty: true }
     }
 
     /// Shows `mesh`; the camera is reset only when it is a different model.
@@ -33,7 +33,7 @@ impl ModelViewer {
     }
 
     pub fn reset_view(&mut self) {
-        self.view = ViewParams::default();
+        self.view = orbit_view();
         self.dirty = true;
     }
 
@@ -89,4 +89,9 @@ impl ModelViewer {
             self.reset_view();
         }
     }
+}
+
+/// Turning the model must not zoom or shift it: fixed pivot and distance.
+fn orbit_view() -> ViewParams {
+    ViewParams { framing: Framing::Orbit, ..ViewParams::default() }
 }

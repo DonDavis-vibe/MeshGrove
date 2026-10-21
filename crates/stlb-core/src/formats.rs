@@ -39,6 +39,33 @@ impl Kind {
         }
     }
 
+    /// Stable name used in the library database.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Folder => "folder",
+            Kind::Stl => "stl",
+            Kind::ThreeMf => "3mf",
+            Kind::Step => "step",
+            Kind::Archive => "archive",
+            Kind::Image => "image",
+            Kind::Pdf => "pdf",
+            Kind::Other => "other",
+        }
+    }
+
+    pub fn parse(name: &str) -> Kind {
+        match name {
+            "folder" => Kind::Folder,
+            "stl" => Kind::Stl,
+            "3mf" => Kind::ThreeMf,
+            "step" => Kind::Step,
+            "archive" => Kind::Archive,
+            "image" => Kind::Image,
+            "pdf" => Kind::Pdf,
+            _ => Kind::Other,
+        }
+    }
+
     /// Files that become a 3D mesh (rendered thumbnail, viewer, hover turntable, duplicate geometry).
     pub fn is_model(self) -> bool {
         matches!(self, Kind::Stl | Kind::ThreeMf | Kind::Step)
@@ -60,5 +87,10 @@ mod tests {
         assert_eq!(Kind::from_file_name("Regelwerk.pdf"), Kind::Pdf);
         assert_eq!(Kind::from_file_name("notes"), Kind::Other);
         assert!(Kind::Step.is_model() && !Kind::Archive.is_model());
+        for k in
+            [Kind::Folder, Kind::Stl, Kind::ThreeMf, Kind::Step, Kind::Archive, Kind::Image, Kind::Pdf, Kind::Other]
+        {
+            assert_eq!(Kind::parse(k.as_str()), k);
+        }
     }
 }

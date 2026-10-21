@@ -1,0 +1,475 @@
+//! The library index: every folder and file below the library roots, plus the model facts
+//! learned while making thumbnails. SQLite in WAL mode, so the UI can read while the
+//! background scanner writes.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
+
+use crate::cache::{ThumbCache, ThumbMeta};
+use crate::formats::Kind;
+use crate::listing::Entry;
+use crate::query::Query;
+
+pub use rusqlite::Error;
+
+const SCHEMA_VERSION: i32 = 1;
+const SCHEMA: &str = "
+CREATE TABLE dirs (
+    id INTEGER PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,
+    parent TEXT,
+    mtime_ns INTEGER NOT NULL
+);
+CREATE INDEX dirs_parent ON dirs(parent);
+CREATE TABLE files (
+    id INTEGER PRIMARY KEY,
+    dir_id INTEGER NOT NULL REFERENCES dirs(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    mtime_ns INTEGER NOT NULL,
+    -- lower-case name + folder path relative to the library root, for substring search
+    search TEXT NOT NULL,
+    -- thumbnail cache key the facts below belong to; NULL until the file was processed
+    meta_key TEXT,
+    triangles INTEGER,
+    size_x REAL,
+    size_y REAL,
+    size_z REAL,
+    content_hash TEXT,
+    geo_sig TEXT,
+    UNIQUE (dir_id, name)
+);
+CREATE INDEX files_content ON files(content_hash);
+CREATE INDEX files_geo ON files(geo_sig);
+";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Counts {
+    pub files: usize,
+    /// Model files (STL/3MF/STEP).
+    pub models: usize,
+    /// Files whose thumbnail facts are stored.
+    pub processed: usize,
+    /// Files that can have facts (models and images).
+    pub processable: usize,
+}
+
+pub struct Library {
+    conn: Connection,
+}
+
+impl Library {
+    /// `~/.local/share/stl-browser/library.db`
+    pub fn default_location() -> Option<PathBuf> {
+        Some(dirs::data_dir()?.join("stl-browser").join("library.db"))
+    }
+
+    pub fn open(path: &Path) -> Result<Library, Error> {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        Self::init(Connection::open(path)?)
+    }
+
+    /// Read-only connection for UI queries. `None` until the writer has created the index
+    /// (opening early would race the writer's schema setup).
+    pub fn open_reader(path: &Path) -> Option<Library> {
+        use rusqlite::OpenFlags;
+        let conn =
+            Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+                .ok()?;
+        conn.busy_timeout(Duration::from_secs(2)).ok()?;
+        let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).ok()?;
+        (version == SCHEMA_VERSION).then_some(Library { conn })
+    }
+
+    pub fn open_in_memory() -> Result<Library, Error> {
+        Self::init(Connection::open_in_memory()?)
+    }
+
+    fn init(conn: Connection) -> Result<Library, Error> {
+        conn.busy_timeout(Duration::from_secs(5))?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version != SCHEMA_VERSION {
+            // The index is only a cache of the disk: rebuild instead of migrating.
+            conn.execute_batch("DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS dirs;")?;
+            conn.execute_batch(SCHEMA)?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        Ok(Library { conn })
+    }
+
+    pub fn dir_mtime(&self, dir: &Path) -> Option<i64> {
+        self.conn
+            .query_row("SELECT mtime_ns FROM dirs WHERE path = ?1", [path_str(dir)?], |r| r.get(0))
+            .optional()
+            .ok()?
+    }
+
+    pub fn child_dirs(&self, dir: &Path) -> Vec<PathBuf> {
+        let Some(dir) = path_str(dir) else { return Vec::new() };
+        let Ok(mut stmt) = self.conn.prepare_cached("SELECT path FROM dirs WHERE parent = ?1") else {
+            return Vec::new();
+        };
+        stmt.query_map([dir], |r| r.get::<_, String>(0))
+            .map(|rows| rows.filter_map(Result::ok).map(PathBuf::from).collect())
+            .unwrap_or_default()
+    }
+
+    /// Records the current contents of `dir` (below library root `root`): files are diffed
+    /// against the index (changed files lose their stale facts), vanished subfolders are removed.
+    pub fn update_dir(
+        &mut self,
+        root: &Path,
+        dir: &Path,
+        mtime_ns: i64,
+        files: &[Entry],
+        subdirs: &[PathBuf],
+    ) -> Result<(), Error> {
+        let Some(dir_s) = path_str(dir) else { return Ok(()) };
+        let parent = if dir == root { None } else { dir.parent().and_then(path_str) };
+        let rel = dir.strip_prefix(root).unwrap_or(dir).to_string_lossy().to_lowercase();
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO dirs (path, parent, mtime_ns) VALUES (?1, ?2, ?3)
+             ON CONFLICT(path) DO UPDATE SET parent = excluded.parent, mtime_ns = excluded.mtime_ns",
+            params![dir_s, parent, mtime_ns],
+        )?;
+        let dir_id: i64 = tx.query_row("SELECT id FROM dirs WHERE path = ?1", [dir_s], |r| r.get(0))?;
+
+        let mut known: HashMap<String, (i64, i64, i64)> = HashMap::new();
+        {
+            let mut stmt = tx.prepare_cached("SELECT name, id, size, mtime_ns FROM files WHERE dir_id = ?1")?;
+            for row in stmt.query_map([dir_id], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?))))? {
+                let (name, v) = row?;
+                known.insert(name, v);
+            }
+        }
+        {
+            let mut insert = tx.prepare_cached(
+                "INSERT INTO files (dir_id, name, kind, size, mtime_ns, search) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            let mut update = tx.prepare_cached(
+                "UPDATE files SET kind = ?2, size = ?3, mtime_ns = ?4, meta_key = NULL, triangles = NULL,
+                 size_x = NULL, size_y = NULL, size_z = NULL, content_hash = NULL, geo_sig = NULL WHERE id = ?1",
+            )?;
+            for f in files.iter().filter(|f| !f.is_dir()) {
+                let mtime = nanos(f.modified);
+                match known.remove(&f.name) {
+                    Some((_, size, old_mtime)) if size == f.size as i64 && old_mtime == mtime => {}
+                    Some((id, _, _)) => {
+                        update.execute(params![id, f.kind.as_str(), f.size as i64, mtime])?;
+                    }
+                    None => {
+                        let search = format!("{}\n{rel}", f.name.to_lowercase());
+                        insert.execute(params![dir_id, f.name, f.kind.as_str(), f.size as i64, mtime, search])?;
+                    }
+                }
+            }
+            let mut delete = tx.prepare_cached("DELETE FROM files WHERE id = ?1")?;
+            for (id, _, _) in known.into_values() {
+                delete.execute([id])?;
+            }
+        }
+        let children: Vec<String> = {
+            let mut stmt = tx.prepare_cached("SELECT path FROM dirs WHERE parent = ?1")?;
+            stmt.query_map([dir_s], |r| r.get(0))?.collect::<Result<_, _>>()?
+        };
+        for child in children {
+            if !subdirs.iter().any(|s| path_str(s) == Some(child.as_str())) {
+                remove_tree(&tx, Path::new(&child))?;
+            }
+        }
+        tx.commit()
+    }
+
+    /// Forgets a folder and everything below it.
+    pub fn remove_tree(&mut self, dir: &Path) -> Result<(), Error> {
+        remove_tree(&self.conn, dir)
+    }
+
+    /// Forgets everything that is not below one of `roots`.
+    pub fn retain_roots(&mut self, roots: &[PathBuf]) -> Result<(), Error> {
+        let all: Vec<String> = {
+            let mut stmt = self.conn.prepare("SELECT path FROM dirs WHERE parent IS NULL")?;
+            stmt.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?
+        };
+        for top in all {
+            if !roots.iter().any(|r| path_str(r) == Some(top.as_str())) {
+                self.remove_tree(Path::new(&top))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Stores the facts learned while making `path`'s thumbnail (cache key `key`).
+    pub fn store_meta(&mut self, path: &Path, key: &str, meta: &ThumbMeta) -> Result<(), Error> {
+        let (Some(dir), Some(name)) = (path.parent().and_then(path_str), path.file_name().and_then(|n| n.to_str()))
+        else {
+            return Ok(());
+        };
+        let size = meta.size_mm.unwrap_or([f32::NAN; 3]).map(|v| if v.is_finite() { Some(v as f64) } else { None });
+        self.conn.execute(
+            "UPDATE files SET meta_key = ?3, triangles = ?4, size_x = ?5, size_y = ?6, size_z = ?7,
+                 content_hash = ?8, geo_sig = ?9
+             WHERE name = ?2 AND dir_id = (SELECT id FROM dirs WHERE path = ?1)",
+            params![
+                dir,
+                name,
+                key,
+                meta.triangles.map(|t| t as i64),
+                size[0],
+                size[1],
+                size[2],
+                meta.content_hash,
+                meta.geo_sig
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Models and images whose thumbnail facts are missing or out of date, for background processing.
+    pub fn needing_meta(&self) -> Result<Vec<(Entry, String)>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns, f.meta_key FROM files f JOIN dirs d ON d.id = f.dir_id
+             WHERE f.kind IN ('stl', '3mf', 'image') ORDER BY d.path, f.name",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((entry_from_row(r)?, r.get::<_, Option<String>>(5)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (entry, stored) = row?;
+            let key = ThumbCache::key(&entry.path, entry.size, entry.modified, None);
+            if stored.as_deref() != Some(key.as_str()) {
+                out.push((entry, key));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Files matching `query`, folders excluded, sorted by name.
+    pub fn search(&self, query: &Query, limit: usize) -> Result<Vec<Entry>, Error> {
+        let mut sql = String::from(
+            "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns FROM files f JOIN dirs d ON d.id = f.dir_id WHERE 1",
+        );
+        let mut args: Vec<String> = Vec::new();
+        for term in &query.terms {
+            args.push(format!("%{}%", escape_like(term)));
+            sql += &format!(" AND f.search LIKE ?{} ESCAPE '\\'", args.len());
+        }
+        if !query.kinds.is_empty() {
+            let list: Vec<String> = query.kinds.iter().map(|k| format!("'{}'", k.as_str())).collect();
+            sql += &format!(" AND f.kind IN ({})", list.join(","));
+        }
+        sql += &format!(" ORDER BY f.name COLLATE NOCASE LIMIT {limit}");
+        let mut stmt = self.conn.prepare(&sql)?;
+        stmt.query_map(params_from_iter(args), entry_from_row)?.collect()
+    }
+
+    /// Up to `n` thumbnail-capable files in or below `dir` for its mosaic: models before images,
+    /// files directly inside before those in subfolders.
+    pub fn folder_preview(&self, dir: &Path, n: usize) -> Result<Vec<Entry>, Error> {
+        let Some(d) = path_str(dir) else { return Ok(Vec::new()) };
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns FROM files f JOIN dirs d ON d.id = f.dir_id
+             WHERE (d.path = ?1 OR (d.path > ?2 AND d.path < ?3)) AND f.kind IN ('stl', '3mf', 'image')
+             ORDER BY (f.kind = 'image'), (d.path = ?1) DESC, d.path, f.name COLLATE NOCASE LIMIT ?4",
+        )?;
+        stmt.query_map(params![d, format!("{d}/"), format!("{d}0"), n as i64], entry_from_row)?.collect()
+    }
+
+    pub fn counts(&self) -> Result<Counts, Error> {
+        self.conn.query_row(
+            "SELECT COUNT(*),
+                    COALESCE(SUM(kind IN ('stl', '3mf', 'step')), 0),
+                    COALESCE(SUM(meta_key IS NOT NULL), 0),
+                    COALESCE(SUM(kind IN ('stl', '3mf', 'image')), 0)
+             FROM files",
+            [],
+            |r| {
+                Ok(Counts {
+                    files: r.get::<_, i64>(0)? as usize,
+                    models: r.get::<_, i64>(1)? as usize,
+                    processed: r.get::<_, i64>(2)? as usize,
+                    processable: r.get::<_, i64>(3)? as usize,
+                })
+            },
+        )
+    }
+}
+
+fn remove_tree(conn: &Connection, dir: &Path) -> Result<(), Error> {
+    let Some(d) = path_str(dir) else { return Ok(()) };
+    conn.execute(
+        "DELETE FROM dirs WHERE path = ?1 OR (path > ?2 AND path < ?3)",
+        params![d, format!("{d}/"), format!("{d}0")],
+    )?;
+    Ok(())
+}
+
+fn entry_from_row(r: &rusqlite::Row) -> Result<Entry, Error> {
+    let dir: String = r.get(0)?;
+    let name: String = r.get(1)?;
+    let kind: String = r.get(2)?;
+    let mtime: i64 = r.get(4)?;
+    Ok(Entry {
+        path: Path::new(&dir).join(&name),
+        name,
+        kind: Kind::parse(&kind),
+        size: r.get::<_, i64>(3)? as u64,
+        modified: (mtime != 0).then(|| SystemTime::UNIX_EPOCH + Duration::from_nanos(mtime as u64)),
+    })
+}
+
+/// Nanoseconds since the epoch, 0 when unknown.
+pub fn nanos(t: Option<SystemTime>) -> i64 {
+    t.and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos() as i64)
+}
+
+/// Non-UTF-8 paths cannot be stored (and are vanishingly rare); they are skipped.
+fn path_str(p: &Path) -> Option<&str> {
+    p.to_str()
+}
+
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::query;
+
+    fn file(dir: &str, name: &str, size: u64, t: u64) -> Entry {
+        Entry {
+            name: name.into(),
+            path: Path::new(dir).join(name),
+            kind: Kind::from_file_name(name),
+            size,
+            modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(t)),
+        }
+    }
+
+    fn library() -> Library {
+        let mut lib = Library::open_in_memory().unwrap();
+        let root = Path::new("/lib/3D_druck");
+        let minis = Path::new("/lib/3D_druck/minis");
+        lib.update_dir(root, root, 1, &[file("/lib/3D_druck", "readme.txt", 5, 1)], &[minis.into()]).unwrap();
+        lib.update_dir(
+            root,
+            minis,
+            2,
+            &[
+                file("/lib/3D_druck/minis", "Knight.stl", 100, 1),
+                file("/lib/3D_druck/minis", "box_lid.3mf", 50, 1),
+                file("/lib/3D_druck/minis", "photo.jpg", 10, 1),
+            ],
+            &[],
+        )
+        .unwrap();
+        lib
+    }
+
+    fn names(entries: &[Entry]) -> Vec<&str> {
+        entries.iter().map(|e| e.name.as_str()).collect()
+    }
+
+    #[test]
+    fn search_by_words_folder_and_kind() {
+        let lib = library();
+        assert_eq!(names(&lib.search(&query::parse("knig"), 50).unwrap()), ["Knight.stl"]);
+        assert_eq!(
+            names(&lib.search(&query::parse("minis"), 50).unwrap()),
+            ["box_lid.3mf", "Knight.stl", "photo.jpg"]
+        );
+        assert_eq!(names(&lib.search(&query::parse("minis ext:3mf"), 50).unwrap()), ["box_lid.3mf"]);
+        // "_" is a literal underscore, not a LIKE wildcard; the root's own name is not searchable.
+        assert_eq!(names(&lib.search(&query::parse("x_lid"), 50).unwrap()), ["box_lid.3mf"]);
+        assert!(lib.search(&query::parse("3d_druck"), 50).unwrap().is_empty());
+        assert_eq!(
+            lib.search(&query::parse("knig"), 50).unwrap()[0].path,
+            Path::new("/lib/3D_druck/minis/Knight.stl")
+        );
+    }
+
+    #[test]
+    fn rescans_diff_files_and_drop_vanished_folders() {
+        let mut lib = library();
+        let minis = Path::new("/lib/3D_druck/minis");
+        let root = Path::new("/lib/3D_druck");
+        lib.store_meta(&minis.join("Knight.stl"), "k1", &ThumbMeta { triangles: Some(7), ..Default::default() })
+            .unwrap();
+        let lid = file("/lib/3D_druck/minis", "box_lid.3mf", 50, 1);
+        let lid_key = ThumbCache::key(&lid.path, lid.size, lid.modified, None);
+        lib.store_meta(&lid.path, &lid_key, &ThumbMeta::default()).unwrap();
+        assert_eq!(lib.counts().unwrap(), Counts { files: 4, models: 2, processed: 2, processable: 3 });
+
+        // Knight changed on disk, photo deleted, a new file appeared.
+        lib.update_dir(
+            root,
+            minis,
+            3,
+            &[
+                file("/lib/3D_druck/minis", "Knight.stl", 120, 2),
+                file("/lib/3D_druck/minis", "box_lid.3mf", 50, 1),
+                file("/lib/3D_druck/minis", "new.stl", 1, 1),
+            ],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(lib.counts().unwrap(), Counts { files: 4, models: 3, processed: 1, processable: 3 });
+        let pending: Vec<String> = lib.needing_meta().unwrap().into_iter().map(|(e, _)| e.name).collect();
+        assert_eq!(pending, ["Knight.stl", "new.stl"], "box_lid is unchanged and already processed");
+
+        assert_eq!(lib.dir_mtime(minis), Some(3));
+        lib.update_dir(root, root, 4, &[], &[]).unwrap();
+        assert_eq!(lib.dir_mtime(minis), None, "subfolder vanished with its files");
+        assert_eq!(lib.counts().unwrap().files, 0);
+    }
+
+    #[test]
+    fn mosaic_prefers_models_and_direct_children() {
+        let mut lib = library();
+        let root = Path::new("/lib/3D_druck");
+        let sub = Path::new("/lib/3D_druck/minis/bases");
+        lib.update_dir(root, sub, 5, &[file("/lib/3D_druck/minis/bases", "a_base.stl", 1, 1)], &[]).unwrap();
+        let preview = lib.folder_preview(Path::new("/lib/3D_druck/minis"), 3).unwrap();
+        assert_eq!(names(&preview), ["box_lid.3mf", "Knight.stl", "a_base.stl"]);
+        // A sibling folder whose name starts with the same text must not leak in.
+        lib.update_dir(
+            root,
+            Path::new("/lib/3D_druck/minis2"),
+            6,
+            &[file("/lib/3D_druck/minis2", "zz.stl", 1, 1)],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(lib.folder_preview(Path::new("/lib/3D_druck/minis"), 9).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn reader_opens_only_a_ready_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.db");
+        assert!(Library::open_reader(&path).is_none(), "no index yet");
+        let mut writer = Library::open(&path).unwrap();
+        writer.update_dir(Path::new("/r"), Path::new("/r"), 1, &[file("/r", "a.stl", 1, 1)], &[]).unwrap();
+        let reader = Library::open_reader(&path).expect("index exists now");
+        assert_eq!(names(&reader.search(&query::parse("a"), 9).unwrap()), ["a.stl"]);
+    }
+
+    #[test]
+    fn retain_roots_forgets_removed_libraries() {
+        let mut lib = library();
+        lib.retain_roots(&[PathBuf::from("/lib/3D_druck")]).unwrap();
+        assert_eq!(lib.counts().unwrap().files, 4);
+        lib.retain_roots(&[PathBuf::from("/other")]).unwrap();
+        assert_eq!(lib.counts().unwrap().files, 0);
+    }
+}

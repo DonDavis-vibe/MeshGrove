@@ -7,6 +7,7 @@
 //!                                                              └─► 1 GPU thread (render) ──► cache + UI
 //! ```
 //! Visible tiles always jump the queue; opening another folder drops everything not started yet.
+//! Background jobs (the rest of the library, for its index) only run when nothing else waits.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -27,11 +28,21 @@ pub struct Job {
     pub key: String,
     pub path: PathBuf,
     pub kind: Kind,
+    /// Library indexing work: lowest priority, survives folder changes, no picture needed.
+    pub background: bool,
 }
 
 pub enum ThumbResult {
-    Ready { key: String, image: egui::ColorImage, meta: ThumbMeta },
-    Failed { key: String, error: String },
+    /// `image` is `None` for background jobs.
+    Ready {
+        job: Job,
+        image: Option<egui::ColorImage>,
+        meta: ThumbMeta,
+    },
+    Failed {
+        job: Job,
+        error: String,
+    },
 }
 
 /// Which kinds get a picture (everything else shows an icon).
@@ -68,7 +79,8 @@ struct Shared {
 }
 
 impl Shared {
-    /// Blocks until a job of `stage` is available; visible tiles first, then folder order.
+    /// Blocks until a job of `stage` is available: visible tiles, then the rest of the folder,
+    /// then background work.
     fn pop(&self, stage: Stage) -> Option<(Queued, u64)> {
         let mut q = self.queue.lock().unwrap();
         loop {
@@ -80,7 +92,7 @@ impl Shared {
                 .iter()
                 .enumerate()
                 .filter(|(_, it)| it.stage == stage)
-                .min_by_key(|(_, it)| (!it.visible, it.order))
+                .min_by_key(|(_, it)| (it.job.background, !it.visible, it.order))
                 .map(|(i, _)| i);
             if let Some(i) = best {
                 return Some((q.items.swap_remove(i), self.generation.load(Ordering::SeqCst)));
@@ -89,17 +101,21 @@ impl Shared {
         }
     }
 
+    fn current(&self, job: &Job, generation: u64) -> bool {
+        job.background || self.generation.load(Ordering::SeqCst) == generation
+    }
+
     fn requeue(&self, mut item: Queued, generation: u64, stage: Stage) {
         let mut q = self.queue.lock().unwrap();
-        if self.generation.load(Ordering::SeqCst) == generation {
+        if self.current(&item.job, generation) {
             item.stage = stage;
             q.items.push(item);
             self.wake.notify_all();
         }
     }
 
-    fn finish(&self, generation: u64) {
-        if self.generation.load(Ordering::SeqCst) == generation {
+    fn finish(&self, job: &Job, generation: u64) {
+        if !job.background && self.generation.load(Ordering::SeqCst) == generation {
             let done = self.done.fetch_add(1, Ordering::SeqCst) + 1;
             if done == self.total.load(Ordering::SeqCst) {
                 let secs = self.started.lock().unwrap().elapsed().as_secs_f32();
@@ -138,12 +154,12 @@ impl ThumbService {
                 while let Some((item, generation)) = shared.pop(Stage::Lookup) {
                     match cache.load(&item.job.key) {
                         Some(Ok(thumb)) => {
-                            send(ready(item.job.key.clone(), thumb));
-                            shared.finish(generation);
+                            shared.finish(&item.job, generation);
+                            send(ready(item.job, thumb));
                         }
                         Some(Err(error)) => {
-                            send(ThumbResult::Failed { key: item.job.key.clone(), error });
-                            shared.finish(generation);
+                            shared.finish(&item.job, generation);
+                            send(ThumbResult::Failed { job: item.job, error });
                         }
                         None => shared.requeue(item, generation, Stage::Generate),
                     }
@@ -181,7 +197,8 @@ impl ThumbService {
                             if let Err(e) = cache.store(&job.key, &thumb) {
                                 log::warn!("thumbnail cache write failed: {e}");
                             }
-                            send(ready(job.key, thumb));
+                            shared.finish(&job, generation);
+                            send(ready(job, thumb));
                         }
                         Err(failure) => {
                             let error = match failure {
@@ -192,10 +209,10 @@ impl ThumbService {
                                 Failure::Transient(e) => e,
                             };
                             log::info!("no thumbnail for {}: {error}", job.path.display());
-                            send(ThumbResult::Failed { key: job.key, error });
+                            shared.finish(&job, generation);
+                            send(ThumbResult::Failed { job, error });
                         }
                     }
-                    shared.finish(generation);
                 }
             });
         }
@@ -203,18 +220,34 @@ impl ThumbService {
         ThumbService { shared, results }
     }
 
-    /// Replaces all pending work (e.g. after opening another folder).
+    /// Replaces the pending foreground work (e.g. after opening another folder).
     pub fn set_jobs(&self, jobs: Vec<Job>) {
         let mut q = self.shared.queue.lock().unwrap();
         self.shared.generation.fetch_add(1, Ordering::SeqCst);
         self.shared.done.store(0, Ordering::SeqCst);
         self.shared.total.store(jobs.len(), Ordering::SeqCst);
         *self.shared.started.lock().unwrap() = std::time::Instant::now();
-        q.items = jobs
-            .into_iter()
-            .enumerate()
-            .map(|(order, job)| Queued { job, stage: Stage::Lookup, order, visible: false })
-            .collect();
+        let keys: std::collections::HashSet<&str> = jobs.iter().map(|j| j.key.as_str()).collect();
+        // The foreground job will produce the same result (and its facts) sooner.
+        q.items.retain(|it| it.job.background && !keys.contains(it.job.key.as_str()));
+        q.items.extend(jobs.into_iter().enumerate().map(|(order, mut job)| {
+            job.background = false;
+            Queued { job, stage: Stage::Lookup, order, visible: false }
+        }));
+        self.shared.wake.notify_all();
+    }
+
+    /// Replaces the background work (library files whose facts are missing).
+    pub fn set_background(&self, jobs: Vec<Job>) {
+        let mut q = self.shared.queue.lock().unwrap();
+        q.items.retain(|it| !it.job.background);
+        let foreground: std::collections::HashSet<String> = q.items.iter().map(|it| it.job.key.clone()).collect();
+        q.items.extend(jobs.into_iter().filter(|j| !foreground.contains(&j.key)).enumerate().map(
+            |(order, mut job)| {
+                job.background = true;
+                Queued { job, stage: Stage::Lookup, order, visible: false }
+            },
+        ));
         self.shared.wake.notify_all();
     }
 
@@ -308,10 +341,12 @@ fn gpu_thread(requests: Receiver<RenderRequest>) {
     }
 }
 
-fn ready(key: String, thumb: Thumbnail) -> ThumbResult {
-    let size = [thumb.image.width() as usize, thumb.image.height() as usize];
-    let image = egui::ColorImage::from_rgba_unmultiplied(size, thumb.image.as_raw());
-    ThumbResult::Ready { key, image, meta: thumb.meta }
+fn ready(job: Job, thumb: Thumbnail) -> ThumbResult {
+    let image = (!job.background).then(|| {
+        let size = [thumb.image.width() as usize, thumb.image.height() as usize];
+        egui::ColorImage::from_rgba_unmultiplied(size, thumb.image.as_raw())
+    });
+    ThumbResult::Ready { job, image, meta: thumb.meta }
 }
 
 fn spawn(name: &str, f: impl FnOnce() + Send + 'static) {
@@ -327,7 +362,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(order, &(key, stage, visible))| Queued {
-                job: Job { key: key.into(), path: key.into(), kind: Kind::Stl },
+                job: Job { key: key.into(), path: key.into(), kind: Kind::Stl, background: false },
                 stage,
                 order,
                 visible,
@@ -358,6 +393,25 @@ mod tests {
         ]);
         assert_eq!(pop_keys(&shared, Stage::Lookup, 4), ["c", "e", "a", "b"]);
         assert_eq!(pop_keys(&shared, Stage::Generate, 1), ["d"]);
+    }
+
+    #[test]
+    fn background_work_waits_and_survives_folder_changes() {
+        let shared = Arc::new(shared_with(&[]));
+        let service = ThumbService { shared: shared.clone(), results: unbounded().1 };
+        let job = |k: &str| Job { key: k.into(), path: k.into(), kind: Kind::Stl, background: false };
+        service.set_background(vec![job("lib1"), job("lib2"), job("a")]);
+        service.set_jobs(vec![job("a"), job("b")]);
+        assert_eq!(
+            pop_keys(&shared, Stage::Lookup, 4),
+            ["a", "b", "lib1", "lib2"],
+            "duplicate 'a' runs once, in front"
+        );
+
+        service.set_background(vec![job("lib3")]);
+        service.set_jobs(vec![job("c")]);
+        assert_eq!(pop_keys(&shared, Stage::Lookup, 2), ["c", "lib3"]);
+        std::mem::forget(service); // Drop would shut the shared queue down
     }
 
     #[test]

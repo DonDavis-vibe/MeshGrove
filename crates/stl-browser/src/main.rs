@@ -5,6 +5,7 @@ i18n!("locales", fallback = "en");
 
 mod app;
 mod i18n;
+mod library;
 mod meshes;
 mod nav;
 mod screenshot;
@@ -27,7 +28,11 @@ fn main() -> eframe::Result {
     i18n::init(config.language.as_deref());
 
     // Optional argument: a folder to open, or a file to open its folder with it selected.
-    let start = std::env::args_os().nth(1).map(PathBuf::from).map(|p| std::path::absolute(&p).unwrap_or(p));
+    let start = std::env::args_os()
+        .nth(1)
+        .filter(|a| !a.is_empty())
+        .map(PathBuf::from)
+        .map(|p| std::path::absolute(&p).unwrap_or(p));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(t!("app.title"))

@@ -1,12 +1,13 @@
 //! Hover turntable: resting the pointer on a model tile spins the real model in place of the
-//! still thumbnail. It starts at the thumbnail's camera angle, so the switch is seamless.
+//! still thumbnail, around a fixed axis so it never zooms or wobbles. Dragging on the tile
+//! turns it by hand instead, and the mouse wheel zooms while a button is held.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use egui::{Color32, Rect, Ui};
 use stlb_core::Kind;
-use stlb_render::{Renderer, ViewParams};
+use stlb_render::{Framing, Renderer, ViewParams};
 
 use super::offscreen::{OffscreenView, pixel_size};
 use crate::meshes::{MeshState, MeshStore};
@@ -15,7 +16,7 @@ use crate::meshes::{MeshState, MeshStore};
 const HOVER_DELAY: Duration = Duration::from_millis(300);
 const DEGREES_PER_SECOND: f32 = 50.0;
 
-/// The model tile under the pointer, as reported by the gallery.
+/// The model tile under the pointer (or being dragged), as reported by the gallery.
 pub struct HoveredTile {
     pub path: PathBuf,
     pub kind: Kind,
@@ -23,13 +24,27 @@ pub struct HoveredTile {
     pub image_rect: Rect,
     /// Tile background, painted over the still thumbnail.
     pub background: Color32,
+    /// Mouse drag on the tile this frame: turns the model by hand.
+    pub drag: egui::Vec2,
+    /// A mouse button is held on the tile: the wheel zooms the preview instead of scrolling.
+    pub dragging: bool,
+}
+
+struct Spin {
+    path: PathBuf,
+    since: Instant,
+    azimuth: f32,
+    elevation: f32,
+    /// The user turned it by hand: stop spinning on our own.
+    manual: bool,
+    zoom: f32,
+    last_frame: Instant,
 }
 
 #[derive(Default)]
 pub struct Turntable {
     offscreen: OffscreenView,
-    current: Option<(PathBuf, Instant)>,
-    spinning_since: Option<Instant>,
+    spin: Option<Spin>,
 }
 
 impl Turntable {
@@ -43,22 +58,40 @@ impl Turntable {
         rs: &egui_wgpu::RenderState,
         renderer: &Renderer,
     ) {
-        let scrolling = ui.input(|i| i.smooth_scroll_delta != egui::Vec2::ZERO || i.pointer.any_down());
-        let Some(tile) = hovered.filter(|_| !scrolling) else {
-            self.current = None;
-            self.spinning_since = None;
+        let wheel = ui.input(|i| i.smooth_scroll_delta.y);
+        // Plain scrolling moves the grid, so the preview stops; with a button held it zooms instead.
+        let Some(tile) = hovered.filter(|t| t.dragging || wheel == 0.0) else {
+            self.spin = None;
             return;
         };
-        let since = match &self.current {
-            Some((path, since)) if *path == tile.path => *since,
-            _ => {
-                self.current = Some((tile.path.clone(), Instant::now()));
-                self.spinning_since = None;
-                Instant::now()
-            }
+        let now = Instant::now();
+        let start = ViewParams::default();
+        let spin = match &mut self.spin {
+            Some(spin) if spin.path == tile.path => spin,
+            slot => slot.insert(Spin {
+                path: tile.path.clone(),
+                since: now,
+                azimuth: start.azimuth_deg,
+                elevation: start.elevation_deg,
+                manual: false,
+                zoom: 1.0,
+                last_frame: now,
+            }),
         };
-        let waited = since.elapsed();
-        if waited < HOVER_DELAY {
+        if tile.dragging && wheel != 0.0 {
+            spin.manual = true;
+            spin.zoom = (spin.zoom * (wheel * 0.003).exp()).clamp(0.5, 8.0);
+        }
+        if tile.drag != egui::Vec2::ZERO {
+            spin.manual = true;
+            spin.azimuth -= tile.drag.x * 0.6;
+            spin.elevation = (spin.elevation + tile.drag.y * 0.6).clamp(-89.0, 89.0);
+        }
+        let dt = (now - spin.last_frame).as_secs_f32().min(0.1);
+        spin.last_frame = now;
+        // Dragging starts right away; merely resting the pointer waits a moment.
+        let waited = spin.since.elapsed();
+        if !spin.manual && waited < HOVER_DELAY {
             ui.ctx().request_repaint_after(HOVER_DELAY - waited);
             return;
         }
@@ -73,12 +106,16 @@ impl Turntable {
             MeshState::Failed(_) => {}
             MeshState::Ready(loaded) => {
                 let mesh = loaded.mesh.clone();
-                let started = *self.spinning_since.get_or_insert_with(Instant::now);
+                if !spin.manual {
+                    spin.azimuth += dt * DEGREES_PER_SECOND;
+                }
                 let (w, h) = pixel_size(ui.ctx(), tile.image_rect);
                 self.offscreen.ensure_size(rs, renderer, w, h);
                 let view = ViewParams {
-                    azimuth_deg: ViewParams::default().azimuth_deg
-                        + started.elapsed().as_secs_f32() * DEGREES_PER_SECOND,
+                    azimuth_deg: spin.azimuth,
+                    elevation_deg: spin.elevation,
+                    zoom: spin.zoom,
+                    framing: Framing::Orbit,
                     ..ViewParams::default()
                 };
                 self.offscreen.render(rs, renderer, &mesh, &view);

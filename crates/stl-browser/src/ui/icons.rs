@@ -18,6 +18,51 @@ pub fn folder(p: &Painter, r: Rect) {
     p.rect_filled(front, w * 0.05, FOLDER_BLUE);
 }
 
+/// Folder whose contents peek out: up to four previews in the folder body, the front flap
+/// drawn translucently over their lower part.
+pub fn folder_mosaic(p: &Painter, r: Rect, previews: &[(egui::TextureId, egui::Vec2)], paper: Color32) {
+    let w = r.width();
+    let body =
+        Rect::from_min_max(pos2(r.min.x + w * 0.04, r.min.y + w * 0.12), pos2(r.max.x - w * 0.04, r.max.y - w * 0.04));
+    let tab = Rect::from_min_size(pos2(body.min.x, body.min.y - w * 0.07), vec2(w * 0.32, w * 0.12));
+    let back = FOLDER_BLUE.linear_multiply(0.7);
+    p.rect_filled(tab, w * 0.03, back);
+    p.rect_filled(body, w * 0.05, back);
+
+    let inner = body.shrink(w * 0.045);
+    let cells: Vec<Rect> = match previews.len() {
+        1 => vec![inner],
+        2 => split_h(inner).to_vec(),
+        _ => {
+            let [top, bottom] = split_v(inner);
+            let [a, b] = split_h(top);
+            let [c, d] = split_h(bottom);
+            vec![a, b, c, d]
+        }
+    };
+    for (cell, (texture, size)) in cells.iter().zip(previews) {
+        let cell = cell.shrink(w * 0.01);
+        p.rect_filled(cell, w * 0.025, paper);
+        let scale = (cell.width() / size.x).min(cell.height() / size.y);
+        let img = Rect::from_center_size(cell.center(), *size * scale);
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        p.image(*texture, img, uv, Color32::WHITE);
+    }
+
+    let flap = Rect::from_min_max(pos2(body.min.x, body.max.y - body.height() * 0.3), body.max);
+    p.rect_filled(flap, w * 0.05, FOLDER_BLUE.gamma_multiply(0.85));
+}
+
+fn split_h(r: Rect) -> [Rect; 2] {
+    let mid = r.center().x;
+    [Rect::from_min_max(r.min, pos2(mid, r.max.y)), Rect::from_min_max(pos2(mid, r.min.y), r.max)]
+}
+
+fn split_v(r: Rect) -> [Rect; 2] {
+    let mid = r.center().y;
+    [Rect::from_min_max(r.min, pos2(r.max.x, mid)), Rect::from_min_max(pos2(r.min.x, mid), r.max)]
+}
+
 /// Sheet of paper with a folded corner and a short label (file extension) on it.
 pub fn file(p: &Painter, r: Rect, label: &str, fill: Color32, ink: Color32) {
     let w = r.width();

@@ -10,6 +10,17 @@ const FOV_Y_DEG: f32 = 28.0;
 /// Keeps vertex buffers well below wgpu's default 256 MiB `max_buffer_size`.
 const MAX_CHUNK_BYTES: usize = 64 << 20;
 
+/// How the camera frames the model.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Framing {
+    /// Tightest fit for exactly this angle, centred on screen (still thumbnails).
+    #[default]
+    Tight,
+    /// Fixed pivot (box centre) and one distance that fits every angle, so turning the model
+    /// never zooms or shifts it (3D viewer, hover turntable).
+    Orbit,
+}
+
 /// How a model is looked at. Angles in degrees; azimuth 0 looks from the front (−Y),
 /// positive azimuth moves the camera to the right; elevation 90 looks straight down.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -24,6 +35,7 @@ pub struct ViewParams {
     pub model_color: [f32; 3],
     /// Straight sRGB + alpha, 0..1. Alpha 0 gives transparent thumbnails.
     pub background: [f32; 4],
+    pub framing: Framing,
 }
 
 impl Default for ViewParams {
@@ -35,6 +47,7 @@ impl Default for ViewParams {
             pan: Vec2::ZERO,
             model_color: [0.80, 0.82, 0.85],
             background: [0.0, 0.0, 0.0, 0.0],
+            framing: Framing::Tight,
         }
     }
 }
@@ -287,52 +300,79 @@ pub fn upload_mesh(device: &wgpu::Device, mesh: &Mesh) -> Option<GpuMesh> {
 
 struct Camera {
     eye: Vec3,
+    #[cfg_attr(not(test), allow(dead_code))]
+    target: Vec3,
     view_proj: Mat4,
     right: Vec3,
     up: Vec3,
     forward: Vec3,
 }
 
-impl Camera {
-    /// Places the camera so the model's bounding box fills ~92 % of the view and is centred
-    /// on screen, then applies the user's zoom and pan.
-    fn fit(bounds: &Aabb, view: &ViewParams, aspect: f32) -> Camera {
-        let (az, el) = (view.azimuth_deg.to_radians(), view.elevation_deg.clamp(-89.5, 89.5).to_radians());
-        let to_eye = Vec3::new(el.cos() * az.sin(), -el.cos() * az.cos(), el.sin());
-        let forward = -to_eye;
-        let right = forward.cross(Vec3::Z).normalize();
-        let up = right.cross(forward);
+/// Camera axes for a viewing direction: (towards the eye, right, up, forward).
+fn basis(azimuth_deg: f32, elevation_deg: f32) -> (Vec3, Vec3, Vec3, Vec3) {
+    let (az, el) = (azimuth_deg.to_radians(), elevation_deg.clamp(-89.5, 89.5).to_radians());
+    let to_eye = Vec3::new(el.cos() * az.sin(), -el.cos() * az.cos(), el.sin());
+    let forward = -to_eye;
+    let right = forward.cross(Vec3::Z).normalize();
+    let up = right.cross(forward);
+    (to_eye, right, up, forward)
+}
 
+fn corners(b: &Aabb) -> [Vec3; 8] {
+    std::array::from_fn(|i| {
+        Vec3::new(
+            if i & 1 == 0 { b.min.x } else { b.max.x },
+            if i & 2 == 0 { b.min.y } else { b.max.y },
+            if i & 4 == 0 { b.min.z } else { b.max.z },
+        )
+    })
+}
+
+/// Fraction of the half view the model may fill.
+const FILL: f32 = 0.92;
+
+impl Camera {
+    fn fit(bounds: &Aabb, view: &ViewParams, aspect: f32) -> Camera {
+        let (to_eye, right, up, forward) = basis(view.azimuth_deg, view.elevation_deg);
         let tan_y = (FOV_Y_DEG.to_radians() * 0.5).tan();
         let tan_x = tan_y * aspect;
         let radius = bounds.radius().max(1e-4);
-        let mut target = bounds.center();
-        let mut dist = radius / tan_x.min(tan_y).atan().sin();
-        let corners: Vec<Vec3> = (0..8)
-            .map(|i| {
-                Vec3::new(
-                    if i & 1 == 0 { bounds.min.x } else { bounds.max.x },
-                    if i & 2 == 0 { bounds.min.y } else { bounds.max.y },
-                    if i & 4 == 0 { bounds.min.z } else { bounds.max.z },
-                )
-            })
-            .collect();
-        // Perspective makes the fit non-linear; a few refinement rounds converge well.
-        for _ in 0..4 {
-            let eye = target + to_eye * dist;
-            let (mut lo, mut hi) = (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY));
-            for c in &corners {
-                let d = *c - eye;
-                let depth = d.dot(forward).max(1e-6);
-                let ndc = Vec2::new(d.dot(right) / (depth * tan_x), d.dot(up) / (depth * tan_y));
-                lo = lo.min(ndc);
-                hi = hi.max(ndc);
+        let corners = corners(bounds);
+        let start = radius / tan_x.min(tan_y).atan().sin();
+        // Never put the camera inside the bounding sphere: a corner at the eye projects to infinity.
+        let refine = |dist: f32, fill: f32| (dist * (fill / FILL).max(0.05)).max(radius * 1.5);
+
+        let (mut target, mut dist) = match view.framing {
+            Framing::Tight => {
+                let (mut target, mut dist) = (bounds.center(), start);
+                // Perspective makes the fit non-linear; a few refinement rounds converge well.
+                for _ in 0..4 {
+                    let (lo, hi) = project(&corners, target + to_eye * dist, (right, up, forward), tan_x, tan_y);
+                    let mid = (lo + hi) * 0.5;
+                    target += right * mid.x * dist * tan_x + up * mid.y * dist * tan_y;
+                    dist = refine(dist, ((hi - lo) * 0.5).max_element());
+                }
+                (target, dist)
             }
-            let mid = (lo + hi) * 0.5;
-            target += right * mid.x * dist * tan_x + up * mid.y * dist * tan_y;
-            let extent = ((hi - lo) * 0.5).max_element();
-            dist *= (extent / 0.92).max(0.05);
-        }
+            Framing::Orbit => {
+                // Pivot stays at the box centre; the distance is the largest any viewing angle needs.
+                let target = bounds.center();
+                let dist = [0.0, ViewParams::default().elevation_deg, 60.0, 89.0]
+                    .iter()
+                    .flat_map(|&el| (0..24).map(move |i| basis(i as f32 * 15.0, el)))
+                    .map(|(to_eye, right, up, forward)| {
+                        let mut dist = start;
+                        for _ in 0..5 {
+                            let (lo, hi) =
+                                project(&corners, target + to_eye * dist, (right, up, forward), tan_x, tan_y);
+                            dist = refine(dist, lo.abs().max(hi.abs()).max_element());
+                        }
+                        dist
+                    })
+                    .fold(0.0, f32::max);
+                (target, dist)
+            }
+        };
 
         target += (right * view.pan.x + up * view.pan.y) * radius;
         dist /= view.zoom.max(0.01);
@@ -342,7 +382,7 @@ impl Camera {
         // wgpu NDC is Y-up with depth in [0, 1], i.e. the DirectX convention.
         let proj = glam::camera::rh::proj::directx::perspective(FOV_Y_DEG.to_radians(), aspect, near, far);
         let view_m = glam::camera::rh::view::look_at_mat4(eye, target, up);
-        Camera { eye, view_proj: proj * view_m, right, up, forward }
+        Camera { eye, target, view_proj: proj * view_m, right, up, forward }
     }
 
     fn uniforms(&self, view: &ViewParams) -> Uniforms {
@@ -360,6 +400,67 @@ impl Camera {
     }
 }
 
+/// Bounding rectangle of the corners in normalised device coordinates, seen from `eye`.
+fn project(
+    corners: &[Vec3; 8],
+    eye: Vec3,
+    (right, up, forward): (Vec3, Vec3, Vec3),
+    tan_x: f32,
+    tan_y: f32,
+) -> (Vec2, Vec2) {
+    let (mut lo, mut hi) = (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY));
+    for c in corners {
+        let d = *c - eye;
+        let depth = d.dot(forward).max(1e-6);
+        let ndc = Vec2::new(d.dot(right) / (depth * tan_x), d.dot(up) / (depth * tan_y));
+        lo = lo.min(ndc);
+        hi = hi.max(ndc);
+    }
+    (lo, hi)
+}
+
 fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rod() -> Aabb {
+        Aabb { min: Vec3::new(-100.0, -5.0, 0.0), max: Vec3::new(100.0, 5.0, 10.0) }
+    }
+
+    #[test]
+    fn orbit_framing_keeps_pivot_and_distance_while_turning() {
+        let view =
+            |az, el| ViewParams { azimuth_deg: az, elevation_deg: el, framing: Framing::Orbit, ..Default::default() };
+        let a = Camera::fit(&rod(), &view(0.0, 25.0), 1.0);
+        for (az, el) in [(37.0, 25.0), (90.0, 25.0), (211.0, 60.0), (300.0, -10.0)] {
+            let b = Camera::fit(&rod(), &view(az, el), 1.0);
+            assert_eq!(b.target, a.target, "pivot moved at az {az} el {el}");
+            let (da, db) = ((a.eye - a.target).length(), (b.eye - b.target).length());
+            assert!((db - da).abs() < da * 1e-5, "zoomed at az {az}: {da} vs {db}");
+            assert!(da < rod().radius() * 6.0, "camera too far away: {da}");
+        }
+    }
+
+    #[test]
+    fn orbit_fits_the_model_at_every_angle_and_tight_differs() {
+        let b = rod();
+        for az in (0..360).step_by(10) {
+            let view = ViewParams { azimuth_deg: az as f32, framing: Framing::Orbit, ..Default::default() };
+            let cam = Camera::fit(&b, &view, 1.0);
+            let (lo, hi) = project(
+                &corners(&b),
+                cam.eye,
+                (cam.right, cam.up, cam.forward),
+                (FOV_Y_DEG.to_radians() * 0.5).tan(),
+                (FOV_Y_DEG.to_radians() * 0.5).tan(),
+            );
+            assert!(lo.min_element() >= -1.0 && hi.max_element() <= 1.0, "cut off at az {az}: {lo} {hi}");
+        }
+        let tight = |az| Camera::fit(&b, &ViewParams { azimuth_deg: az, ..Default::default() }, 1.0);
+        assert!((tight(0.0).eye - tight(0.0).target).length() != (tight(90.0).eye - tight(90.0).target).length());
+    }
 }
