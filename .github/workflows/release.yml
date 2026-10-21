@@ -1,0 +1,123 @@
+name: Release
+
+# Pushing a tag like v0.1.0 builds Meshgrove for Linux, Windows and macOS and attaches the
+# packages to a GitHub release of that tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-22.04
+            package: linux-x86_64
+          - name: Windows x64
+            os: windows-latest
+            package: windows-x64
+          - name: macOS Apple Silicon
+            os: macos-latest
+            package: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-dev libxkbcommon-dev libwayland-dev pkg-config
+      - name: System packages (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libarchive pkg-config dylibbundler
+      - name: vcpkg cache (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: C:/vcpkg/installed
+          key: vcpkg-libarchive-x64-windows-static-md-v1
+      - name: libarchive (Windows, static through vcpkg)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+          echo "VCPKGRS_TRIPLET=x64-windows-static-md" >> "$GITHUB_ENV"
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install libarchive:x64-windows-static-md
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
+
+      - name: Version
+        shell: bash
+        run: echo "VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_ENV"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          dir="Meshgrove-$VERSION-${{ matrix.package }}"
+          mkdir -p "$dir/bin"
+          cp target/release/{meshgrove,meshgrove-step-mesher,meshgrove-thumbnailer} "$dir/bin/"
+          cp -r packaging README.md LICENSE "$dir/"
+          tar czf "$dir.tar.gz" "$dir"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          dir="Meshgrove-$VERSION-${{ matrix.package }}"
+          mkdir -p "$dir"
+          cp target/release/meshgrove.exe target/release/meshgrove-step-mesher.exe README.md LICENSE "$dir/"
+          7z a "$dir.zip" "$dir"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          app="Meshgrove.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" meshgrove.iconset
+          cp target/release/meshgrove target/release/meshgrove-step-mesher "$app/Contents/MacOS/"
+          sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          for size in 16 32 128 256 512; do
+            cp "packaging/icons/meshgrove-$size.png" "meshgrove.iconset/icon_${size}x${size}.png"
+            double=$((size * 2))
+            cp "packaging/icons/meshgrove-$double.png" "meshgrove.iconset/icon_${size}x${size}@2x.png" 2>/dev/null \
+              || sips -z $double $double "packaging/icons/meshgrove-1024.png" --out "meshgrove.iconset/icon_${size}x${size}@2x.png"
+          done
+          iconutil -c icns meshgrove.iconset -o "$app/Contents/Resources/meshgrove.icns"
+          # Ship Homebrew's libarchive (and what it needs) inside the app.
+          dylibbundler -od -b -x "$app/Contents/MacOS/meshgrove" -d "$app/Contents/libs/" -p @executable_path/../libs/
+          codesign --force --deep --sign - "$app"
+          ditto -c -k --keepParent "$app" "Meshgrove-$VERSION-${{ matrix.package }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.package }}
+          path: |
+            Meshgrove-*.tar.gz
+            Meshgrove-*.zip
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            Meshgrove-*.tar.gz
+            Meshgrove-*.zip

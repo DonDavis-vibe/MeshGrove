@@ -1,3 +1,6 @@
+// Release builds on Windows are GUI programs without a console window.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 #[macro_use]
 extern crate rust_i18n;
 
@@ -40,6 +43,7 @@ fn main() -> eframe::Result {
             .with_title(t!("app.title"))
             // Matches the .desktop file name so KDE shows the right icon on Wayland.
             .with_app_id("meshgrove")
+            .with_icon(app_icon())
             .with_inner_size([1400.0, 860.0])
             .with_min_inner_size([720.0, 480.0]),
         renderer: eframe::Renderer::Wgpu,
@@ -52,4 +56,11 @@ fn main() -> eframe::Result {
             Ok(Box::new(app::App::new(cc, config, config_error, start).map_err(|e| e.into_boxed_dyn_error())?))
         }),
     )
+}
+
+/// Window and taskbar icon (Windows, X11, macOS Dock while running).
+fn app_icon() -> egui::IconData {
+    let png = include_bytes!("../../../packaging/icons/meshgrove-256.png");
+    let image = image::load_from_memory(png).expect("bundled icon is a valid PNG").into_rgba8();
+    egui::IconData { width: image.width(), height: image.height(), rgba: image.into_raw() }
 }

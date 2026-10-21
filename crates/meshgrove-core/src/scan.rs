@@ -5,7 +5,6 @@
 
 use std::collections::HashSet;
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -43,7 +42,7 @@ pub fn scan(
             }
         };
         // Symlinked folders can form loops; visit every real folder once.
-        if !seen.insert((meta.dev(), meta.ino())) {
+        if !seen.insert(folder_id(&dir, &meta)) {
             continue;
         }
         report.dirs_visited += 1;
@@ -74,6 +73,18 @@ pub fn scan(
         stack.extend(subdirs.into_iter().map(|d| (d, false)));
     }
     Ok(report)
+}
+
+/// What makes a folder the same folder when reached through different (symlinked) paths.
+#[cfg(unix)]
+fn folder_id(_dir: &Path, meta: &std::fs::Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    (meta.dev(), meta.ino())
+}
+
+#[cfg(not(unix))]
+fn folder_id(dir: &Path, _meta: &std::fs::Metadata) -> PathBuf {
+    dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf())
 }
 
 #[cfg(test)]

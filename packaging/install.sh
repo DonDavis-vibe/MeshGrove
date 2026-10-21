@@ -1,30 +1,36 @@
 #!/usr/bin/env bash
-# Builds and installs Meshgrove for the current user (no root needed):
+# Installs Meshgrove for the current user on Linux (no root needed):
 #   ~/.local/bin                     meshgrove, meshgrove-step-mesher, meshgrove-thumbnailer
 #   ~/.local/share/applications      menu entry
 #   ~/.local/share/icons             icon
 #   ~/.local/share/mime              model/step file type
 #   ~/.local/share/thumbnailers      previews in Dolphin and file dialogs
 #
-#   packaging/install.sh             build + install
+#   packaging/install.sh             build from source (or take bin/ of a release package) + install
 #   packaging/install.sh --uninstall remove everything again (settings, index and cache stay)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 BIN="${XDG_BIN_HOME:-$HOME/.local/bin}"
 DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
+PROGRAMS=(meshgrove meshgrove-step-mesher meshgrove-thumbnailer)
+ICON_SIZES=(16 24 32 48 64 128 256 512)
 FILES=(
-    "$BIN/meshgrove" "$BIN/meshgrove-step-mesher" "$BIN/meshgrove-thumbnailer"
+    "${PROGRAMS[@]/#/$BIN/}"
     "$DATA/applications/meshgrove.desktop"
-    "$DATA/icons/hicolor/scalable/apps/meshgrove.svg"
     "$DATA/mime/packages/meshgrove-step.xml"
     "$DATA/thumbnailers/meshgrove.thumbnailer"
 )
+for size in "${ICON_SIZES[@]}"; do
+    FILES+=("$DATA/icons/hicolor/${size}x${size}/apps/meshgrove.png")
+done
 
-# Files of the former name "STL-Browser" (settings and index move over on the first start).
+# Files of earlier versions: the former name "STL-Browser" (settings and index move over on the
+# first start) and the old vector icon.
 LEGACY=(
     "$BIN/stl-browser" "$BIN/stlb-step-mesher" "$BIN/stl-browser-thumbnailer"
     "$DATA/applications/stl-browser.desktop"
     "$DATA/icons/hicolor/scalable/apps/stl-browser.svg"
+    "$DATA/icons/hicolor/scalable/apps/meshgrove.svg"
     "$DATA/mime/packages/stl-browser-step.xml"
     "$DATA/thumbnailers/stl-browser.thumbnailer"
 )
@@ -43,13 +49,20 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     exit 0
 fi
 
-cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
-install -Dm755 target/release/meshgrove "$BIN/meshgrove"
-install -Dm755 target/release/meshgrove-step-mesher "$BIN/meshgrove-step-mesher"
-install -Dm755 target/release/meshgrove-thumbnailer "$BIN/meshgrove-thumbnailer"
-install -Dm644 packaging/meshgrove.svg "$DATA/icons/hicolor/scalable/apps/meshgrove.svg"
-install -Dm644 packaging/mime/meshgrove-step.xml "$DATA/mime/packages/meshgrove-step.xml"
+if [[ -x bin/meshgrove ]]; then
+    SOURCE=bin   # unpacked release package
+else
+    cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
+    SOURCE=target/release
+fi
 rm -f "${LEGACY[@]}"
+for program in "${PROGRAMS[@]}"; do
+    install -Dm755 "$SOURCE/$program" "$BIN/$program"
+done
+for size in "${ICON_SIZES[@]}"; do
+    install -Dm644 "packaging/icons/meshgrove-$size.png" "$DATA/icons/hicolor/${size}x${size}/apps/meshgrove.png"
+done
+install -Dm644 packaging/mime/meshgrove-step.xml "$DATA/mime/packages/meshgrove-step.xml"
 mkdir -p "$DATA/applications" "$DATA/thumbnailers"
 sed "s|@BIN@|$BIN|g" packaging/meshgrove.desktop > "$DATA/applications/meshgrove.desktop"
 sed "s|@BIN@|$BIN|g" packaging/meshgrove.thumbnailer > "$DATA/thumbnailers/meshgrove.thumbnailer"

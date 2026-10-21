@@ -9,24 +9,62 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-24.04
+          - name: Windows
+            os: windows-latest
+          - name: macOS
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: System packages
+
+      - name: System packages (Linux)
+        if: runner.os == 'Linux'
         # libarchive for archives, poppler for PDF previews, lavapipe (software Vulkan) for the
         # GPU render tests. OpenCascade is left out: the STEP mesher then builds as a stub.
         run: |
           sudo apt-get update
           sudo apt-get install -y libarchive-dev poppler-utils mesa-vulkan-drivers \
             libxkbcommon-dev libwayland-dev pkg-config
+
+      - name: System packages (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libarchive pkg-config
+
+      - name: vcpkg cache (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: C:/vcpkg/installed
+          key: vcpkg-libarchive-x64-windows-static-md-v1
+      - name: libarchive (Windows, static through vcpkg)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+          echo "VCPKGRS_TRIPLET=x64-windows-static-md" >> "$GITHUB_ENV"
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install libarchive:x64-windows-static-md
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+
       - run: cargo fmt --all --check
+        if: runner.os == 'Linux'
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests (render tests on lavapipe)
+        if: runner.os == 'Linux'
         env:
           MESHGROVE_REQUIRE_GPU: "1"
           WGPU_BACKEND: vulkan
+        run: cargo test --workspace
+      - name: Tests
+        if: runner.os != 'Linux'
         run: cargo test --workspace

@@ -115,7 +115,7 @@ impl Sidebar {
             .filter(|r| current.starts_with(r))
             .max_by_key(|r| r.components().count())
             .cloned()
-            .unwrap_or_else(|| PathBuf::from("/"))
+            .unwrap_or_else(|| current.ancestors().last().unwrap_or(current).to_path_buf())
     }
 
     fn node(&mut self, ui: &mut Ui, path: &Path, current: &Path, reveal: bool, action: &mut Option<SidebarAction>) {
@@ -172,6 +172,7 @@ fn place(
 }
 
 /// Removable and extra drives as KDE shows them: mounts below /run/media/<user> and /mnt.
+#[cfg(target_os = "linux")]
 fn mounted_drives() -> Vec<PathBuf> {
     let Ok(mounts) = std::fs::read_to_string("/proc/self/mounts") else {
         return Vec::new();
@@ -186,4 +187,24 @@ fn mounted_drives() -> Vec<PathBuf> {
     drives.sort();
     drives.dedup();
     drives
+}
+
+/// Drive letters that are present (A: and B: are skipped: probing old floppy drives is slow).
+#[cfg(windows)]
+fn mounted_drives() -> Vec<PathBuf> {
+    (b'C'..=b'Z').map(|letter| PathBuf::from(format!("{}:\\", letter as char))).filter(|p| p.exists()).collect()
+}
+
+/// Volumes in /Volumes, without the link back to the system disk.
+#[cfg(target_os = "macos")]
+fn mounted_drives() -> Vec<PathBuf> {
+    let volumes = std::fs::read_dir("/Volumes").into_iter().flatten().flatten();
+    let mut drives: Vec<PathBuf> = volumes.map(|e| e.path()).filter(|p| p.is_dir() && !p.is_symlink()).collect();
+    drives.sort();
+    drives
+}
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+fn mounted_drives() -> Vec<PathBuf> {
+    Vec::new()
 }

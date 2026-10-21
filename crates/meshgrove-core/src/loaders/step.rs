@@ -2,7 +2,7 @@
 //! binary STL in `~/.cache/meshgrove/step`, since meshing a big assembly takes seconds.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use super::{LoadError, stl};
@@ -18,14 +18,15 @@ pub fn mesher_path() -> PathBuf {
     if let Some(p) = std::env::var_os("MESHGROVE_STEP_MESHER") {
         return p.into();
     }
-    let sibling = |exe: PathBuf| exe.parent().map(|d| d.join("meshgrove-step-mesher")).filter(|p| p.is_file());
+    let name = crate::process::exe_name("meshgrove-step-mesher");
+    let sibling = |exe: PathBuf| exe.parent().map(|d| d.join(&name)).filter(|p| p.is_file());
     std::env::current_exe()
         .ok()
         .and_then(|exe| {
             // Test binaries live one level deeper (target/<profile>/deps).
             sibling(exe.clone()).or_else(|| sibling(exe.parent()?.to_path_buf()))
         })
-        .unwrap_or_else(|| "meshgrove-step-mesher".into())
+        .unwrap_or_else(|| name.clone().into())
 }
 
 pub fn load(path: &Path) -> Result<Mesh, LoadError> {
@@ -52,7 +53,7 @@ fn load_with(path: &Path, cache: &Path, mesher: &Path) -> Result<Mesh, LoadError
 }
 
 fn run(mesher: &Path, input: &Path, output: &Path) -> Result<(), LoadError> {
-    let mut child = Command::new(mesher)
+    let mut child = crate::process::helper(mesher)
         .arg(input)
         .arg(output)
         .stdin(Stdio::null())
@@ -90,7 +91,8 @@ mod tests {
         let mesher = mesher_path();
         let dir = tempfile::tempdir().unwrap();
         let step = dir.path().join("cube.step");
-        let made = Command::new(&mesher).arg("--write-test-cube").arg(&step).stdout(Stdio::null()).status();
+        let made =
+            std::process::Command::new(&mesher).arg("--write-test-cube").arg(&step).stdout(Stdio::null()).status();
         if !made.is_ok_and(|s| s.success()) {
             eprintln!("skipping: {} unavailable or without OpenCascade", mesher.display());
             return;

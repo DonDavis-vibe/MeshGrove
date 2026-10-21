@@ -1,4 +1,4 @@
-//! Handing files to other programs: the slicer, the file manager, the trash.
+//! Handing files to other programs: the slicer, the file manager, the clipboard, the trash.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -14,7 +14,14 @@ pub fn open_in_slicer(slicer: &Slicer, files: &[PathBuf]) -> io::Result<()> {
 }
 
 fn slicer_command(slicer: &Slicer, files: &[PathBuf], inherited_lib_path: Option<String>) -> Command {
-    let mut cmd = Command::new(&slicer.program);
+    // A macOS app bundle starts through `open -a`, which also hands files to a running instance.
+    let mut cmd = if slicer.program.extension().is_some_and(|x| x == "app") {
+        let mut open = Command::new("open");
+        open.arg("-a").arg(&slicer.program);
+        open
+    } else {
+        Command::new(&slicer.program)
+    };
     cmd.args(&slicer.args).args(files).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     for (key, value) in &slicer.env {
         let value = match (key.as_str(), &inherited_lib_path) {
@@ -30,13 +37,18 @@ fn slicer_command(slicer: &Slicer, files: &[PathBuf], inherited_lib_path: Option
     cmd
 }
 
-/// Opens the file manager with the files selected (KDE Dolphin, Nautilus, … via the
-/// freedesktop FileManager1 D-Bus interface). Archive members show their archive.
+/// Opens the file manager with the files selected (Dolphin/Nautilus via the freedesktop
+/// FileManager1 D-Bus interface, Finder, Explorer). Archive members show their archive.
 pub fn show_in_file_manager(paths: &[PathBuf]) -> io::Result<()> {
     let mut on_disk: Vec<PathBuf> =
         paths.iter().map(|p| archive::split(p).map_or_else(|| p.clone(), |(a, _)| a)).collect();
     on_disk.dedup();
-    let uris: Vec<String> = on_disk.iter().map(|p| file_uri(p)).collect();
+    reveal(&on_disk)
+}
+
+#[cfg(target_os = "linux")]
+fn reveal(paths: &[PathBuf]) -> io::Result<()> {
+    let uris: Vec<String> = paths.iter().map(|p| file_uri(p)).collect();
     let status = Command::new("dbus-send")
         .args([
             "--session",
@@ -54,19 +66,57 @@ pub fn show_in_file_manager(paths: &[PathBuf]) -> io::Result<()> {
         Ok(s) if s.success() => Ok(()),
         _ => {
             // No file manager service: at least open the folder.
-            let folder = on_disk.first().and_then(|p| p.parent()).unwrap_or(Path::new("/"));
-            Command::new("xdg-open").arg(folder).spawn().map(drop)
+            let folder = paths.first().and_then(|p| p.parent()).unwrap_or(Path::new("/"));
+            open_with_default_app(folder)
         }
     }
 }
 
-/// Puts the files on the Wayland clipboard so they can be pasted into Dolphin, a slicer or a
-/// chat (`text/uri-list` plus GNOME's variant, and the plain paths as text). Archive members
-/// are extracted first. Blocks while extracting, so call it off the UI thread.
+#[cfg(target_os = "macos")]
+fn reveal(paths: &[PathBuf]) -> io::Result<()> {
+    Command::new("open").arg("-R").args(paths).spawn().map(drop)
+}
+
+#[cfg(windows)]
+fn reveal(paths: &[PathBuf]) -> io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    // Explorer selects a single file and wants the path quoted right after the comma.
+    let Some(first) = paths.first() else { return Ok(()) };
+    Command::new("explorer").raw_arg(format!("/select,\"{}\"", first.display())).spawn().map(drop)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn reveal(paths: &[PathBuf]) -> io::Result<()> {
+    let folder = paths.first().and_then(|p| p.parent()).unwrap_or(Path::new("/"));
+    open_with_default_app(folder)
+}
+
+/// Opens a file or folder with the system's default application.
+pub fn open_with_default_app(path: &Path) -> io::Result<()> {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(windows) {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    Command::new(opener).arg(path).spawn().map(drop)
+}
+
+/// Puts the files on the clipboard so they can be pasted into the file manager, a slicer or a
+/// chat. Archive members are extracted first. Blocks while extracting, so call it off the UI
+/// thread.
 pub fn copy_files(paths: &[PathBuf]) -> Result<usize, String> {
-    use wl_clipboard_rs::copy::{MimeSource, MimeType, Options, Source};
     let files: Vec<PathBuf> =
         paths.iter().map(|p| archive::materialize(p)).collect::<io::Result<_>>().map_err(|e| e.to_string())?;
+    files_to_clipboard(&files)?;
+    Ok(files.len())
+}
+
+/// Wayland: `text/uri-list` plus GNOME's variant, and the plain paths as text.
+#[cfg(target_os = "linux")]
+fn files_to_clipboard(files: &[PathBuf]) -> Result<(), String> {
+    use wl_clipboard_rs::copy::{MimeSource, MimeType, Options, Source};
     let uris: Vec<String> = files.iter().map(|p| file_uri(p)).collect();
     let text: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     let source =
@@ -77,11 +127,24 @@ pub fn copy_files(paths: &[PathBuf]) -> Result<usize, String> {
         source(uris.iter().map(|u| format!("{u}\r\n")).collect(), MimeType::Specific("text/uri-list".into())),
         source(format!("copy\n{}", uris.join("\n")), MimeType::Specific("x-special/gnome-copied-files".into())),
     ];
-    Options::new().copy_multi(sources).map_err(|e| e.to_string())?;
-    Ok(files.len())
+    Options::new().copy_multi(sources).map_err(|e| e.to_string())
+}
+
+/// Windows (file drop list, as Explorer's copy) and macOS (file URLs, as Finder's copy).
+#[cfg(any(windows, target_os = "macos"))]
+fn files_to_clipboard(files: &[PathBuf]) -> Result<(), String> {
+    use clipboard_rs::{Clipboard, ClipboardContext};
+    let clipboard = ClipboardContext::new().map_err(|e| e.to_string())?;
+    clipboard.set_files(files.iter().map(|p| p.display().to_string()).collect()).map_err(|e| e.to_string())
+}
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+fn files_to_clipboard(_files: &[PathBuf]) -> Result<(), String> {
+    Err("copying files is not supported on this system".into())
 }
 
 /// `file://` URI with everything but unreserved characters and `/` percent-encoded.
+#[cfg(target_os = "linux")]
 pub fn file_uri(path: &Path) -> String {
     use std::os::unix::ffi::OsStrExt;
     let mut uri = String::from("file://");
@@ -138,6 +201,21 @@ mod tests {
         assert_eq!(cmd.get_current_dir(), Some(Path::new("/opt/a")));
     }
 
+    #[test]
+    fn mac_app_bundles_start_through_open() {
+        let slicer = Slicer {
+            name: "OrcaSlicer".into(),
+            program: "/Applications/OrcaSlicer.app".into(),
+            args: Vec::new(),
+            env: Vec::new(),
+            workdir: None,
+        };
+        let cmd = slicer_command(&slicer, &[PathBuf::from("/m/orc.stl")], None);
+        assert_eq!(cmd.get_program(), "open");
+        assert_eq!(cmd.get_args().collect::<Vec<_>>(), ["-a", "/Applications/OrcaSlicer.app", "/m/orc.stl"]);
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
     fn file_uris_are_percent_encoded() {
         assert_eq!(file_uri(Path::new("/a b/Größe,1.stl")), "file:///a%20b/Gr%C3%B6%C3%9Fe%2C1.stl");

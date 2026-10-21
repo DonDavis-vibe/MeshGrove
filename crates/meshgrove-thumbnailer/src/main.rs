@@ -53,8 +53,14 @@ fn path_from_arg(arg: &str) -> PathBuf {
             i += 1;
         }
     }
-    use std::os::unix::ffi::OsStringExt;
-    PathBuf::from(std::ffi::OsString::from_vec(out))
+    #[cfg(unix)]
+    let path = {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(out)
+    };
+    #[cfg(not(unix))]
+    let path = String::from_utf8_lossy(&out).into_owned();
+    PathBuf::from(path)
 }
 
 fn run(input: &Path, output: &Path, size: u32) -> Result<(), String> {

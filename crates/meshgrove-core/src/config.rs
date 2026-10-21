@@ -22,40 +22,125 @@ impl Slicer {
     /// Finds an installed slicer: the user's Anycubic Slicer Next build first, then common
     /// Orca/Prusa/Bambu installs (distribution packages and Flatpaks).
     pub fn detect() -> Option<Slicer> {
-        let home = dirs::home_dir()?;
-        let anycubic = home.join("opt/AnycubicSlicer");
-        let anycubic_bin = anycubic.join("app/bin/AnycubicSlicerNext");
-        if anycubic_bin.is_file() {
-            return Some(Slicer {
-                name: "Anycubic Slicer Next".into(),
-                program: anycubic_bin,
-                args: Vec::new(),
-                env: vec![
-                    ("LD_LIBRARY_PATH".into(), anycubic.join("app/lib").to_string_lossy().into_owned()),
-                    // WebKitGTK renders a blank window on NVIDIA + Wayland without this.
-                    ("WEBKIT_DISABLE_DMABUF_RENDERER".into(), "1".into()),
-                ],
-                workdir: Some(anycubic),
-            });
-        }
-        let flatpak = |id: &str| {
-            ["/var/lib/flatpak/exports/bin", &format!("{}/.local/share/flatpak/exports/bin", home.display())]
-                .iter()
-                .map(|dir| Path::new(dir).join(id))
-                .find(|p| p.exists())
-        };
-        let candidates = [
-            ("OrcaSlicer", Some(PathBuf::from("/usr/bin/orca-slicer"))),
-            ("OrcaSlicer", flatpak("io.github.softfever.OrcaSlicer")),
-            ("PrusaSlicer", Some(PathBuf::from("/usr/bin/prusa-slicer"))),
-            ("PrusaSlicer", flatpak("com.prusa3d.PrusaSlicer")),
-            ("Bambu Studio", flatpak("com.bambulab.BambuStudio")),
-        ];
-        candidates.into_iter().find_map(|(name, program)| {
-            let program = program.filter(|p| p.exists())?;
-            Some(Slicer { name: name.into(), program, args: Vec::new(), env: Vec::new(), workdir: None })
-        })
+        detect_slicer()
     }
+}
+
+fn plain(name: &str, program: PathBuf) -> Slicer {
+    Slicer { name: name.into(), program, args: Vec::new(), env: Vec::new(), workdir: None }
+}
+
+#[cfg(target_os = "linux")]
+fn detect_slicer() -> Option<Slicer> {
+    let home = dirs::home_dir()?;
+    let anycubic = home.join("opt/AnycubicSlicer");
+    let anycubic_bin = anycubic.join("app/bin/AnycubicSlicerNext");
+    if anycubic_bin.is_file() {
+        return Some(Slicer {
+            name: "Anycubic Slicer Next".into(),
+            program: anycubic_bin,
+            args: Vec::new(),
+            env: vec![
+                ("LD_LIBRARY_PATH".into(), anycubic.join("app/lib").to_string_lossy().into_owned()),
+                // WebKitGTK renders a blank window on NVIDIA + Wayland without this.
+                ("WEBKIT_DISABLE_DMABUF_RENDERER".into(), "1".into()),
+            ],
+            workdir: Some(anycubic),
+        });
+    }
+    let flatpak = |id: &str| {
+        ["/var/lib/flatpak/exports/bin", &format!("{}/.local/share/flatpak/exports/bin", home.display())]
+            .iter()
+            .map(|dir| Path::new(dir).join(id))
+            .find(|p| p.exists())
+    };
+    let candidates = [
+        ("OrcaSlicer", Some(PathBuf::from("/usr/bin/orca-slicer"))),
+        ("OrcaSlicer", flatpak("io.github.softfever.OrcaSlicer")),
+        ("PrusaSlicer", Some(PathBuf::from("/usr/bin/prusa-slicer"))),
+        ("PrusaSlicer", flatpak("com.prusa3d.PrusaSlicer")),
+        ("Bambu Studio", flatpak("com.bambulab.BambuStudio")),
+    ];
+    candidates.into_iter().find_map(|(name, program)| Some(plain(name, program.filter(|p| p.exists())?)))
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+const WINDOWS_PROGRAMS: &[(&str, &str)] = &[
+    ("Anycubic Slicer Next", "anycubicslicernext.exe"),
+    ("OrcaSlicer", "orca-slicer.exe"),
+    ("Bambu Studio", "bambu-studio.exe"),
+    ("PrusaSlicer", "prusa-slicer.exe"),
+];
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const MACOS_APPS: &[(&str, &str)] = &[
+    ("Anycubic Slicer Next", "anycubic"),
+    ("OrcaSlicer", "orcaslicer"),
+    ("Bambu Studio", "bambustudio"),
+    ("PrusaSlicer", "prusaslicer"),
+];
+
+#[cfg(windows)]
+fn detect_slicer() -> Option<Slicer> {
+    let mut roots: Vec<PathBuf> =
+        ["ProgramFiles", "ProgramFiles(x86)"].into_iter().filter_map(std::env::var_os).map(PathBuf::from).collect();
+    roots.extend(dirs::data_local_dir().map(|d| d.join("Programs")));
+    find_program(&roots, WINDOWS_PROGRAMS)
+}
+
+#[cfg(target_os = "macos")]
+fn detect_slicer() -> Option<Slicer> {
+    let mut folders = vec![PathBuf::from("/Applications")];
+    folders.extend(dirs::home_dir().map(|h| h.join("Applications")));
+    find_app_bundle(&folders, MACOS_APPS)
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn subdirs(dir: &Path) -> Vec<PathBuf> {
+    let entries = std::fs::read_dir(dir).into_iter().flatten().flatten();
+    entries.map(|e| e.path()).filter(|p| p.is_dir()).collect()
+}
+
+/// Windows installers pick different folders, so programs (lower-case file names) are looked up
+/// one and two levels below the program folders: `Program Files\OrcaSlicer\orca-slicer.exe`,
+/// `Program Files\Prusa3D\PrusaSlicer\prusa-slicer.exe`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn find_program(roots: &[PathBuf], programs: &[(&str, &str)]) -> Option<Slicer> {
+    let folders: Vec<PathBuf> = roots
+        .iter()
+        .flat_map(|root| subdirs(root))
+        .flat_map(|dir| {
+            let below = subdirs(&dir);
+            std::iter::once(dir).chain(below)
+        })
+        .collect();
+    programs.iter().find_map(|&(name, exe)| {
+        folders.iter().find_map(|folder| {
+            let mut entries = std::fs::read_dir(folder).into_iter().flatten().flatten();
+            entries.find(|e| e.file_name().to_string_lossy().to_lowercase() == exe).map(|e| plain(name, e.path()))
+        })
+    })
+}
+
+/// macOS apps by bundle name (`OrcaSlicer.app`); `actions` starts a `.app` through `open -a`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn find_app_bundle(folders: &[PathBuf], apps: &[(&str, &str)]) -> Option<Slicer> {
+    let bundles: Vec<PathBuf> = folders
+        .iter()
+        .flat_map(|f| std::fs::read_dir(f).into_iter().flatten().flatten().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "app"))
+        .collect();
+    apps.iter().find_map(|&(name, key)| {
+        bundles.iter().find_map(|bundle| {
+            let stem = bundle.file_stem()?.to_string_lossy().to_lowercase().replace([' ', '-', '_'], "");
+            stem.contains(key).then(|| plain(name, bundle.clone()))
+        })
+    })
+}
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+fn detect_slicer() -> Option<Slicer> {
+    None
 }
 
 /// Gallery sort order (folders always come first).
@@ -149,6 +234,25 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_windows_programs_and_mac_bundles() {
+        let dir = tempfile::tempdir().unwrap();
+        let programs = dir.path().join("Program Files");
+        std::fs::create_dir_all(programs.join("Prusa3D/PrusaSlicer")).unwrap();
+        std::fs::write(programs.join("Prusa3D/PrusaSlicer/prusa-slicer.exe"), b"").unwrap();
+        std::fs::create_dir_all(programs.join("OrcaSlicer")).unwrap();
+        std::fs::write(programs.join("OrcaSlicer/Orca-Slicer.exe"), b"").unwrap();
+        let found = find_program(std::slice::from_ref(&programs), WINDOWS_PROGRAMS).unwrap();
+        assert_eq!(found.name, "OrcaSlicer", "earlier entries win, file names compare case-insensitively");
+        assert_eq!(found.program, programs.join("OrcaSlicer/Orca-Slicer.exe"));
+
+        let apps = dir.path().join("Applications");
+        std::fs::create_dir_all(apps.join("Bambu Studio.app")).unwrap();
+        std::fs::create_dir_all(apps.join("Safari.app")).unwrap();
+        let found = find_app_bundle(std::slice::from_ref(&apps), MACOS_APPS).unwrap();
+        assert_eq!((found.name.as_str(), found.program), ("Bambu Studio", apps.join("Bambu Studio.app")));
+    }
 
     #[test]
     fn legacy_folders_move_once() {

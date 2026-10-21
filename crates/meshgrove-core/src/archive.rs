@@ -71,6 +71,8 @@ pub fn split(path: &Path) -> Option<(PathBuf, String)> {
         return None;
     }
     let member = path.strip_prefix(archive).ok()?.to_str()?.to_owned();
+    #[cfg(windows)]
+    let member = member.replace('\\', "/"); // members are always `/`-separated
     Some((archive.to_path_buf(), member))
 }
 

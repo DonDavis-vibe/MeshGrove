@@ -25,4 +25,12 @@ image.workspace = true
 dirs.workspace = true
 notify.workspace = true
 trash.workspace = true
+
+[build-dependencies]
+winresource = "0.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
 wl-clipboard-rs.workspace = true
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+clipboard-rs = { version = "0.3", default-features = false }

@@ -298,8 +298,8 @@ impl App {
         // Files inside archives are extracted first so other programs can open them.
         match meshgrove_core::archive::materialize(&entry.path) {
             Ok(file) => {
-                if let Err(e) = std::process::Command::new("xdg-open").arg(&file).spawn() {
-                    log::warn!("xdg-open failed: {e}");
+                if let Err(e) = actions::open_with_default_app(&file) {
+                    log::warn!("cannot open {}: {e}", file.display());
                 }
             }
             Err(e) => log::warn!("cannot extract {}: {e}", entry.path.display()),
@@ -657,7 +657,7 @@ impl App {
                 SettingsChange::OpenBackups => {
                     if let Some(dir) = meshgrove_core::userdata::backup_dir() {
                         let _ = std::fs::create_dir_all(&dir);
-                        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+                        let _ = actions::open_with_default_app(&dir);
                     }
                 }
                 SettingsChange::ClearCache => {
@@ -993,7 +993,7 @@ impl App {
             if i > 0 {
                 ui.weak("›");
             }
-            let name = if part.parent().is_none() { "/".to_owned() } else { listing::file_name(part) };
+            let name = listing::file_name(part); // roots ("/", "C:\") show as they are
             let last = i + 1 == parts.len();
             if ui
                 .add(Button::new(if last { RichText::new(name).strong() } else { RichText::new(name) }).frame(false))
@@ -1301,11 +1301,7 @@ fn view_entries<'a>(view: &'a View, nav: &'a Navigator) -> &'a [Entry] {
 /// Use the desktop's UI font (Noto Sans on KDE) so the app does not look foreign;
 /// glyphs it lacks still fall back to egui's bundled fonts and the system fallback.
 fn use_system_ui_font(ctx: &egui::Context) {
-    let Ok(out) = std::process::Command::new("fc-match").args(["-f", "%{file}", "sans-serif:style=Regular"]).output()
-    else {
-        return;
-    };
-    let path = String::from_utf8_lossy(&out.stdout).into_owned();
+    let Some(path) = system_ui_font() else { return };
     let Ok(bytes) = std::fs::read(&path) else { return };
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert("system-ui".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
@@ -1313,7 +1309,25 @@ fn use_system_ui_font(ctx: &egui::Context) {
         family.insert(0, "system-ui".into());
     }
     ctx.set_fonts(fonts);
-    log::info!("UI font: {path}");
+    log::info!("UI font: {}", path.display());
+}
+
+#[cfg(target_os = "linux")]
+fn system_ui_font() -> Option<PathBuf> {
+    let out = std::process::Command::new("fc-match").args(["-f", "%{file}", "sans-serif:style=Regular"]).output();
+    Some(PathBuf::from(String::from_utf8_lossy(&out.ok()?.stdout).into_owned()))
+}
+
+#[cfg(windows)]
+fn system_ui_font() -> Option<PathBuf> {
+    let font = PathBuf::from(std::env::var_os("WINDIR")?).join("Fonts").join("segoeui.ttf");
+    font.is_file().then_some(font)
+}
+
+/// macOS ships its UI font (SF Pro) only as a variable font; egui's bundled font stays.
+#[cfg(not(any(target_os = "linux", windows)))]
+fn system_ui_font() -> Option<PathBuf> {
+    None
 }
 
 /// Thumbnails per second over the last few seconds, for the status bar.

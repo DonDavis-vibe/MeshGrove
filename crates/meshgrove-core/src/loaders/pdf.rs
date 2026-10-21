@@ -2,7 +2,7 @@
 
 use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use image::RgbaImage;
@@ -22,7 +22,7 @@ pub fn thumbnail_from_bytes(bytes: &[u8], max: u32) -> Result<RgbaImage, LoadErr
 }
 
 fn render(input: &std::ffi::OsStr, stdin: Option<&[u8]>, max: u32) -> Result<RgbaImage, LoadError> {
-    let mut child = Command::new("pdftoppm")
+    let mut child = crate::process::helper(crate::process::exe_name("pdftoppm"))
         .args(["-f", "1", "-l", "1", "-singlefile", "-png", "-scale-to", &max.to_string()])
         .arg(input)
         .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })

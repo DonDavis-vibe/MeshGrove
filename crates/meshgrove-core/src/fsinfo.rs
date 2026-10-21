@@ -3,17 +3,26 @@
 use std::path::{Path, PathBuf};
 
 /// The mount containing `path` is mounted read-only (e.g. an NTFS drive without write support).
+/// Only Linux tells us cheaply; elsewhere a failing move to the trash reports the problem.
+#[cfg(target_os = "linux")]
 pub fn is_read_only(path: &Path) -> bool {
     let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
     let real = existing_ancestor(path).canonicalize().unwrap_or_else(|_| path.to_path_buf());
     mount_is_read_only(&mounts, &real)
 }
 
+#[cfg(not(target_os = "linux"))]
+pub fn is_read_only(_path: &Path) -> bool {
+    false
+}
+
 /// Archive members do not exist on disk; their archive does.
+#[cfg(target_os = "linux")]
 fn existing_ancestor(path: &Path) -> PathBuf {
     path.ancestors().find(|p| p.exists()).unwrap_or(Path::new("/")).to_path_buf()
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn mount_is_read_only(mounts: &str, path: &Path) -> bool {
     mounts
         .lines()
