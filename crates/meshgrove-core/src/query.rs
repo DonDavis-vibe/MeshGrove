@@ -1,5 +1,5 @@
 //! Library search syntax: `drache "castle tower" ext:3mf tag:pirat`.
-//! Plain words must all appear (case-insensitive) in the file name or its folder path.
+//! Plain words must all appear (case-insensitive) in the file name, its folder path or its note.
 
 use crate::formats::Kind;
 

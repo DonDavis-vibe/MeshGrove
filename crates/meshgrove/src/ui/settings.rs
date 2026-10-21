@@ -166,7 +166,11 @@ impl SettingsDialog {
             });
         }
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.root_input).hint_text("/pfad/zum/ordner").desired_width(320.0));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.root_input)
+                    .hint_text(t!("settings.folder_hint"))
+                    .desired_width(320.0),
+            );
             if ui.button(t!("settings.add")).clicked() {
                 let path = PathBuf::from(self.root_input.trim());
                 if path.is_dir() {
@@ -359,6 +363,16 @@ fn about(ui: &mut Ui, info: &AppInfo) {
             ui.label(v);
             ui.end_row();
         };
+        ui.weak(t!("settings.developer"));
+        ui.horizontal(|ui| {
+            ui.label(t!("settings.developer_value"));
+            ui.hyperlink_to("German Redneck Engineering", env!("CARGO_PKG_HOMEPAGE"));
+        });
+        ui.end_row();
+        ui.weak(t!("settings.source"));
+        ui.hyperlink_to(env!("CARGO_PKG_REPOSITORY"), env!("CARGO_PKG_REPOSITORY"));
+        ui.end_row();
+        row(ui, t!("settings.license"), env!("CARGO_PKG_LICENSE").to_owned());
         row(ui, t!("settings.version"), env!("CARGO_PKG_VERSION").to_owned());
         row(ui, t!("settings.gpu"), info.gpu.to_owned());
         row(ui, t!("settings.config_file"), Config::path().map(|p| p.display().to_string()).unwrap_or_default());

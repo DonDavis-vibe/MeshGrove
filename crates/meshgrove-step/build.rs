@@ -34,6 +34,16 @@ fn main() {
         println!("cargo:rustc-cfg=no_occt");
         return;
     }
+    // The data-exchange libraries were split and renamed (TKDESTEP, …) in 7.8.
+    let version = occt_version(Path::new(&include));
+    if version < (7, 8) {
+        println!(
+            "cargo:warning=OpenCascade {}.{} found, 7.8 or newer is needed: building meshgrove-step-mesher without STEP support",
+            version.0, version.1
+        );
+        println!("cargo:rustc-cfg=no_occt");
+        return;
+    }
     cc::Build::new()
         .cpp(true)
         .std("c++17")
@@ -47,4 +57,13 @@ fn main() {
     for lib in OCCT_LIBS {
         println!("cargo:rustc-link-lib=dylib={lib}");
     }
+}
+
+/// (major, minor) from Standard_Version.hxx; (0, 0) if it cannot be read.
+fn occt_version(include: &Path) -> (u32, u32) {
+    let header = std::fs::read_to_string(include.join("Standard_Version.hxx")).unwrap_or_default();
+    let define = |name: &str| {
+        header.lines().find_map(|line| line.strip_prefix("#define ")?.strip_prefix(name)?.trim().parse().ok())
+    };
+    (define("OCC_VERSION_MAJOR").unwrap_or(0), define("OCC_VERSION_MINOR").unwrap_or(0))
 }
