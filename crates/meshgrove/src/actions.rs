@@ -7,10 +7,122 @@ use std::process::{Command, Stdio};
 use meshgrove_core::config::Slicer;
 use meshgrove_core::{archive, fsinfo};
 
-/// Starts the slicer with the given model files (archive members are extracted first).
-pub fn open_in_slicer(slicer: &Slicer, files: &[PathBuf]) -> io::Result<()> {
+/// How the slicer got the files.
+pub enum SlicerOpened {
+    Started,
+    /// An already open slicer window took them.
+    HandedOver,
+}
+
+/// Gives the model files to the slicer (archive members are extracted first): to a slicer
+/// window that is already open if it accepts files from outside, else to a new one.
+pub fn open_in_slicer(slicer: &Slicer, files: &[PathBuf]) -> io::Result<SlicerOpened> {
     let files: Vec<PathBuf> = files.iter().map(|f| archive::materialize(f)).collect::<io::Result<_>>()?;
-    slicer_command(slicer, &files, std::env::var("LD_LIBRARY_PATH").ok()).spawn().map(drop)
+    #[cfg(target_os = "linux")]
+    if hand_to_running_slicer(slicer, &files) {
+        return Ok(SlicerOpened::HandedOver);
+    }
+    slicer_command(slicer, &files, std::env::var("LD_LIBRARY_PATH").ok()).spawn()?;
+    Ok(SlicerOpened::Started)
+}
+
+/// Orca-family slicers listen on the session bus for the files of a second start, even with
+/// their own single-instance setting off: (program name contains, bus name prefix, object path
+/// prefix); the running instance appends a hash of its executable's path to both.
+#[cfg(target_os = "linux")]
+const RUNNING_SLICERS: &[(&str, &str, &str)] = &[
+    (
+        "anycubicslicernext",
+        "com.softfever3d.AnycubicSlicerNext.InstanceCheck.Object",
+        "/com/softfever3d/AnycubicSlicer/InstanceCheck/Object",
+    ),
+    ("orca", "com.orcaslicer.OrcaSlicer.InstanceCheck.Object", "/com/orcaslicer/OrcaSlicer/InstanceCheck/Object"),
+    // OrcaSlicer 2.x and older.
+    ("orca", "com.softfever3d.orca-slicer.InstanceCheck.Object", "/com/softfever3d/OrcaSlicer/InstanceCheck/Object"),
+];
+
+/// Sends the files to an open window of this slicer; false if none is open (or it failed).
+#[cfg(target_os = "linux")]
+fn hand_to_running_slicer(slicer: &Slicer, files: &[PathBuf]) -> bool {
+    let program = slicer.program.to_string_lossy().to_lowercase();
+    let program_name = program.rsplit('/').next().unwrap_or_default();
+    let families: Vec<_> = RUNNING_SLICERS.iter().filter(|(key, _, _)| program_name.contains(key)).collect();
+    if families.is_empty() {
+        return false;
+    }
+    let Ok(out) = Command::new("dbus-send")
+        .args(["--session", "--print-reply", "--dest=org.freedesktop.DBus", "/org/freedesktop/DBus"])
+        .arg("org.freedesktop.DBus.ListNames")
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return false;
+    };
+    let names = bus_names(&String::from_utf8_lossy(&out.stdout));
+    // The message is the command line the slicer would have got, as its C-style escaped list.
+    let mut args = vec![slicer.program.to_string_lossy().into_owned()];
+    args.extend(files.iter().map(|f| f.to_string_lossy().into_owned()));
+    let message = escape_strings_cstyle(&args);
+    families.iter().any(|&&(_, bus_prefix, path_prefix)| {
+        names.iter().filter_map(|n| n.strip_prefix(bus_prefix).map(|hash| (n, hash))).any(|(name, hash)| {
+            Command::new("dbus-send")
+                .args(handover_args(name, &format!("{path_prefix}{hash}"), &message))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        })
+    })
+}
+
+/// Arguments for `dbus-send` calling `AnotherInstance(message)` (no reply is sent back).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn handover_args(name: &str, object: &str, message: &str) -> Vec<String> {
+    vec![
+        "--session".into(),
+        "--type=method_call".into(),
+        format!("--dest={name}"),
+        object.into(),
+        format!("{name}.AnotherInstance"),
+        format!("string:{message}"),
+    ]
+}
+
+/// Bus names from `dbus-send --print-reply … ListNames` output (`string "name"` lines).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn bus_names(reply: &str) -> Vec<String> {
+    reply.lines().filter_map(|l| l.trim().strip_prefix("string \"")?.strip_suffix('"').map(str::to_owned)).collect()
+}
+
+/// string with spaces, tabs, `;`, `\`, `"` or line breaks goes in quotes with `\` escapes.
+/// string with spaces, tabs, `;`, `\\`, `"` or line breaks goes in quotes with `\\` escapes.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn escape_strings_cstyle(strings: &[String]) -> String {
+    let mut out = String::new();
+    for (i, s) in strings.iter().enumerate() {
+        if i > 0 {
+            out.push(';');
+        }
+        let quote = (strings.len() == 1 && s.is_empty()) || s.contains([' ', '\t', ';', '\\', '"', '\r', '\n']);
+        if !quote {
+            out += s;
+            continue;
+        }
+        out.push('"');
+        for c in s.chars() {
+            match c {
+                '\\' | '"' => {
+                    out.push('\\');
+                    out.push(c);
+                }
+                '\r' => out += "\\r",
+                '\n' => out += "\\n",
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+    }
+    out
 }
 
 fn slicer_command(slicer: &Slicer, files: &[PathBuf], inherited_lib_path: Option<String>) -> Command {
@@ -22,6 +134,11 @@ fn slicer_command(slicer: &Slicer, files: &[PathBuf], inherited_lib_path: Option
     } else {
         Command::new(&slicer.program)
     };
+    // PrusaSlicer hands the files to an open window itself when asked to.
+    let program_name = slicer.program.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if program_name.contains("prusa") {
+        cmd.arg("--single-instance");
+    }
     cmd.args(&slicer.args).args(files).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     for (key, value) in &slicer.env {
         let value = match (key.as_str(), &inherited_lib_path) {
@@ -199,6 +316,49 @@ mod tests {
         assert!(envs.contains(&("LD_LIBRARY_PATH".into(), Some("/opt/a/app/lib:/usr/lib/x".into()))));
         assert!(envs.contains(&("WEBKIT_DISABLE_DMABUF_RENDERER".into(), Some("1".into()))));
         assert_eq!(cmd.get_current_dir(), Some(Path::new("/opt/a")));
+    }
+
+    #[test]
+    fn running_slicers_get_their_command_line_over_dbus() {
+        let args: Vec<String> =
+            ["/opt/a/AnycubicSlicerNext", "/m/orc.stl", "/m/Fidgets & Puzzles/shark v2.stl", r#"a"b\c"#]
+                .map(String::from)
+                .to_vec();
+        assert_eq!(
+            escape_strings_cstyle(&args),
+            r#"/opt/a/AnycubicSlicerNext;/m/orc.stl;"/m/Fidgets & Puzzles/shark v2.stl";"a\"b\\c""#
+        );
+        assert_eq!(escape_strings_cstyle(&[String::new()]), r#""""#);
+
+        let reply = "method return time=1 sender=org.freedesktop.DBus -> destination=:1.9 serial=3\n   array [\n      string \"org.freedesktop.DBus\"\n      string \"com.softfever3d.AnycubicSlicerNext.InstanceCheck.Object5886\"\n   ]\n";
+        assert_eq!(
+            bus_names(reply),
+            ["org.freedesktop.DBus", "com.softfever3d.AnycubicSlicerNext.InstanceCheck.Object5886"]
+        );
+        assert_eq!(
+            handover_args("com.x.InstanceCheck.Object7", "/com/x/InstanceCheck/Object7", "a;b"),
+            [
+                "--session",
+                "--type=method_call",
+                "--dest=com.x.InstanceCheck.Object7",
+                "/com/x/InstanceCheck/Object7",
+                "com.x.InstanceCheck.Object7.AnotherInstance",
+                "string:a;b"
+            ]
+        );
+    }
+
+    #[test]
+    fn prusaslicer_is_asked_for_a_single_instance() {
+        let slicer = Slicer {
+            name: "PrusaSlicer".into(),
+            program: "/usr/bin/prusa-slicer".into(),
+            args: Vec::new(),
+            env: Vec::new(),
+            workdir: None,
+        };
+        let cmd = slicer_command(&slicer, &[PathBuf::from("/m/orc.stl")], None);
+        assert_eq!(cmd.get_args().collect::<Vec<_>>(), ["--single-instance", "/m/orc.stl"]);
     }
 
     #[test]

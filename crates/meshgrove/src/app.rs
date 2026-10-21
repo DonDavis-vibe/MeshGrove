@@ -566,7 +566,12 @@ impl App {
                     .collect();
                 if let Some(slicer) = &self.slicer {
                     let message = match actions::open_in_slicer(slicer, &models) {
-                        Ok(()) => t!("toast.slicer_started", name = slicer.name, count = models.len()),
+                        Ok(actions::SlicerOpened::Started) => {
+                            t!("toast.slicer_started", name = slicer.name, count = models.len())
+                        }
+                        Ok(actions::SlicerOpened::HandedOver) => {
+                            t!("toast.slicer_handed_over", name = slicer.name, count = models.len())
+                        }
                         Err(e) => t!("toast.slicer_failed", name = slicer.name, error = e.to_string()),
                     };
                     self.toast(message.into_owned());
