@@ -64,6 +64,11 @@ impl ModelWindow {
         self.viewer.script_measure(picks);
     }
 
+    /// Test hook: start with a standard view (see [`ModelViewer::script_view`]).
+    pub fn script_view(&mut self, name: &str) {
+        self.viewer.script_view(name);
+    }
+
     /// Brings the window to the front.
     pub fn raise(&mut self) {
         self.focus = true;

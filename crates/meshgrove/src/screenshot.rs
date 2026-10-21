@@ -7,7 +7,8 @@
 //! `MESHGROVE_CLICKS=x,y;x,y;…` clicks those points one after the other, from 3 s on, every 0.8 s
 //! (`x,y*2` double-clicks), and `MESHGROVE_TYPE=text` types the text after the last click.
 //! `MESHGROVE_MEASURE=fx,fy;fx,fy` measures between those points (fractions of the view) in the
-//! first model window that opens, which the hook's input cannot reach.
+//! first model window that opens, which the hook's input cannot reach; `MESHGROVE_WINDOW_VIEW=top`
+//! (or `front`, `left` …) starts that window in a standard view.
 
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,8 @@ pub struct ScreenshotHook {
     pub search: Option<String>,
     /// Measuring points for the first model window.
     pub measure: Vec<egui::Vec2>,
+    /// Standard view for the first model window.
+    pub window_view: Option<String>,
     /// `MESHGROVE_FLATTEN=1`: start with "include subfolders" on.
     pub flatten: bool,
     /// `MESHGROVE_VIEW=duplicates`: open the duplicates view once the index is ready.
@@ -72,6 +75,7 @@ impl ScreenshotHook {
             pressed: false,
             search,
             measure,
+            window_view: std::env::var("MESHGROVE_WINDOW_VIEW").ok(),
             flatten,
             duplicates,
             settings,

@@ -312,10 +312,13 @@ impl App {
             Some(window) => window.raise(),
             None => {
                 let mut window = ModelWindow::new(entry);
-                if let Some(hook) = &mut self.screenshot
-                    && !hook.measure.is_empty()
-                {
-                    window.script_measure(std::mem::take(&mut hook.measure));
+                if let Some(hook) = &mut self.screenshot {
+                    if !hook.measure.is_empty() {
+                        window.script_measure(std::mem::take(&mut hook.measure));
+                    }
+                    if let Some(view) = hook.window_view.take() {
+                        window.script_view(&view);
+                    }
                 }
                 self.model_windows.push(window);
             }

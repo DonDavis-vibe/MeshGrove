@@ -21,7 +21,7 @@
 
 ---
 
-![Meshgrove mit einem Ordner voller Haushaltsdrucke, im 3D-Viewer ein Zahnbürstenhalter](docs/images/screenshot-hero.png)
+![Meshgrove mit einem Ordner voller mehrfarbiger Modelle, ein bemaltes 3MF-Logo im eigenen Modell-Fenster](docs/images/screenshot-hero.png)
 
 ## Inhalt
 
@@ -751,6 +751,7 @@ Test-Hooks (Umgebungsvariablen) steuern die Sitzung. Eigene `XDG_CONFIG_HOME`,
 | `MESHGROVE_HOLD=1`, `MESHGROVE_WHEEL=dy` | Taste gedrückt halten / Mausrad am Zeiger drehen |
 | `MESHGROVE_CLICKS=x,y;x,y` | Diese Punkte nacheinander anklicken (ab 3 s, alle 0,8 s); `x,y*2` klickt doppelt |
 | `MESHGROVE_MEASURE=fx,fy;fx,fy` | Im ersten Modell-Fenster zwischen diesen Punkten messen (Anteile der Ansicht) |
+| `MESHGROVE_WINDOW_VIEW=top` | Das erste Modell-Fenster in einer Standardansicht öffnen (`front`, `left` …) |
 | `MESHGROVE_TYPE=text` | Nach den Klicks Text tippen |
 | `MESHGROVE_SEARCH=suche` | Mit einer Bibliothekssuche starten |
 | `MESHGROVE_FLATTEN=1` | Mit „Unterordner einbeziehen“ starten |

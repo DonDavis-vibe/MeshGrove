@@ -45,6 +45,8 @@ pub struct ModelViewer {
     /// Test hook: measuring points to place once the triangles are loaded, as fractions of the
     /// view (0..1 from the top left).
     scripted_picks: Vec<egui::Vec2>,
+    /// Test hook: a standard view (`top`, `front`, …) to show once the model is there.
+    scripted_view: Option<String>,
 }
 
 impl ModelViewer {
@@ -58,7 +60,13 @@ impl ModelViewer {
             measure: None,
             saving: None,
             scripted_picks: Vec::new(),
+            scripted_view: None,
         }
+    }
+
+    /// Test hook: shows a standard view (`top`, `front`, …) as soon as the model is there.
+    pub fn script_view(&mut self, name: &str) {
+        self.scripted_view = Some(format!("viewer.view_{name}"));
     }
 
     /// Test hook: starts measuring and places these points (fractions of the view) as soon as
@@ -110,6 +118,12 @@ impl ModelViewer {
             );
             return message;
         };
+        if let Some(key) = self.scripted_view.take()
+            && let Some(&(_, az, el)) = PRESETS.iter().find(|(k, ..)| *k == key)
+        {
+            self.view = ViewParams { azimuth_deg: az, elevation_deg: el, ..orbit_view() };
+            self.dirty = true;
+        }
         let (w, h) = pixel_size(ui.ctx(), rect);
         if w < 8 || h < 8 {
             return message;

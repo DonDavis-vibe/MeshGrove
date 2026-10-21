@@ -21,7 +21,7 @@
 
 ---
 
-![Meshgrove showing a folder of household prints, with a toothbrush holder in the 3D viewer](docs/images/screenshot-hero.png)
+![Meshgrove showing a folder of multi-colour models, with a painted 3MF logo open in a model window of its own](docs/images/screenshot-hero.png)
 
 ## Contents
 
@@ -726,6 +726,7 @@ folders to keep test runs away from your real settings:
 | `MESHGROVE_HOLD=1`, `MESHGROVE_WHEEL=dy` | Hold the button / turn the wheel at the pointer |
 | `MESHGROVE_CLICKS=x,y;x,y` | Click these points one after another (from 3 s, every 0.8 s); `x,y*2` double-clicks |
 | `MESHGROVE_MEASURE=fx,fy;fx,fy` | Measure between these points (fractions of the view) in the first model window |
+| `MESHGROVE_WINDOW_VIEW=top` | Start the first model window in a standard view (`front`, `left`, …) |
 | `MESHGROVE_TYPE=text` | Type text after the clicks |
 | `MESHGROVE_SEARCH=query` | Start with a library search |
 | `MESHGROVE_FLATTEN=1` | Start with "include subfolders" |
