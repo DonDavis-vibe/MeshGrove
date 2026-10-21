@@ -64,16 +64,28 @@ struct Uniforms {
 
 /// A mesh uploaded to the GPU, recentred on its bounding-box centre for float precision.
 pub struct GpuMesh {
-    chunks: Vec<(wgpu::Buffer, u32)>,
+    chunks: Vec<Chunk>,
     /// Bounds relative to the uploaded (recentred) coordinates.
     pub bounds: Aabb,
     pub triangle_count: usize,
 }
 
+/// One vertex buffer of positions, plus one of sRGB colours for coloured meshes.
+struct Chunk {
+    positions: wgpu::Buffer,
+    colors: Option<wgpu::Buffer>,
+    vertices: u32,
+}
+
 impl GpuMesh {
     /// GPU memory used by the vertex buffers.
     pub fn byte_size(&self) -> usize {
-        self.chunks.iter().map(|(_, count)| *count as usize * 12).sum()
+        self.chunks.iter().map(|c| c.vertices as usize * if c.colors.is_some() { 16 } else { 12 }).sum()
+    }
+
+    /// Whether the mesh brings its own colours (and ignores `ViewParams::model_color`).
+    pub fn is_colored(&self) -> bool {
+        self.chunks.iter().any(|c| c.colors.is_some())
     }
 }
 
@@ -91,6 +103,8 @@ pub struct RenderTarget {
 
 pub struct Renderer {
     pipeline: wgpu::RenderPipeline,
+    /// The same with a second vertex buffer of per-vertex colours.
+    colored: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sample_count: u32,
 }
@@ -121,47 +135,60 @@ impl Renderer {
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("meshgrove mesh pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: 12,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                })],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                // No culling: winding in STL files is unreliable and meshes may be open.
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: wgpu::MultisampleState { count: sample_count, ..Default::default() },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: COLOR_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        Renderer { pipeline, bind_group_layout, sample_count }
+        let positions = wgpu::VertexBufferLayout {
+            array_stride: 12,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+        };
+        let colors = wgpu::VertexBufferLayout {
+            array_stride: 4,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &wgpu::vertex_attr_array![1 => Unorm8x4],
+        };
+        let pipeline = |label, entry_point, buffers: &[Option<wgpu::VertexBufferLayout>]| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some(entry_point),
+                    compilation_options: Default::default(),
+                    buffers,
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    // No culling: winding in STL files is unreliable and meshes may be open.
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: wgpu::MultisampleState { count: sample_count, ..Default::default() },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: COLOR_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        Renderer {
+            pipeline: pipeline("meshgrove mesh pipeline", "vs_main", &[Some(positions.clone())]),
+            colored: pipeline("meshgrove coloured mesh pipeline", "vs_colored", &[Some(positions), Some(colors)]),
+            bind_group_layout,
+            sample_count,
+        }
     }
 
     pub fn upload(&self, device: &wgpu::Device, mesh: &Mesh) -> Option<GpuMesh> {
@@ -266,11 +293,14 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &target.bind_group, &[]);
-        for (buffer, count) in &mesh.chunks {
-            pass.set_vertex_buffer(0, buffer.slice(..));
-            pass.draw(0..*count, 0..1);
+        for chunk in &mesh.chunks {
+            pass.set_pipeline(if chunk.colors.is_some() { &self.colored } else { &self.pipeline });
+            pass.set_vertex_buffer(0, chunk.positions.slice(..));
+            if let Some(colors) = &chunk.colors {
+                pass.set_vertex_buffer(1, colors.slice(..));
+            }
+            pass.draw(0..chunk.vertices, 0..1);
         }
     }
 }
@@ -296,16 +326,25 @@ pub fn upload_mesh(device: &wgpu::Device, mesh: &Mesh) -> Option<GpuMesh> {
     let bounds = mesh.bounds()?;
     let center = bounds.center();
     let soup: Vec<[f32; 3]> = mesh.to_soup().into_iter().map(|p| (Vec3::from(p) - center).to_array()).collect();
+    let colors = mesh.soup_colors().filter(|c| c.len() == soup.len());
     let verts_per_chunk = (MAX_CHUNK_BYTES / 12) / 3 * 3;
+    let buffer = |label, contents: &[u8]| {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(label),
+            contents,
+            usage: wgpu::BufferUsages::VERTEX,
+        })
+    };
     let chunks = soup
         .chunks(verts_per_chunk)
-        .map(|chunk| {
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("meshgrove mesh vertices"),
-                contents: bytemuck::cast_slice(chunk),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            (buffer, chunk.len() as u32)
+        .enumerate()
+        .map(|(i, chunk)| Chunk {
+            positions: buffer("meshgrove mesh vertices", bytemuck::cast_slice(chunk)),
+            colors: colors.as_ref().map(|c| {
+                let start = i * verts_per_chunk;
+                buffer("meshgrove mesh colours", bytemuck::cast_slice(&c[start..start + chunk.len()]))
+            }),
+            vertices: chunk.len() as u32,
         })
         .collect();
     Some(GpuMesh {

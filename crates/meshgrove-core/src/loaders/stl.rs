@@ -46,7 +46,7 @@ fn parse_binary(bytes: &[u8]) -> Result<Mesh, LoadError> {
             positions.push([f(0), f(4), f(8)]);
         }
     }
-    Ok(Mesh { positions, indices: None })
+    Ok(Mesh { positions, indices: None, colors: None })
 }
 
 fn parse_ascii(bytes: &[u8]) -> Result<Mesh, LoadError> {
@@ -65,7 +65,7 @@ fn parse_ascii(bytes: &[u8]) -> Result<Mesh, LoadError> {
     }
     // Drop a dangling partial facet instead of rejecting the whole file.
     positions.truncate(positions.len() / 3 * 3);
-    Ok(Mesh { positions, indices: None })
+    Ok(Mesh { positions, indices: None, colors: None })
 }
 
 /// Binary STL bytes for any mesh (used for the STEP mesh cache and test fixtures).
@@ -110,7 +110,7 @@ mod tests {
 
     fn cube_soup() -> Mesh {
         let cube = Mesh::cube(20.0);
-        Mesh { positions: cube.to_soup(), indices: None }
+        Mesh { positions: cube.to_soup(), indices: None, colors: None }
     }
 
     #[test]

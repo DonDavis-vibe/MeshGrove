@@ -254,6 +254,18 @@ fn facts(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, model: &ModelStatus,
                 }
             }
         }
+        // The viewer's plate knows the materials; the thumbnail only the colours of the first plate.
+        let filaments: Vec<(Option<u32>, [u8; 3], Option<&str>)> = match info {
+            Some(info) if !info.filaments.is_empty() => {
+                info.filaments.iter().map(|f| (Some(f.slot), f.color, f.material.as_deref())).collect()
+            }
+            _ => meta.map(|m| m.filaments.iter().map(|&c| (None, c, None)).collect()).unwrap_or_default(),
+        };
+        if !filaments.is_empty() {
+            ui.label(RichText::new(t!("details.filaments")).weak());
+            filament_swatches(ui, &filaments);
+            ui.end_row();
+        }
         if meta.is_some_and(|m| m.embedded) {
             fact(ui, &t!("details.preview"), &t!("details.preview_embedded"));
         }
@@ -292,6 +304,39 @@ fn plates(ui: &mut Ui, plates: &[(usize, egui::TextureHandle)], active: Option<u
         });
     });
     clicked
+}
+
+/// One colour chip per filament (slot number inside, details on hover), then the materials.
+fn filament_swatches(ui: &mut Ui, filaments: &[(Option<u32>, [u8; 3], Option<&str>)]) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for &(slot, [r, g, b], material) in filaments {
+            let (rect, response) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+            let painter = ui.painter();
+            painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(r, g, b));
+            painter.rect_stroke(rect, 4.0, ui.visuals().widgets.noninteractive.fg_stroke, egui::StrokeKind::Inside);
+            if let Some(slot) = slot {
+                // Dark digits on light filaments and the other way round.
+                let luma = 0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b);
+                let ink = if luma > 140.0 { egui::Color32::BLACK } else { egui::Color32::WHITE };
+                painter.text(rect.center(), egui::Align2::CENTER_CENTER, slot, egui::FontId::proportional(11.0), ink);
+            }
+            let hex = format!("#{r:02X}{g:02X}{b:02X}");
+            response.on_hover_text(match (slot, material) {
+                (Some(n), Some(material)) => t!("details.filament_material", n = n, material = material, color = hex),
+                (Some(n), None) => t!("details.filament", n = n, color = hex),
+                _ => hex.into(),
+            });
+        }
+        let mut materials: Vec<&str> = filaments.iter().filter_map(|f| f.2).collect();
+        materials.dedup();
+        materials.sort_unstable();
+        materials.dedup();
+        if !materials.is_empty() {
+            ui.add_space(4.0);
+            ui.label(materials.join(", "));
+        }
+    });
 }
 
 fn fact(ui: &mut Ui, label: &str, value: &str) {

@@ -46,11 +46,19 @@ pub fn make(
         Kind::ThreeMf => {
             // The slicer's own plate picture is free and shows filament colours; render only without one.
             let parsed = loaders::threemf::parse(bytes);
-            let meta = parsed.as_ref().map(|m| mesh_meta(&m.mesh, bytes)).unwrap_or_default();
+            let meta = parsed
+                .as_ref()
+                .map(|m| ThumbMeta {
+                    filaments: m.filaments.iter().map(|f| f.color).collect(),
+                    ..mesh_meta(&m.mesh, bytes)
+                })
+                .unwrap_or_default();
             if let Some(image) = loaders::threemf::embedded_thumbnail(bytes, size) {
                 return Ok(Thumbnail { image, meta: ThumbMeta { embedded: true, ..meta } });
             }
-            rendered(parsed.map_err(bad)?.mesh, meta)
+            parsed.map_err(bad)?;
+            // Painted areas only show in the split mesh the viewer uses as well.
+            rendered(loaders::threemf::parse_plate(bytes, None).map_err(bad)?.mesh, meta)
         }
         Kind::Step => {
             // Tessellated by the OpenCascade helper (cached); the bytes are only hashed.
@@ -80,6 +88,7 @@ fn mesh_meta(mesh: &Mesh, bytes: &[u8]) -> ThumbMeta {
         content_hash: (!bytes.is_empty()).then(|| dedupe::content_hash(bytes)),
         geo_sig: dedupe::geo_signature(mesh),
         embedded: false,
+        filaments: Vec::new(),
     }
 }
 

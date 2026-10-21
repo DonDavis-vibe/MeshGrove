@@ -31,6 +31,8 @@ pub struct ModelInfo {
     /// The build plate this mesh shows, for multi-plate slicer projects.
     pub plate: Option<usize>,
     pub plate_count: usize,
+    /// Filaments the shown plate prints with (slicer projects).
+    pub filaments: Vec<threemf::Filament>,
 }
 
 impl ModelInfo {
@@ -45,6 +47,7 @@ impl ModelInfo {
             plates: Vec::new(),
             plate: None,
             plate_count: 0,
+            filaments: Vec::new(),
         }
     }
 }
@@ -197,7 +200,7 @@ fn read(path: &Path, kind: Kind, plate: Option<usize>) -> Result<(meshgrove_core
                 })
                 .collect();
             let info = ModelInfo {
-                triangles: 0,
+                triangles: model.triangles,
                 size_mm: glam::Vec3::ZERO,
                 title: model.title,
                 designer: model.designer,
@@ -205,6 +208,7 @@ fn read(path: &Path, kind: Kind, plate: Option<usize>) -> Result<(meshgrove_core
                 plates,
                 plate: model.plate,
                 plate_count: model.plates.len(),
+                filaments: model.filaments,
             };
             (model.mesh, info)
         }
@@ -214,7 +218,10 @@ fn read(path: &Path, kind: Kind, plate: Option<usize>) -> Result<(meshgrove_core
 }
 
 fn finish(mesh: meshgrove_core::Mesh, mut info: ModelInfo, device: &wgpu::Device) -> Result<Loaded, String> {
-    info.triangles = mesh.triangle_count();
+    // 3MF files report their own count: split paint must not inflate it.
+    if info.triangles == 0 {
+        info.triangles = mesh.triangle_count();
+    }
     info.size_mm = mesh.bounds().map(|b| b.size()).unwrap_or_default();
     let gpu = upload_mesh(device, &mesh).ok_or_else(|| t!("error.empty_model").into_owned())?;
     Ok(Loaded { mesh: Arc::new(gpu), info: Arc::new(info) })

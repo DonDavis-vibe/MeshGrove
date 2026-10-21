@@ -91,7 +91,7 @@ Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 | **Galerie** | Vorschauen für STL, 3MF, STEP, Bilder und PDFs; Ordner- und Archiv-Kacheln zeigen ein 2×2-Mosaik ihres Inhalts; Kachelgröße einstellbar; Sortieren nach Name, Datum, Größe oder Typ; „Nur 3D-Modelle“; „Unterordner einbeziehen“ (alle Dateien unter einem Ordner in einem Raster); Mehrfachauswahl |
 | **Drehvorschau** | Mit der Maus über eine Modell-Kachel fahren, und das Modell dreht sich. Ziehen dreht es von Hand, Mausrad beim Ziehen zoomt |
 | **3D-Viewer** | Drehen, Verschieben und Zoomen um einen festen Drehpunkt (das Modell springt beim Drehen nie); Standardansichten (vorne, hinten, links, rechts, oben, unten, schräg); **Messen zwischen zwei Punkten in mm**; **Bildexport** als PNG mit 2048 px |
-| **3MF-Projekte** | Eingebettete Plattenbilder der Slicer (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); Klick auf ein Plattenbild zeigt diese Platte in 3D; Titel, Designer und Programm aus den Metadaten |
+| **3MF-Projekte** | Eingebettete Plattenbilder der Slicer (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); Klick auf ein Plattenbild zeigt diese Platte in 3D; **mehrfarbig**: Filamentfarben pro Objekt und Teil, bemalte Modelle (Multi-Material-Bemalung) und 3MF-Materialfarben im Viewer und in selbst gerenderten Vorschauen; Filament-Farbfelder auf Kacheln und in den Details; Titel, Designer und Programm aus den Metadaten |
 | **STEP / STP** | CAD-Dateien werden von OpenCascade in einem eigenen Hilfsprozess vernetzt, eine kaputte Datei kann die App also nicht abstürzen lassen; das Ergebnis wird zwischengespeichert |
 | **Archive** | ZIP, 7z, RAR und TAR öffnen wie Ordner; jedes enthaltene Modell bekommt eine Vorschau; entpackt wird nur, wenn ein anderes Programm die Datei braucht |
 | **Bibliothek** | Index (SQLite) aller Bibliotheksordner; Sofortsuche wie `drache ext:3mf tag:bemalt`; Änderungen auf der Platte werden automatisch erkannt |
@@ -275,6 +275,21 @@ Die Knöpfe über der Ansicht:
 unter den Fakten die Bilder aller Platten. Ein Klick auf ein Plattenbild zeigt diese Platte im
 Viewer.
 
+**Mehrfarbige 3MF-Projekte** zeigen ihre Farben im Viewer, in der Drehvorschau und in den
+Vorschauen, die Meshgrove selbst rendert:
+
+- jedes Objekt und jedes Teil in der Farbe des Filaments, das der Slicer ihm zugewiesen hat
+  (Bambu Studio, OrcaSlicer, Anycubic Slicer Next, PrusaSlicer)
+- bemalte Modelle: Die Multi-Material-Bemalung (`paint_color` / `mmu_segmentation`) wird
+  entschlüsselt und flächengenau eingefärbt
+- einfache 3MF-Dateien mit Standard-Materialfarben (`basematerials`, `colorgroup`), wie sie
+  CAD-Programme schreiben
+- Modifier, negative Volumen und Stützblocker werden nicht gezeichnet, so wie sie auch nicht
+  gedruckt werden
+
+Kacheln von Slicer-Projekten zeigen einen Punkt pro Filamentfarbe, und die Details listen die
+Filamente mit Slot-Nummer und Material.
+
 ### Die Detailansicht
 
 Unter dem Viewer stehen:
@@ -282,8 +297,8 @@ Unter dem Viewer stehen:
 - Typ, Dateigröße und Änderungsdatum
 - **Maße** in mm (X × Y × Z) und die Anzahl der **Dreiecke**
 - das Ergebnis des **Druckbett-Checks** (siehe [Druckbett-Check](#druckbett-check))
-- bei 3MF: Titel, Designer, das erzeugende Programm und ob die Vorschau das eingebettete Bild
-  des Slicers ist
+- bei 3MF: Titel, Designer, das erzeugende Programm, die **Filamente** (Farbe, Slot und
+  Material) und ob die Vorschau das eingebettete Bild des Slicers ist
 - **Tags** und die **Notiz** (für Dateien in der Bibliothek)
 - der vollständige Pfad
 
@@ -458,7 +473,7 @@ Strg heißt auf macOS ⌘ Cmd.
 | Typ | Endungen | Vorschau | 3D-Viewer | Hinweise |
 |---|---|---|---|---|
 | STL | `.stl` | ✔ | ✔ | Binär und ASCII; Binärdateien, die mit „solid“ beginnen, werden richtig erkannt |
-| 3MF | `.3mf` | ✔ | ✔ | Zuerst das eingebettete Slicer-Bild (leere Platten werden übersprungen), sonst gerendert; Komponenten, Transformationen, Einheiten, Production-Erweiterung (`p:path`), mehrere Druckplatten |
+| 3MF | `.3mf` | ✔ | ✔ | Zuerst das eingebettete Slicer-Bild (leere Platten werden übersprungen), sonst gerendert; Komponenten, Transformationen, Einheiten, Production-Erweiterung (`p:path`), mehrere Druckplatten, Filament-, Bemalungs- und Materialfarben |
 | STEP | `.step`, `.stp` | ✔ | ✔ | Braucht den OpenCascade-Helfer `meshgrove-step-mesher`; einmal vernetzt, dann zwischengespeichert |
 | Archive | `.zip`, `.7z`, `.rar`, `.tar`, `.tar.gz`, `.tgz`, … | Mosaik | Inhalt | Wie Ordner durchsuchbar, über libarchive |
 | Bilder | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | ✔ | – | In der Detailansicht groß angezeigt |

@@ -1,4 +1,5 @@
 pub mod image;
+pub mod paint;
 pub mod pdf;
 pub mod step;
 pub mod stl;

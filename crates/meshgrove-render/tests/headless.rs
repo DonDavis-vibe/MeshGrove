@@ -51,3 +51,30 @@ fn long_thin_model_is_framed_too() {
     assert!(cov > 0.01, "rod must be visible, coverage {cov}");
     assert!((center[0] - 0.5).abs() < 0.05 && (center[1] - 0.5).abs() < 0.05, "centre {center:?}");
 }
+
+#[test]
+fn coloured_triangles_keep_their_colours() {
+    let Some(gpu) = gpu() else { return };
+    let mut cube = Mesh::cube(20.0);
+    // Half the triangles red, half blue; the model colour must not show up anywhere.
+    let n = cube.triangle_count();
+    cube.colors = Some((0..n).map(|i| if i < n / 2 { [230, 30, 30, 255] } else { [30, 30, 230, 255] }).collect());
+    let view = ViewParams { model_color: [0.0, 1.0, 0.0], ..Default::default() };
+    let img = gpu.render(&cube, 128, &view).unwrap();
+    let (mut red, mut blue, mut green) = (0, 0, 0);
+    for p in img.pixels().filter(|p| p[3] > 250) {
+        let [r, g, b, _] = p.0;
+        if r > g.saturating_add(40) && r > b.saturating_add(40) {
+            red += 1;
+        } else if b > r.saturating_add(40) && b > g.saturating_add(40) {
+            blue += 1;
+        } else if g > r.saturating_add(40) && g > b.saturating_add(40) {
+            green += 1;
+        }
+    }
+    assert!(red > 200 && blue > 200, "red {red}, blue {blue}");
+    assert_eq!(green, 0);
+    // Plain meshes still use the model colour.
+    let plain = gpu.render(&Mesh::cube(20.0), 128, &view).unwrap();
+    assert!(plain.pixels().any(|p| p[3] > 250 && p[1] > p[0].saturating_add(40)));
+}

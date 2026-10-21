@@ -441,6 +441,16 @@ impl Gallery {
             }
             (_, None) => icons::file(&painter, img, &icons::extension_label(&entry.name), paper, ink),
         }
+        if let Some(Thumb::Ready(_, meta)) = self.thumb(index)
+            && entry.kind.is_model()
+            && !meta.filaments.is_empty()
+        {
+            // Two slots with the same colour look like one filament on a tile.
+            let mut colors = meta.filaments.clone();
+            let mut seen = std::collections::HashSet::new();
+            colors.retain(|c| seen.insert(*c));
+            icons::filament_dots(&painter, img, &colors);
+        }
         if let Some(n) = self.duplicates.get(&entry.path) {
             icons::corner_badge(
                 &painter,

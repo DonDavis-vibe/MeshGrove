@@ -7,6 +7,9 @@ pub struct Mesh {
     /// Triangle indices into `positions`. `None` means `positions` is a
     /// triangle soup with three consecutive vertices per triangle (what STL gives us).
     pub indices: Option<Vec<u32>>,
+    /// One sRGB colour per triangle (filament or material colours of 3MF projects);
+    /// `None` for plain meshes, which the renderer draws in its model colour.
+    pub colors: Option<Vec<[u8; 4]>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -76,6 +79,12 @@ impl Mesh {
         }
     }
 
+    /// Per-vertex colours matching [`Mesh::to_soup`] (each triangle's colour three times).
+    pub fn soup_colors(&self) -> Option<Vec<[u8; 4]>> {
+        let colors = self.colors.as_ref()?;
+        Some(colors.iter().take(self.triangle_count()).flat_map(|&c| [c; 3]).collect())
+    }
+
     /// Axis-aligned cube from (0,0,0) to (size,size,size), 12 triangles, outward winding.
     pub fn cube(size: f32) -> Mesh {
         let s = size;
@@ -98,7 +107,7 @@ impl Mesh {
             1, 2, 6,  1, 6, 5, // right (+X)
             3, 0, 4,  3, 4, 7, // left (-X)
         ];
-        Mesh { positions, indices: Some(indices) }
+        Mesh { positions, indices: Some(indices), colors: None }
     }
 }
 
@@ -155,14 +164,18 @@ mod tests {
         let b = cube.bounds().unwrap();
         assert_eq!(b.size(), Vec3::splat(10.0));
         assert_eq!(b.center(), Vec3::splat(5.0));
-        let soup = Mesh { positions: cube.to_soup(), indices: None };
+        let soup = Mesh { positions: cube.to_soup(), indices: None, colors: None };
         assert_eq!(soup.triangle_count(), 12);
         assert_eq!(soup.triangle(3), cube.triangle(3));
     }
 
     #[test]
     fn bounds_ignore_non_finite_vertices() {
-        let mesh = Mesh { positions: vec![[0.0, 0.0, 0.0], [f32::NAN, 1.0, 1.0], [2.0, 3.0, 4.0]], indices: None };
+        let mesh = Mesh {
+            positions: vec![[0.0, 0.0, 0.0], [f32::NAN, 1.0, 1.0], [2.0, 3.0, 4.0]],
+            indices: None,
+            colors: None,
+        };
         let b = mesh.bounds().unwrap();
         assert_eq!(b.max, Vec3::new(2.0, 3.0, 4.0));
         assert!(Mesh::default().bounds().is_none());

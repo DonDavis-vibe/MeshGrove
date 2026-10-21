@@ -90,7 +90,7 @@ What makes it different from other model managers:
 | **Gallery** | Thumbnails for STL, 3MF, STEP, images and PDFs; folder and archive tiles show a 2×2 mosaic of what is inside; resizable tiles; sort by name, date, size or type; "models only"; "include subfolders" (all files below a folder in one grid); multi-selection |
 | **Hover turntable** | Point at a model tile and the model spins in place. Drag to turn it yourself, and turn the wheel while dragging to zoom |
 | **3D viewer** | Orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **picture export** as a 2048 px PNG |
-| **3MF projects** | Embedded slicer plate pictures (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); click a plate picture to see that plate in 3D; title, designer and application from the metadata |
+| **3MF projects** | Embedded slicer plate pictures (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); click a plate picture to see that plate in 3D; **multi-colour**: filament colours per object and part, painted models (multi-material painting) and 3MF material colours in the viewer and in rendered previews; filament swatches on tiles and in the details; title, designer and application from the metadata |
 | **STEP / STP** | CAD files are tessellated by OpenCascade in a separate helper process, so a broken file cannot crash the app; results are cached |
 | **Archives** | Open ZIP, 7z, RAR and TAR like folders; every model inside gets a preview; files are extracted only when another program needs them |
 | **Library** | Index (SQLite) of all library folders; instant search such as `dragon ext:3mf tag:painted`; changes on disk are picked up automatically |
@@ -267,6 +267,20 @@ The buttons above the view:
 pictures of all plates below the facts. Click a plate picture to show that plate in the
 viewer.
 
+**Multi-colour 3MF projects** show their colours in the viewer, the hover turntable and the
+previews Meshgrove renders itself:
+
+- each object and part in the colour of the filament the slicer assigned to it (Bambu Studio,
+  OrcaSlicer, Anycubic Slicer Next, PrusaSlicer)
+- painted models: multi-material painting (`paint_color` / `mmu_segmentation`) is decoded
+  into the painted areas
+- plain 3MF files with standard material colours (`basematerials`, `colorgroup`), as CAD
+  programs write them
+- modifiers, negative volumes and support blockers are not drawn, just as they are not printed
+
+Tiles of slicer projects show a dot per filament colour, and the details list the filaments
+with their slot number and material.
+
 ### The details panel
 
 Below the viewer you find:
@@ -274,8 +288,8 @@ Below the viewer you find:
 - type, file size and modification date
 - **dimensions** in mm (X × Y × Z) and the **triangle** count
 - the **print bed** result (see [Print bed check](#print-bed-check))
-- for 3MF: title, designer, the application that wrote it, and whether the preview comes from
-  the slicer's embedded picture
+- for 3MF: title, designer, the application that wrote it, the **filaments** (colour, slot and
+  material) and whether the preview comes from the slicer's embedded picture
 - **tags** and the **note** (for files in the library)
 - the full path
 
@@ -443,7 +457,7 @@ Ctrl means ⌘ Cmd on macOS.
 | Type | Extensions | Preview | 3D viewer | Notes |
 |---|---|---|---|---|
 | STL | `.stl` | ✔ | ✔ | Binary and ASCII; binary files that start with "solid" are recognised correctly |
-| 3MF | `.3mf` | ✔ | ✔ | Embedded slicer picture first (blank plates are skipped), otherwise rendered; components, transforms, units, Production extension (`p:path`), multiple build plates |
+| 3MF | `.3mf` | ✔ | ✔ | Embedded slicer picture first (blank plates are skipped), otherwise rendered; components, transforms, units, Production extension (`p:path`), multiple build plates, filament, paint and material colours |
 | STEP | `.step`, `.stp` | ✔ | ✔ | Needs the OpenCascade helper `meshgrove-step-mesher`; tessellated once, then cached |
 | Archives | `.zip`, `.7z`, `.rar`, `.tar`, `.tar.gz`, `.tgz`, … | Mosaic | Members | Browsed like folders through libarchive |
 | Images | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | ✔ | – | Shown large in the details panel |

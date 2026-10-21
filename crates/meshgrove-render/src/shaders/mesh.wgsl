@@ -1,5 +1,6 @@
 // Flat-shaded mesh. Normals come from screen-space derivatives, so the vertex
 // buffer only holds positions and the (often wrong) STL normals are ignored.
+// Coloured meshes (3MF filaments, materials) add an sRGB colour per vertex.
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
@@ -14,6 +15,7 @@ struct Uniforms {
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) world: vec3<f32>,
+    @location(1) color: vec3<f32>,   // linear RGB, the same at all corners of a triangle
 };
 
 @vertex
@@ -21,6 +23,22 @@ fn vs_main(@location(0) pos: vec3<f32>) -> VsOut {
     var out: VsOut;
     out.world = pos;
     out.clip = u.view_proj * vec4<f32>(pos, 1.0);
+    out.color = u.base_color.rgb;
+    return out;
+}
+
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let lo = c / 12.92;
+    let hi = pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
+    return select(hi, lo, c <= vec3<f32>(0.04045));
+}
+
+@vertex
+fn vs_colored(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> VsOut {
+    var out: VsOut;
+    out.world = pos;
+    out.clip = u.view_proj * vec4<f32>(pos, 1.0);
+    out.color = srgb_to_linear(color.rgb);
     return out;
 }
 
@@ -41,6 +59,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let half_v = normalize(u.key_dir.xyz + to_eye);
     let spec = pow(max(dot(n, half_v), 0.0), 48.0) * 0.18;
 
-    let lit = u.base_color.rgb * (hemi + key * 0.85 + fill * 0.12) + vec3<f32>(spec + rim);
+    let lit = in.color * (hemi + key * 0.85 + fill * 0.12) + vec3<f32>(spec + rim);
     return vec4<f32>(lit, 1.0);
 }
