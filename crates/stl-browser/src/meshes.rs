@@ -11,9 +11,9 @@ use stlb_core::Kind;
 use stlb_core::loaders::{self, threemf};
 use stlb_render::{GpuMesh, upload_mesh};
 
-/// Kinds the viewer and turntable can show (STEP follows with its own mesher).
+/// Kinds the viewer and turntable can show.
 pub fn viewable(kind: Kind) -> bool {
-    matches!(kind, Kind::Stl | Kind::ThreeMf)
+    matches!(kind, Kind::Stl | Kind::ThreeMf | Kind::Step)
 }
 
 const VRAM_BUDGET: usize = 1536 << 20;
@@ -31,6 +31,22 @@ pub struct ModelInfo {
     /// The build plate this mesh shows, for multi-plate slicer projects.
     pub plate: Option<usize>,
     pub plate_count: usize,
+}
+
+impl ModelInfo {
+    /// Facts of a plain mesh file (no 3MF metadata or plates).
+    fn plain() -> ModelInfo {
+        ModelInfo {
+            triangles: 0,
+            size_mm: glam::Vec3::ZERO,
+            title: None,
+            designer: None,
+            application: None,
+            plates: Vec::new(),
+            plate: None,
+            plate_count: 0,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -152,8 +168,12 @@ fn ready_bytes(state: &MeshState) -> Option<usize> {
 }
 
 fn load(path: &Path, kind: Kind, plate: Option<usize>, device: &wgpu::Device) -> Result<Loaded, String> {
+    if kind == Kind::Step {
+        let mesh = loaders::step::load(path).map_err(|e| e.to_string())?;
+        return finish(mesh, ModelInfo::plain(), device);
+    }
     let bytes = stlb_core::archive::read(path).map_err(|e| e.to_string())?;
-    let (mesh, mut info) = match kind {
+    let (mesh, info) = match kind {
         Kind::ThreeMf => {
             let model = threemf::parse_plate(&bytes, plate).map_err(|e| e.to_string())?;
             let plates = threemf::plate_images(&bytes)
@@ -175,22 +195,13 @@ fn load(path: &Path, kind: Kind, plate: Option<usize>, device: &wgpu::Device) ->
             };
             (model.mesh, info)
         }
-        _ => {
-            let mesh = loaders::load_mesh(kind, &bytes).map_err(|e| e.to_string())?;
-            let info = ModelInfo {
-                triangles: 0,
-                size_mm: glam::Vec3::ZERO,
-                title: None,
-                designer: None,
-                application: None,
-                plates: Vec::new(),
-                plate: None,
-                plate_count: 0,
-            };
-            (mesh, info)
-        }
+        _ => (loaders::load_mesh(kind, &bytes).map_err(|e| e.to_string())?, ModelInfo::plain()),
     };
     drop(bytes);
+    finish(mesh, info, device)
+}
+
+fn finish(mesh: stlb_core::Mesh, mut info: ModelInfo, device: &wgpu::Device) -> Result<Loaded, String> {
     info.triangles = mesh.triangle_count();
     info.size_mm = mesh.bounds().map(|b| b.size()).unwrap_or_default();
     let gpu = upload_mesh(device, &mesh).ok_or_else(|| t!("error.empty_model").into_owned())?;

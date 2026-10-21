@@ -4,6 +4,7 @@ members = [
     "crates/stlb-core",
     "crates/stlb-render",
     "crates/stl-browser",
+    "crates/stlb-step",
 ]
 
 [workspace.package]

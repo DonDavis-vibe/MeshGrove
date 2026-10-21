@@ -1,0 +1,15 @@
+[package]
+name = "stlb-step"
+description = "stlb-step-mesher: tessellates STEP CAD files to binary STL with OpenCascade (separate process, so OCCT crashes cannot take the browser down)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "stlb-step-mesher"
+path = "src/main.rs"
+
+[build-dependencies]
+cc = "1.2"

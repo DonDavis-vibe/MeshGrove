@@ -47,7 +47,7 @@ pub enum ThumbResult {
 
 /// Which kinds get a picture (everything else shows an icon).
 pub fn has_thumbnail(kind: Kind) -> bool {
-    matches!(kind, Kind::Stl | Kind::ThreeMf | Kind::Image | Kind::Pdf)
+    matches!(kind, Kind::Stl | Kind::ThreeMf | Kind::Step | Kind::Image | Kind::Pdf)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -301,6 +301,12 @@ fn generate(job: &Job, bytes: &[u8], render_tx: &Sender<RenderRequest>) -> Resul
             }
             let model = parsed.map_err(|e| Failure::Permanent(e.to_string()))?;
             Ok(Thumbnail { image: render(model.mesh, render_tx)?, meta })
+        }
+        Kind::Step => {
+            // Tessellated by the OpenCascade helper (cached); the bytes are only hashed.
+            let mesh = loaders::step::load(&job.path).map_err(|e| Failure::Permanent(e.to_string()))?;
+            let meta = mesh_meta(&mesh, bytes);
+            Ok(Thumbnail { image: render(mesh, render_tx)?, meta })
         }
         Kind::Pdf => {
             let image = if bytes.is_empty() {
