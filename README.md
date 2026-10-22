@@ -90,7 +90,7 @@ What makes it different from other model managers:
 | **Gallery** | Thumbnails for STL, 3MF, STEP, OBJ, PLY, glTF/GLB, images and PDFs; folder and archive tiles show a 2×2 mosaic of what is inside (optionally also models from subfolders on disk, fading through them); resizable tiles (slider in the status bar, growing smoothly towards the pointer); sort by name, date, size or type; "models only"; "include subfolders" (all files below a folder in one grid); multi-selection |
 | **Panes** | Places, files, preview and info are panes: drag a header to move one, drop it on an edge to split or on another header to stack; the dividers resize them; *Lock the panes* in the settings keeps them where they are |
 | **Hover turntable** | Point at a model tile and the model spins in place. Drag to turn it yourself, and turn the wheel while dragging to zoom |
-| **3D viewer** | In the side panel, or **double-click a model for a window of its own** (resizable, several at once, with "open in slicer"), or **press Space for a large preview** over the window (smoother edges, optional studio lighting); orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **picture export** as a 2048 px PNG |
+| **3D viewer** | In the side panel, or **double-click a model for a window of its own** (resizable, several at once, with "open in slicer"), or **press Space for a large preview** over the window (just the model until you click ☰); smoother edges and optional studio lighting for both; what a double-click does can be changed (model window, large preview, slicer, mesh editor or the default app); orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **picture export** as a 2048 px PNG |
 | **3MF projects** | Embedded slicer plate pictures (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); click a plate picture to see that plate in 3D; **multi-colour**: filament colours per object and part, painted models (multi-material painting) and 3MF material colours in the viewer and in rendered previews; filament swatches on tiles and in the details; title, designer and application from the metadata |
 | **STEP / STP** | CAD files are tessellated by OpenCascade in a separate helper process, so a broken file cannot crash the app; results are cached |
 | **Archives** | Open ZIP, 7z, RAR and TAR like folders; every model inside gets a preview; files are extracted only when another program needs them |
@@ -98,7 +98,7 @@ What makes it different from other model managers:
 | **Tags and notes** | Tags and notes belong to the file *content*, so they survive renames and moves; the search finds note text too; daily automatic backups; export and import as JSON |
 | **Print bed check** | Reads the printer selected in Anycubic Slicer Next, OrcaSlicer or Bambu Studio (or takes your own build volume) and marks models that only fit when turned (↻ 41°) or are too big (✕) |
 | **Duplicates** | Finds exact copies and the same model saved differently (ASCII vs binary STL, STL vs 3MF, rotated or moved copies), suggests which copy to keep and can move the others to the trash |
-| **Slicer and apps** | "Open in slicer" for one or many models (auto-detects Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer), into the slicer window that is already open where the slicer allows it; **Ctrl+C copies the files** for pasting into the file manager or slicer; "show in file manager"; open with the default app |
+| **Slicer and apps** | "Open in slicer" for one or many models (auto-detects Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer), into the slicer window that is already open where the slicer allows it; "open in" your **mesh editor or CAD program** (auto-detects Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer); **Ctrl+C copies the files** for pasting into the file manager or slicer; "show in file manager"; open with the default app |
 | **Desktop integration** | Menu entry, icon, file associations; on Linux the same renderer also provides **thumbnails in Dolphin and file dialogs** |
 | **Languages** | English and German, following the system language (switchable in the settings) |
 
@@ -258,7 +258,7 @@ unpack it anywhere and start `meshgrove.exe`.
 ### Browsing the gallery
 
 - **Navigate** with double-click (folders and archives open, models open in a window of their
-  own, other files in their default app), the breadcrumb, the sidebar, or the keyboard: arrow keys move the selection, Enter
+  own or as set in *Settings → Double-click on a model*, other files in their default app), the breadcrumb, the sidebar, or the keyboard: arrow keys move the selection, Enter
   opens, Backspace or Alt+↑ goes up, Alt+← / Alt+→ or the mouse buttons 4 / 5 go back and forward.
 - **Tile size:** Ctrl + mouse wheel, Ctrl + `+` / `-`, or the slider in the status bar or the
   *View* menu. The tiles grow smoothly, and the one under the pointer stays where it is.
@@ -279,10 +279,15 @@ unpack it anywhere and start `meshgrove.exe`.
 - **Panes:** drag a pane's header to move it; drop it on the edge of another pane to split
   that, or on another header to stack both as tabs. The dividers between panes resize them.
   *Settings → Panes* can lock them, so they can only be resized, and resets the layout.
-- **Large preview:** Space shows the selected model large over the window, with the same
-  tools as the viewer and an "open in slicer" button; Space, Esc or a click outside closes it.
-  *Settings → Large preview* sets its picture quality: *High* renders at twice the resolution
-  for smooth edges, *Studio* adds glossy studio lighting.
+- **Large preview:** Space shows the selected model large over the window, at first nothing but
+  the model. ☰ in its top right corner adds the file name, the viewer's tools and the hints
+  (Meshgrove remembers the choice). Space, Esc or a click outside closes it.
+  *Settings → Large preview and model windows* sets the picture quality: *High* renders at
+  twice the resolution for smooth edges, *Studio* adds glossy studio lighting.
+- **Double-click on a model** opens its model window. *Settings → Double-click on a model* can
+  make it show the large preview, open the model in the slicer or the mesh editor, or open it
+  with the system's default application instead (Enter does the same). Models that program
+  does not open still get a model window.
 - **Folder previews from disk:** folder tiles outside the library can show models from their
   subfolders too (*Settings → Folder previews*, off by default, up to five levels deep). With
   more than four models the pictures slowly fade through them.
@@ -292,7 +297,7 @@ unpack it anywhere and start `meshgrove.exe`.
 The right panel shows the selected model in 3D. **Double-click a model** (or press Enter) to
 open it in a window of its own: it can be made as large as the screen, several models can be
 open side by side, each with its own camera, and the window has the same tools, the model's
-facts and an *Open in slicer* button. Esc or the close button closes it.
+facts and buttons to open it in the slicer or the mesh editor. Esc or the close button closes it.
 
 | Action | Mouse |
 |---|---|
@@ -421,8 +426,8 @@ to the trash* cleans up a group after a confirmation. Tiles everywhere in the ga
 
 ### Working with your slicer and other apps
 
-- **Open in slicer** (context menu, the button in the details panel, in a model window or
-  in the large preview):
+- **Open in slicer** (context menu, or the button below the facts in the *Info* pane and in a
+  model window, next to the print bed check):
   opens the selected models, several at once if you like (STL, 3MF, STEP and OBJ; the slicers
   do not open PLY and glTF). Files inside archives are extracted to a cache folder first.
   Meshgrove finds these slicers automatically:
@@ -441,6 +446,19 @@ to the trash* cleans up a group after a confirmation. Tiles everywhere in the ga
 
   Any other slicer (Cura, Simplify3D, ElegooSlicer, …) can be set in *Settings → Slicer*:
   give it a name, the program and optionally a working folder.
+- **Open in the mesh editor** (context menu, or the button next to *Open in slicer*): opens the
+  selected models in a mesh editor or CAD program to repair or change them. Meshgrove finds
+  these automatically:
+
+  | System | Detected |
+  |---|---|
+  | Linux | FreeCAD, Blender, MeshLab (system package, Snap or Flatpak) |
+  | Windows | Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer |
+  | macOS | Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer in */Applications* or *~/Applications* |
+
+  Blender only opens its own files, so Meshgrove starts it with a short import script: an
+  empty scene in millimetres with the models (STL, OBJ, PLY, glTF) in it. FreeCAD and the
+  others get the files directly. Any other program can be set in *Settings → Mesh editor*.
 - **Copy (Ctrl+C):** puts the selected files on the clipboard as real files. Paste them into
   Dolphin, Explorer or Finder, into many slicers, or into a chat. Archive members are
   extracted first. *Copy path* puts the paths as text instead.
@@ -493,11 +511,11 @@ Ctrl means ⌘ Cmd on macOS.
 | Keys | Action |
 |---|---|
 | ← → ↑ ↓, Home, End | Move the selection |
-| Enter | Open the selected folder or archive; a model in its own window; other files in their default app |
+| Enter | Open the selected folder or archive; a model in its own window (or as set for double-click); other files in their default app |
 | Esc (in a model window) | Close the window |
 | Backspace, Alt+↑ | Parent folder |
 | Alt+←, Alt+→, mouse buttons 4 / 5 | Back, forward |
-| Space | Large preview of the selected model (Esc or Space closes it) |
+| Space | Large preview of the selected model (Esc or Space closes it; ☰ shows its tools) |
 | F5 | Reload the folder |
 | Ctrl+A | Select all shown files |
 | Ctrl+click, Shift+click | Toggle a file, select a range |
@@ -530,8 +548,8 @@ Ctrl means ⌘ Cmd on macOS.
 ## Settings and files on disk
 
 Everything can be changed in the settings window (⚙ at the top right, or Ctrl+,): language,
-the panes, library folders, slicer, printer, the unit of glTF models, the picture quality of the
-large preview, folder previews, backups, and the preview cache (with its size and a *Clear
+the panes, library folders, slicer, mesh editor, printer, the unit of glTF models, what a double-click on a model
+does, the picture quality of the large preview and the model windows, folder previews, backups, and the preview cache (with its size and a *Clear
 cache* button). The *About* section lists the exact paths on your system.
 
 | What | Linux | Windows | macOS |
@@ -555,7 +573,9 @@ sort_by = "name"           # name | modified | size | type
 sort_descending = false
 language = "en"            # "de", "en"; leave out to follow the system
 lock_panes = false         # true: panes can only be resized, not moved
-preview_quality = "high"   # large preview: standard | high | studio
+double_click = "window"    # window | preview | slicer | editor | default_app
+preview_quality = "high"   # large preview and model windows: standard | high | studio
+preview_controls = false   # large preview: show name, tools and hints
 
 [folder_previews]
 enabled = false            # models from subfolders on folder tiles
@@ -568,6 +588,10 @@ program = "/opt/myslicer/bin/myslicer"
 args = []                  # put before the file names
 env = [["LD_LIBRARY_PATH", "/opt/myslicer/lib"]]
 workdir = "/opt/myslicer"
+
+[editor]                   # mesh editor; leave out to detect automatically
+name = "FreeCAD"
+program = "/usr/bin/freecad"
 
 [printer]                  # leave out to take it from the slicer
 name = "Anycubic Kobra S1"

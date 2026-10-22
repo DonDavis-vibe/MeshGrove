@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
-use meshgrove_core::config::{Config, FOLDER_PREVIEW_DEPTH, FolderPreviews, GltfUnit, PreviewQuality, Slicer};
+use meshgrove_core::config::{
+    Config, DoubleClick, FOLDER_PREVIEW_DEPTH, FolderPreviews, GltfUnit, PreviewQuality, Program, Slicer,
+};
 use meshgrove_core::printer::Bed;
 use meshgrove_core::userdata;
 
@@ -16,10 +18,13 @@ pub enum SettingsChange {
     RemoveRoot(PathBuf),
     /// `None`: detect the slicer automatically.
     Slicer(Option<Slicer>),
+    /// `None`: detect a mesh editor.
+    Editor(Option<Program>),
     /// `None`: take the printer selected in the slicer.
     Printer(Option<Bed>),
     GltfUnit(GltfUnit),
     PreviewQuality(PreviewQuality),
+    DoubleClick(DoubleClick),
     FolderPreviews(FolderPreviews),
     LockPanes(bool),
     ResetLayout,
@@ -60,7 +65,24 @@ fn folder_previews(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChang
     }
 }
 
-/// Picture quality of the large preview.
+/// What a double-click (or Enter) on a model does.
+fn double_click(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+    ui.label(RichText::new(t!("settings.double_click")).strong());
+    for (action, label) in [
+        (DoubleClick::Window, t!("settings.double_click_window")),
+        (DoubleClick::Preview, t!("settings.double_click_preview")),
+        (DoubleClick::Slicer, t!("settings.double_click_slicer")),
+        (DoubleClick::Editor, t!("settings.double_click_editor")),
+        (DoubleClick::DefaultApp, t!("settings.double_click_default_app")),
+    ] {
+        if ui.radio(config.double_click == action, label).clicked() && config.double_click != action {
+            changes.push(SettingsChange::DoubleClick(action));
+        }
+    }
+    ui.weak(t!("settings.double_click_hint"));
+}
+
+/// Picture quality of the large preview and the model windows.
 fn preview(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
     ui.label(RichText::new(t!("settings.preview")).strong());
     ui.horizontal(|ui| {
@@ -106,6 +128,8 @@ pub struct SettingsDialog {
     root_input: String,
     root_error: Option<String>,
     slicer_form: Option<(String, String, String)>,
+    /// Name and program as typed.
+    editor_form: Option<(String, String)>,
     /// Name and X/Y/Z as typed.
     printer_form: Option<[String; 4]>,
     printer_error: bool,
@@ -135,7 +159,7 @@ fn dir_size(dir: &Path) -> u64 {
 }
 
 impl SettingsDialog {
-    pub fn open(&mut self, active_slicer: Option<&Slicer>, bed: Option<&Bed>) {
+    pub fn open(&mut self, active_slicer: Option<&Slicer>, active_editor: Option<&Program>, bed: Option<&Bed>) {
         self.open = true;
         self.printer_form = Some(printer_form(bed));
         self.printer_error = false;
@@ -150,6 +174,7 @@ impl SettingsDialog {
             ),
             None => Default::default(),
         });
+        self.editor_form = active_editor.map(|e| (e.name.clone(), e.program.display().to_string()));
         self.refresh_cache_size();
     }
 
@@ -167,6 +192,7 @@ impl SettingsDialog {
         ctx: &egui::Context,
         config: &Config,
         slicer: Option<&Slicer>,
+        editor: Option<&Program>,
         bed: Option<&Bed>,
         info: AppInfo,
     ) -> Vec<SettingsChange> {
@@ -200,9 +226,13 @@ impl SettingsDialog {
                     ui.separator();
                     self.slicer(ui, config, slicer, &mut changes);
                     ui.separator();
+                    self.editor(ui, config, editor, &mut changes);
+                    ui.separator();
                     self.printer(ui, config, bed, &mut changes);
                     ui.separator();
                     models(ui, config, &mut changes);
+                    ui.separator();
+                    double_click(ui, config, &mut changes);
                     ui.separator();
                     preview(ui, config, &mut changes);
                     ui.separator();
@@ -307,13 +337,52 @@ impl SettingsDialog {
             }
         });
         if detect {
-            self.slicer_form = Slicer::detect().map(|s| {
+            self.slicer_form = Slicer::detect_slicer().map(|s| {
                 (
                     s.name,
                     s.program.display().to_string(),
                     s.workdir.map(|d| d.display().to_string()).unwrap_or_default(),
                 )
             });
+        }
+    }
+
+    fn editor(&mut self, ui: &mut Ui, config: &Config, active: Option<&Program>, changes: &mut Vec<SettingsChange>) {
+        ui.label(RichText::new(t!("settings.editor")).strong());
+        let status = match (active, &config.editor) {
+            (Some(e), None) => t!("settings.slicer_detected", name = e.name),
+            (Some(e), Some(_)) => t!("settings.slicer_custom", name = e.name),
+            (None, _) => t!("settings.editor_none"),
+        };
+        ui.weak(status);
+        let mut detect = false;
+        let (name, program) = self.editor_form.get_or_insert_with(Default::default);
+        egui::Grid::new("editor_form").num_columns(2).show(ui, |ui| {
+            ui.label(t!("settings.slicer_name"));
+            ui.add(egui::TextEdit::singleline(name).desired_width(320.0));
+            ui.end_row();
+            ui.label(t!("settings.slicer_program"));
+            ui.add(egui::TextEdit::singleline(program).desired_width(320.0));
+            ui.end_row();
+        });
+        ui.horizontal(|ui| {
+            if ui.button(t!("settings.apply")).clicked() && !program.trim().is_empty() {
+                changes.push(SettingsChange::Editor(Some(Program {
+                    name: if name.trim().is_empty() { "Editor".into() } else { name.trim().to_owned() },
+                    program: program.trim().into(),
+                    args: Vec::new(),
+                    env: Vec::new(),
+                    workdir: None,
+                })));
+            }
+            if ui.button(t!("settings.slicer_auto")).clicked() {
+                changes.push(SettingsChange::Editor(None));
+                detect = true;
+            }
+        });
+        ui.weak(t!("settings.editor_hint"));
+        if detect {
+            self.editor_form = Program::detect_editor().map(|e| (e.name, e.program.display().to_string()));
         }
     }
 

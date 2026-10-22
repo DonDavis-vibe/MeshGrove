@@ -1,11 +1,13 @@
 //! A model in a window of its own: double-click (or Enter) on a model opens it next to the main
-//! window, freely sizable, with the 3D viewer, its facts and "open in slicer". Several can be
+//! window, freely sizable, with the 3D viewer, its facts and "open in" the slicer and the mesh
+//! editor. Several can be
 //! open at once; each has its own camera.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use egui::{Key, RichText, Ui, ViewportBuilder, ViewportCommand, ViewportId};
+use meshgrove_core::config::{PreviewQuality, Program};
 use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::printer::Bed;
 use meshgrove_render::Renderer;
@@ -17,6 +19,7 @@ use crate::meshes::{MeshState, MeshStore};
 /// What the windows ask the app to do.
 pub enum WindowAction {
     OpenInSlicer(PathBuf),
+    OpenInEditor(PathBuf),
     /// Result of a viewer tool (picture saved, …) for the status bar.
     Message(String),
 }
@@ -28,6 +31,8 @@ pub struct WindowContext<'a> {
     pub renderer: &'a Renderer,
     pub bed: Option<&'a Bed>,
     pub slicer: Option<&'a str>,
+    pub editor: Option<&'a Program>,
+    pub quality: PreviewQuality,
     pub icon: Arc<egui::IconData>,
 }
 
@@ -77,6 +82,7 @@ impl ModelWindow {
     /// Shows the window for this frame; false once the user closed it.
     pub fn show(&mut self, ctx: &egui::Context, cx: &mut WindowContext, actions: &mut Vec<WindowAction>) -> bool {
         self.update_model(ctx, cx.meshes);
+        self.viewer.set_quality(cx.quality);
         let name = listing::file_name(&self.entry.path);
         let builder = ViewportBuilder::default()
             .with_title(format!("{name} – Meshgrove"))
@@ -103,11 +109,15 @@ impl ModelWindow {
             egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                 ui.add_space(6.0);
                 ui.label(RichText::new(name).heading().strong());
-                if details::slicer_button(ui, self.entry.kind, cx.slicer) {
-                    actions.push(WindowAction::OpenInSlicer(self.entry.path.clone()));
-                }
                 ui.add_space(10.0);
                 details::facts(ui, &self.entry, None, &self.model, cx.bed);
+                let (slicer, editor) = details::open_buttons(ui, self.entry.kind, cx.slicer, cx.editor);
+                if slicer {
+                    actions.push(WindowAction::OpenInSlicer(self.entry.path.clone()));
+                }
+                if editor {
+                    actions.push(WindowAction::OpenInEditor(self.entry.path.clone()));
+                }
                 if !self.plates.is_empty() {
                     let active = match &self.model {
                         ModelStatus::Ready(info) => info.plate,

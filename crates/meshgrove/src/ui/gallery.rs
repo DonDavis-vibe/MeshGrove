@@ -47,6 +47,7 @@ pub enum Action {
     /// Large preview of the selected model.
     Preview,
     OpenInSlicer,
+    OpenInEditor,
     ShowInFileManager,
     CopyPaths,
     /// Copy the files themselves (Ctrl+C), for pasting in Dolphin or the slicer.
@@ -59,6 +60,8 @@ pub enum Action {
 #[derive(Default)]
 pub struct MenuContext {
     pub slicer: Option<String>,
+    /// The mesh editor, if it opens a file of the selection.
+    pub editor: Option<String>,
     /// Why the selection cannot go to the trash (read-only drive, inside an archive).
     pub trash_blocked: Option<String>,
     pub can_tag: bool,
@@ -350,6 +353,7 @@ impl Gallery {
                         }
                         let show_folders = self.show_folders;
                         let sliceable = entries[entry].kind.is_sliceable();
+                        let model = entries[entry].kind.is_model();
                         let viewable = crate::meshes::viewable(entries[entry].kind);
                         response.context_menu(|ui| {
                             let mut item = |ui: &mut Ui, text: std::borrow::Cow<str>, act: Action| {
@@ -365,6 +369,9 @@ impl Gallery {
                             }
                             if sliceable && let Some(slicer) = &menu.slicer {
                                 item(ui, t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);
+                            }
+                            if model && let Some(editor) = &menu.editor {
+                                item(ui, t!("menu.open_in_editor", name = editor), Action::OpenInEditor);
                             }
                             if show_folders {
                                 item(ui, t!("menu.show_in_folder"), Action::ShowInFolder(entry));

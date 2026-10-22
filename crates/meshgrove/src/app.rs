@@ -6,7 +6,7 @@ use anyhow::Context as _;
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use egui::{Button, Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use meshgrove_core::cache::{ThumbCache, ThumbMeta};
-use meshgrove_core::config::{Config, Slicer, SortKey};
+use meshgrove_core::config::{Config, DoubleClick, Program, Slicer, SortKey};
 use meshgrove_core::db::Library;
 use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::printer::Bed;
@@ -107,6 +107,8 @@ pub struct App {
     rate: RateMeter,
     screenshot: Option<crate::screenshot::ScreenshotHook>,
     slicer: Option<Slicer>,
+    /// Mesh editor or CAD program for "open in …".
+    editor: Option<Program>,
     /// Context-menu facts for `menu_for` (recomputed when the selection changes).
     menu: MenuContext,
     menu_for: Vec<PathBuf>,
@@ -148,10 +150,14 @@ impl App {
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         use_system_ui_font(&cc.egui_ctx);
 
-        let slicer = config.slicer.clone().or_else(Slicer::detect);
+        let slicer = config.slicer.clone().or_else(Slicer::detect_slicer);
         match &slicer {
             Some(s) => log::info!("slicer: {} ({})", s.name, s.program.display()),
             None => log::info!("no slicer found; models open with the default application"),
+        }
+        let editor = config.editor.clone().or_else(Program::detect_editor);
+        if let Some(e) = &editor {
+            log::info!("mesh editor: {} ({})", e.name, e.program.display());
         }
         let bed = config.printer.clone().or_else(Bed::detect);
         if let Some(b) = &bed {
@@ -190,14 +196,14 @@ impl App {
             viewer: ModelViewer::new(),
             model_windows: Vec::new(),
             preview_open: false,
-            folder_scan: FolderScanner::new(cc.egui_ctx.clone()),
-            scan_pending: false,
-            scan_refreshed: Instant::now(),
             preview_viewer: {
                 let mut v = ModelViewer::new();
                 v.set_quality(config.preview_quality);
                 v
             },
+            folder_scan: FolderScanner::new(cc.egui_ctx.clone()),
+            scan_pending: false,
+            scan_refreshed: Instant::now(),
             model: ModelStatus::Idle,
             meshes: MeshStore::new(rs.device.clone(), cc.egui_ctx.clone()),
             turntable: Turntable::default(),
@@ -216,6 +222,7 @@ impl App {
             rate: RateMeter::default(),
             screenshot: crate::screenshot::ScreenshotHook::from_env(),
             slicer,
+            editor,
             menu: MenuContext::default(),
             menu_for: Vec::new(),
             selection_tags: Vec::new(),
@@ -337,7 +344,24 @@ impl App {
             return;
         }
         if meshes::viewable(entry.kind) {
-            self.open_model_window(entry);
+            // As set in the settings, where that program opens the model; else its own window.
+            let kind = entry.kind;
+            match self.config.double_click {
+                DoubleClick::Preview => {
+                    if self.gallery.selected != Some(index) {
+                        self.gallery.select(Some(index));
+                    }
+                    self.open_preview();
+                }
+                DoubleClick::Slicer if self.slicer.is_some() && kind.is_sliceable() => {
+                    self.open_in_slicer(vec![entry.path]);
+                }
+                DoubleClick::Editor if self.editor.as_ref().is_some_and(|e| e.opens(kind)) => {
+                    self.open_in_editor(vec![entry.path]);
+                }
+                DoubleClick::DefaultApp => self.open_with_default_app(&entry),
+                _ => self.open_model_window(entry),
+            }
             return;
         }
         self.open_with_default_app(&entry);
@@ -392,6 +416,21 @@ impl App {
         self.toast(message.into_owned());
     }
 
+    /// Opens the models among `files` that the mesh editor reads.
+    fn open_in_editor(&mut self, files: Vec<PathBuf>) {
+        let Some(editor) = &self.editor else { return };
+        let models: Vec<PathBuf> =
+            files.into_iter().filter(|p| editor.opens(Kind::from_file_name(&listing::file_name(p)))).collect();
+        if models.is_empty() {
+            return;
+        }
+        let message = match actions::open_in_editor(editor, &models) {
+            Ok(()) => t!("toast.slicer_started", name = editor.name, count = models.len()),
+            Err(e) => t!("toast.slicer_failed", name = editor.name, error = e.to_string()),
+        };
+        self.toast(message.into_owned());
+    }
+
     /// Draws the model windows; handles what they ask for and forgets the closed ones.
     fn show_model_windows(&mut self, ctx: &egui::Context, rs: &egui_wgpu::RenderState) {
         if self.model_windows.is_empty() {
@@ -404,12 +443,15 @@ impl App {
             renderer: &self.renderer,
             bed: self.bed.as_ref(),
             slicer: self.slicer.as_ref().map(|s| s.name.as_str()),
+            editor: self.editor.as_ref(),
+            quality: self.config.preview_quality,
             icon: model_window::icon(crate::app_icon),
         };
         self.model_windows.retain_mut(|window| window.show(ctx, &mut cx, &mut actions));
         for action in actions {
             match action {
                 WindowAction::OpenInSlicer(path) => self.open_in_slicer(vec![path]),
+                WindowAction::OpenInEditor(path) => self.open_in_editor(vec![path]),
                 WindowAction::Message(message) => self.toast(message),
             }
         }
@@ -597,6 +639,11 @@ impl App {
             self.note_dirty = true;
             self.menu = MenuContext {
                 slicer: self.slicer.as_ref().map(|s| s.name.clone()),
+                editor: self
+                    .editor
+                    .as_ref()
+                    .filter(|e| paths.iter().any(|p| e.opens(Kind::from_file_name(&listing::file_name(p)))))
+                    .map(|e| e.name.clone()),
                 trash_blocked: actions::trash_blocked(&paths),
                 can_tag: self.index.is_some() && !paths.is_empty() && paths.iter().all(|p| self.in_library(p)),
             };
@@ -681,6 +728,7 @@ impl App {
             Action::Preview => self.open_preview(),
             Action::ShowInFolder(index) => self.show_in_folder(index),
             Action::OpenInSlicer => self.open_in_slicer(self.selected_paths()),
+            Action::OpenInEditor => self.open_in_editor(self.selected_paths()),
             Action::ShowInFileManager => {
                 if let Err(e) = actions::show_in_file_manager(&self.selected_paths()) {
                     self.toast(t!("toast.file_manager_failed", error = e.to_string()).into_owned());
@@ -742,13 +790,23 @@ impl App {
                 }
                 SettingsChange::Slicer(slicer) => {
                     self.config.slicer = slicer.clone();
-                    self.slicer = slicer.or_else(Slicer::detect);
+                    self.slicer = slicer.or_else(Slicer::detect_slicer);
                     self.menu_for.clear();
                     let name = self
                         .slicer
                         .as_ref()
                         .map_or_else(|| t!("settings.slicer_none").into_owned(), |s| s.name.clone());
                     self.toast(t!("toast.slicer_set", name = name).into_owned());
+                }
+                SettingsChange::Editor(editor) => {
+                    self.config.editor = editor.clone();
+                    self.editor = editor.or_else(Program::detect_editor);
+                    self.menu_for.clear();
+                    let name = self
+                        .editor
+                        .as_ref()
+                        .map_or_else(|| t!("settings.editor_none").into_owned(), |e| e.name.clone());
+                    self.toast(t!("toast.editor_set", name = name).into_owned());
                 }
                 SettingsChange::Printer(bed) => {
                     self.config.printer = bed.clone();
@@ -768,6 +826,7 @@ impl App {
                     self.layout.reset();
                     self.layout.save();
                 }
+                SettingsChange::DoubleClick(action) => self.config.double_click = action,
                 SettingsChange::PreviewQuality(quality) => {
                     self.config.preview_quality = quality;
                     self.preview_viewer.set_quality(quality);
@@ -872,12 +931,13 @@ impl App {
         }
     }
 
-    /// Keeps the 3D viewer in sync with the selection (debounced, loads run in the mesh store).
+    /// The small viewer and the large preview show the same model.
     fn set_viewer_mesh(&mut self, mesh: Option<(std::sync::Arc<meshgrove_render::GpuMesh>, MeshSource)>) {
         self.preview_viewer.set_mesh(mesh.clone());
         self.viewer.set_mesh(mesh);
     }
 
+    /// Keeps the 3D viewer in sync with the selection (debounced, loads run in the mesh store).
     fn update_viewer(&mut self, ctx: &egui::Context) {
         if self.gallery.selected != self.last_selected {
             self.last_selected = self.gallery.selected;
@@ -972,7 +1032,7 @@ impl App {
             self.request_trash(paths);
         }
         if pressed(Modifiers::COMMAND, Key::Comma) {
-            self.settings.open(self.slicer.as_ref(), self.bed.as_ref());
+            self.settings.open(self.slicer.as_ref(), self.editor.as_ref(), self.bed.as_ref());
         }
         if pressed(Modifiers::NONE, Key::F5) {
             self.reload();
@@ -1037,7 +1097,7 @@ impl App {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button(RichText::new("⚙").size(16.0)).on_hover_text(t!("settings.open")).clicked() {
-                    self.settings.open(self.slicer.as_ref(), self.bed.as_ref());
+                    self.settings.open(self.slicer.as_ref(), self.editor.as_ref(), self.bed.as_ref());
                 }
                 self.view_menu(ui);
                 self.search_field(ui);
@@ -1340,6 +1400,7 @@ impl App {
             note: NoteEditor { enabled: self.menu.can_tag, text: &mut self.note_input, mixed: self.note_mixed },
             bed: self.bed.as_ref(),
             slicer: self.slicer.as_ref().map(|s| s.name.as_str()),
+            editor: self.editor.as_ref(),
             thumb,
             model: &self.model,
             plates: self.plates.as_ref().map_or(&[][..], |(_, p)| p.as_slice()),
@@ -1350,6 +1411,7 @@ impl App {
     }
 
     /// The large model view over (almost) the whole window; click outside, Esc or Space closes it.
+    /// At first only the model shows; ☰ adds the file name, the viewer's tools and the hints.
     fn preview_overlay(&mut self, ctx: &egui::Context, rs: &egui_wgpu::RenderState) {
         if !self.preview_open {
             return;
@@ -1360,6 +1422,9 @@ impl App {
             self.preview_open = false;
             return;
         };
+        let controls = self.config.preview_controls;
+        self.preview_viewer.set_tools(controls);
+        let mut toggle_controls = false;
         let screen = ctx.content_rect();
         let mut close = false;
         egui::Area::new(*PREVIEW_BACKDROP).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
@@ -1378,15 +1443,17 @@ impl App {
                 .show(ui, |ui| {
                     ui.set_min_size(panel.size() - egui::vec2(20.0, 20.0));
                     ui.set_max_size(panel.size() - egui::vec2(20.0, 20.0));
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(RichText::new(name).heading().strong()).truncate());
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("✕").on_hover_text(t!("preview.close")).clicked() {
-                                close = true;
-                            }
+                    if controls {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Label::new(RichText::new(name).heading().strong()).truncate());
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button("✕").on_hover_text(t!("preview.close")).clicked() {
+                                    close = true;
+                                }
+                            });
                         });
-                    });
-                    let hint = ui.text_style_height(&egui::TextStyle::Small) + 6.0;
+                    }
+                    let hint = if controls { ui.text_style_height(&egui::TextStyle::Small) + 6.0 } else { 0.0 };
                     let mut size = ui.available_size();
                     size.y = (size.y - hint).max(80.0);
                     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
@@ -1400,11 +1467,21 @@ impl App {
                         }
                         _ => message = self.preview_viewer.ui(&mut child, rs, &self.renderer),
                     }
-                    ui.add(egui::Label::new(RichText::new(t!("preview.hint")).weak()).truncate());
+                    let corner =
+                        egui::Rect::from_min_size(rect.right_top() + egui::vec2(-30.0, 2.0), egui::vec2(28.0, 24.0));
+                    let tip = if controls { t!("preview.controls_hide") } else { t!("preview.controls_show") };
+                    toggle_controls = ui.put(corner, egui::Button::new("☰")).on_hover_text(tip).clicked();
+                    if controls {
+                        ui.add(egui::Label::new(RichText::new(t!("preview.hint")).weak()).truncate());
+                    }
                 });
         });
         if let Some(message) = message {
             self.toast(message);
+        }
+        if toggle_controls {
+            self.config.preview_controls = !controls;
+            self.save_config();
         }
         if close {
             self.preview_open = false;
@@ -1429,6 +1506,9 @@ impl App {
         }
         if out.open_in_slicer {
             self.open_in_slicer(self.selected_paths());
+        }
+        if out.open_in_editor {
+            self.open_in_editor(self.selected_paths());
         }
     }
 }
@@ -1588,7 +1668,7 @@ impl eframe::App for App {
         self.update_viewer(&ctx);
         if let Some(hook) = &mut self.screenshot {
             if std::mem::take(&mut hook.settings) {
-                self.settings.open(self.slicer.as_ref(), self.bed.as_ref());
+                self.settings.open(self.slicer.as_ref(), self.editor.as_ref(), self.bed.as_ref());
             }
             let hook = self.screenshot.as_mut().expect("checked above");
             if hook.duplicates && self.index.is_some() && self.duplicate_groups > 0 {
@@ -1636,7 +1716,8 @@ impl eframe::App for App {
         self.preview_overlay(&ctx, &rs);
 
         let info = AppInfo { gpu: &self.gpu_name, db_path: &self.db_path };
-        let changes = self.settings.show(&ctx, &self.config, self.slicer.as_ref(), self.bed.as_ref(), info);
+        let changes =
+            self.settings.show(&ctx, &self.config, self.slicer.as_ref(), self.editor.as_ref(), self.bed.as_ref(), info);
         self.apply_settings(changes);
         self.show_model_windows(&ctx, &rs);
     }

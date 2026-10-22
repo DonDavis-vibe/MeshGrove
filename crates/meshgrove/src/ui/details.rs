@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use egui::{Grid, Key, RichText, Ui};
 use meshgrove_core::Kind;
+use meshgrove_core::config::Program;
 use meshgrove_core::listing::Entry;
 use meshgrove_core::printer::{self, Bed, Fit};
 use meshgrove_render::Renderer;
@@ -48,6 +49,8 @@ pub struct DetailsOutput {
     pub message: Option<String>,
     /// "Open in slicer" was clicked.
     pub open_in_slicer: bool,
+    /// "Open in" the mesh editor was clicked.
+    pub open_in_editor: bool,
 }
 
 pub struct DetailsContext<'a> {
@@ -59,6 +62,7 @@ pub struct DetailsContext<'a> {
     pub bed: Option<&'a Bed>,
     /// Name of the slicer models can be handed to.
     pub slicer: Option<&'a str>,
+    pub editor: Option<&'a Program>,
     pub thumb: Option<&'a Thumb>,
     pub model: &'a ModelStatus,
     /// Plate previews of a 3MF project (plate number, texture).
@@ -88,14 +92,8 @@ pub fn preview(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
 
     if meshes::viewable(entry.kind) {
         let hint = ui.text_style_height(&egui::TextStyle::Small) + 6.0;
-        // Room below the view for the hint and the "open in slicer" button.
-        let button = if cx.slicer.is_some() && entry.kind.is_sliceable() {
-            SLICER_BUTTON_HEIGHT + ui.spacing().item_spacing.y
-        } else {
-            0.0
-        };
         let mut size = ui.available_size();
-        size.y = (size.y - hint - button).max(80.0);
+        size.y = (size.y - hint).max(80.0);
         let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         match cx.model {
@@ -108,7 +106,6 @@ pub fn preview(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
             _ => out.message = cx.viewer.ui(&mut child, cx.render_state, cx.renderer),
         }
         ui.add(egui::Label::new(RichText::new(t!("viewer.hint")).weak()).truncate());
-        out.open_in_slicer = slicer_button(ui, entry.kind, cx.slicer);
     } else if entry.kind == Kind::Image
         && let Some(Thumb::Ready(texture, _)) = cx.thumb
     {
@@ -128,6 +125,7 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         ui.add_space(4.0);
         facts(ui, entry, cx.thumb, cx.model, cx.bed);
+        (out.open_in_slicer, out.open_in_editor) = open_buttons(ui, entry.kind, cx.slicer, cx.editor);
         if !cx.plates.is_empty() {
             let active = match cx.model {
                 ModelStatus::Ready(info) => info.plate,
@@ -143,15 +141,27 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
     out
 }
 
-/// "Open in Anycubic Slicer Next" for models a slicer opens; true when clicked.
-pub fn slicer_button(ui: &mut Ui, kind: Kind, slicer: Option<&str>) -> bool {
-    let Some(name) = slicer.filter(|_| kind.is_sliceable()) else { return false };
-    ui.add_space(6.0);
-    ui.add(egui::Button::new(t!("menu.open_in_slicer", name = name)).min_size(egui::vec2(0.0, 28.0))).clicked()
+/// "Open in Anycubic Slicer Next" and "Open in FreeCAD" for a model, as far as the slicer and
+/// the mesh editor open its kind. Which of them was clicked: (slicer, editor).
+pub fn open_buttons(ui: &mut Ui, kind: Kind, slicer: Option<&str>, editor: Option<&Program>) -> (bool, bool) {
+    let slicer = slicer.filter(|_| kind.is_sliceable());
+    let editor = editor.filter(|e| e.opens(kind));
+    let mut clicked = (false, false);
+    if slicer.is_none() && editor.is_none() {
+        return clicked;
+    }
+    ui.add_space(8.0);
+    ui.horizontal_wrapped(|ui| {
+        let button = |text: std::borrow::Cow<str>| egui::Button::new(text).min_size(egui::vec2(0.0, 28.0));
+        if let Some(name) = slicer {
+            clicked.0 = ui.add(button(t!("menu.open_in_slicer", name = name))).clicked();
+        }
+        if let Some(editor) = editor {
+            clicked.1 = ui.add(button(t!("menu.open_in_editor", name = editor.name))).clicked();
+        }
+    });
+    clicked
 }
-
-/// Height [`slicer_button`] takes, with the space above it.
-const SLICER_BUTTON_HEIGHT: f32 = 6.0 + 28.0;
 
 fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, count: usize, out: &mut DetailsOutput) {
     ui.add_space(10.0);

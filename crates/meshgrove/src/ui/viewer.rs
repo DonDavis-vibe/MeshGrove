@@ -51,6 +51,8 @@ pub struct ModelViewer {
     /// Render this many times the pixels the view shows (smooths edges).
     supersample: f32,
     studio: bool,
+    /// The buttons over the view (standard views, measuring, picture).
+    tools: bool,
 }
 
 impl ModelViewer {
@@ -67,7 +69,13 @@ impl ModelViewer {
             scripted_view: None,
             supersample: 1.0,
             studio: false,
+            tools: true,
         }
+    }
+
+    /// Shows or hides the buttons over the view.
+    pub fn set_tools(&mut self, shown: bool) {
+        self.tools = shown;
     }
 
     /// Picture quality of this view; changing it redraws.
@@ -169,7 +177,9 @@ impl ModelViewer {
             }
         }
         self.paint_measure(ui, &mesh, rect);
-        if let Some(m) = self.toolbar(ui, rect, rs, renderer, &mesh) {
+        if self.tools
+            && let Some(m) = self.toolbar(ui, rect, rs, renderer, &mesh)
+        {
             message = Some(m);
         }
         message

@@ -91,7 +91,7 @@ Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 | **Galerie** | Vorschauen für STL, 3MF, STEP, OBJ, PLY, glTF/GLB, Bilder und PDFs; Ordner- und Archiv-Kacheln zeigen ein 2×2-Mosaik ihres Inhalts (auf Wunsch auch Modelle aus Unterordnern auf der Platte, die langsam durchblenden); Kachelgröße einstellbar (Regler in der Statusleiste, Kacheln wachsen fließend zur Maus hin); Sortieren nach Name, Datum, Größe oder Typ; „Nur 3D-Modelle“; „Unterordner einbeziehen“ (alle Dateien unter einem Ordner in einem Raster); Mehrfachauswahl |
 | **Bereiche** | Orte, Dateien, Vorschau und Info sind Bereiche: Kopfzeile ziehen verschiebt einen, am Rand eines anderen ablegen teilt ihn, auf einer anderen Kopfzeile ablegen stapelt beide; die Trennlinien ändern die Größe; *Bereiche fixieren* in den Einstellungen hält sie an ihrem Platz |
 | **Drehvorschau** | Mit der Maus über eine Modell-Kachel fahren, und das Modell dreht sich. Ziehen dreht es von Hand, Mausrad beim Ziehen zoomt |
-| **3D-Viewer** | In der Seitenleiste, oder **Doppelklick auf ein Modell für ein eigenes Fenster** (frei vergrößerbar, mehrere gleichzeitig, mit „In Slicer öffnen“), oder **Leertaste für eine große Vorschau** über dem Fenster (glattere Kanten, auf Wunsch Studiolicht); Drehen, Verschieben und Zoomen um einen festen Drehpunkt (das Modell springt beim Drehen nie); Standardansichten (vorne, hinten, links, rechts, oben, unten, schräg); **Messen zwischen zwei Punkten in mm**; **Bildexport** als PNG mit 2048 px |
+| **3D-Viewer** | In der Seitenleiste, oder **Doppelklick auf ein Modell für ein eigenes Fenster** (frei vergrößerbar, mehrere gleichzeitig, mit „In Slicer öffnen“), oder **Leertaste für eine große Vorschau** über dem Fenster (nur das Modell, bis du auf ☰ klickst); für beide glattere Kanten und auf Wunsch Studiolicht; was ein Doppelklick tut, ist einstellbar (Modellfenster, große Vorschau, Slicer, Mesh-Editor oder Standardprogramm); Drehen, Verschieben und Zoomen um einen festen Drehpunkt (das Modell springt beim Drehen nie); Standardansichten (vorne, hinten, links, rechts, oben, unten, schräg); **Messen zwischen zwei Punkten in mm**; **Bildexport** als PNG mit 2048 px |
 | **3MF-Projekte** | Eingebettete Plattenbilder der Slicer (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); Klick auf ein Plattenbild zeigt diese Platte in 3D; **mehrfarbig**: Filamentfarben pro Objekt und Teil, bemalte Modelle (Multi-Material-Bemalung) und 3MF-Materialfarben im Viewer und in selbst gerenderten Vorschauen; Filament-Farbfelder auf Kacheln und in den Details; Titel, Designer und Programm aus den Metadaten |
 | **STEP / STP** | CAD-Dateien werden von OpenCascade in einem eigenen Hilfsprozess vernetzt, eine kaputte Datei kann die App also nicht abstürzen lassen; das Ergebnis wird zwischengespeichert |
 | **Archive** | ZIP, 7z, RAR und TAR öffnen wie Ordner; jedes enthaltene Modell bekommt eine Vorschau; entpackt wird nur, wenn ein anderes Programm die Datei braucht |
@@ -99,7 +99,7 @@ Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 | **Tags und Notizen** | Tags und Notizen hängen am *Inhalt* der Datei und überleben so Umbenennen und Verschieben; die Suche findet auch Notiztext; tägliche automatische Sicherung; Export und Import als JSON |
 | **Druckbett-Check** | Liest den in Anycubic Slicer Next, OrcaSlicer oder Bambu Studio gewählten Drucker (oder deinen eigenen Bauraum) und markiert Modelle, die nur gedreht passen (↻ 41°) oder zu groß sind (✕) |
 | **Duplikate** | Findet exakte Kopien und dasselbe Modell in anderer Form (ASCII- statt Binär-STL, STL statt 3MF, gedrehte oder verschobene Kopien), schlägt vor, welche Kopie bleiben soll, und kann die anderen in den Papierkorb legen |
-| **Slicer und Programme** | „In Slicer öffnen“ für ein oder viele Modelle (erkennt Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer), ins schon offene Slicer-Fenster, wo der Slicer das erlaubt; **Strg+C kopiert die Dateien** zum Einfügen im Dateimanager oder Slicer; „Im Dateimanager zeigen“; Öffnen mit dem Standardprogramm |
+| **Slicer und Programme** | „In Slicer öffnen“ für ein oder viele Modelle (erkennt Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer), ins schon offene Slicer-Fenster, wo der Slicer das erlaubt; „In … öffnen“ für deinen **Mesh-Editor oder dein CAD-Programm** (erkennt Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer); **Strg+C kopiert die Dateien** zum Einfügen im Dateimanager oder Slicer; „Im Dateimanager zeigen“; Öffnen mit dem Standardprogramm |
 | **Desktop-Einbindung** | Menüeintrag, Symbol, Dateizuordnungen; unter Linux liefert derselbe Renderer auch **Vorschauen in Dolphin und Dateidialogen** |
 | **Sprachen** | Deutsch und Englisch, folgt der Systemsprache (in den Einstellungen umstellbar) |
 
@@ -267,7 +267,8 @@ Programme: irgendwohin entpacken und `meshgrove.exe` starten.
 ### Die Galerie
 
 - **Navigieren** per Doppelklick (Ordner und Archive öffnen sich, Modelle in einem eigenen
-  Fenster, andere Dateien im Standardprogramm), über die Pfadleiste, die Seitenleiste oder die Tastatur: Pfeiltasten
+  Fenster oder wie unter *Einstellungen → Doppelklick auf ein Modell* gewählt, andere Dateien im
+  Standardprogramm), über die Pfadleiste, die Seitenleiste oder die Tastatur: Pfeiltasten
   bewegen die Auswahl, Enter öffnet, Rücktaste oder Alt+↑ geht eine Ebene hoch, Alt+← und
   Alt+→ oder die Maustasten 4 / 5 gehen zurück und vor.
 - **Kachelgröße:** Strg + Mausrad, Strg + `+` / `-` oder der Regler in der Statusleiste oder im
@@ -291,10 +292,15 @@ Programme: irgendwohin entpacken und `meshgrove.exe` starten.
   Bereichs abgelegt teilt er diesen, auf einer anderen Kopfzeile werden beide zu Tabs. Die
   Trennlinien zwischen den Bereichen ändern ihre Größe. *Einstellungen → Bereiche* fixiert sie,
   dann lässt sich nur noch die Größe ändern, und setzt die Anordnung zurück.
-- **Große Vorschau:** Die Leertaste zeigt das gewählte Modell groß über dem Fenster, mit
-  denselben Werkzeugen wie im Viewer und einem Knopf „In Slicer öffnen“; Leertaste, Esc oder ein
-  Klick daneben schließt sie. *Einstellungen → Große Vorschau* stellt die Bildqualität ein:
-  *Hoch* rendert mit doppelter Auflösung für glatte Kanten, *Studio* fügt glänzendes Studiolicht hinzu.
+- **Große Vorschau:** Die Leertaste zeigt das gewählte Modell groß über dem Fenster, zuerst
+  nichts als das Modell. ☰ oben rechts blendet Dateiname, Werkzeuge und Hinweise ein (Meshgrove
+  merkt sich das). Leertaste, Esc oder ein Klick daneben schließt sie. *Einstellungen → Große
+  Vorschau und Modellfenster* stellt die Bildqualität ein: *Hoch* rendert mit doppelter Auflösung
+  für glatte Kanten, *Studio* fügt glänzendes Studiolicht hinzu.
+- **Doppelklick auf ein Modell** öffnet sein Modellfenster. Unter *Einstellungen → Doppelklick
+  auf ein Modell* kannst du stattdessen die große Vorschau, den Slicer, den Mesh-Editor oder das
+  Standardprogramm des Systems wählen (Enter macht dasselbe). Modelle, die das gewählte Programm
+  nicht öffnet, bekommen trotzdem ein Modellfenster.
 - **Ordnervorschau von der Platte:** Ordnerkacheln außerhalb der Bibliothek können auch Modelle
   aus ihren Unterordnern zeigen (*Einstellungen → Ordnervorschau*, standardmäßig aus, bis zu fünf
   Ebenen tief). Bei mehr als vier Modellen blenden die Bilder langsam durch.
@@ -304,7 +310,8 @@ Programme: irgendwohin entpacken und `meshgrove.exe` starten.
 Rechts siehst du das ausgewählte Modell in 3D. Ein **Doppelklick auf ein Modell** (oder Enter)
 öffnet es in einem eigenen Fenster: Es lässt sich bildschirmgroß ziehen, mehrere Modelle können
 nebeneinander offen sein, jedes mit eigener Kamera, und das Fenster hat dieselben Werkzeuge, die
-Fakten des Modells und einen Knopf *In Slicer öffnen*. Esc oder das Schließen-Kreuz schließt es.
+Fakten des Modells und Knöpfe, um es im Slicer oder im Mesh-Editor zu öffnen. Esc oder das
+Schließen-Kreuz schließt es.
 
 | Aktion | Maus |
 |---|---|
@@ -437,8 +444,8 @@ Galerie tragen Dateien mit Duplikaten eine `2×`/`3×`-Markierung.
 
 ### Zusammenarbeit mit Slicer und anderen Programmen
 
-- **In Slicer öffnen** (Kontextmenü, Knopf in der Detailansicht, im Modell-Fenster oder in
-  der großen Vorschau):
+- **In Slicer öffnen** (Kontextmenü, oder der Knopf unter den Angaben im Bereich *Info* und im
+  Modell-Fenster, gleich beim Druckbett-Check):
   öffnet die ausgewählten Modelle, gern mehrere auf einmal (STL, 3MF, STEP und OBJ; PLY und
   glTF öffnen die Slicer nicht). Dateien aus Archiven werden vorher in einen Cache-Ordner
   entpackt. Diese Slicer findet Meshgrove von selbst:
@@ -457,6 +464,20 @@ Galerie tragen Dateien mit Duplikaten eine `2×`/`3×`-Markierung.
 
   Jeden anderen Slicer (Cura, Simplify3D, ElegooSlicer, …) richtest du unter *Einstellungen →
   Slicer* ein: Name, Programm und auf Wunsch ein Arbeitsordner.
+- **Im Mesh-Editor öffnen** (Kontextmenü, oder der Knopf neben *In Slicer öffnen*): öffnet die
+  ausgewählten Modelle in einem Mesh-Editor oder CAD-Programm, um sie zu reparieren oder zu
+  ändern. Diese findet Meshgrove von selbst:
+
+  | System | Erkannt |
+  |---|---|
+  | Linux | FreeCAD, Blender, MeshLab (Systempaket, Snap oder Flatpak) |
+  | Windows | Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer |
+  | macOS | Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer in */Programme* oder *~/Programme* |
+
+  Blender öffnet nur seine eigenen Dateien, deshalb startet Meshgrove es mit einem kurzen
+  Import-Skript: eine leere Szene in Millimetern mit den Modellen (STL, OBJ, PLY, glTF) darin.
+  FreeCAD und die anderen bekommen die Dateien direkt. Jedes andere Programm richtest du unter
+  *Einstellungen → Mesh-Editor* ein.
 - **Kopieren (Strg+C):** legt die ausgewählten Dateien als echte Dateien in die
   Zwischenablage. Du kannst sie in Dolphin, im Explorer oder Finder, in vielen Slicern oder in
   einem Chat einfügen. Dateien aus Archiven werden vorher entpackt. *Pfad kopieren* legt
@@ -514,11 +535,11 @@ Strg heißt auf macOS ⌘ Cmd.
 | Tasten | Aktion |
 |---|---|
 | ← → ↑ ↓, Pos1, Ende | Auswahl bewegen |
-| Enter | Ausgewählten Ordner oder Archiv öffnen; ein Modell im eigenen Fenster; andere Dateien im Standardprogramm |
+| Enter | Ausgewählten Ordner oder Archiv öffnen; ein Modell im eigenen Fenster (oder wie für den Doppelklick eingestellt); andere Dateien im Standardprogramm |
 | Esc (im Modell-Fenster) | Fenster schließen |
 | Rücktaste, Alt+↑ | Übergeordneter Ordner |
 | Alt+←, Alt+→, Maustasten 4 / 5 | Zurück, vor |
-| Leertaste | Große Vorschau des gewählten Modells (Esc oder Leertaste schließt sie) |
+| Leertaste | Große Vorschau des gewählten Modells (Esc oder Leertaste schließt sie; ☰ zeigt ihre Werkzeuge) |
 | F5 | Ordner neu laden |
 | Strg+A | Alle angezeigten Dateien auswählen |
 | Strg+Klick, Umschalt+Klick | Datei umschalten, Bereich auswählen |
@@ -551,8 +572,8 @@ Strg heißt auf macOS ⌘ Cmd.
 ## Einstellungen und Dateien auf der Platte
 
 Alles lässt sich im Einstellungsfenster ändern (⚙ oben rechts oder Strg+,): Sprache,
-die Bereiche, Bibliotheksordner, Slicer, Drucker, die Einheit von glTF-Modellen, die Bildqualität
-der großen Vorschau, die Ordnervorschau, Sicherungen und der Vorschau-Cache (mit Größe und *Cache
+die Bereiche, Bibliotheksordner, Slicer, Mesh-Editor, Drucker, die Einheit von glTF-Modellen, was ein Doppelklick auf
+ein Modell tut, die Bildqualität der großen Vorschau und der Modellfenster, die Ordnervorschau, Sicherungen und der Vorschau-Cache (mit Größe und *Cache
 leeren*). Der Abschnitt *Über* nennt die genauen Pfade auf deinem System.
 
 | Was | Linux | Windows | macOS |
@@ -577,7 +598,9 @@ sort_by = "name"           # name | modified | size | type
 sort_descending = false
 language = "de"            # "de", "en"; weglassen = Systemsprache
 lock_panes = false         # true: Bereiche nur in der Größe änderbar
-preview_quality = "high"   # große Vorschau: standard | high | studio
+double_click = "window"    # window | preview | slicer | editor | default_app
+preview_quality = "high"   # große Vorschau und Modellfenster: standard | high | studio
+preview_controls = false   # große Vorschau: Name, Werkzeuge und Hinweise zeigen
 
 [folder_previews]
 enabled = false            # Modelle aus Unterordnern auf Ordnerkacheln
@@ -590,6 +613,10 @@ program = "/opt/meinslicer/bin/meinslicer"
 args = []                  # stehen vor den Dateinamen
 env = [["LD_LIBRARY_PATH", "/opt/meinslicer/lib"]]
 workdir = "/opt/meinslicer"
+
+[editor]                   # Mesh-Editor; weglassen = automatisch erkennen
+name = "FreeCAD"
+program = "/usr/bin/freecad"
 
 [printer]                  # weglassen = aus dem Slicer übernehmen
 name = "Anycubic Kobra S1"

@@ -1,10 +1,11 @@
-//! Handing files to other programs: the slicer, the file manager, the clipboard, the trash.
+//! Handing files to other programs: the slicer, the mesh editor, the file manager, the
+//! clipboard, the trash.
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use meshgrove_core::config::Slicer;
+use meshgrove_core::config::{Program, Slicer};
 use meshgrove_core::{archive, fsinfo};
 
 /// How the slicer got the files.
@@ -23,8 +24,76 @@ pub fn open_in_slicer(slicer: &Slicer, files: &[PathBuf]) -> io::Result<SlicerOp
     if hand_to_running_slicer(slicer, &files) {
         return Ok(SlicerOpened::HandedOver);
     }
-    slicer_command(slicer, &files, std::env::var("LD_LIBRARY_PATH").ok()).spawn()?;
+    launch_command(slicer, &files, std::env::var("LD_LIBRARY_PATH").ok()).spawn()?;
     Ok(SlicerOpened::Started)
+}
+
+/// Opens the model files in the mesh editor (archive members are extracted first).
+pub fn open_in_editor(editor: &Program, files: &[PathBuf]) -> io::Result<()> {
+    let files: Vec<PathBuf> = files.iter().map(|f| archive::materialize(f)).collect::<io::Result<_>>()?;
+    let mut cmd = if editor.is_blender() {
+        blender_command(editor, &files)
+    } else {
+        launch_command(editor, &files, std::env::var("LD_LIBRARY_PATH").ok())
+    };
+    cmd.spawn()?;
+    Ok(())
+}
+
+/// Run by Blender after it started: an empty scene in millimetres (as models for printing are),
+/// the files after `--` imported with whichever importer this Blender version has, and the
+/// view fitted to them.
+const BLENDER_IMPORT: &str = r#"
+import bpy, sys
+files = sys.argv[sys.argv.index("--") + 1:]
+for obj in list(bpy.data.objects):
+    bpy.data.objects.remove(obj)
+units = bpy.context.scene.unit_settings
+units.system, units.scale_length, units.length_unit = "METRIC", 0.001, "MILLIMETERS"
+importers = {
+    "stl": [("wm", "stl_import"), ("import_mesh", "stl")],
+    "obj": [("wm", "obj_import"), ("import_scene", "obj")],
+    "ply": [("wm", "ply_import"), ("import_mesh", "ply")],
+    "gltf": [("import_scene", "gltf")],
+    "glb": [("import_scene", "gltf")],
+}
+for f in files:
+    for group, name in importers.get(f.rsplit(".", 1)[-1].lower(), []):
+        try:
+            getattr(getattr(bpy.ops, group), name)(filepath=f)
+            break
+        except (AttributeError, RuntimeError):
+            pass
+def fit():
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == "VIEW_3D":
+                area.spaces.active.clip_end = max(area.spaces.active.clip_end, 100000.0)
+                region = next(r for r in area.regions if r.type == "WINDOW")
+                with bpy.context.temp_override(window=window, area=area, region=region):
+                    bpy.ops.view3d.view_all()
+bpy.app.timers.register(fit, first_interval=0.5)
+"#;
+
+/// Blender opens only its own files: models go in through [`BLENDER_IMPORT`].
+fn blender_command(blender: &Program, files: &[PathBuf]) -> Command {
+    let mut cmd = if blender.program.extension().is_some_and(|x| x == "app") {
+        // A new instance, so the script runs even when Blender is already open.
+        let mut open = Command::new("open");
+        open.arg("-n").arg("-a").arg(&blender.program).arg("--args");
+        open
+    } else {
+        Command::new(&blender.program)
+    };
+    cmd.args(&blender.args).arg("--python-expr").arg(BLENDER_IMPORT).arg("--").args(files);
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    for (key, value) in &blender.env {
+        cmd.env(key, value);
+    }
+    if let Some(dir) = &blender.workdir {
+        cmd.current_dir(dir);
+    }
+    cmd
 }
 
 /// Orca-family slicers listen on the session bus for the files of a second start, even with
@@ -126,30 +195,31 @@ fn escape_strings_cstyle(strings: &[String]) -> String {
     out
 }
 
-fn slicer_command(slicer: &Slicer, files: &[PathBuf], inherited_lib_path: Option<String>) -> Command {
+/// `program [args…] files…` for the slicer or the mesh editor.
+fn launch_command(program: &Program, files: &[PathBuf], inherited_lib_path: Option<String>) -> Command {
     // A macOS app bundle starts through `open -a`, which also hands files to a running instance.
-    let mut cmd = if slicer.program.extension().is_some_and(|x| x == "app") {
+    let mut cmd = if program.program.extension().is_some_and(|x| x == "app") {
         let mut open = Command::new("open");
-        open.arg("-a").arg(&slicer.program);
+        open.arg("-a").arg(&program.program);
         open
     } else {
-        Command::new(&slicer.program)
+        Command::new(&program.program)
     };
     // PrusaSlicer hands the files to an open window itself when asked to.
-    let program_name = slicer.program.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let program_name = program.program.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
     if program_name.contains("prusa") {
         cmd.arg("--single-instance");
     }
-    cmd.args(&slicer.args).args(files).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    for (key, value) in &slicer.env {
+    cmd.args(&program.args).args(files).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    for (key, value) in &program.env {
         let value = match (key.as_str(), &inherited_lib_path) {
-            // Keep the inherited library path behind the slicer's own libraries.
+            // Keep the inherited library path behind the program's own libraries.
             ("LD_LIBRARY_PATH", Some(inherited)) if !inherited.is_empty() => format!("{value}:{inherited}"),
             _ => value.clone(),
         };
         cmd.env(key, value);
     }
-    if let Some(dir) = &slicer.workdir {
+    if let Some(dir) = &program.workdir {
         cmd.current_dir(dir);
     }
     cmd
@@ -306,7 +376,7 @@ mod tests {
             ],
             workdir: Some("/opt/a".into()),
         };
-        let cmd = slicer_command(
+        let cmd = launch_command(
             &slicer,
             &[PathBuf::from("/m/orc.stl"), PathBuf::from("/m/plate.3mf")],
             Some("/usr/lib/x".into()),
@@ -317,6 +387,22 @@ mod tests {
         assert!(envs.contains(&("LD_LIBRARY_PATH".into(), Some("/opt/a/app/lib:/usr/lib/x".into()))));
         assert!(envs.contains(&("WEBKIT_DISABLE_DMABUF_RENDERER".into(), Some("1".into()))));
         assert_eq!(cmd.get_current_dir(), Some(Path::new("/opt/a")));
+    }
+
+    #[test]
+    fn blender_imports_the_models() {
+        let blender = Program {
+            name: "Blender".into(),
+            program: "/usr/bin/blender".into(),
+            args: Vec::new(),
+            env: Vec::new(),
+            workdir: None,
+        };
+        let cmd = blender_command(&blender, &[PathBuf::from("/m/orc.stl"), PathBuf::from("/m/a b.obj")]);
+        assert_eq!(cmd.get_program(), "/usr/bin/blender");
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args[0], "--python-expr");
+        assert_eq!(args[2..], ["--", "/m/orc.stl", "/m/a b.obj"]);
     }
 
     #[test]
@@ -358,7 +444,7 @@ mod tests {
             env: Vec::new(),
             workdir: None,
         };
-        let cmd = slicer_command(&slicer, &[PathBuf::from("/m/orc.stl")], None);
+        let cmd = launch_command(&slicer, &[PathBuf::from("/m/orc.stl")], None);
         assert_eq!(cmd.get_args().collect::<Vec<_>>(), ["--single-instance", "/m/orc.stl"]);
     }
 
@@ -371,7 +457,7 @@ mod tests {
             env: Vec::new(),
             workdir: None,
         };
-        let cmd = slicer_command(&slicer, &[PathBuf::from("/m/orc.stl")], None);
+        let cmd = launch_command(&slicer, &[PathBuf::from("/m/orc.stl")], None);
         assert_eq!(cmd.get_program(), "open");
         assert_eq!(cmd.get_args().collect::<Vec<_>>(), ["-a", "/Applications/OrcaSlicer.app", "/m/orc.stl"]);
     }
