@@ -200,6 +200,26 @@ pub enum PreviewQuality {
     Studio,
 }
 
+/// Pictures of the models inside a folder on the folder's tile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FolderPreviews {
+    /// Look into the folders on disk (costs some reading per folder).
+    pub enabled: bool,
+    /// How many folder levels down to look for models.
+    pub depth: u8,
+    /// With more than four models, slowly fade through them.
+    pub cycle: bool,
+}
+
+impl Default for FolderPreviews {
+    fn default() -> Self {
+        FolderPreviews { enabled: false, depth: 2, cycle: true }
+    }
+}
+
+pub const FOLDER_PREVIEW_DEPTH: std::ops::RangeInclusive<u8> = 1..=5;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -221,6 +241,8 @@ pub struct Config {
     pub gltf_unit: GltfUnit,
     /// Picture quality of the large preview (Space / double-click).
     pub preview_quality: PreviewQuality,
+    /// Model pictures on folder tiles.
+    pub folder_previews: FolderPreviews,
 }
 
 impl Default for Config {
@@ -237,6 +259,7 @@ impl Default for Config {
             printer: None,
             gltf_unit: GltfUnit::Metres,
             preview_quality: PreviewQuality::High,
+            folder_previews: FolderPreviews::default(),
         }
     }
 }

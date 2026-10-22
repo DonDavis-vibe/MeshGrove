@@ -8,6 +8,7 @@ i18n!("locales", fallback = "en");
 
 mod actions;
 mod app;
+mod folder_scan;
 mod i18n;
 mod library;
 mod meshes;

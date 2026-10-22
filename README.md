@@ -483,7 +483,8 @@ Ctrl means ⌘ Cmd on macOS.
 | Enter | Open the selected folder or archive; a model in its own window; other files in their default app |
 | Esc (in a model window) | Close the window |
 | Backspace, Alt+↑ | Parent folder |
-| Alt+←, Alt+→ | Back, forward |
+| Alt+←, Alt+→, mouse buttons 4 / 5 | Back, forward |
+| Space | Large preview of the selected model (Esc or Space closes it) |
 | F5 | Reload the folder |
 | Ctrl+A | Select all shown files |
 | Ctrl+click, Shift+click | Toggle a file, select a range |

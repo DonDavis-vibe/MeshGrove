@@ -14,6 +14,7 @@ use meshgrove_core::{Kind, query};
 use meshgrove_render::Renderer;
 
 use crate::actions;
+use crate::folder_scan::FolderScanner;
 use crate::i18n;
 use crate::library::{LibEvent, LibraryService, Transfer};
 use crate::meshes::{self, MeshState, MeshStore};
@@ -82,6 +83,10 @@ pub struct App {
     /// The large preview over the window (Space, or double-click when Meshgrove is the default app).
     preview_open: bool,
     preview_viewer: ModelViewer,
+    /// Models found inside folders on disk, for the folder tiles (when enabled in the settings).
+    folder_scan: FolderScanner,
+    scan_pending: bool,
+    scan_refreshed: Instant,
     model: ModelStatus,
     meshes: MeshStore,
     turntable: Turntable,
@@ -185,6 +190,9 @@ impl App {
             viewer: ModelViewer::new(),
             model_windows: Vec::new(),
             preview_open: false,
+            folder_scan: FolderScanner::new(cc.egui_ctx.clone()),
+            scan_pending: false,
+            scan_refreshed: Instant::now(),
             preview_viewer: {
                 let mut v = ModelViewer::new();
                 v.set_quality(config.preview_quality);
@@ -264,9 +272,25 @@ impl App {
     fn refresh_gallery(&mut self, reset: bool) {
         let entries = self.entries().to_vec();
         let mut mosaics = HashMap::new();
-        if let (View::Folder, Some(index)) = (&self.view, &self.index) {
+        let fp = self.config.folder_previews;
+        self.gallery.cycle_previews = fp.enabled && fp.cycle;
+        if matches!(self.view, View::Folder) {
+            if reset || self.folder_scan.folder() != self.nav.current() {
+                self.folder_scan.reset(self.nav.current());
+            }
+            // More than four candidates only when they are cycled through.
+            let limit = if fp.enabled && fp.cycle { 8 } else { 4 };
             for (i, e) in entries.iter().enumerate().filter(|(_, e)| e.is_dir() || e.kind == Kind::Archive) {
-                let preview = index.folder_preview(&e.path, 4).unwrap_or_default();
+                let mut preview = match &self.index {
+                    Some(index) => index.folder_preview(&e.path, limit).unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                if preview.is_empty() && fp.enabled && e.is_dir() {
+                    preview = self.folder_scan.get_or_request(&e.path, fp.depth, limit).cloned().unwrap_or_default();
+                }
+                if self.config.only_models {
+                    preview.retain(|f| f.kind.is_model());
+                }
                 if !preview.is_empty() {
                     mosaics.insert(i, preview);
                 }
@@ -743,6 +767,11 @@ impl App {
                         self.bed.as_ref().map_or_else(|| t!("settings.printer_none").into_owned(), |b| b.name.clone());
                     self.toast(t!("toast.printer_set", name = name).into_owned());
                 }
+                SettingsChange::FolderPreviews(fp) => {
+                    self.config.folder_previews = fp;
+                    self.folder_scan.reset(self.nav.current());
+                    self.refresh_gallery(false);
+                }
                 SettingsChange::PreviewQuality(quality) => {
                     self.config.preview_quality = quality;
                     self.preview_viewer.set_quality(quality);
@@ -905,6 +934,18 @@ impl App {
     fn shortcuts(&mut self, ctx: &egui::Context) {
         let typing = ctx.egui_wants_keyboard_input();
         let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
+        // The mouse's back / forward buttons (4 and 5), as in a file manager.
+        let (mouse_back, mouse_forward) = ctx.input(|i| {
+            (i.pointer.button_pressed(egui::PointerButton::Extra1), i.pointer.button_pressed(egui::PointerButton::Extra2))
+        });
+        if mouse_back && !self.preview_open {
+            self.leave_search();
+            self.nav.back();
+        }
+        if mouse_forward && !self.preview_open {
+            self.leave_search();
+            self.nav.forward();
+        }
         if pressed(Modifiers::ALT, Key::ArrowLeft) {
             self.leave_search();
             self.nav.back();
@@ -1011,6 +1052,7 @@ impl App {
     /// "Ansicht" menu: sorting, "models only", "include subfolders", tile size.
     fn view_menu(&mut self, ui: &mut Ui) {
         let mut changed = false;
+        let models_only = self.config.only_models;
         let mut flatten = self.flatten;
         ui.menu_button(format!("{} ▾", t!("view.menu")), |ui| {
             ui.label(RichText::new(t!("gallery.sort")).weak());
@@ -1034,7 +1076,9 @@ impl App {
         if flatten != self.flatten {
             self.set_flatten(flatten);
         }
-        if changed {
+        if changed && models_only != self.config.only_models {
+            self.refresh_gallery(false); // the folder tiles show models only, too
+        } else if changed {
             self.reapply_filter();
         }
     }
@@ -1521,6 +1565,19 @@ impl eframe::App for App {
                 self.save_note();
             } else {
                 ctx.request_repaint_after(NOTE_DEBOUNCE);
+            }
+        }
+        if self.folder_scan.poll() {
+            self.scan_pending = true;
+        }
+        if self.scan_pending {
+            // Several folders finish close together: redraw them in one go.
+            if self.scan_refreshed.elapsed() >= Duration::from_millis(300) {
+                self.scan_pending = false;
+                self.scan_refreshed = Instant::now();
+                self.refresh_gallery(false);
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(300));
             }
         }
         self.meshes.begin_frame();

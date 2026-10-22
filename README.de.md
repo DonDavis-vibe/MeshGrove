@@ -503,7 +503,8 @@ Strg heißt auf macOS ⌘ Cmd.
 | Enter | Ausgewählten Ordner oder Archiv öffnen; ein Modell im eigenen Fenster; andere Dateien im Standardprogramm |
 | Esc (im Modell-Fenster) | Fenster schließen |
 | Rücktaste, Alt+↑ | Übergeordneter Ordner |
-| Alt+←, Alt+→ | Zurück, vor |
+| Alt+←, Alt+→, Maustasten 4 / 5 | Zurück, vor |
+| Leertaste | Große Vorschau des gewählten Modells (Esc oder Leertaste schließt sie) |
 | F5 | Ordner neu laden |
 | Strg+A | Alle angezeigten Dateien auswählen |
 | Strg+Klick, Umschalt+Klick | Datei umschalten, Bereich auswählen |

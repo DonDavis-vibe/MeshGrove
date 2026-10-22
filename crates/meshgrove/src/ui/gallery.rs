@@ -114,6 +114,10 @@ pub struct Gallery {
     tile_dragged: bool,
     /// Printer bed that model tiles are checked against.
     pub bed: Option<Bed>,
+    /// Folder tiles with more than four pictures fade through them.
+    pub cycle_previews: bool,
+    /// Soonest moment (seconds from now) a cycling folder tile needs a redraw.
+    next_cycle: std::cell::Cell<Option<f32>>,
 }
 
 impl Gallery {
@@ -410,6 +414,9 @@ impl Gallery {
                 });
             }
         });
+        if let Some(wait) = self.next_cycle.take() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f32(wait.max(0.016)));
+        }
         self.tile_dragged = tile_dragged;
         self.last_offset = output.state.clamped_offset().y;
         self.last_viewport_h = output.inner_rect.height();
@@ -467,6 +474,41 @@ impl Gallery {
         None
     }
 
+    /// The four cells of a folder tile. With more pictures than cells (and cycling on) every
+    /// cell, staggered, fades into the next picture now and then.
+    fn cycled(&self, ctx: &egui::Context, index: usize, ready: &[icons::Preview]) -> Vec<icons::MosaicCell> {
+        const PERIOD: f32 = 5.0; // seconds a picture stays
+        const FADE: f32 = 1.2; // seconds the fade takes
+        const STAGGER: f32 = 0.9; // seconds between neighbouring cells
+        if !self.cycle_previews || ready.len() <= 4 {
+            return ready.iter().take(4).map(|&p| (p, None)).collect();
+        }
+        let n = ready.len();
+        // Folders do not change in lockstep.
+        let t = ctx.input(|i| i.time) as f32 + (index % 7) as f32 * 1.3;
+        let mut wake = f32::MAX;
+        let cells = (0..4)
+            .map(|i| {
+                let local = (t - i as f32 * STAGGER) / PERIOD;
+                let step = local.floor().max(0.0) as usize;
+                let frac = local - local.floor();
+                let fade_from = 1.0 - FADE / PERIOD;
+                let now = ready[(step * 4 + i) % n];
+                if frac < fade_from {
+                    wake = wake.min((fade_from - frac) * PERIOD);
+                    (now, None)
+                } else {
+                    wake = wake.min(0.033);
+                    let x = ((frac - fade_from) / (1.0 - fade_from)).clamp(0.0, 1.0);
+                    let smooth = x * x * (3.0 - 2.0 * x);
+                    (now, Some((ready[((step + 1) * 4 + i) % n], smooth)))
+                }
+            })
+            .collect();
+        self.next_cycle.set(Some(self.next_cycle.get().map_or(wake, |w| w.min(wake))));
+        cells
+    }
+
     fn tile(&self, ui: &mut Ui, entry: &Entry, index: usize, w: f32, h: f32) -> egui::Response {
         // Dragging on a model tile turns the hover preview by hand.
         let (rect, response) = ui.allocate_exact_size(vec2(w, h), Sense::click_and_drag());
@@ -483,7 +525,7 @@ impl Gallery {
         let paper = visuals.widgets.inactive.bg_fill;
         match (entry.kind, self.thumb(index)) {
             (Kind::Folder | Kind::Archive, _) if entry.is_dir() || self.mosaics.contains_key(&index) => {
-                let previews: Vec<(egui::TextureId, egui::Vec2)> = self
+                let ready: Vec<icons::Preview> = self
                     .mosaics
                     .get(&index)
                     .into_iter()
@@ -493,6 +535,7 @@ impl Gallery {
                         _ => None,
                     })
                     .collect();
+                let previews = self.cycled(ui.ctx(), index, &ready);
                 let color = if entry.is_dir() { icons::FOLDER_BLUE } else { icons::ARCHIVE_AMBER };
                 if previews.is_empty() && entry.is_dir() {
                     icons::folder(&painter, img);

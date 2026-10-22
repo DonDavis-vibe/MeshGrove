@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
-use meshgrove_core::config::{Config, GltfUnit, PreviewQuality, Slicer};
+use meshgrove_core::config::{Config, FOLDER_PREVIEW_DEPTH, FolderPreviews, GltfUnit, PreviewQuality, Slicer};
 use meshgrove_core::printer::Bed;
 use meshgrove_core::userdata;
 
@@ -20,10 +20,29 @@ pub enum SettingsChange {
     Printer(Option<Bed>),
     GltfUnit(GltfUnit),
     PreviewQuality(PreviewQuality),
+    FolderPreviews(FolderPreviews),
     Export(PathBuf),
     Import(PathBuf),
     OpenBackups,
     ClearCache,
+}
+
+/// Model pictures on folder tiles.
+fn folder_previews(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+    ui.label(RichText::new(t!("settings.folder_previews")).strong());
+    let mut fp = config.folder_previews;
+    ui.checkbox(&mut fp.enabled, t!("settings.folder_previews_enabled"));
+    ui.add_enabled_ui(fp.enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(t!("settings.folder_previews_depth"));
+            ui.add(egui::Slider::new(&mut fp.depth, FOLDER_PREVIEW_DEPTH));
+        });
+        ui.checkbox(&mut fp.cycle, t!("settings.folder_previews_cycle"));
+    });
+    ui.weak(t!("settings.folder_previews_hint"));
+    if fp != config.folder_previews {
+        changes.push(SettingsChange::FolderPreviews(fp));
+    }
 }
 
 /// Picture quality of the large preview.
@@ -169,6 +188,8 @@ impl SettingsDialog {
                     models(ui, config, &mut changes);
                     ui.separator();
                     preview(ui, config, &mut changes);
+                    ui.separator();
+                    folder_previews(ui, config, &mut changes);
                     ui.separator();
                     self.user_data(ui, &mut changes);
                     ui.separator();
