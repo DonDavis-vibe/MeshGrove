@@ -101,6 +101,13 @@ pub struct Gallery {
     scroll_to_selected: bool,
     last_offset: f32,
     last_viewport_h: f32,
+    /// Tile width as drawn: eases towards the laid-out width when it changes.
+    shown_tile: f32,
+    /// The tile that stays put on screen while the size animates, and its height from the
+    /// viewport's top.
+    zoom_anchor: Option<(usize, f32)>,
+    /// Geometry of the previous frame (columns, tile width and height, scroll area), to place the anchor.
+    last_layout: Option<(usize, f32, f32, Rect)>,
     /// Show the containing folder under each name (search results, flattened views).
     pub show_folders: bool,
     /// A tile was being dragged last frame: the wheel then zooms its preview, not the grid.
@@ -157,6 +164,47 @@ impl Gallery {
         }
         let shown: HashSet<usize> = self.shown.iter().copied().collect();
         self.marked.retain(|i| shown.contains(i));
+    }
+
+    /// Eases the drawn tile width towards `target` (so Ctrl+wheel and the slider glide).
+    fn animate_tile(&mut self, ctx: &egui::Context, target: f32) -> f32 {
+        if self.shown_tile <= 0.0 {
+            self.shown_tile = target;
+        }
+        let diff = target - self.shown_tile;
+        if diff.abs() < 0.3 {
+            self.shown_tile = target;
+        } else {
+            let dt = ctx.input(|i| i.unstable_dt).min(0.05);
+            self.shown_tile += diff * (1.0 - (-dt * 7.0).exp());
+            ctx.request_repaint();
+        }
+        self.shown_tile
+    }
+
+    /// While the size animates: the scroll offset that keeps one tile where it was on screen,
+    /// so zooming does not lose orientation. That tile is the one closest to the pointer (or the
+    /// one in the middle of the view when the pointer is elsewhere, as when dragging the slider).
+    fn zoom_scroll(&mut self, ui: &Ui, cols: usize, tile_h: f32, animating: bool) -> Option<f32> {
+        let Some((old_cols, old_w, old_h, rect)) = self.last_layout else { return None };
+        if !animating {
+            self.zoom_anchor = None;
+            return None;
+        }
+        if self.shown.is_empty() {
+            return None;
+        }
+        let top_of = |pos: usize, cols: usize, h: f32| (pos / cols) as f32 * (h + SPACING);
+        if self.zoom_anchor.is_none() {
+            let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p));
+            let p = pointer.unwrap_or(rect.center());
+            let row = ((p.y - rect.top() + self.last_offset) / (old_h + SPACING)).floor().max(0.0) as usize;
+            let col = (((p.x - rect.left()) / (old_w + SPACING)).floor().max(0.0) as usize).min(old_cols - 1);
+            let pos = (row * old_cols + col).min(self.shown.len() - 1);
+            self.zoom_anchor = Some((pos, top_of(pos, old_cols, old_h) + old_h / 2.0 - self.last_offset));
+        }
+        let (pos, y) = self.zoom_anchor?;
+        Some((top_of(pos, cols, tile_h) + tile_h / 2.0 - y).max(0.0))
     }
 
     pub fn shown_count(&self) -> usize {
@@ -239,11 +287,21 @@ impl Gallery {
         let rows_of_text = if self.show_folders { 3.0 } else { 2.0 };
         let label_h = rows_of_text * ui.ctx().fonts_mut(|f| f.row_height(&FontId::proportional(LABEL_FONT))) + 4.0;
         let avail = ui.available_width();
-        let cols = (((avail + SPACING) / (tile + SPACING)).floor() as usize).max(1);
-        // Stretch tiles a little so every row ends flush with the right edge.
-        let tile_w = ((avail + SPACING) / cols as f32 - SPACING).max(tile.min(avail));
+        // Where the tiles end up: whole columns, stretched a little so every row ends flush on the right.
+        let target_cols = (((avail + SPACING) / (tile + SPACING)).floor() as usize).max(1);
+        let target_w = ((avail + SPACING) / target_cols as f32 - SPACING).max(tile.min(avail));
+        // The drawn width glides there; in between the columns follow the width, so the tiles
+        // grow continuously (the right edge is ragged until they arrive).
+        let tile_w = self.animate_tile(ui.ctx(), target_w);
+        let settled = tile_w == target_w;
+        let cols = if settled {
+            target_cols
+        } else {
+            (((avail + SPACING) / (tile_w + SPACING)).floor() as usize).max(1)
+        };
         let tile_h = tile_w + label_h + PAD;
         let rows = self.shown.len().div_ceil(cols);
+        let zoom_offset = self.zoom_scroll(ui, cols, tile_h, !settled);
 
         let mut action = self.keyboard(ui, cols);
 
@@ -262,6 +320,10 @@ impl Gallery {
             } else if row_bottom > self.last_offset + self.last_viewport_h {
                 area = area.vertical_scroll_offset(row_bottom - self.last_viewport_h);
             }
+        }
+
+        if let Some(offset) = zoom_offset {
+            area = area.vertical_scroll_offset(offset);
         }
 
         ui.spacing_mut().item_spacing = vec2(SPACING, SPACING);
@@ -351,6 +413,7 @@ impl Gallery {
         self.tile_dragged = tile_dragged;
         self.last_offset = output.state.clamped_offset().y;
         self.last_viewport_h = output.inner_rect.height();
+        self.last_layout = Some((cols, tile_w, tile_h, output.inner_rect));
 
         if visible != self.visible {
             service.set_visible(|k| visible.contains(k));
