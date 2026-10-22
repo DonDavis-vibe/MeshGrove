@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
-use meshgrove_core::config::{Config, GltfUnit, Slicer};
+use meshgrove_core::config::{Config, FOLDER_PREVIEW_DEPTH, FolderPreviews, GltfUnit, PreviewQuality, Slicer};
 use meshgrove_core::printer::Bed;
 use meshgrove_core::userdata;
 
@@ -19,10 +19,63 @@ pub enum SettingsChange {
     /// `None`: take the printer selected in the slicer.
     Printer(Option<Bed>),
     GltfUnit(GltfUnit),
+    PreviewQuality(PreviewQuality),
+    FolderPreviews(FolderPreviews),
+    LockPanes(bool),
+    ResetLayout,
     Export(PathBuf),
     Import(PathBuf),
     OpenBackups,
     ClearCache,
+}
+
+/// Whether the panes of the main window can be moved.
+fn panes(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+    ui.label(RichText::new(t!("settings.panes")).strong());
+    let mut locked = config.lock_panes;
+    if ui.checkbox(&mut locked, t!("settings.panes_lock")).changed() {
+        changes.push(SettingsChange::LockPanes(locked));
+    }
+    ui.weak(t!("settings.panes_hint"));
+    if ui.button(t!("pane.reset")).clicked() {
+        changes.push(SettingsChange::ResetLayout);
+    }
+}
+
+/// Model pictures on folder tiles.
+fn folder_previews(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+    ui.label(RichText::new(t!("settings.folder_previews")).strong());
+    let mut fp = config.folder_previews;
+    ui.checkbox(&mut fp.enabled, t!("settings.folder_previews_enabled"));
+    ui.add_enabled_ui(fp.enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(t!("settings.folder_previews_depth"));
+            ui.add(egui::Slider::new(&mut fp.depth, FOLDER_PREVIEW_DEPTH));
+        });
+        ui.checkbox(&mut fp.cycle, t!("settings.folder_previews_cycle"));
+    });
+    ui.weak(t!("settings.folder_previews_hint"));
+    if fp != config.folder_previews {
+        changes.push(SettingsChange::FolderPreviews(fp));
+    }
+}
+
+/// Picture quality of the large preview.
+fn preview(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+    ui.label(RichText::new(t!("settings.preview")).strong());
+    ui.horizontal(|ui| {
+        ui.label(t!("settings.preview_quality"));
+        for (quality, label) in [
+            (PreviewQuality::Standard, t!("settings.preview_standard")),
+            (PreviewQuality::High, t!("settings.preview_high")),
+            (PreviewQuality::Studio, t!("settings.preview_studio")),
+        ] {
+            if ui.radio(config.preview_quality == quality, label).clicked() && config.preview_quality != quality {
+                changes.push(SettingsChange::PreviewQuality(quality));
+            }
+        }
+    });
+    ui.weak(t!("settings.preview_hint"));
 }
 
 /// How model files without a fixed unit are read.
@@ -141,6 +194,8 @@ impl SettingsDialog {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     self.language(ui, config, &mut changes);
                     ui.separator();
+                    panes(ui, config, &mut changes);
+                    ui.separator();
                     self.library(ui, config, &mut changes);
                     ui.separator();
                     self.slicer(ui, config, slicer, &mut changes);
@@ -148,6 +203,10 @@ impl SettingsDialog {
                     self.printer(ui, config, bed, &mut changes);
                     ui.separator();
                     models(ui, config, &mut changes);
+                    ui.separator();
+                    preview(ui, config, &mut changes);
+                    ui.separator();
+                    folder_previews(ui, config, &mut changes);
                     ui.separator();
                     self.user_data(ui, &mut changes);
                     ui.separator();

@@ -14,19 +14,22 @@ use meshgrove_core::{Kind, query};
 use meshgrove_render::Renderer;
 
 use crate::actions;
+use crate::folder_scan::FolderScanner;
 use crate::i18n;
 use crate::library::{LibEvent, LibraryService, Transfer};
 use crate::meshes::{self, MeshState, MeshStore};
 use crate::nav::{Listing, Navigator};
 use crate::thumbs::{ThumbResult, ThumbService};
-use crate::ui::details::{self, DetailsContext, ModelStatus, NoteEditor, TagEditor};
+use crate::ui::details::{self, DetailsContext, DetailsOutput, ModelStatus, NoteEditor, TagEditor};
 use crate::ui::duplicates::{self, DupAction, GroupInfo};
 use crate::ui::gallery::{Action, Arrange, Gallery, MenuContext};
+use crate::ui::layout::{Layout, Pane};
 use crate::ui::model_window::{self, ModelWindow, WindowAction, WindowContext};
 use crate::ui::settings::{AppInfo, SettingsChange, SettingsDialog};
 use crate::ui::sidebar::{LibraryInfo, Sidebar, SidebarAction};
 use crate::ui::turntable::Turntable;
 use crate::ui::viewer::{MeshSource, ModelViewer};
+use egui_tiles::Tree;
 
 /// Wait this long after the selection settles before loading a model into the viewer,
 /// so arrowing through a folder of 200 MB miniatures doesn't load every one of them.
@@ -77,6 +80,13 @@ pub struct App {
     viewer: ModelViewer,
     /// Models opened in windows of their own.
     model_windows: Vec<ModelWindow>,
+    /// The large preview over the window (Space).
+    preview_open: bool,
+    preview_viewer: ModelViewer,
+    /// Models found inside folders on disk, for the folder tiles (when enabled in the settings).
+    folder_scan: FolderScanner,
+    scan_pending: bool,
+    scan_refreshed: Instant,
     model: ModelStatus,
     meshes: MeshStore,
     turntable: Turntable,
@@ -105,6 +115,7 @@ pub struct App {
     tags_dirty: bool,
     tag_input: String,
     focus_tags: bool,
+    layout: Layout,
     /// Note of the selection as shown in the editor; saved shortly after the last keystroke.
     note_input: String,
     note_mixed: bool,
@@ -178,6 +189,15 @@ impl App {
             renderer: Renderer::new(&rs.device, &rs.adapter),
             viewer: ModelViewer::new(),
             model_windows: Vec::new(),
+            preview_open: false,
+            folder_scan: FolderScanner::new(cc.egui_ctx.clone()),
+            scan_pending: false,
+            scan_refreshed: Instant::now(),
+            preview_viewer: {
+                let mut v = ModelViewer::new();
+                v.set_quality(config.preview_quality);
+                v
+            },
             model: ModelStatus::Idle,
             meshes: MeshStore::new(rs.device.clone(), cc.egui_ctx.clone()),
             turntable: Turntable::default(),
@@ -203,6 +223,7 @@ impl App {
             tags_dirty: true,
             tag_input: String::new(),
             focus_tags: false,
+            layout: Layout::load(),
             note_input: String::new(),
             note_mixed: false,
             note_edited: None,
@@ -251,9 +272,25 @@ impl App {
     fn refresh_gallery(&mut self, reset: bool) {
         let entries = self.entries().to_vec();
         let mut mosaics = HashMap::new();
-        if let (View::Folder, Some(index)) = (&self.view, &self.index) {
+        let fp = self.config.folder_previews;
+        self.gallery.cycle_previews = fp.enabled && fp.cycle;
+        if matches!(self.view, View::Folder) {
+            if reset || self.folder_scan.folder() != self.nav.current() {
+                self.folder_scan.reset(self.nav.current());
+            }
+            // More than four candidates only when they are cycled through.
+            let limit = if fp.enabled && fp.cycle { 8 } else { 4 };
             for (i, e) in entries.iter().enumerate().filter(|(_, e)| e.is_dir() || e.kind == Kind::Archive) {
-                let preview = index.folder_preview(&e.path, 4).unwrap_or_default();
+                let mut preview = match &self.index {
+                    Some(index) => index.folder_preview(&e.path, limit).unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                if preview.is_empty() && fp.enabled && e.is_dir() {
+                    preview = self.folder_scan.get_or_request(&e.path, fp.depth, limit).cloned().unwrap_or_default();
+                }
+                if self.config.only_models {
+                    preview.retain(|f| f.kind.is_model());
+                }
                 if !preview.is_empty() {
                     mosaics.insert(i, preview);
                 }
@@ -375,6 +412,13 @@ impl App {
                 WindowAction::OpenInSlicer(path) => self.open_in_slicer(vec![path]),
                 WindowAction::Message(message) => self.toast(message),
             }
+        }
+    }
+
+    fn open_preview(&mut self) {
+        if self.selected_entry().is_some_and(|e| meshes::viewable(e.kind)) {
+            self.preview_viewer.reset_view();
+            self.preview_open = true;
         }
     }
 
@@ -634,6 +678,7 @@ impl App {
                     self.open_with_default_app(&entry);
                 }
             }
+            Action::Preview => self.open_preview(),
             Action::ShowInFolder(index) => self.show_in_folder(index),
             Action::OpenInSlicer => self.open_in_slicer(self.selected_paths()),
             Action::ShowInFileManager => {
@@ -712,6 +757,20 @@ impl App {
                     let name =
                         self.bed.as_ref().map_or_else(|| t!("settings.printer_none").into_owned(), |b| b.name.clone());
                     self.toast(t!("toast.printer_set", name = name).into_owned());
+                }
+                SettingsChange::FolderPreviews(fp) => {
+                    self.config.folder_previews = fp;
+                    self.folder_scan.reset(self.nav.current());
+                    self.refresh_gallery(false);
+                }
+                SettingsChange::LockPanes(locked) => self.config.lock_panes = locked,
+                SettingsChange::ResetLayout => {
+                    self.layout.reset();
+                    self.layout.save();
+                }
+                SettingsChange::PreviewQuality(quality) => {
+                    self.config.preview_quality = quality;
+                    self.preview_viewer.set_quality(quality);
                 }
                 SettingsChange::GltfUnit(unit) => {
                     self.config.gltf_unit = unit;
@@ -814,6 +873,11 @@ impl App {
     }
 
     /// Keeps the 3D viewer in sync with the selection (debounced, loads run in the mesh store).
+    fn set_viewer_mesh(&mut self, mesh: Option<(std::sync::Arc<meshgrove_render::GpuMesh>, MeshSource)>) {
+        self.preview_viewer.set_mesh(mesh.clone());
+        self.viewer.set_mesh(mesh);
+    }
+
     fn update_viewer(&mut self, ctx: &egui::Context) {
         if self.gallery.selected != self.last_selected {
             self.last_selected = self.gallery.selected;
@@ -822,30 +886,31 @@ impl App {
         }
         let wanted = self.selected_entry().filter(|e| meshes::viewable(e.kind)).map(|e| (e.path.clone(), e.kind));
         let Some((path, kind)) = wanted else {
-            self.viewer.set_mesh(None);
+            self.set_viewer_mesh(None);
             self.model = ModelStatus::Idle;
             return;
         };
         let waited = self.selection_changed.elapsed();
         if waited < VIEWER_DEBOUNCE {
             ctx.request_repaint_after(VIEWER_DEBOUNCE - waited);
-            self.viewer.set_mesh(None);
+            self.set_viewer_mesh(None);
             self.model = ModelStatus::Loading;
             return;
         }
         match self.meshes.request(&path, kind, self.viewer_plate) {
             MeshState::Loading => {
-                self.viewer.set_mesh(None);
+                self.set_viewer_mesh(None);
                 self.model = ModelStatus::Loading;
             }
             MeshState::Failed(e) => {
-                self.viewer.set_mesh(None);
-                self.model = ModelStatus::Failed(e.clone());
+                let e = e.clone();
+                self.set_viewer_mesh(None);
+                self.model = ModelStatus::Failed(e);
             }
             MeshState::Ready(loaded) => {
                 let loaded = loaded.clone();
                 let source = MeshSource { path: path.clone(), kind, plate: self.viewer_plate };
-                self.viewer.set_mesh(Some((loaded.mesh, source)));
+                self.set_viewer_mesh(Some((loaded.mesh, source)));
                 if self.plates.as_ref().is_none_or(|(p, _)| *p != path) {
                     let textures = loaded
                         .info
@@ -865,6 +930,21 @@ impl App {
     fn shortcuts(&mut self, ctx: &egui::Context) {
         let typing = ctx.egui_wants_keyboard_input();
         let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
+        // The mouse's back / forward buttons (4 and 5), as in a file manager.
+        let (mouse_back, mouse_forward) = ctx.input(|i| {
+            (
+                i.pointer.button_pressed(egui::PointerButton::Extra1),
+                i.pointer.button_pressed(egui::PointerButton::Extra2),
+            )
+        });
+        if mouse_back && !self.preview_open {
+            self.leave_search();
+            self.nav.back();
+        }
+        if mouse_forward && !self.preview_open {
+            self.leave_search();
+            self.nav.forward();
+        }
         if pressed(Modifiers::ALT, Key::ArrowLeft) {
             self.leave_search();
             self.nav.back();
@@ -876,6 +956,16 @@ impl App {
         if pressed(Modifiers::ALT, Key::ArrowUp) || (!typing && pressed(Modifiers::NONE, Key::Backspace)) {
             self.leave_search();
             self.nav.up();
+        }
+        if self.preview_open && pressed(Modifiers::NONE, Key::Escape) {
+            self.preview_open = false;
+        }
+        if !typing && pressed(Modifiers::NONE, Key::Space) {
+            if self.preview_open {
+                self.preview_open = false;
+            } else {
+                self.open_preview();
+            }
         }
         if !typing && pressed(Modifiers::NONE, Key::Delete) {
             let paths = self.selected_paths();
@@ -961,6 +1051,7 @@ impl App {
     /// "Ansicht" menu: sorting, "models only", "include subfolders", tile size.
     fn view_menu(&mut self, ui: &mut Ui) {
         let mut changed = false;
+        let models_only = self.config.only_models;
         let mut flatten = self.flatten;
         ui.menu_button(format!("{} ▾", t!("view.menu")), |ui| {
             ui.label(RichText::new(t!("gallery.sort")).weak());
@@ -984,7 +1075,9 @@ impl App {
         if flatten != self.flatten {
             self.set_flatten(flatten);
         }
-        if changed {
+        if changed && models_only != self.config.only_models {
+            self.refresh_gallery(false); // the folder tiles show models only, too
+        } else if changed {
             self.reapply_filter();
         }
     }
@@ -1112,6 +1205,12 @@ impl App {
                 ui.colored_label(ui.visuals().warn_fg_color, t!("error.config", error = err));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Preview size, as in a file manager's status bar (also Ctrl + mouse wheel over the files).
+                ui.spacing_mut().slider_width = 110.0;
+                ui.add(egui::Slider::new(&mut self.config.tile_size, TILE_RANGE).show_value(false))
+                    .on_hover_text(t!("gallery.tile_size"));
+                ui.weak("🔍");
+                ui.separator();
                 ui.weak(t!("status.gpu", name = self.gpu_name));
                 ui.separator();
                 self.library_status(ui);
@@ -1157,7 +1256,7 @@ impl App {
             return;
         }
         let zoom = ui.input(|i| i.zoom_delta());
-        if zoom != 1.0 && ui.ui_contains_pointer() {
+        if zoom != 1.0 && ui.rect_contains_pointer(ui.max_rect()) {
             self.config.tile_size = (self.config.tile_size * zoom).clamp(*TILE_RANGE.start(), *TILE_RANGE.end());
         }
         if let View::Duplicates { entries, groups } = &self.view {
@@ -1183,6 +1282,257 @@ impl App {
             self.handle_action(ui.ctx(), action);
         }
         self.turntable.show(ui, output.hovered, output.viewport, &mut self.meshes, rs, &self.renderer);
+    }
+}
+
+static PREVIEW_BACKDROP: std::sync::LazyLock<egui::Id> =
+    std::sync::LazyLock::new(|| egui::Id::unique("preview_backdrop"));
+static PREVIEW_PANEL: std::sync::LazyLock<egui::Id> = std::sync::LazyLock::new(|| egui::Id::unique("preview_panel"));
+
+impl App {
+    fn pane_places(&mut self, ui: &mut Ui) {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        let info = LibraryInfo {
+            tags: &self.all_tags,
+            duplicate_groups: self.duplicate_groups,
+            showing_duplicates: matches!(self.view, View::Duplicates { .. }),
+        };
+        match self.sidebar.show(ui, &self.config, self.nav.current(), info) {
+            Some(SidebarAction::Navigate(path)) => self.navigate(path),
+            Some(SidebarAction::AddRoot(path)) => {
+                if !self.config.library_roots.contains(&path) {
+                    self.config.library_roots.push(path);
+                    self.save_config();
+                    self.library.set_roots(self.config.library_roots.clone());
+                }
+            }
+            Some(SidebarAction::RemoveRoot(path)) => {
+                self.config.library_roots.retain(|r| r != &path);
+                self.save_config();
+                self.library.set_roots(self.config.library_roots.clone());
+            }
+            Some(SidebarAction::SearchTag(tag)) => {
+                self.scope = Scope::Library;
+                self.search = if tag.contains(' ') { format!("tag:\"{tag}\"") } else { format!("tag:{tag}") };
+                self.run_search();
+            }
+            Some(SidebarAction::ShowDuplicates) => self.show_duplicates(),
+            None => {}
+        }
+    }
+
+    fn details_context<'a>(&'a mut self, rs: &'a egui_wgpu::RenderState, focus_tags: bool) -> DetailsContext<'a> {
+        let entries = view_entries(&self.view, &self.nav);
+        let entry = self.gallery.selected.and_then(|i| entries.get(i));
+        let thumb = self.gallery.selected.and_then(|i| self.gallery.thumb(i));
+        let picked = self.gallery.selection();
+        let selection = (picked.len(), picked.iter().filter_map(|&i| entries.get(i)).map(|e| e.size).sum());
+        DetailsContext {
+            entry,
+            selection,
+            tags: TagEditor {
+                enabled: self.menu.can_tag,
+                on_selection: &self.selection_tags,
+                all: &self.all_tags,
+                input: &mut self.tag_input,
+                focus: focus_tags,
+            },
+            note: NoteEditor { enabled: self.menu.can_tag, text: &mut self.note_input, mixed: self.note_mixed },
+            bed: self.bed.as_ref(),
+            slicer: self.slicer.as_ref().map(|s| s.name.as_str()),
+            thumb,
+            model: &self.model,
+            plates: self.plates.as_ref().map_or(&[][..], |(_, p)| p.as_slice()),
+            viewer: &mut self.viewer,
+            render_state: rs,
+            renderer: &self.renderer,
+        }
+    }
+
+    /// The large model view over (almost) the whole window; click outside, Esc or Space closes it.
+    fn preview_overlay(&mut self, ctx: &egui::Context, rs: &egui_wgpu::RenderState) {
+        if !self.preview_open {
+            return;
+        }
+        let Some(name) =
+            self.selected_entry().filter(|e| meshes::viewable(e.kind)).map(|e| listing::file_name(&e.path))
+        else {
+            self.preview_open = false;
+            return;
+        };
+        let screen = ctx.content_rect();
+        let mut close = false;
+        egui::Area::new(*PREVIEW_BACKDROP).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+            let response = ui.allocate_rect(screen, egui::Sense::click());
+            ui.painter().rect_filled(screen, 0.0, egui::Color32::from_black_alpha(190));
+            close |= response.clicked();
+        });
+        let panel = screen.shrink(20.0);
+        let mut message = None;
+        egui::Area::new(*PREVIEW_PANEL).order(egui::Order::Foreground).fixed_pos(panel.min).show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(ui.visuals().panel_fill)
+                .corner_radius(8.0)
+                .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                .inner_margin(10.0)
+                .show(ui, |ui| {
+                    ui.set_min_size(panel.size() - egui::vec2(20.0, 20.0));
+                    ui.set_max_size(panel.size() - egui::vec2(20.0, 20.0));
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Label::new(RichText::new(name).heading().strong()).truncate());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("✕").on_hover_text(t!("preview.close")).clicked() {
+                                close = true;
+                            }
+                        });
+                    });
+                    let hint = ui.text_style_height(&egui::TextStyle::Small) + 6.0;
+                    let mut size = ui.available_size();
+                    size.y = (size.y - hint).max(80.0);
+                    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    match &self.model {
+                        ModelStatus::Loading => {
+                            child.centered_and_justified(|ui| ui.spinner());
+                        }
+                        ModelStatus::Failed(e) => {
+                            child.centered_and_justified(|ui| ui.colored_label(ui.visuals().error_fg_color, e));
+                        }
+                        _ => message = self.preview_viewer.ui(&mut child, rs, &self.renderer),
+                    }
+                    ui.add(egui::Label::new(RichText::new(t!("preview.hint")).weak()).truncate());
+                });
+        });
+        if let Some(message) = message {
+            self.toast(message);
+        }
+        if close {
+            self.preview_open = false;
+        }
+    }
+
+    fn apply_details_output(&mut self, out: DetailsOutput) {
+        if out.clicked_plate.is_some() {
+            self.viewer_plate = out.clicked_plate;
+        }
+        if let Some(tag) = out.add_tag {
+            self.library.tag(self.menu_for.clone(), tag);
+        }
+        if let Some(tag) = out.remove_tag {
+            self.library.untag(self.menu_for.clone(), tag);
+        }
+        if out.note_changed {
+            self.note_edited = Some(Instant::now());
+        }
+        if let Some(message) = out.message {
+            self.toast(message);
+        }
+        if out.open_in_slicer {
+            self.open_in_slicer(self.selected_paths());
+        }
+    }
+}
+
+/// Three dots centred in the pane's header bar; dragging them moves the pane like its tab does.
+/// Returns whether a drag started on them.
+fn grip_handle(ui: &Ui) -> bool {
+    const BAR: f32 = 24.0;
+    let pane = ui.max_rect();
+    if pane.width() < 200.0 {
+        return false;
+    }
+    let bar = egui::Rect::from_center_size(egui::pos2(pane.center().x, pane.top() - BAR / 2.0), egui::vec2(36.0, BAR));
+    // The pane's Ui is clipped to the pane, so paint and listen on the whole screen instead.
+    let ctx = ui.ctx();
+    let (hovered, pressed) =
+        ctx.input(|i| (i.pointer.hover_pos().is_some_and(|p| bar.contains(p)), i.pointer.primary_pressed()));
+    let color = if hovered { ui.visuals().widgets.hovered.fg_stroke.color } else { ui.visuals().weak_text_color() };
+    if hovered {
+        ctx.set_cursor_icon(egui::CursorIcon::Grab);
+    }
+    let painter = egui::Painter::new(ctx.clone(), ui.layer_id(), ctx.content_rect());
+    let line = egui::Stroke::new(1.0, ui.visuals().widgets.inactive.bg_fill);
+    painter.hline(pane.x_range(), pane.top() - 0.5, line);
+    for i in -1..=1 {
+        painter.circle_filled(bar.center() + egui::vec2(i as f32 * 6.0, 0.0), 1.5, color);
+    }
+    hovered && pressed
+}
+
+/// Draws the panes of the dockable layout with the app's state.
+struct PaneHost<'a> {
+    app: &'a mut App,
+    rs: &'a egui_wgpu::RenderState,
+    /// Panes can only be resized: nothing to drag, and single panes have no header.
+    locked: bool,
+    reset: bool,
+}
+
+impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
+    fn pane_ui(&mut self, ui: &mut Ui, _tile_id: egui_tiles::TileId, pane: &mut Pane) -> egui_tiles::UiResponse {
+        let rs = self.rs;
+        let grip = !self.locked && grip_handle(ui);
+        ui.shrink_clip_rect(ui.max_rect());
+        match pane {
+            Pane::Places => self.app.pane_places(ui),
+            Pane::Files => self.app.central(ui, rs),
+            Pane::Preview => {
+                let cx = self.app.details_context(rs, false);
+                let out = details::preview(ui, cx);
+                self.app.apply_details_output(out);
+            }
+            Pane::Info => {
+                let focus = std::mem::take(&mut self.app.focus_tags);
+                let cx = self.app.details_context(rs, focus);
+                let out = details::info(ui, cx);
+                self.app.apply_details_output(out);
+            }
+        }
+        if grip { egui_tiles::UiResponse::DragStarted } else { egui_tiles::UiResponse::None }
+    }
+
+    fn tab_bar_hline_stroke(&self, visuals: &egui::Visuals) -> egui::Stroke {
+        egui::Stroke::new(1.0, visuals.widgets.inactive.bg_fill)
+    }
+
+    fn tab_bar_color(&self, visuals: &egui::Visuals) -> egui::Color32 {
+        visuals.panel_fill
+    }
+
+    fn tab_title_for_pane(&mut self, pane: &Pane) -> egui::WidgetText {
+        pane.title().into()
+    }
+
+    fn is_tab_closable(&self, _tiles: &egui_tiles::Tiles<Pane>, _tile_id: egui_tiles::TileId) -> bool {
+        false
+    }
+
+    fn is_tile_draggable(&self, _tiles: &egui_tiles::Tiles<Pane>, _tile_id: egui_tiles::TileId) -> bool {
+        !self.locked
+    }
+
+    /// Stacked panes keep their tabs when locked, or one of them could not be reached any more.
+    fn is_tab_bar_visible(&self, _tile_id: egui_tiles::TileId, tabs: &egui_tiles::Tabs) -> bool {
+        !self.locked || tabs.children.len() > 1
+    }
+
+    fn simplification_options(&self) -> egui_tiles::SimplificationOptions {
+        egui_tiles::SimplificationOptions { all_panes_must_have_tabs: true, ..Default::default() }
+    }
+
+    fn top_bar_right_ui(
+        &mut self,
+        tiles: &egui_tiles::Tiles<Pane>,
+        ui: &mut Ui,
+        _tile_id: egui_tiles::TileId,
+        tabs: &egui_tiles::Tabs,
+        _scroll_offset: &mut f32,
+    ) {
+        let holds_files =
+            tabs.children.iter().any(|&c| matches!(tiles.get(c), Some(egui_tiles::Tile::Pane(Pane::Files))));
+        if holds_files && ui.small_button("↺").on_hover_text(t!("pane.reset")).clicked() {
+            self.reset = true;
+        }
     }
 }
 
@@ -1221,6 +1571,19 @@ impl eframe::App for App {
                 ctx.request_repaint_after(NOTE_DEBOUNCE);
             }
         }
+        if self.folder_scan.poll() {
+            self.scan_pending = true;
+        }
+        if self.scan_pending {
+            // Several folders finish close together: redraw them in one go.
+            if self.scan_refreshed.elapsed() >= Duration::from_millis(300) {
+                self.scan_pending = false;
+                self.scan_refreshed = Instant::now();
+                self.refresh_gallery(false);
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(300));
+            }
+        }
         self.meshes.begin_frame();
         self.update_viewer(&ctx);
         if let Some(hook) = &mut self.screenshot {
@@ -1253,100 +1616,24 @@ impl eframe::App for App {
         });
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
 
-        let sidebar_action = egui::Panel::left("sidebar")
-            .default_size(250.0)
-            .max_size(420.0)
-            .show(ui, |ui| {
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                let info = LibraryInfo {
-                    tags: &self.all_tags,
-                    duplicate_groups: self.duplicate_groups,
-                    showing_duplicates: matches!(self.view, View::Duplicates { .. }),
-                };
-                self.sidebar.show(ui, &self.config, self.nav.current(), info)
-            })
-            .inner;
-        match sidebar_action {
-            Some(SidebarAction::Navigate(path)) => self.navigate(path),
-            Some(SidebarAction::AddRoot(path)) => {
-                if !self.config.library_roots.contains(&path) {
-                    self.config.library_roots.push(path);
-                    self.save_config();
-                    self.library.set_roots(self.config.library_roots.clone());
-                }
+        let fill = ui.visuals().panel_fill;
+        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
+            let mut tree = std::mem::replace(&mut self.layout.tree, Tree::empty(egui::Id::unique("layout")));
+            let locked = self.config.lock_panes;
+            let mut host = PaneHost { app: self, rs: &rs, locked, reset: false };
+            tree.ui(&mut host, ui);
+            let reset = host.reset;
+            self.layout.tree = tree;
+            if reset {
+                self.layout.reset();
             }
-            Some(SidebarAction::RemoveRoot(path)) => {
-                self.config.library_roots.retain(|r| r != &path);
-                self.save_config();
-                self.library.set_roots(self.config.library_roots.clone());
+            // Moving a pane or a divider ends with the button let go.
+            if reset || ctx.input(|i| i.pointer.any_released()) {
+                self.layout.save();
             }
-            Some(SidebarAction::SearchTag(tag)) => {
-                self.scope = Scope::Library;
-                self.search = if tag.contains(' ') { format!("tag:\"{tag}\"") } else { format!("tag:{tag}") };
-                self.run_search();
-            }
-            Some(SidebarAction::ShowDuplicates) => self.show_duplicates(),
-            None => {}
-        }
+        });
 
-        let focus_tags = std::mem::take(&mut self.focus_tags);
-        let details_out = egui::Panel::right("details")
-            .default_size(340.0)
-            .show(ui, |ui| {
-                let entries = view_entries(&self.view, &self.nav);
-                let entry = self.gallery.selected.and_then(|i| entries.get(i));
-                let thumb = self.gallery.selected.and_then(|i| self.gallery.thumb(i));
-                let picked = self.gallery.selection();
-                let selection = (picked.len(), picked.iter().filter_map(|&i| entries.get(i)).map(|e| e.size).sum());
-                details::show(
-                    ui,
-                    DetailsContext {
-                        entry,
-                        selection,
-                        tags: TagEditor {
-                            enabled: self.menu.can_tag,
-                            on_selection: &self.selection_tags,
-                            all: &self.all_tags,
-                            input: &mut self.tag_input,
-                            focus: focus_tags,
-                        },
-                        note: NoteEditor {
-                            enabled: self.menu.can_tag,
-                            text: &mut self.note_input,
-                            mixed: self.note_mixed,
-                        },
-                        bed: self.bed.as_ref(),
-                        slicer: self.slicer.as_ref().map(|s| s.name.as_str()),
-                        thumb,
-                        model: &self.model,
-                        plates: self.plates.as_ref().map_or(&[][..], |(_, p)| p.as_slice()),
-                        viewer: &mut self.viewer,
-                        render_state: &rs,
-                        renderer: &self.renderer,
-                    },
-                )
-            })
-            .inner;
-        if details_out.clicked_plate.is_some() {
-            self.viewer_plate = details_out.clicked_plate;
-        }
-        if let Some(tag) = details_out.add_tag {
-            self.library.tag(self.menu_for.clone(), tag);
-        }
-        if let Some(tag) = details_out.remove_tag {
-            self.library.untag(self.menu_for.clone(), tag);
-        }
-        if details_out.note_changed {
-            self.note_edited = Some(Instant::now());
-        }
-        if let Some(message) = details_out.message {
-            self.toast(message);
-        }
-        if details_out.open_in_slicer {
-            self.open_in_slicer(self.selected_paths());
-        }
-
-        egui::CentralPanel::default().show(ui, |ui| self.central(ui, &rs));
+        self.preview_overlay(&ctx, &rs);
 
         let info = AppInfo { gpu: &self.gpu_name, db_path: &self.db_path };
         let changes = self.settings.show(&ctx, &self.config, self.slicer.as_ref(), self.bed.as_ref(), info);
@@ -1361,6 +1648,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        self.layout.save();
         self.save_note();
         self.library.flush(Duration::from_secs(3));
         self.save_config();

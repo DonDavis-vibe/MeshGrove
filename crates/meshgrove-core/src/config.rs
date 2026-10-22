@@ -187,6 +187,39 @@ pub enum SortKey {
     Type,
 }
 
+/// How much effort the large preview puts into the picture.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PreviewQuality {
+    /// Drawn like the small viewer.
+    Standard,
+    /// Rendered at twice the resolution and scaled down: smooth edges.
+    #[default]
+    High,
+    /// High, plus studio lighting with glossy highlights.
+    Studio,
+}
+
+/// Pictures of the models inside a folder on the folder's tile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FolderPreviews {
+    /// Look into the folders on disk (costs some reading per folder).
+    pub enabled: bool,
+    /// How many folder levels down to look for models.
+    pub depth: u8,
+    /// With more than four models, slowly fade through them.
+    pub cycle: bool,
+}
+
+impl Default for FolderPreviews {
+    fn default() -> Self {
+        FolderPreviews { enabled: false, depth: 2, cycle: true }
+    }
+}
+
+pub const FOLDER_PREVIEW_DEPTH: std::ops::RangeInclusive<u8> = 1..=5;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -206,6 +239,12 @@ pub struct Config {
     pub printer: Option<crate::printer::Bed>,
     /// What one glTF unit stands for.
     pub gltf_unit: GltfUnit,
+    /// Picture quality of the large preview (Space).
+    pub preview_quality: PreviewQuality,
+    /// Model pictures on folder tiles.
+    pub folder_previews: FolderPreviews,
+    /// The panes of the main window can only be resized, not moved.
+    pub lock_panes: bool,
 }
 
 impl Default for Config {
@@ -221,6 +260,9 @@ impl Default for Config {
             slicer: None,
             printer: None,
             gltf_unit: GltfUnit::Metres,
+            preview_quality: PreviewQuality::High,
+            folder_previews: FolderPreviews::default(),
+            lock_panes: false,
         }
     }
 }

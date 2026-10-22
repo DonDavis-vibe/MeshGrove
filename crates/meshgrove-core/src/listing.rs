@@ -51,6 +51,43 @@ pub fn list_dir(dir: &Path) -> io::Result<Vec<Entry>> {
     Ok(entries)
 }
 
+/// Model files (images only when there are no models) in `dir` and up to `depth` levels below it,
+/// for a folder's tile: files closer to the top first, at most `limit`. Reads at most a bounded
+/// number of folders and entries, so a huge tree stays cheap.
+pub fn scan_previews(dir: &Path, depth: u8, limit: usize) -> Vec<Entry> {
+    const MAX_DIRS: usize = 120;
+    const MAX_ENTRIES: usize = 4000;
+    let (mut models, mut images) = (Vec::new(), Vec::new());
+    let mut level = vec![dir.to_path_buf()];
+    let (mut dirs_read, mut seen) = (0, 0);
+    for _ in 0..depth {
+        let mut next = Vec::new();
+        for d in &level {
+            if dirs_read >= MAX_DIRS || seen >= MAX_ENTRIES || models.len() >= limit {
+                break;
+            }
+            dirs_read += 1;
+            let Ok(entries) = list_dir(d) else { continue };
+            seen += entries.len();
+            for e in entries {
+                match e.kind {
+                    Kind::Folder => next.push(e.path),
+                    k if k.is_model() => models.push(e),
+                    Kind::Image => images.push(e),
+                    _ => {}
+                }
+            }
+        }
+        if models.len() >= limit || next.is_empty() {
+            break;
+        }
+        level = next;
+    }
+    let mut found = if models.is_empty() { images } else { models };
+    found.truncate(limit);
+    found
+}
+
 /// Visible subfolders only, for the sidebar tree.
 pub fn subdirs(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(dir)?

@@ -36,6 +36,8 @@ pub struct ViewParams {
     /// Straight sRGB + alpha, 0..1. Alpha 0 gives transparent thumbnails.
     pub background: [f32; 4],
     pub framing: Framing,
+    /// Studio lighting with glossy highlights instead of the plain thumbnail lighting.
+    pub studio: bool,
 }
 
 impl Default for ViewParams {
@@ -48,6 +50,7 @@ impl Default for ViewParams {
             model_color: [0.80, 0.82, 0.85],
             background: [0.0, 0.0, 0.0, 0.0],
             framing: Framing::Tight,
+            studio: false,
         }
     }
 }
@@ -448,7 +451,7 @@ impl Camera {
         let fill = (self.right * 0.9 - self.up * 0.2 + to_eye * 0.3).normalize();
         Uniforms {
             view_proj: self.view_proj.to_cols_array_2d(),
-            eye: self.eye.extend(1.0).to_array(),
+            eye: self.eye.extend(if view.studio { 2.0 } else { 1.0 }).to_array(),
             base_color: [r, g, b, 1.0],
             key_dir: key.extend(0.0).to_array(),
             fill_dir: fill.extend(0.0).to_array(),

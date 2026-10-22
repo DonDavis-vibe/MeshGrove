@@ -8,6 +8,7 @@ use crossbeam_channel::{Receiver, bounded};
 use egui::{Color32, PointerButton, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 use glam::{Vec2, Vec3};
 use meshgrove_core::Kind;
+use meshgrove_core::config::PreviewQuality;
 use meshgrove_render::{Framing, GpuMesh, Renderer, ViewParams, project_point, view_ray};
 
 use super::offscreen::{OffscreenView, pixel_size};
@@ -47,6 +48,9 @@ pub struct ModelViewer {
     scripted_picks: Vec<egui::Vec2>,
     /// Test hook: a standard view (`top`, `front`, …) to show once the model is there.
     scripted_view: Option<String>,
+    /// Render this many times the pixels the view shows (smooths edges).
+    supersample: f32,
+    studio: bool,
 }
 
 impl ModelViewer {
@@ -61,6 +65,22 @@ impl ModelViewer {
             saving: None,
             scripted_picks: Vec::new(),
             scripted_view: None,
+            supersample: 1.0,
+            studio: false,
+        }
+    }
+
+    /// Picture quality of this view; changing it redraws.
+    pub fn set_quality(&mut self, quality: PreviewQuality) {
+        let (supersample, studio) = match quality {
+            PreviewQuality::Standard => (1.0, false),
+            PreviewQuality::High => (2.0, false),
+            PreviewQuality::Studio => (2.0, true),
+        };
+        if supersample != self.supersample || studio != self.studio {
+            self.supersample = supersample;
+            self.studio = studio;
+            self.dirty = true;
         }
     }
 
@@ -128,6 +148,9 @@ impl ModelViewer {
         if w < 8 || h < 8 {
             return message;
         }
+        let max = rs.device.limits().max_texture_dimension_2d;
+        let (w, h) = (((w as f32 * self.supersample) as u32).min(max), ((h as f32 * self.supersample) as u32).min(max));
+        self.view.studio = self.studio;
         if self.offscreen.ensure_size(rs, renderer, w, h) {
             self.dirty = true;
         }

@@ -22,7 +22,11 @@ pub fn folder(p: &Painter, r: Rect) {
 
 /// Folder whose contents peek out: up to four previews in the folder body, the front flap
 /// drawn translucently over their lower part.
-pub fn folder_mosaic(p: &Painter, r: Rect, previews: &[(egui::TextureId, egui::Vec2)], paper: Color32, color: Color32) {
+/// One picture in a folder mosaic, optionally fading into the next one (`.1` = how far, 0..1).
+pub type Preview = (egui::TextureId, egui::Vec2);
+pub type MosaicCell = (Preview, Option<(Preview, f32)>);
+
+pub fn folder_mosaic(p: &Painter, r: Rect, previews: &[MosaicCell], paper: Color32, color: Color32) {
     let w = r.width();
     let body =
         Rect::from_min_max(pos2(r.min.x + w * 0.04, r.min.y + w * 0.12), pos2(r.max.x - w * 0.04, r.max.y - w * 0.04));
@@ -42,13 +46,22 @@ pub fn folder_mosaic(p: &Painter, r: Rect, previews: &[(egui::TextureId, egui::V
             vec![a, b, c, d]
         }
     };
-    for (cell, (texture, size)) in cells.iter().zip(previews) {
+    for (cell, (now, next)) in cells.iter().zip(previews) {
         let cell = cell.shrink(w * 0.01);
         p.rect_filled(cell, w * 0.025, paper);
-        let scale = (cell.width() / size.x).min(cell.height() / size.y);
-        let img = Rect::from_center_size(cell.center(), *size * scale);
-        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-        p.image(*texture, img, uv, Color32::WHITE);
+        let draw = |(texture, size): Preview, opacity: f32| {
+            let scale = (cell.width() / size.x).min(cell.height() / size.y);
+            let img = Rect::from_center_size(cell.center(), size * scale);
+            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+            p.image(texture, img, uv, Color32::WHITE.gamma_multiply(opacity));
+        };
+        match next {
+            Some((next, fade)) => {
+                draw(*now, 1.0 - fade);
+                draw(*next, *fade);
+            }
+            None => draw(*now, 1.0),
+        }
     }
 
     let flap = Rect::from_min_max(pos2(body.min.x, body.max.y - body.height() * 0.3), body.max);

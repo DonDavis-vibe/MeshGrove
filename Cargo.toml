@@ -35,6 +35,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 pollster = "1.0"
 wgpu = "30"
 egui-wgpu = "0.37"
+egui_tiles = { version = "0.18", features = ["serde"] }
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts", "system_fonts", "accesskit"] }
 egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 rust-i18n = "4.2"

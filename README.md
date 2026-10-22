@@ -87,9 +87,10 @@ What makes it different from other model managers:
 
 | Area | What you get |
 |---|---|
-| **Gallery** | Thumbnails for STL, 3MF, STEP, OBJ, PLY, glTF/GLB, images and PDFs; folder and archive tiles show a 2×2 mosaic of what is inside; resizable tiles; sort by name, date, size or type; "models only"; "include subfolders" (all files below a folder in one grid); multi-selection |
+| **Gallery** | Thumbnails for STL, 3MF, STEP, OBJ, PLY, glTF/GLB, images and PDFs; folder and archive tiles show a 2×2 mosaic of what is inside (optionally also models from subfolders on disk, fading through them); resizable tiles (slider in the status bar, growing smoothly towards the pointer); sort by name, date, size or type; "models only"; "include subfolders" (all files below a folder in one grid); multi-selection |
+| **Panes** | Places, files, preview and info are panes: drag a header to move one, drop it on an edge to split or on another header to stack; the dividers resize them; *Lock the panes* in the settings keeps them where they are |
 | **Hover turntable** | Point at a model tile and the model spins in place. Drag to turn it yourself, and turn the wheel while dragging to zoom |
-| **3D viewer** | In the side panel, or **double-click a model for a window of its own** (resizable, several at once, with "open in slicer"); orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **picture export** as a 2048 px PNG |
+| **3D viewer** | In the side panel, or **double-click a model for a window of its own** (resizable, several at once, with "open in slicer"), or **press Space for a large preview** over the window (smoother edges, optional studio lighting); orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **picture export** as a 2048 px PNG |
 | **3MF projects** | Embedded slicer plate pictures (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); click a plate picture to see that plate in 3D; **multi-colour**: filament colours per object and part, painted models (multi-material painting) and 3MF material colours in the viewer and in rendered previews; filament swatches on tiles and in the details; title, designer and application from the metadata |
 | **STEP / STP** | CAD files are tessellated by OpenCascade in a separate helper process, so a broken file cannot crash the app; results are cached |
 | **Archives** | Open ZIP, 7z, RAR and TAR like folders; every model inside gets a preview; files are extracted only when another program needs them |
@@ -258,8 +259,9 @@ unpack it anywhere and start `meshgrove.exe`.
 
 - **Navigate** with double-click (folders and archives open, models open in a window of their
   own, other files in their default app), the breadcrumb, the sidebar, or the keyboard: arrow keys move the selection, Enter
-  opens, Backspace or Alt+↑ goes up, Alt+← / Alt+→ go back and forward.
-- **Tile size:** Ctrl + mouse wheel, Ctrl + `+` / `-`, or the slider in the *View* menu.
+  opens, Backspace or Alt+↑ goes up, Alt+← / Alt+→ or the mouse buttons 4 / 5 go back and forward.
+- **Tile size:** Ctrl + mouse wheel, Ctrl + `+` / `-`, or the slider in the status bar or the
+  *View* menu. The tiles grow smoothly, and the one under the pointer stays where it is.
 - **View menu:** sort by name, modified date, size or type (ascending or descending); *3D models
   only* hides everything except 3D models (folders stay so you can navigate); *Include
   subfolders* lists every file below the current folder in one grid, each with its folder
@@ -274,6 +276,16 @@ unpack it anywhere and start `meshgrove.exe`.
 - **Badges on tiles:** the file type at the bottom left; `2×`, `3×` … at the top right when the
   library holds duplicates of this file; ↻ angle or ✕ at the bottom right from the print bed
   check.
+- **Panes:** drag a pane's header to move it; drop it on the edge of another pane to split
+  that, or on another header to stack both as tabs. The dividers between panes resize them.
+  *Settings → Panes* can lock them, so they can only be resized, and resets the layout.
+- **Large preview:** Space shows the selected model large over the window, with the same
+  tools as the viewer and an "open in slicer" button; Space, Esc or a click outside closes it.
+  *Settings → Large preview* sets its picture quality: *High* renders at twice the resolution
+  for smooth edges, *Studio* adds glossy studio lighting.
+- **Folder previews from disk:** folder tiles outside the library can show models from their
+  subfolders too (*Settings → Folder previews*, off by default, up to five levels deep). With
+  more than four models the pictures slowly fade through them.
 
 ### The 3D viewer and its tools
 
@@ -324,7 +336,7 @@ with their slot number and material.
 
 ### The details panel
 
-Below the viewer you find:
+The *Info* pane (below the viewer unless you move it) shows:
 
 - type, file size and modification date
 - **dimensions** in mm (X × Y × Z) and the **triangle** count
@@ -409,7 +421,8 @@ to the trash* cleans up a group after a confirmation. Tiles everywhere in the ga
 
 ### Working with your slicer and other apps
 
-- **Open in slicer** (context menu, the button in the details panel or in a model window):
+- **Open in slicer** (context menu, the button in the details panel, in a model window or
+  in the large preview):
   opens the selected models, several at once if you like (STL, 3MF, STEP and OBJ; the slicers
   do not open PLY and glTF). Files inside archives are extracted to a cache folder first.
   Meshgrove finds these slicers automatically:
@@ -483,7 +496,8 @@ Ctrl means ⌘ Cmd on macOS.
 | Enter | Open the selected folder or archive; a model in its own window; other files in their default app |
 | Esc (in a model window) | Close the window |
 | Backspace, Alt+↑ | Parent folder |
-| Alt+←, Alt+→ | Back, forward |
+| Alt+←, Alt+→, mouse buttons 4 / 5 | Back, forward |
+| Space | Large preview of the selected model (Esc or Space closes it) |
 | F5 | Reload the folder |
 | Ctrl+A | Select all shown files |
 | Ctrl+click, Shift+click | Toggle a file, select a range |
@@ -495,6 +509,7 @@ Ctrl means ⌘ Cmd on macOS.
 | Ctrl + `+` / `-`, Ctrl + wheel | Tile size |
 | Ctrl+, | Settings |
 | **Mouse on a model tile** | Hover: spin · drag: turn · wheel while dragging: zoom |
+| **Mouse on a pane header** | Drag: move the pane (not when locked in the settings) |
 | **Mouse in the 3D viewer** | Left drag: turn · right/middle drag: pan · wheel: zoom · double-click: reset |
 
 ## Supported file types
@@ -515,12 +530,13 @@ Ctrl means ⌘ Cmd on macOS.
 ## Settings and files on disk
 
 Everything can be changed in the settings window (⚙ at the top right, or Ctrl+,): language,
-library folders, slicer, printer, the unit of glTF models, backups, and the preview cache (with its size and a *Clear
+the panes, library folders, slicer, printer, the unit of glTF models, the picture quality of the
+large preview, folder previews, backups, and the preview cache (with its size and a *Clear
 cache* button). The *About* section lists the exact paths on your system.
 
 | What | Linux | Windows | macOS |
 |---|---|---|---|
-| Settings (`config.toml`) | `~/.config/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
+| Settings (`config.toml`) and pane layout (`layout.json`) | `~/.config/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Library index (`library.db`) and `backups/` | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Cache: previews, STEP meshes, extracted archive files | `~/.cache/meshgrove/` | `%LOCALAPPDATA%\meshgrove\` | `~/Library/Caches/meshgrove/` |
 | Exported pictures | `~/Pictures/Meshgrove` (localised, e.g. `~/Bilder`) | `Pictures\Meshgrove` | `~/Pictures/Meshgrove` |
@@ -538,6 +554,13 @@ only_models = false
 sort_by = "name"           # name | modified | size | type
 sort_descending = false
 language = "en"            # "de", "en"; leave out to follow the system
+lock_panes = false         # true: panes can only be resized, not moved
+preview_quality = "high"   # large preview: standard | high | studio
+
+[folder_previews]
+enabled = false            # models from subfolders on folder tiles
+depth = 2                  # 1 … 5 levels
+cycle = true               # fade through more than four
 
 [slicer]                   # leave out to detect automatically
 name = "My Slicer"
