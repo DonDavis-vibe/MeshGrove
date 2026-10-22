@@ -81,13 +81,21 @@ pub fn preview(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
         let text = t!("details.multi", count = i18n::count(count), size = i18n::file_size(total_size));
         ui.label(RichText::new(text).strong().color(ui.visuals().selection.stroke.color));
     }
-    ui.add(egui::Label::new(RichText::new(meshgrove_core::listing::file_name(&entry.path)).heading().strong()).truncate());
+    ui.add(
+        egui::Label::new(RichText::new(meshgrove_core::listing::file_name(&entry.path)).heading().strong()).truncate(),
+    );
     ui.add_space(4.0);
 
     if meshes::viewable(entry.kind) {
         let hint = ui.text_style_height(&egui::TextStyle::Small) + 6.0;
+        // Room below the view for the hint and the "open in slicer" button.
+        let button = if cx.slicer.is_some() && entry.kind.is_sliceable() {
+            SLICER_BUTTON_HEIGHT + ui.spacing().item_spacing.y
+        } else {
+            0.0
+        };
         let mut size = ui.available_size();
-        size.y = (size.y - hint).max(80.0);
+        size.y = (size.y - hint - button).max(80.0);
         let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         match cx.model {
@@ -141,6 +149,9 @@ pub fn slicer_button(ui: &mut Ui, kind: Kind, slicer: Option<&str>) -> bool {
     ui.add_space(6.0);
     ui.add(egui::Button::new(t!("menu.open_in_slicer", name = name)).min_size(egui::vec2(0.0, 28.0))).clicked()
 }
+
+/// Height [`slicer_button`] takes, with the space above it.
+const SLICER_BUTTON_HEIGHT: f32 = 6.0 + 28.0;
 
 fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, count: usize, out: &mut DetailsOutput) {
     ui.add_space(10.0);

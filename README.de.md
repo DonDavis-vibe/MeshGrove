@@ -88,9 +88,10 @@ Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 
 | Bereich | Was du bekommst |
 |---|---|
-| **Galerie** | Vorschauen für STL, 3MF, STEP, OBJ, PLY, glTF/GLB, Bilder und PDFs; Ordner- und Archiv-Kacheln zeigen ein 2×2-Mosaik ihres Inhalts; Kachelgröße einstellbar; Sortieren nach Name, Datum, Größe oder Typ; „Nur 3D-Modelle“; „Unterordner einbeziehen“ (alle Dateien unter einem Ordner in einem Raster); Mehrfachauswahl |
+| **Galerie** | Vorschauen für STL, 3MF, STEP, OBJ, PLY, glTF/GLB, Bilder und PDFs; Ordner- und Archiv-Kacheln zeigen ein 2×2-Mosaik ihres Inhalts (auf Wunsch auch Modelle aus Unterordnern auf der Platte, die langsam durchblenden); Kachelgröße einstellbar (Regler in der Statusleiste, Kacheln wachsen fließend zur Maus hin); Sortieren nach Name, Datum, Größe oder Typ; „Nur 3D-Modelle“; „Unterordner einbeziehen“ (alle Dateien unter einem Ordner in einem Raster); Mehrfachauswahl |
+| **Bereiche** | Orte, Dateien, Vorschau und Info sind Bereiche: Kopfzeile ziehen verschiebt einen, am Rand eines anderen ablegen teilt ihn, auf einer anderen Kopfzeile ablegen stapelt beide; die Trennlinien ändern die Größe; *Bereiche fixieren* in den Einstellungen hält sie an ihrem Platz |
 | **Drehvorschau** | Mit der Maus über eine Modell-Kachel fahren, und das Modell dreht sich. Ziehen dreht es von Hand, Mausrad beim Ziehen zoomt |
-| **3D-Viewer** | In der Seitenleiste, oder **Doppelklick auf ein Modell für ein eigenes Fenster** (frei vergrößerbar, mehrere gleichzeitig, mit „In Slicer öffnen“); Drehen, Verschieben und Zoomen um einen festen Drehpunkt (das Modell springt beim Drehen nie); Standardansichten (vorne, hinten, links, rechts, oben, unten, schräg); **Messen zwischen zwei Punkten in mm**; **Bildexport** als PNG mit 2048 px |
+| **3D-Viewer** | In der Seitenleiste, oder **Doppelklick auf ein Modell für ein eigenes Fenster** (frei vergrößerbar, mehrere gleichzeitig, mit „In Slicer öffnen“), oder **Leertaste für eine große Vorschau** über dem Fenster (glattere Kanten, auf Wunsch Studiolicht); Drehen, Verschieben und Zoomen um einen festen Drehpunkt (das Modell springt beim Drehen nie); Standardansichten (vorne, hinten, links, rechts, oben, unten, schräg); **Messen zwischen zwei Punkten in mm**; **Bildexport** als PNG mit 2048 px |
 | **3MF-Projekte** | Eingebettete Plattenbilder der Slicer (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); Klick auf ein Plattenbild zeigt diese Platte in 3D; **mehrfarbig**: Filamentfarben pro Objekt und Teil, bemalte Modelle (Multi-Material-Bemalung) und 3MF-Materialfarben im Viewer und in selbst gerenderten Vorschauen; Filament-Farbfelder auf Kacheln und in den Details; Titel, Designer und Programm aus den Metadaten |
 | **STEP / STP** | CAD-Dateien werden von OpenCascade in einem eigenen Hilfsprozess vernetzt, eine kaputte Datei kann die App also nicht abstürzen lassen; das Ergebnis wird zwischengespeichert |
 | **Archive** | ZIP, 7z, RAR und TAR öffnen wie Ordner; jedes enthaltene Modell bekommt eine Vorschau; entpackt wird nur, wenn ein anderes Programm die Datei braucht |
@@ -268,8 +269,9 @@ Programme: irgendwohin entpacken und `meshgrove.exe` starten.
 - **Navigieren** per Doppelklick (Ordner und Archive öffnen sich, Modelle in einem eigenen
   Fenster, andere Dateien im Standardprogramm), über die Pfadleiste, die Seitenleiste oder die Tastatur: Pfeiltasten
   bewegen die Auswahl, Enter öffnet, Rücktaste oder Alt+↑ geht eine Ebene hoch, Alt+← und
-  Alt+→ gehen zurück und vor.
-- **Kachelgröße:** Strg + Mausrad, Strg + `+` / `-` oder der Regler im Menü *Ansicht*.
+  Alt+→ oder die Maustasten 4 / 5 gehen zurück und vor.
+- **Kachelgröße:** Strg + Mausrad, Strg + `+` / `-` oder der Regler in der Statusleiste oder im
+  Menü *Ansicht*. Die Kacheln wachsen fließend, die Kachel unter der Maus bleibt an ihrem Platz.
 - **Menü Ansicht:** Sortieren nach Name, Änderungsdatum, Größe oder Typ (auf- oder absteigend);
   *Nur 3D-Modelle* blendet alles außer 3D-Modellen aus (Ordner bleiben zum Navigieren
   sichtbar); *Unterordner einbeziehen* zeigt alle Dateien unterhalb des aktuellen Ordners in
@@ -285,6 +287,17 @@ Programme: irgendwohin entpacken und `meshgrove.exe` starten.
 - **Markierungen auf Kacheln:** unten links der Dateityp; oben rechts `2×`, `3×` …, wenn es in
   der Bibliothek Duplikate dieser Datei gibt; unten rechts ↻ mit Winkel oder ✕ vom
   Druckbett-Check.
+- **Bereiche:** Die Kopfzeile eines Bereichs ziehen verschiebt ihn; am Rand eines anderen
+  Bereichs abgelegt teilt er diesen, auf einer anderen Kopfzeile werden beide zu Tabs. Die
+  Trennlinien zwischen den Bereichen ändern ihre Größe. *Einstellungen → Bereiche* fixiert sie,
+  dann lässt sich nur noch die Größe ändern, und setzt die Anordnung zurück.
+- **Große Vorschau:** Die Leertaste zeigt das gewählte Modell groß über dem Fenster, mit
+  denselben Werkzeugen wie im Viewer und einem Knopf „In Slicer öffnen“; Leertaste, Esc oder ein
+  Klick daneben schließt sie. *Einstellungen → Große Vorschau* stellt die Bildqualität ein:
+  *Hoch* rendert mit doppelter Auflösung für glatte Kanten, *Studio* fügt glänzendes Studiolicht hinzu.
+- **Ordnervorschau von der Platte:** Ordnerkacheln außerhalb der Bibliothek können auch Modelle
+  aus ihren Unterordnern zeigen (*Einstellungen → Ordnervorschau*, standardmäßig aus, bis zu fünf
+  Ebenen tief). Bei mehr als vier Modellen blenden die Bilder langsam durch.
 
 ### Der 3D-Viewer und seine Werkzeuge
 
@@ -337,7 +350,7 @@ Filamente mit Slot-Nummer und Material.
 
 ### Die Detailansicht
 
-Unter dem Viewer stehen:
+Der Bereich *Info* (unter dem Viewer, solange du ihn nicht verschiebst) zeigt:
 
 - Typ, Dateigröße und Änderungsdatum
 - **Maße** in mm (X × Y × Z) und die Anzahl der **Dreiecke**
@@ -424,7 +437,8 @@ Galerie tragen Dateien mit Duplikaten eine `2×`/`3×`-Markierung.
 
 ### Zusammenarbeit mit Slicer und anderen Programmen
 
-- **In Slicer öffnen** (Kontextmenü, Knopf in der Detailansicht oder im Modell-Fenster):
+- **In Slicer öffnen** (Kontextmenü, Knopf in der Detailansicht, im Modell-Fenster oder in
+  der großen Vorschau):
   öffnet die ausgewählten Modelle, gern mehrere auf einmal (STL, 3MF, STEP und OBJ; PLY und
   glTF öffnen die Slicer nicht). Dateien aus Archiven werden vorher in einen Cache-Ordner
   entpackt. Diese Slicer findet Meshgrove von selbst:
@@ -516,6 +530,7 @@ Strg heißt auf macOS ⌘ Cmd.
 | Strg + `+` / `-`, Strg + Mausrad | Kachelgröße |
 | Strg+, | Einstellungen |
 | **Maus auf einer Modell-Kachel** | Darüberfahren: dreht sich · Ziehen: von Hand drehen · Mausrad beim Ziehen: zoomen |
+| **Maus auf der Kopfzeile eines Bereichs** | Ziehen: Bereich verschieben (nicht, wenn in den Einstellungen fixiert) |
 | **Maus im 3D-Viewer** | Linke Taste ziehen: drehen · rechte/mittlere Taste ziehen: verschieben · Mausrad: zoomen · Doppelklick: zurücksetzen |
 
 ## Unterstützte Dateitypen
@@ -536,12 +551,13 @@ Strg heißt auf macOS ⌘ Cmd.
 ## Einstellungen und Dateien auf der Platte
 
 Alles lässt sich im Einstellungsfenster ändern (⚙ oben rechts oder Strg+,): Sprache,
-Bibliotheksordner, Slicer, Drucker, die Einheit von glTF-Modellen, Sicherungen und der Vorschau-Cache (mit Größe und *Cache
+die Bereiche, Bibliotheksordner, Slicer, Drucker, die Einheit von glTF-Modellen, die Bildqualität
+der großen Vorschau, die Ordnervorschau, Sicherungen und der Vorschau-Cache (mit Größe und *Cache
 leeren*). Der Abschnitt *Über* nennt die genauen Pfade auf deinem System.
 
 | Was | Linux | Windows | macOS |
 |---|---|---|---|
-| Einstellungen (`config.toml`) | `~/.config/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
+| Einstellungen (`config.toml`) und Anordnung der Bereiche (`layout.json`) | `~/.config/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Bibliotheks-Index (`library.db`) und `backups/` | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Cache: Vorschauen, STEP-Netze, entpackte Archivdateien | `~/.cache/meshgrove/` | `%LOCALAPPDATA%\meshgrove\` | `~/Library/Caches/meshgrove/` |
 | Exportierte Bilder | `~/Bilder/Meshgrove` | `Bilder\Meshgrove` | `~/Bilder/Meshgrove` |
@@ -560,6 +576,13 @@ only_models = false
 sort_by = "name"           # name | modified | size | type
 sort_descending = false
 language = "de"            # "de", "en"; weglassen = Systemsprache
+lock_panes = false         # true: Bereiche nur in der Größe änderbar
+preview_quality = "high"   # große Vorschau: standard | high | studio
+
+[folder_previews]
+enabled = false            # Modelle aus Unterordnern auf Ordnerkacheln
+depth = 2                  # 1 … 5 Ebenen
+cycle = true               # bei mehr als vier durchblenden
 
 [slicer]                   # weglassen = automatisch erkennen
 name = "Mein Slicer"

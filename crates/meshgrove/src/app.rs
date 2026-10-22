@@ -21,15 +21,15 @@ use crate::meshes::{self, MeshState, MeshStore};
 use crate::nav::{Listing, Navigator};
 use crate::thumbs::{ThumbResult, ThumbService};
 use crate::ui::details::{self, DetailsContext, DetailsOutput, ModelStatus, NoteEditor, TagEditor};
-use crate::ui::layout::{self, Pane};
-use egui_tiles::Tree;
 use crate::ui::duplicates::{self, DupAction, GroupInfo};
 use crate::ui::gallery::{Action, Arrange, Gallery, MenuContext};
+use crate::ui::layout::{Layout, Pane};
 use crate::ui::model_window::{self, ModelWindow, WindowAction, WindowContext};
 use crate::ui::settings::{AppInfo, SettingsChange, SettingsDialog};
 use crate::ui::sidebar::{LibraryInfo, Sidebar, SidebarAction};
 use crate::ui::turntable::Turntable;
 use crate::ui::viewer::{MeshSource, ModelViewer};
+use egui_tiles::Tree;
 
 /// Wait this long after the selection settles before loading a model into the viewer,
 /// so arrowing through a folder of 200 MB miniatures doesn't load every one of them.
@@ -80,7 +80,7 @@ pub struct App {
     viewer: ModelViewer,
     /// Models opened in windows of their own.
     model_windows: Vec<ModelWindow>,
-    /// The large preview over the window (Space, or double-click when Meshgrove is the default app).
+    /// The large preview over the window (Space).
     preview_open: bool,
     preview_viewer: ModelViewer,
     /// Models found inside folders on disk, for the folder tiles (when enabled in the settings).
@@ -115,7 +115,7 @@ pub struct App {
     tags_dirty: bool,
     tag_input: String,
     focus_tags: bool,
-    layout: Tree<Pane>,
+    layout: Layout,
     /// Note of the selection as shown in the editor; saved shortly after the last keystroke.
     note_input: String,
     note_mixed: bool,
@@ -223,7 +223,7 @@ impl App {
             tags_dirty: true,
             tag_input: String::new(),
             focus_tags: false,
-            layout: layout::load().unwrap_or_else(layout::default_tree),
+            layout: Layout::load(),
             note_input: String::new(),
             note_mixed: false,
             note_edited: None,
@@ -336,12 +336,8 @@ impl App {
             self.navigate(entry.path);
             return;
         }
-        if meshes::viewable(entry.kind) && actions::default_app_is_meshgrove(&entry.path, entry.kind) {
-            // Meshgrove would only start another window: show the model large right here.
-            if self.gallery.selected != Some(index) {
-                self.gallery.select(Some(index));
-            }
-            self.open_preview();
+        if meshes::viewable(entry.kind) {
+            self.open_model_window(entry);
             return;
         }
         self.open_with_default_app(&entry);
@@ -682,11 +678,6 @@ impl App {
                     self.open_with_default_app(&entry);
                 }
             }
-            Action::OpenInWindow(index) => {
-                if let Some(entry) = self.entries().get(index).cloned() {
-                    self.open_model_window(entry);
-                }
-            }
             Action::Preview => self.open_preview(),
             Action::ShowInFolder(index) => self.show_in_folder(index),
             Action::OpenInSlicer => self.open_in_slicer(self.selected_paths()),
@@ -771,6 +762,11 @@ impl App {
                     self.config.folder_previews = fp;
                     self.folder_scan.reset(self.nav.current());
                     self.refresh_gallery(false);
+                }
+                SettingsChange::LockPanes(locked) => self.config.lock_panes = locked,
+                SettingsChange::ResetLayout => {
+                    self.layout.reset();
+                    self.layout.save();
                 }
                 SettingsChange::PreviewQuality(quality) => {
                     self.config.preview_quality = quality;
@@ -936,7 +932,10 @@ impl App {
         let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
         // The mouse's back / forward buttons (4 and 5), as in a file manager.
         let (mouse_back, mouse_forward) = ctx.input(|i| {
-            (i.pointer.button_pressed(egui::PointerButton::Extra1), i.pointer.button_pressed(egui::PointerButton::Extra2))
+            (
+                i.pointer.button_pressed(egui::PointerButton::Extra1),
+                i.pointer.button_pressed(egui::PointerButton::Extra2),
+            )
         });
         if mouse_back && !self.preview_open {
             self.leave_search();
@@ -1286,7 +1285,8 @@ impl App {
     }
 }
 
-static PREVIEW_BACKDROP: std::sync::LazyLock<egui::Id> = std::sync::LazyLock::new(|| egui::Id::unique("preview_backdrop"));
+static PREVIEW_BACKDROP: std::sync::LazyLock<egui::Id> =
+    std::sync::LazyLock::new(|| egui::Id::unique("preview_backdrop"));
 static PREVIEW_PANEL: std::sync::LazyLock<egui::Id> = std::sync::LazyLock::new(|| egui::Id::unique("preview_panel"));
 
 impl App {
@@ -1321,11 +1321,7 @@ impl App {
         }
     }
 
-    fn details_context<'a>(
-        &'a mut self,
-        rs: &'a egui_wgpu::RenderState,
-        focus_tags: bool,
-    ) -> DetailsContext<'a> {
+    fn details_context<'a>(&'a mut self, rs: &'a egui_wgpu::RenderState, focus_tags: bool) -> DetailsContext<'a> {
         let entries = view_entries(&self.view, &self.nav);
         let entry = self.gallery.selected.and_then(|i| entries.get(i));
         let thumb = self.gallery.selected.and_then(|i| self.gallery.thumb(i));
@@ -1358,60 +1354,55 @@ impl App {
         if !self.preview_open {
             return;
         }
-        let Some(name) = self.selected_entry().filter(|e| meshes::viewable(e.kind)).map(|e| listing::file_name(&e.path))
+        let Some(name) =
+            self.selected_entry().filter(|e| meshes::viewable(e.kind)).map(|e| listing::file_name(&e.path))
         else {
             self.preview_open = false;
             return;
         };
         let screen = ctx.content_rect();
         let mut close = false;
-        egui::Area::new(*PREVIEW_BACKDROP).order(egui::Order::Foreground).fixed_pos(screen.min).show(
-            ctx,
-            |ui| {
-                let response = ui.allocate_rect(screen, egui::Sense::click());
-                ui.painter().rect_filled(screen, 0.0, egui::Color32::from_black_alpha(190));
-                close |= response.clicked();
-            },
-        );
+        egui::Area::new(*PREVIEW_BACKDROP).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+            let response = ui.allocate_rect(screen, egui::Sense::click());
+            ui.painter().rect_filled(screen, 0.0, egui::Color32::from_black_alpha(190));
+            close |= response.clicked();
+        });
         let panel = screen.shrink(20.0);
         let mut message = None;
-        egui::Area::new(*PREVIEW_PANEL).order(egui::Order::Foreground).fixed_pos(panel.min).show(
-            ctx,
-            |ui| {
-                egui::Frame::new()
-                    .fill(ui.visuals().panel_fill)
-                    .corner_radius(8.0)
-                    .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-                    .inner_margin(10.0)
-                    .show(ui, |ui| {
-                        ui.set_min_size(panel.size() - egui::vec2(20.0, 20.0));
-                        ui.set_max_size(panel.size() - egui::vec2(20.0, 20.0));
-                        ui.horizontal(|ui| {
-                            ui.add(egui::Label::new(RichText::new(name).heading().strong()).truncate());
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.button("✕").on_hover_text(t!("preview.close")).clicked() {
-                                    close = true;
-                                }
-                            });
+        egui::Area::new(*PREVIEW_PANEL).order(egui::Order::Foreground).fixed_pos(panel.min).show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(ui.visuals().panel_fill)
+                .corner_radius(8.0)
+                .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                .inner_margin(10.0)
+                .show(ui, |ui| {
+                    ui.set_min_size(panel.size() - egui::vec2(20.0, 20.0));
+                    ui.set_max_size(panel.size() - egui::vec2(20.0, 20.0));
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Label::new(RichText::new(name).heading().strong()).truncate());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("✕").on_hover_text(t!("preview.close")).clicked() {
+                                close = true;
+                            }
                         });
-                        let hint = ui.text_style_height(&egui::TextStyle::Small) + 6.0;
-                        let mut size = ui.available_size();
-                        size.y = (size.y - hint).max(80.0);
-                        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                        match &self.model {
-                            ModelStatus::Loading => {
-                                child.centered_and_justified(|ui| ui.spinner());
-                            }
-                            ModelStatus::Failed(e) => {
-                                child.centered_and_justified(|ui| ui.colored_label(ui.visuals().error_fg_color, e));
-                            }
-                            _ => message = self.preview_viewer.ui(&mut child, rs, &self.renderer),
-                        }
-                        ui.add(egui::Label::new(RichText::new(t!("preview.hint")).weak()).truncate());
                     });
-            },
-        );
+                    let hint = ui.text_style_height(&egui::TextStyle::Small) + 6.0;
+                    let mut size = ui.available_size();
+                    size.y = (size.y - hint).max(80.0);
+                    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    match &self.model {
+                        ModelStatus::Loading => {
+                            child.centered_and_justified(|ui| ui.spinner());
+                        }
+                        ModelStatus::Failed(e) => {
+                            child.centered_and_justified(|ui| ui.colored_label(ui.visuals().error_fg_color, e));
+                        }
+                        _ => message = self.preview_viewer.ui(&mut child, rs, &self.renderer),
+                    }
+                    ui.add(egui::Label::new(RichText::new(t!("preview.hint")).weak()).truncate());
+                });
+        });
         if let Some(message) = message {
             self.toast(message);
         }
@@ -1453,7 +1444,8 @@ fn grip_handle(ui: &Ui) -> bool {
     let bar = egui::Rect::from_center_size(egui::pos2(pane.center().x, pane.top() - BAR / 2.0), egui::vec2(36.0, BAR));
     // The pane's Ui is clipped to the pane, so paint and listen on the whole screen instead.
     let ctx = ui.ctx();
-    let (hovered, pressed) = ctx.input(|i| (i.pointer.hover_pos().is_some_and(|p| bar.contains(p)), i.pointer.primary_pressed()));
+    let (hovered, pressed) =
+        ctx.input(|i| (i.pointer.hover_pos().is_some_and(|p| bar.contains(p)), i.pointer.primary_pressed()));
     let color = if hovered { ui.visuals().widgets.hovered.fg_stroke.color } else { ui.visuals().weak_text_color() };
     if hovered {
         ctx.set_cursor_icon(egui::CursorIcon::Grab);
@@ -1471,13 +1463,15 @@ fn grip_handle(ui: &Ui) -> bool {
 struct PaneHost<'a> {
     app: &'a mut App,
     rs: &'a egui_wgpu::RenderState,
+    /// Panes can only be resized: nothing to drag, and single panes have no header.
+    locked: bool,
     reset: bool,
 }
 
 impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
     fn pane_ui(&mut self, ui: &mut Ui, _tile_id: egui_tiles::TileId, pane: &mut Pane) -> egui_tiles::UiResponse {
         let rs = self.rs;
-        let grip = grip_handle(ui);
+        let grip = !self.locked && grip_handle(ui);
         ui.shrink_clip_rect(ui.max_rect());
         match pane {
             Pane::Places => self.app.pane_places(ui),
@@ -1513,6 +1507,15 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
         false
     }
 
+    fn is_tile_draggable(&self, _tiles: &egui_tiles::Tiles<Pane>, _tile_id: egui_tiles::TileId) -> bool {
+        !self.locked
+    }
+
+    /// Stacked panes keep their tabs when locked, or one of them could not be reached any more.
+    fn is_tab_bar_visible(&self, _tile_id: egui_tiles::TileId, tabs: &egui_tiles::Tabs) -> bool {
+        !self.locked || tabs.children.len() > 1
+    }
+
     fn simplification_options(&self) -> egui_tiles::SimplificationOptions {
         egui_tiles::SimplificationOptions { all_panes_must_have_tabs: true, ..Default::default() }
     }
@@ -1525,7 +1528,8 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
         tabs: &egui_tiles::Tabs,
         _scroll_offset: &mut f32,
     ) {
-        let holds_files = tabs.children.iter().any(|&c| matches!(tiles.get(c), Some(egui_tiles::Tile::Pane(Pane::Files))));
+        let holds_files =
+            tabs.children.iter().any(|&c| matches!(tiles.get(c), Some(egui_tiles::Tile::Pane(Pane::Files))));
         if holds_files && ui.small_button("↺").on_hover_text(t!("pane.reset")).clicked() {
             self.reset = true;
         }
@@ -1614,11 +1618,19 @@ impl eframe::App for App {
 
         let fill = ui.visuals().panel_fill;
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
-            let mut tree = std::mem::replace(&mut self.layout, Tree::empty(egui::Id::unique("layout")));
-            let mut host = PaneHost { app: self, rs: &rs, reset: false };
+            let mut tree = std::mem::replace(&mut self.layout.tree, Tree::empty(egui::Id::unique("layout")));
+            let locked = self.config.lock_panes;
+            let mut host = PaneHost { app: self, rs: &rs, locked, reset: false };
             tree.ui(&mut host, ui);
             let reset = host.reset;
-            self.layout = if reset { layout::default_tree() } else { tree };
+            self.layout.tree = tree;
+            if reset {
+                self.layout.reset();
+            }
+            // Moving a pane or a divider ends with the button let go.
+            if reset || ctx.input(|i| i.pointer.any_released()) {
+                self.layout.save();
+            }
         });
 
         self.preview_overlay(&ctx, &rs);
@@ -1636,7 +1648,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
-        layout::save(&self.layout);
+        self.layout.save();
         self.save_note();
         self.library.flush(Duration::from_secs(3));
         self.save_config();

@@ -1,4 +1,5 @@
 //! The four dockable panes: grab a header to move a pane, drop it on an edge to split, on a header to stack.
+//! Locked in the settings, they can only be resized.
 
 use std::path::PathBuf;
 
@@ -28,7 +29,7 @@ impl Pane {
 const TREE_ID: &str = "meshgrove_layout";
 
 /// Places | Files | (Preview over Info).
-pub fn default_tree() -> Tree<Pane> {
+fn default_tree() -> Tree<Pane> {
     let mut tiles = Tiles::default();
     let places = tiles.insert_pane(Pane::Places);
     let files = tiles.insert_pane(Pane::Files);
@@ -53,23 +54,47 @@ fn path() -> Option<PathBuf> {
 }
 
 /// The saved layout, if it still holds all four panes.
-pub fn load() -> Option<Tree<Pane>> {
+fn load() -> Option<Tree<Pane>> {
     let tree: Tree<Pane> = serde_json::from_slice(&std::fs::read(path()?).ok()?).ok()?;
     let all = [Pane::Places, Pane::Files, Pane::Preview, Pane::Info];
     all.iter().all(|p| tree.tiles.iter().any(|(_, t)| matches!(t, Tile::Pane(q) if q == p))).then_some(tree)
 }
 
-pub fn save(tree: &Tree<Pane>) {
-    let Some(path) = path() else { return };
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
+/// The pane tree and the file it is kept in.
+pub struct Layout {
+    pub tree: Tree<Pane>,
+    /// The tree as last read or written, so an unchanged layout is not written again.
+    stored: Tree<Pane>,
+}
+
+impl Layout {
+    /// The saved layout, or the default one.
+    pub fn load() -> Layout {
+        let tree = load().unwrap_or_else(default_tree);
+        Layout { stored: tree.clone(), tree }
     }
-    match serde_json::to_vec(tree) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(&path, json) {
-                log::warn!("could not save the layout: {e}");
-            }
+
+    pub fn reset(&mut self) {
+        self.tree = default_tree();
+    }
+
+    /// Writes the layout if it changed since it was last read or written.
+    pub fn save(&mut self) {
+        if self.tree == self.stored {
+            return;
         }
-        Err(e) => log::warn!("could not serialize the layout: {e}"),
+        self.stored = self.tree.clone();
+        let Some(path) = path() else { return };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        match serde_json::to_vec(&self.tree) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    log::warn!("could not save the layout: {e}");
+                }
+            }
+            Err(e) => log::warn!("could not serialize the layout: {e}"),
+        }
     }
 }

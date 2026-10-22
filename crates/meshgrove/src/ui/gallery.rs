@@ -46,8 +46,6 @@ pub enum Action {
     /// The following act on the selection.
     /// Large preview of the selected model.
     Preview,
-    /// Show the model in a window of its own.
-    OpenInWindow(usize),
     OpenInSlicer,
     ShowInFileManager,
     CopyPaths,
@@ -190,7 +188,7 @@ impl Gallery {
     /// so zooming does not lose orientation. That tile is the one closest to the pointer (or the
     /// one in the middle of the view when the pointer is elsewhere, as when dragging the slider).
     fn zoom_scroll(&mut self, ui: &Ui, cols: usize, tile_h: f32, animating: bool) -> Option<f32> {
-        let Some((old_cols, old_w, old_h, rect)) = self.last_layout else { return None };
+        let (old_cols, old_w, old_h, rect) = self.last_layout?;
         if !animating {
             self.zoom_anchor = None;
             return None;
@@ -298,11 +296,8 @@ impl Gallery {
         // grow continuously (the right edge is ragged until they arrive).
         let tile_w = self.animate_tile(ui.ctx(), target_w);
         let settled = tile_w == target_w;
-        let cols = if settled {
-            target_cols
-        } else {
-            (((avail + SPACING) / (tile_w + SPACING)).floor() as usize).max(1)
-        };
+        let cols =
+            if settled { target_cols } else { (((avail + SPACING) / (tile_w + SPACING)).floor() as usize).max(1) };
         let tile_h = tile_w + label_h + PAD;
         let rows = self.shown.len().div_ceil(cols);
         let zoom_offset = self.zoom_scroll(ui, cols, tile_h, !settled);
@@ -367,7 +362,6 @@ impl Gallery {
                             if viewable {
                                 item(ui, t!("menu.preview"), Action::Preview);
                                 item(ui, t!("menu.open_with_default_app"), Action::OpenWithDefaultApp(entry));
-                                item(ui, t!("menu.own_window"), Action::OpenInWindow(entry));
                             }
                             if sliceable && let Some(slicer) = &menu.slicer {
                                 item(ui, t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);

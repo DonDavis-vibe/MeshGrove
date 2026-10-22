@@ -239,10 +239,12 @@ pub struct Config {
     pub printer: Option<crate::printer::Bed>,
     /// What one glTF unit stands for.
     pub gltf_unit: GltfUnit,
-    /// Picture quality of the large preview (Space / double-click).
+    /// Picture quality of the large preview (Space).
     pub preview_quality: PreviewQuality,
     /// Model pictures on folder tiles.
     pub folder_previews: FolderPreviews,
+    /// The panes of the main window can only be resized, not moved.
+    pub lock_panes: bool,
 }
 
 impl Default for Config {
@@ -260,6 +262,7 @@ impl Default for Config {
             gltf_unit: GltfUnit::Metres,
             preview_quality: PreviewQuality::High,
             folder_previews: FolderPreviews::default(),
+            lock_panes: false,
         }
     }
 }

@@ -21,10 +21,25 @@ pub enum SettingsChange {
     GltfUnit(GltfUnit),
     PreviewQuality(PreviewQuality),
     FolderPreviews(FolderPreviews),
+    LockPanes(bool),
+    ResetLayout,
     Export(PathBuf),
     Import(PathBuf),
     OpenBackups,
     ClearCache,
+}
+
+/// Whether the panes of the main window can be moved.
+fn panes(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+    ui.label(RichText::new(t!("settings.panes")).strong());
+    let mut locked = config.lock_panes;
+    if ui.checkbox(&mut locked, t!("settings.panes_lock")).changed() {
+        changes.push(SettingsChange::LockPanes(locked));
+    }
+    ui.weak(t!("settings.panes_hint"));
+    if ui.button(t!("pane.reset")).clicked() {
+        changes.push(SettingsChange::ResetLayout);
+    }
 }
 
 /// Model pictures on folder tiles.
@@ -178,6 +193,8 @@ impl SettingsDialog {
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     self.language(ui, config, &mut changes);
+                    ui.separator();
+                    panes(ui, config, &mut changes);
                     ui.separator();
                     self.library(ui, config, &mut changes);
                     ui.separator();
