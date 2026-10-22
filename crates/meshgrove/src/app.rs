@@ -1162,6 +1162,12 @@ impl App {
                 ui.colored_label(ui.visuals().warn_fg_color, t!("error.config", error = err));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Preview size, as in a file manager's status bar (also Ctrl + mouse wheel over the files).
+                ui.spacing_mut().slider_width = 110.0;
+                ui.add(egui::Slider::new(&mut self.config.tile_size, TILE_RANGE).show_value(false))
+                    .on_hover_text(t!("gallery.tile_size"));
+                ui.weak("🔍");
+                ui.separator();
                 ui.weak(t!("status.gpu", name = self.gpu_name));
                 ui.separator();
                 self.library_status(ui);
@@ -1207,7 +1213,7 @@ impl App {
             return;
         }
         let zoom = ui.input(|i| i.zoom_delta());
-        if zoom != 1.0 && ui.ui_contains_pointer() {
+        if zoom != 1.0 && ui.rect_contains_pointer(ui.max_rect()) {
             self.config.tile_size = (self.config.tile_size * zoom).clamp(*TILE_RANGE.start(), *TILE_RANGE.end());
         }
         if let View::Duplicates { entries, groups } = &self.view {
