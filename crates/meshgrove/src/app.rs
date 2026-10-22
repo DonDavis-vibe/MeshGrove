@@ -822,10 +822,7 @@ impl App {
                     self.refresh_gallery(false);
                 }
                 SettingsChange::LockPanes(locked) => self.config.lock_panes = locked,
-                SettingsChange::ResetLayout => {
-                    self.layout.reset();
-                    self.layout.save();
-                }
+                SettingsChange::ResetLayout => self.layout.reset(),
                 SettingsChange::DoubleClick(action) => self.config.double_click = action,
                 SettingsChange::PreviewQuality(quality) => {
                     self.config.preview_quality = quality;
@@ -1553,7 +1550,9 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
         let rs = self.rs;
         let grip = !self.locked && grip_handle(ui);
         ui.shrink_clip_rect(ui.max_rect());
-        match pane {
+        // The margins the side and central panels had before the panes.
+        let margin = if *pane == Pane::Files { egui::Margin::same(8) } else { egui::Margin::symmetric(8, 2) };
+        egui::Frame::new().inner_margin(margin).show(ui, |ui| match pane {
             Pane::Places => self.app.pane_places(ui),
             Pane::Files => self.app.central(ui, rs),
             Pane::Preview => {
@@ -1567,7 +1566,7 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
                 let out = details::info(ui, cx);
                 self.app.apply_details_output(out);
             }
-        }
+        });
         if grip { egui_tiles::UiResponse::DragStarted } else { egui_tiles::UiResponse::None }
     }
 
@@ -1704,11 +1703,11 @@ impl eframe::App for App {
             tree.ui(&mut host, ui);
             let reset = host.reset;
             self.layout.tree = tree;
+            self.layout.drawn();
             if reset {
                 self.layout.reset();
-            }
-            // Moving a pane or a divider ends with the button let go.
-            if reset || ctx.input(|i| i.pointer.any_released()) {
+            } else if ctx.input(|i| i.pointer.any_released()) {
+                // Moving a pane or a divider ends with the button let go.
                 self.layout.save();
             }
         });

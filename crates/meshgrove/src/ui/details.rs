@@ -117,10 +117,8 @@ pub fn preview(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
 /// The "Info" pane: facts, plates, tags, note and path of the selection.
 pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
     let mut out = DetailsOutput::default();
-    let Some(entry) = cx.entry else {
-        ui.centered_and_justified(|ui| ui.weak(t!("details.none_selected")));
-        return out;
-    };
+    // Without a selection the preview pane says what to do; once is enough.
+    let Some(entry) = cx.entry else { return out };
     let (count, _) = cx.selection;
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         ui.add_space(4.0);

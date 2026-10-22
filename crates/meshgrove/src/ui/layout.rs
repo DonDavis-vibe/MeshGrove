@@ -43,8 +43,8 @@ fn default_tree() -> Tree<Pane> {
         row.shares.set_share(right, 0.38);
     }
     if let Some(Tile::Container(Container::Linear(column))) = tiles.get_mut(right) {
-        column.shares.set_share(preview, 0.72);
-        column.shares.set_share(info, 0.28);
+        column.shares.set_share(preview, 0.55);
+        column.shares.set_share(info, 0.45);
     }
     Tree::new(egui::Id::unique(TREE_ID), root, tiles)
 }
@@ -65,17 +65,33 @@ pub struct Layout {
     pub tree: Tree<Pane>,
     /// The tree as last read or written, so an unchanged layout is not written again.
     stored: Tree<Pane>,
+    /// Not drawn yet: egui_tiles tidies a new tree up on its first frame, which is no change
+    /// of the user's and must not be saved (or later default layouts would never show).
+    fresh: bool,
 }
 
 impl Layout {
     /// The saved layout, or the default one.
     pub fn load() -> Layout {
         let tree = load().unwrap_or_else(default_tree);
-        Layout { stored: tree.clone(), tree }
+        Layout { stored: tree.clone(), tree, fresh: true }
     }
 
+    /// Back to the default layout, which is no longer kept in the file.
     pub fn reset(&mut self) {
         self.tree = default_tree();
+        self.stored = self.tree.clone();
+        self.fresh = true;
+        if let Some(path) = path() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    /// Call after the tree was drawn.
+    pub fn drawn(&mut self) {
+        if std::mem::take(&mut self.fresh) {
+            self.stored = self.tree.clone();
+        }
     }
 
     /// Writes the layout if it changed since it was last read or written.
