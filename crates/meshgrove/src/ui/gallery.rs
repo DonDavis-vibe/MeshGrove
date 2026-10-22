@@ -396,7 +396,7 @@ impl Gallery {
                         let held = response.dragged() || response.is_pointer_button_down_on();
                         tile_dragged |= held;
                         if (response.hovered() || held) && crate::meshes::viewable(e.kind) {
-                            let selected = self.selected == Some(entry);
+                            let selected = self.is_marked(entry);
                             let drag = if response.dragged_by(egui::PointerButton::Primary) {
                                 response.drag_delta()
                             } else {
@@ -406,7 +406,12 @@ impl Gallery {
                                 path: e.path.clone(),
                                 kind: e.kind,
                                 image_rect: image_rect(response.rect),
-                                background: tile_background(ui.visuals(), selected, true),
+                                // Opaque, or the still thumbnail would show through the
+                                // selection's translucent tint.
+                                background: over(
+                                    tile_background(ui.visuals(), selected, true),
+                                    ui.visuals().panel_fill,
+                                ),
                                 drag,
                                 dragging: held,
                             });
@@ -666,6 +671,13 @@ fn tile_background(visuals: &egui::Visuals, selected: bool, hovered: bool) -> Co
     }
 }
 
+/// `top` painted over `bottom`, fully opaque (egui colours are premultiplied).
+fn over(top: Color32, bottom: Color32) -> Color32 {
+    let keep = 255 - u16::from(top.a());
+    let mix = |t: u8, b: u8| (u16::from(t) + u16::from(b) * keep / 255).min(255) as u8;
+    Color32::from_rgb(mix(top.r(), bottom.r()), mix(top.g(), bottom.g()), mix(top.b(), bottom.b()))
+}
+
 /// The square thumbnail area at the top of a tile.
 fn image_rect(tile: Rect) -> Rect {
     let side = tile.width() - 2.0 * PAD;
@@ -757,5 +769,16 @@ mod tests {
     fn fit_keeps_aspect_ratio() {
         let r = fit_inside(egui::vec2(400.0, 200.0), Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(100.0, 100.0)));
         assert_eq!(r, Rect::from_min_max(pos2(0.0, 25.0), pos2(100.0, 75.0)));
+    }
+
+    #[test]
+    fn selection_cover_is_opaque() {
+        let panel = Color32::from_gray(27);
+        let tint = Color32::from_rgb(0, 92, 128).linear_multiply(0.55);
+        let cover = over(tint, panel);
+        assert_eq!(cover.a(), 255, "the still thumbnail must not show through");
+        assert_eq!(over(Color32::TRANSPARENT, panel), panel);
+        assert_eq!(over(Color32::from_rgb(1, 2, 3), panel), Color32::from_rgb(1, 2, 3));
+        assert!(cover.b() > panel.b() && cover.r() < panel.r() + 1);
     }
 }
