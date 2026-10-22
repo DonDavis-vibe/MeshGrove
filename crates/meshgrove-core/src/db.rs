@@ -11,12 +11,12 @@ use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use crate::cache::{ThumbCache, ThumbMeta};
 use crate::formats::Kind;
 use crate::listing::Entry;
-use crate::query::Query;
+use crate::query::{Mark, Query};
 use crate::userdata::{UserData, UserEntry};
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 5;
 /// `kind` values of model files ([`Kind::is_model`]) for SQL `IN (…)` lists.
 const MODEL_KINDS: &str = "'stl', '3mf', 'step', 'obj', 'ply', 'gltf'";
 /// The index proper: a cache of the disk, rebuilt when its layout changes.
@@ -99,7 +99,7 @@ pub struct Counts {
 }
 
 pub struct Library {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 impl Library {
@@ -151,7 +151,9 @@ impl Library {
                     )?;
                 }
             }
-            conn.execute_batch(TAGS_SCHEMA)?; // v2 added tags, v3 notes; the index tables are unchanged
+            // v2 added tags, v3 notes, v5 lists, prints and tag colours; the index tables are unchanged.
+            conn.execute_batch(TAGS_SCHEMA)?;
+            conn.execute_batch(crate::lists::LISTS_SCHEMA)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Library { conn })
@@ -327,6 +329,33 @@ impl Library {
                 args.len()
             );
         }
+        for list in &query.lists {
+            args.push(list.clone());
+            sql += &format!(
+                " AND f.content_hash IN (SELECT li.content_hash FROM list_items li JOIN lists l ON l.id = li.list_id
+                   WHERE l.name = ?{} COLLATE NOCASE)",
+                args.len()
+            );
+        }
+        for mark in &query.marks {
+            let unprinted = format!(
+                " AND f.kind IN ({MODEL_KINDS}) AND (f.content_hash IS NULL
+                   OR f.content_hash NOT IN (SELECT content_hash FROM prints WHERE result = 'printed'))"
+            );
+            sql += match mark {
+                Mark::Favorite => {
+                    " AND f.content_hash IN (SELECT li.content_hash FROM list_items li JOIN lists l ON l.id = li.list_id
+                       WHERE l.kind = 'favorites')"
+                }
+                Mark::Printed => " AND f.content_hash IN (SELECT content_hash FROM prints WHERE result = 'printed')",
+                // Only models are printed; a readme is not "unprinted".
+                Mark::Unprinted => &unprinted,
+                Mark::Failed => {
+                    " AND (SELECT p.result FROM prints p WHERE p.content_hash = f.content_hash
+                       ORDER BY p.at_ns DESC, p.id DESC LIMIT 1) = 'failed'"
+                }
+            };
+        }
         if !query.kinds.is_empty() {
             let list: Vec<String> = query.kinds.iter().map(|k| format!("'{}'", k.as_str())).collect();
             sql += &format!(" AND f.kind IN ({})", list.join(","));
@@ -348,7 +377,7 @@ impl Library {
         stmt.query_map(params![d, format!("{d}/"), format!("{d}0"), n as i64], entry_from_row)?.collect()
     }
 
-    fn content_hash_of(&self, path: &Path) -> Result<Option<String>, Error> {
+    pub(crate) fn content_hash_of(&self, path: &Path) -> Result<Option<String>, Error> {
         let (Some(dir), Some(name)) = (path.parent().and_then(path_str), path.file_name().and_then(|n| n.to_str()))
         else {
             return Ok(None);
@@ -378,7 +407,7 @@ impl Library {
 
     /// The file's content hash, computed and stored now if the file was not processed yet.
     /// `None` for files outside the library.
-    fn ensure_content_hash(&mut self, path: &Path) -> Result<Option<String>, Error> {
+    pub(crate) fn ensure_content_hash(&mut self, path: &Path) -> Result<Option<String>, Error> {
         if let Some(hash) = self.content_hash_of(path)? {
             return Ok(Some(hash));
         }
@@ -497,7 +526,8 @@ impl Library {
         Ok((if mixed { None } else { first }, mixed))
     }
 
-    /// Tags and notes, keyed by content, with the current paths of those files for reference.
+    /// Tags, notes, prints, lists and tag colours, keyed by content, with the current paths of
+    /// those files for reference.
     pub fn export_user_data(&self) -> Result<UserData, Error> {
         let mut entries: std::collections::BTreeMap<String, UserEntry> = std::collections::BTreeMap::new();
         fn entry(entries: &mut std::collections::BTreeMap<String, UserEntry>, hash: String) -> &mut UserEntry {
@@ -515,6 +545,14 @@ impl Library {
             let (hash, text) = row?;
             entry(&mut entries, hash).note = Some(text);
         }
+        let crate::lists::ExportedLists { lists, prints, tag_colors } = self.export_lists()?;
+        for (hash, records) in prints {
+            entry(&mut entries, hash).prints = records;
+        }
+        // Files on lists get an entry too, so the export says which files the hashes were.
+        for item in lists.iter().flat_map(|l| &l.items) {
+            entry(&mut entries, item.content_hash.clone());
+        }
         let mut stmt = self
             .conn
             .prepare("SELECT d.path, f.name FROM files f JOIN dirs d ON d.id = f.dir_id WHERE f.content_hash = ?1")?;
@@ -524,11 +562,11 @@ impl Library {
                 e.files.push(format!("{dir}/{name}"));
             }
         }
-        Ok(UserData::new(entries.into_values().collect()))
+        Ok(UserData { lists, tag_colors, ..UserData::new(entries.into_values().collect()) })
     }
 
-    /// Merges exported tags and notes: tags are added, a note only fills a file without one.
-    /// Returns how many entries were applied.
+    /// Merges exported user data: tags are added, a note only fills a file without one, lists,
+    /// prints and tag colours merge as in `import_lists`. Returns how many entries were applied.
     pub fn import_user_data(&mut self, data: &UserData) -> Result<usize, Error> {
         let tx = self.conn.transaction()?;
         for e in &data.entries {
@@ -548,6 +586,13 @@ impl Library {
             }
         }
         tx.commit()?;
+        let prints: Vec<(String, Vec<_>)> = data
+            .entries
+            .iter()
+            .filter(|e| !e.prints.is_empty())
+            .map(|e| (e.content_hash.clone(), e.prints.clone()))
+            .collect();
+        self.import_lists(&data.lists, &prints, &data.tag_colors)?;
         Ok(data.entries.len())
     }
 
@@ -620,7 +665,7 @@ fn remove_tree(conn: &Connection, dir: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-fn entry_from_row(r: &rusqlite::Row) -> Result<Entry, Error> {
+pub(crate) fn entry_from_row(r: &rusqlite::Row) -> Result<Entry, Error> {
     let dir: String = r.get(0)?;
     let name: String = r.get(1)?;
     let kind: String = r.get(2)?;

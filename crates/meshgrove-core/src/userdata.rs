@@ -1,22 +1,33 @@
-//! Tags and notes outside the index: a readable JSON file for export/import, and rolling daily
-//! backups so the hand-made part of the library survives a deleted or broken index.
+//! Tags, notes, lists and the print log outside the index: a readable JSON file for
+//! export/import, and rolling daily backups so the hand-made part of the library survives a
+//! deleted or broken index.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::lists::{ListKind, PrintResult};
+
 pub const FORMAT: &str = "meshgrove-user-data";
 /// Exports made before the project was renamed.
 const LEGACY_FORMAT: &str = "stl-browser-user-data";
-const VERSION: u32 = 1;
+/// 2 added lists, prints and tag colours; version 1 files read as data without them.
+const VERSION: u32 = 2;
 const BACKUP_PREFIX: &str = "user-data-";
 
-/// Tags and notes, keyed by file content (see `Library::export_user_data`).
+/// Tags, notes and prints keyed by file content, plus the lists and the chosen tag colours
+/// (see `Library::export_user_data`).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct UserData {
     pub format: String,
     pub version: u32,
     pub entries: Vec<UserEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lists: Vec<ListData>,
+    /// Palette slot by tag name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tag_colors: BTreeMap<String, u8>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -29,11 +40,61 @@ pub struct UserEntry {
     pub tags: Vec<String>,
     #[serde(default)]
     pub note: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prints: Vec<PrintRecord>,
+}
+
+/// One logged print. Times are seconds since the epoch.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PrintRecord {
+    pub result: PrintResult,
+    pub at: i64,
+    /// The print list it was counted on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ListData {
+    pub kind: ListKind,
+    pub name: String,
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub created: i64,
+    pub items: Vec<ListItemData>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ListItemData {
+    pub content_hash: String,
+    #[serde(default = "one")]
+    pub quantity: u32,
+    #[serde(default)]
+    pub done: u32,
+    #[serde(default)]
+    pub added: i64,
+}
+
+fn one() -> u32 {
+    1
 }
 
 impl UserData {
     pub fn new(entries: Vec<UserEntry>) -> UserData {
-        UserData { format: FORMAT.into(), version: VERSION, entries }
+        UserData { format: FORMAT.into(), version: VERSION, entries, lists: Vec::new(), tag_colors: BTreeMap::new() }
+    }
+
+    /// Nothing hand-made to keep.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty() && self.lists.is_empty() && self.tag_colors.is_empty()
+    }
+
+    /// Same data, whatever the format version.
+    fn same_content(&self, other: &UserData) -> bool {
+        self.entries == other.entries && self.lists == other.lists && self.tag_colors == other.tag_colors
     }
 }
 
@@ -65,9 +126,9 @@ pub fn backup_dir() -> Option<PathBuf> {
 /// same data, then deletes all but the newest `keep` backups. Returns the file written.
 pub fn rolling_backup(data: &UserData, dir: &Path, today: &str, keep: usize) -> io::Result<Option<PathBuf>> {
     let mut existing = backups(dir);
-    let unchanged = existing.last().and_then(|p| read(p).ok()).is_some_and(|last| last.entries == data.entries);
+    let unchanged = existing.last().and_then(|p| read(p).ok()).is_some_and(|last| last.same_content(data));
     let mut written = None;
-    if !data.entries.is_empty() && !unchanged {
+    if !data.is_empty() && !unchanged {
         let path = dir.join(format!("{BACKUP_PREFIX}{today}.json"));
         write(data, &path)?;
         if !existing.contains(&path) {
@@ -123,6 +184,7 @@ mod tests {
             files: vec!["/lib/orc.stl".into()],
             tags: vec!["bemalt".into()],
             note: Some(note.into()),
+            prints: Vec::new(),
         }])
     }
 

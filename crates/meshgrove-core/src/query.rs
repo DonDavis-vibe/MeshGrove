@@ -1,4 +1,4 @@
-//! Library search syntax: `drache "castle tower" ext:3mf tag:pirat`.
+//! Library search syntax: `drache "castle tower" ext:3mf tag:pirat list:markt is:unprinted`.
 //! Plain words must all appear (case-insensitive) in the file name, its folder path or its note.
 
 use crate::formats::Kind;
@@ -11,11 +11,43 @@ pub struct Query {
     pub kinds: Vec<Kind>,
     /// From `tag:`, lower-case.
     pub tags: Vec<String>,
+    /// From `list:`/`liste:`, lower-case list names.
+    pub lists: Vec<String>,
+    /// From `is:`.
+    pub marks: Vec<Mark>,
+}
+
+/// `is:` filters on the user's own marks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    Favorite,
+    /// Printed at least once.
+    Printed,
+    /// Never printed successfully.
+    Unprinted,
+    /// The newest print failed.
+    Failed,
+}
+
+impl Mark {
+    fn parse(value: &str) -> Option<Mark> {
+        Some(match value {
+            "fav" | "favorite" | "favourite" | "favorit" | "favoriten" => Mark::Favorite,
+            "printed" | "gedruckt" => Mark::Printed,
+            "unprinted" | "ungedruckt" => Mark::Unprinted,
+            "failed" | "fehlgeschlagen" => Mark::Failed,
+            _ => return None,
+        })
+    }
 }
 
 impl Query {
     pub fn is_empty(&self) -> bool {
-        self.terms.is_empty() && self.kinds.is_empty() && self.tags.is_empty()
+        self.terms.is_empty()
+            && self.kinds.is_empty()
+            && self.tags.is_empty()
+            && self.lists.is_empty()
+            && self.marks.is_empty()
     }
 }
 
@@ -40,6 +72,18 @@ pub fn parse(input: &str) -> Query {
                 "tag" => {
                     query.tags.push(value.to_owned());
                     continue;
+                }
+                "list" | "liste" => {
+                    query.lists.push(value.to_owned());
+                    continue;
+                }
+                "is" => {
+                    if let Some(mark) = Mark::parse(value) {
+                        if !query.marks.contains(&mark) {
+                            query.marks.push(mark);
+                        }
+                        continue;
+                    }
                 }
                 _ => {}
             }
@@ -83,5 +127,14 @@ mod tests {
         assert_eq!(q.tags, ["pirat"]);
         assert!(parse("   ").is_empty());
         assert_eq!(parse("größe").terms, ["größe"]);
+    }
+
+    #[test]
+    fn lists_and_marks() {
+        let q = parse(r#"liste:"Weihnachts Markt" list:Geschenke is:FAV is:ungedruckt is:fav is:kaputt"#);
+        assert_eq!(q.lists, ["weihnachts markt", "geschenke"]);
+        assert_eq!(q.marks, [Mark::Favorite, Mark::Unprinted]);
+        assert_eq!(q.terms, ["is:kaputt"], "unknown marks stay words");
+        assert!(!parse("is:printed").is_empty());
     }
 }

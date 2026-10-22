@@ -8,6 +8,7 @@ pub mod dedupe;
 pub mod formats;
 pub mod fsinfo;
 pub mod listing;
+pub mod lists;
 pub mod loaders;
 pub mod mesh;
 pub mod printer;
