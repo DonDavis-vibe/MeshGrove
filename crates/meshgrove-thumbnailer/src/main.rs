@@ -21,6 +21,7 @@ fn main() -> ExitCode {
     // glTF sizes (and with them the cache keys) follow the app's unit setting.
     if let Ok(config) = meshgrove_core::config::Config::load() {
         meshgrove_core::config::set_gltf_unit(config.gltf_unit);
+        meshgrove_core::config::set_model_units(config.model_units);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (size, input, output) = match args.as_slice() {

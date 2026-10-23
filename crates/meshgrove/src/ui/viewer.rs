@@ -426,11 +426,11 @@ impl ModelViewer {
             (None, false, [a, b]) => {
                 let d = *b - *a;
                 format!(
-                    "{} mm   (ΔX {} · ΔY {} · ΔZ {})",
-                    i18n::decimal(d.length()),
-                    i18n::decimal(d.x.abs()),
-                    i18n::decimal(d.y.abs()),
-                    i18n::decimal(d.z.abs())
+                    "{}   (ΔX {} · ΔY {} · ΔZ {})",
+                    i18n::length(d.length()),
+                    i18n::length_value(d.x.abs()),
+                    i18n::length_value(d.y.abs()),
+                    i18n::length_value(d.z.abs())
                 )
             }
             (None, false, [_]) => t!("viewer.measure_second").into_owned(),

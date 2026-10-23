@@ -42,7 +42,7 @@ pub fn make(
     };
     match kind {
         Kind::Stl => {
-            let mesh = loaders::stl::parse(bytes).map_err(bad)?;
+            let mesh = loaders::in_file_units(kind, loaders::stl::parse(bytes).map_err(bad)?);
             let meta = mesh_meta(&mesh, bytes);
             rendered(mesh, meta)
         }

@@ -1,6 +1,8 @@
 //! Language selection and locale-aware number formatting.
 //! German is the default; English is used when the system (or the user) asks for it.
 
+use meshgrove_core::config;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
     De,
@@ -71,9 +73,61 @@ pub fn datetime(time: std::time::SystemTime) -> String {
     local.format(pattern).to_string()
 }
 
-/// "20,0 × 10,0 × 5,0 mm"
+/// "20,0 × 10,0 × 5,0 mm" (metric) or "0,79 × 0,39 × 0,20 in" (imperial).
 pub fn dimensions(size: glam::Vec3) -> String {
-    format!("{} × {} × {} mm", decimal(size.x), decimal(size.y), decimal(size.z))
+    let units = config::display_units();
+    let [x, y, z] = [size.x, size.y, size.z].map(|v| length_number(units, v));
+    format!("{x} × {y} × {z} {}", units.label())
+}
+
+/// A number with a fixed count of decimals and the language's decimal separator.
+pub fn fixed(value: f32, places: usize) -> String {
+    fixed_in(Lang::current(), value, places)
+}
+
+fn fixed_in(lang: Lang, value: f32, places: usize) -> String {
+    format!("{value:.places$}").replace('.', &lang.decimal_sep().to_string())
+}
+
+/// A length given in millimetres in the display unit, with its unit: "12,5 mm" / "0,49 in".
+pub fn length(mm: f32) -> String {
+    let units = config::display_units();
+    format!("{} {}", length_number(units, mm), units.label())
+}
+
+/// The number of a length in millimetres in the display unit, without the unit: "12,5".
+pub fn length_value(mm: f32) -> String {
+    length_number(config::display_units(), mm)
+}
+
+/// Like [`length`] for small values such as layer heights and nozzles, without trailing zeros:
+/// "0,2 mm" / "0,008 in".
+pub fn short_length(mm: f32) -> String {
+    let units = config::display_units();
+    let text = match units {
+        config::DisplayUnits::Metric => short_decimal(mm),
+        config::DisplayUnits::Imperial => {
+            let text = format!("{:.3}", units.from_mm(mm));
+            text.trim_end_matches('0').trim_end_matches('.').replace('.', &Lang::current().decimal_sep().to_string())
+        }
+    };
+    format!("{text} {}", units.label())
+}
+
+/// The number of a length: one decimal for millimetres; inches get more where they are small.
+fn length_number(units: config::DisplayUnits, mm: f32) -> String {
+    length_number_in(Lang::current(), units, mm)
+}
+
+fn length_number_in(lang: Lang, units: config::DisplayUnits, mm: f32) -> String {
+    match units {
+        config::DisplayUnits::Metric => decimal_in(lang, mm),
+        config::DisplayUnits::Imperial => {
+            let inches = units.from_mm(mm);
+            let places = if inches.abs() >= 10.0 { 1 } else { 2 };
+            fixed_in(lang, inches, places)
+        }
+    }
 }
 
 fn decimal_in(lang: Lang, value: f32) -> String {
@@ -108,6 +162,17 @@ fn file_size_in(lang: Lang, bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lengths_follow_the_display_unit() {
+        use config::DisplayUnits::{Imperial, Metric};
+        assert_eq!(length_number_in(Lang::En, Metric, 12.5), "12.5");
+        assert_eq!(length_number_in(Lang::En, Imperial, 25.4), "1.00");
+        assert_eq!(length_number_in(Lang::En, Imperial, 254.0), "10.0");
+        assert_eq!(length_number_in(Lang::En, Imperial, 124.8), "4.91");
+        assert_eq!(fixed_in(Lang::En, 0.5, 2), "0.50");
+        assert_eq!(length_number_in(Lang::De, Imperial, 25.4), "1,00");
+    }
+
     use super::*;
 
     #[test]
