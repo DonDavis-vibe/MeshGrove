@@ -34,6 +34,8 @@ pub struct TagEditor<'a> {
     pub all: &'a [(String, usize)],
     pub input: &'a mut String,
     pub focus: bool,
+    /// Existing tags stay listed below the field while nothing is typed.
+    pub idle_chips: bool,
 }
 
 /// The selection's note (shared by all selected files, or `mixed`).
@@ -395,8 +397,11 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
     // Existing tags and suggestions that match what is typed (all existing ones while the field
     // is empty): the ones that start with it first. Up/Down pick one, Enter takes it.
     let needle = ed.input.trim().to_lowercase();
-    let mut candidates: Vec<(String, bool)> =
-        ed.all.iter().filter(|(tag, _)| !on_all(tag)).map(|(tag, _)| (tag.clone(), true)).collect();
+    let mut candidates: Vec<(String, bool)> = if needle.is_empty() && !ed.idle_chips {
+        Vec::new()
+    } else {
+        ed.all.iter().filter(|(tag, _)| !on_all(tag)).map(|(tag, _)| (tag.clone(), true)).collect()
+    };
     if !needle.is_empty() {
         for group in Group::SUGGESTED {
             for tag in tags::suggested(group, style) {

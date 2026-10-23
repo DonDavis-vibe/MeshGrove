@@ -38,6 +38,8 @@ pub enum SettingsChange {
     },
     /// The sidebar lists tags alphabetically, not grouped.
     FlatTagList(bool),
+    /// Existing tags stay listed below the tag field while nothing is typed.
+    IdleTagChips(bool),
     /// The suggested tags of a group (themes, properties, states); `None`: the built-in set.
     Suggestions(Group, Option<Vec<SuggestedTag>>),
     ResetLayout,
@@ -88,6 +90,11 @@ fn tags(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
         changes.push(SettingsChange::FlatTagList(flat));
     }
     ui.weak(t!("settings.tags_flat_hint"));
+    let mut idle = config.tag_chips_idle;
+    if ui.checkbox(&mut idle, t!("settings.tags_idle")).changed() {
+        changes.push(SettingsChange::IdleTagChips(idle));
+    }
+    ui.weak(t!("settings.tags_idle_hint"));
     let now = (colored, on_tiles, count, style);
     if now != (config.colored_tags, config.tags_on_tiles, config.tile_tag_count, config.tile_tags) {
         changes.push(SettingsChange::TagDisplay { colored, on_tiles, count, style });

@@ -1113,6 +1113,7 @@ impl App {
                     self.gallery.tag_style = self.tag_style.clone();
                 }
                 SettingsChange::FlatTagList(flat) => self.config.flat_tag_list = flat,
+                SettingsChange::IdleTagChips(on) => self.config.tag_chips_idle = on,
                 SettingsChange::Suggestions(group, list) => {
                     match group {
                         Group::Themes => self.config.themes = list,
@@ -1825,6 +1826,7 @@ impl App {
                 all: &self.all_tags,
                 input: &mut self.tag_input,
                 focus: focus_tags,
+                idle_chips: self.config.tag_chips_idle,
             },
             note: NoteEditor { enabled: self.menu.can_tag, text: &mut self.note_input, mixed: self.note_mixed },
             bed: self.bed.as_ref(),

@@ -413,6 +413,8 @@ pub struct Config {
     pub states: Option<Vec<SuggestedTag>>,
     /// The sidebar lists all tags alphabetically instead of grouped (themes, properties, state, own).
     pub flat_tag_list: bool,
+    /// Existing tags stay listed below the tag field while nothing is typed.
+    pub tag_chips_idle: bool,
     /// Names or colour dots on the tiles.
     pub tile_tags: TileTags,
     /// Tags a tile shows at most (the last row says "+N" when there are more).
@@ -588,6 +590,7 @@ impl Default for Config {
             properties: None,
             states: None,
             flat_tag_list: false,
+            tag_chips_idle: true,
             tile_tags: TileTags::Names,
             tile_tag_count: 3,
             print_filter: PrintFilter::All,
@@ -743,7 +746,13 @@ mod tests {
         let back: Config = toml::from_str(&toml::to_string_pretty(&config).unwrap()).unwrap();
         assert!(back.themes().is_empty(), "an emptied list stays empty");
         let old: Config = toml::from_str("tile_size = 200.0\n").unwrap();
-        assert!(old.themes.is_none() && old.properties.is_none() && old.states.is_none() && !old.flat_tag_list);
+        assert!(
+            old.themes.is_none()
+                && old.properties.is_none()
+                && old.states.is_none()
+                && !old.flat_tag_list
+                && old.tag_chips_idle
+        );
         assert_eq!(old.properties().len(), 16);
         assert_eq!(old.states().len(), 7);
     }
