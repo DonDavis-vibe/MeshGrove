@@ -178,7 +178,7 @@ impl Sidebar {
             if response.clicked() {
                 *action = Some(SidebarAction::OpenList(list.id));
             }
-            response.context_menu(|ui| self.list_menu(ui, list, action));
+            super::context_menu_with_field(&response, |ui| self.list_menu(ui, list, action));
         }
         let archived: Vec<&ListInfo> = library.lists.iter().filter(|l| l.archived).collect();
         if !archived.is_empty() {
@@ -194,25 +194,28 @@ impl Sidebar {
                         if response.clicked() {
                             *action = Some(SidebarAction::OpenList(list.id));
                         }
-                        response.context_menu(|ui| self.list_menu(ui, list, action));
+                        super::context_menu_with_field(&response, |ui| self.list_menu(ui, list, action));
                     }
                 });
         }
-        ui.menu_button(t!("lists.new"), |ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.list_name).hint_text(t!("lists.name_hint")));
-            let name = self.list_name.trim().to_owned();
-            ui.horizontal(|ui| {
-                for (kind, label) in
-                    [(ListKind::Print, t!("lists.new_print")), (ListKind::Collection, t!("lists.new_collection"))]
-                {
-                    if ui.add_enabled(!name.is_empty(), egui::Button::new(label)).clicked() {
-                        *action = Some(SidebarAction::CreateList(kind, name.clone()));
-                        self.list_name.clear();
-                        ui.close();
+        egui::containers::menu::MenuButton::new(t!("lists.new").into_owned()).config(super::typing_menu()).ui(
+            ui,
+            |ui| {
+                ui.add(egui::TextEdit::singleline(&mut self.list_name).hint_text(t!("lists.name_hint")));
+                let name = self.list_name.trim().to_owned();
+                ui.horizontal(|ui| {
+                    for (kind, label) in
+                        [(ListKind::Print, t!("lists.new_print")), (ListKind::Collection, t!("lists.new_collection"))]
+                    {
+                        if ui.add_enabled(!name.is_empty(), egui::Button::new(label)).clicked() {
+                            *action = Some(SidebarAction::CreateList(kind, name.clone()));
+                            self.list_name.clear();
+                            ui.close();
+                        }
                     }
-                }
-            });
-        });
+                });
+            },
+        );
     }
 
     fn list_menu(&mut self, ui: &mut Ui, list: &ListInfo, action: &mut Option<SidebarAction>) {

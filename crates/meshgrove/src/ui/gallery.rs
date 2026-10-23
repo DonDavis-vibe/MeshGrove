@@ -400,7 +400,8 @@ impl Gallery {
                         let sliceable = entries[entry].kind.is_sliceable();
                         let model = entries[entry].kind.is_model();
                         let viewable = crate::meshes::viewable(entries[entry].kind);
-                        response.context_menu(|ui| {
+                        // Stays open on clicks inside: "Add to list" has a name field.
+                        super::context_menu_with_field(&response, |ui| {
                             let mut item = |ui: &mut Ui, text: std::borrow::Cow<str>, act: Action| {
                                 if ui.button(text).clicked() {
                                     action = Some(act);

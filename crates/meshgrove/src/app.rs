@@ -1432,7 +1432,8 @@ impl App {
                     return;
                 }
                 if self.index.is_some() {
-                    ui.menu_button(t!("lists.save_search"), |ui| {
+                    let save = egui::containers::menu::MenuButton::new(t!("lists.save_search").into_owned());
+                    save.config(crate::ui::typing_menu()).ui(ui, |ui| {
                         ui.label(t!("lists.save_search_hint"));
                         let field = ui
                             .add(egui::TextEdit::singleline(&mut self.new_list_name).hint_text(t!("lists.name_hint")));
