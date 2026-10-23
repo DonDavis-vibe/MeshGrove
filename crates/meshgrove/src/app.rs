@@ -21,6 +21,7 @@ use crate::library::{LibEvent, LibraryService, ListOp, Transfer};
 use crate::meshes::{self, MeshState, MeshStore};
 use crate::nav::{Listing, Navigator};
 use crate::print_export;
+use crate::text_preview::TextPreview;
 use crate::thumbs::{ThumbResult, ThumbService};
 use crate::ui::details::{
     self, DetailsContext, DetailsOutput, ListsOfSelection, ModelStatus, NoteEditor, PrintInfo, TagEditor,
@@ -85,6 +86,8 @@ pub struct App {
     index: Option<Library>,
     renderer: Renderer,
     viewer: ModelViewer,
+    /// The selected readme or note, or the selected folder's readme.
+    text: TextPreview,
     /// Models opened in windows of their own.
     model_windows: Vec<ModelWindow>,
     /// The large preview over the window (Space).
@@ -213,6 +216,7 @@ impl App {
             index: None,
             renderer: Renderer::new(&rs.device, &rs.adapter),
             viewer: ModelViewer::new(),
+            text: TextPreview::default(),
             model_windows: Vec::new(),
             preview_open: false,
             preview_viewer: {
@@ -644,6 +648,14 @@ impl App {
                     self.tags_dirty = true;
                     self.marks_dirty = true;
                 }
+                LibEvent::Rescanned { dir, folders, changed } => {
+                    let folder = listing::file_name(&dir);
+                    let message = match changed {
+                        0 => t!("toast.rescanned_same", folder = folder, folders = i18n::count(folders)),
+                        n => t!("toast.rescanned", folder = folder, folders = i18n::count(folders), changed = n),
+                    };
+                    self.toast(message.into_owned());
+                }
                 LibEvent::Transfer(result) => {
                     let message = match result {
                         Ok(Transfer::Exported(path, n)) => {
@@ -688,6 +700,9 @@ impl App {
                 lists: menu_lists(&self.lists),
                 favorite: self.all_favorite(&paths),
                 current_list: self.current_list(),
+                rescan: self.index.is_some()
+                    && matches!(paths.as_slice(), [p] if self.in_library(p)
+                        && (p.is_dir() || Kind::from_file_name(&listing::file_name(p)) == Kind::Archive)),
             };
             self.menu_for = paths;
             self.tags_dirty = true;
@@ -946,6 +961,11 @@ impl App {
                 }
             }
             Action::Preview => self.open_preview(),
+            Action::Rescan => {
+                if let [dir] = self.selected_paths().as_slice() {
+                    self.library.rescan(dir.clone(), true);
+                }
+            }
             Action::ShowInFolder(index) => self.show_in_folder(index),
             Action::OpenInSlicer => self.open_in_slicer(self.selected_paths()),
             Action::OpenInEditor => self.open_in_editor(self.selected_paths()),
@@ -1262,6 +1282,11 @@ impl App {
         if pressed(Modifiers::NONE, Key::F5) {
             self.reload();
             self.sidebar.refresh();
+            // The index too: what the watcher missed (copied on another system, a network share).
+            let current = self.nav.current().to_path_buf();
+            if matches!(self.view, View::Folder) && self.in_library(&current) {
+                self.library.rescan(current, false);
+            }
         }
         if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::F) {
             self.set_scope(Scope::Library);
@@ -1646,6 +1671,7 @@ impl App {
                     self.library.set_roots(self.config.library_roots.clone());
                 }
             }
+            Some(SidebarAction::Rescan(path)) => self.library.rescan(path, true),
             Some(SidebarAction::RemoveRoot(path)) => {
                 self.config.library_roots.retain(|r| r != &path);
                 self.save_config();
@@ -1716,6 +1742,7 @@ impl App {
             model: &self.model,
             plates: self.plates.as_ref().map_or(&[][..], |(_, p)| p.as_slice()),
             viewer: &mut self.viewer,
+            text: &mut self.text,
             render_state: rs,
             renderer: &self.renderer,
         }
@@ -1836,6 +1863,11 @@ impl App {
         }
         if out.open_in_editor {
             self.open_in_editor(self.selected_paths());
+        }
+        if let Some(path) = out.open_file
+            && let Err(e) = actions::open_with_default_app(&path)
+        {
+            log::warn!("cannot open {}: {e}", path.display());
         }
     }
 }
@@ -2000,6 +2032,8 @@ impl eframe::App for App {
         }
         self.meshes.begin_frame();
         self.update_viewer(&ctx);
+        let selected = self.selected_entry().cloned();
+        self.text.follow(selected.as_ref(), &ctx);
         if let Some(hook) = &mut self.screenshot {
             if std::mem::take(&mut hook.settings) {
                 self.settings.open(self.slicer.as_ref(), self.editor.as_ref(), self.bed.as_ref());

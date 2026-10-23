@@ -37,6 +37,8 @@ wgpu = "30"
 egui-wgpu = "0.37"
 krilla = "0.8"
 epaint_default_fonts = "0.37"
+ab_glyph = "0.2"
+egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark"] }
 egui_tiles = { version = "0.18", features = ["serde"] }
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts", "system_fonts", "accesskit"] }
 egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }

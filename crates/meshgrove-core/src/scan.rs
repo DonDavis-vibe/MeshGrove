@@ -14,23 +14,27 @@ use crate::{archive, listing};
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ScanReport {
     pub dirs_visited: usize,
-    /// Folders whose contents changed (or were new), i.e. had to be listed.
+    /// Folders whose contents changed (or were new).
     pub changed_dirs: Vec<PathBuf>,
 }
 
+/// Which folders are listed even though their modification time did not change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Force {
+    /// None: the usual incremental scan.
+    Nothing,
+    /// The start folder (a file in it was rewritten, which leaves the folder's mtime alone).
+    Start,
+    /// Every folder below the start: "rescan folder". Unchanged files keep their facts and hashes.
+    Tree,
+}
+
 /// Scans `start` (a library root or a folder inside `root`) and everything below it.
-/// `force_start` lists `start` even if its mtime is unchanged (a file in it was rewritten).
-pub fn scan(
-    lib: &mut Library,
-    root: &Path,
-    start: &Path,
-    force_start: bool,
-    cancel: &AtomicBool,
-) -> io::Result<ScanReport> {
+pub fn scan(lib: &mut Library, root: &Path, start: &Path, force: Force, cancel: &AtomicBool) -> io::Result<ScanReport> {
     let mut report = ScanReport::default();
     let mut seen = HashSet::new();
-    let mut stack = vec![(start.to_path_buf(), force_start)];
-    while let Some((dir, force)) = stack.pop() {
+    let mut stack = vec![(start.to_path_buf(), force != Force::Nothing)];
+    while let Some((dir, forced)) = stack.pop() {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
@@ -47,13 +51,14 @@ pub fn scan(
         }
         report.dirs_visited += 1;
         let mtime = db::nanos(meta.modified().ok());
-        let subdirs = if !force && lib.dir_mtime(&dir) == Some(mtime) {
+        let subdirs = if !forced && lib.dir_mtime(&dir) == Some(mtime) {
             lib.child_dirs(&dir)
         } else if meta.is_file() {
             // A broken or password-protected archive is indexed as empty rather than failing the scan.
             let members = archive::entries(&dir).unwrap_or_default();
-            lib.update_dir(root, &dir, mtime, &members, &[]).map_err(io::Error::other)?;
-            report.changed_dirs.push(dir.clone());
+            if lib.update_dir(root, &dir, mtime, &members, &[]).map_err(io::Error::other)? {
+                report.changed_dirs.push(dir.clone());
+            }
             Vec::new()
         } else {
             let entries = match listing::list_dir(&dir) {
@@ -66,11 +71,12 @@ pub fn scan(
                 .filter(|e| e.is_dir() || e.kind == crate::Kind::Archive)
                 .map(|e| e.path.clone())
                 .collect();
-            lib.update_dir(root, &dir, mtime, &entries, &subdirs).map_err(io::Error::other)?;
-            report.changed_dirs.push(dir.clone());
+            if lib.update_dir(root, &dir, mtime, &entries, &subdirs).map_err(io::Error::other)? {
+                report.changed_dirs.push(dir.clone());
+            }
             subdirs
         };
-        stack.extend(subdirs.into_iter().map(|d| (d, false)));
+        stack.extend(subdirs.into_iter().map(|d| (d, force == Force::Tree)));
     }
     Ok(report)
 }
@@ -108,13 +114,13 @@ mod tests {
         let mut lib = Library::open_in_memory().unwrap();
         let no = AtomicBool::new(false);
 
-        let first = scan(&mut lib, &root, &root, false, &no).unwrap();
+        let first = scan(&mut lib, &root, &root, Force::Nothing, &no).unwrap();
         assert_eq!(first.dirs_visited, 3);
         assert_eq!(first.changed_dirs.len(), 3);
         assert_eq!(names(&lib, "orcs"), ["boss.stl"]);
 
         // Nothing changed: no folder is listed again.
-        let again = scan(&mut lib, &root, &root, false, &no).unwrap();
+        let again = scan(&mut lib, &root, &root, Force::Nothing, &no).unwrap();
         assert_eq!(again.dirs_visited, 3);
         assert!(again.changed_dirs.is_empty());
 
@@ -122,7 +128,7 @@ mod tests {
         fs::write(root.join("minis/orcs/grunt.stl"), b"x").unwrap();
         fs::remove_file(root.join("minis/elf.3mf")).unwrap();
         fs::create_dir(root.join("minis/elves")).unwrap();
-        let third = scan(&mut lib, &root, &root, false, &no).unwrap();
+        let third = scan(&mut lib, &root, &root, Force::Nothing, &no).unwrap();
         let mut changed: Vec<_> =
             third.changed_dirs.iter().map(|d| d.strip_prefix(&root).unwrap().to_owned()).collect();
         changed.sort();
@@ -130,7 +136,7 @@ mod tests {
         assert_eq!(names(&lib, "minis"), ["boss.stl", "grunt.stl"]);
 
         fs::remove_dir_all(root.join("minis/orcs")).unwrap();
-        scan(&mut lib, &root, &root, false, &no).unwrap();
+        scan(&mut lib, &root, &root, Force::Nothing, &no).unwrap();
         assert!(names(&lib, "boss").is_empty());
         assert_eq!(lib.counts().unwrap().files, 1);
     }
@@ -143,18 +149,18 @@ mod tests {
         crate::archive::tests::make_zip(&zip);
         let mut lib = Library::open_in_memory().unwrap();
         let no = AtomicBool::new(false);
-        let report = scan(&mut lib, &root, &root, false, &no).unwrap();
+        let report = scan(&mut lib, &root, &root, Force::Nothing, &no).unwrap();
         assert_eq!(report.changed_dirs.len(), 2, "root and the archive");
         let hits = lib.search(&query::parse("orc"), 9).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path, zip.join("minis/orc.stl"));
         assert_eq!(lib.folder_preview(&zip, 4).unwrap().len(), 1);
         assert!(
-            scan(&mut lib, &root, &root, false, &no).unwrap().changed_dirs.is_empty(),
+            scan(&mut lib, &root, &root, Force::Nothing, &no).unwrap().changed_dirs.is_empty(),
             "unchanged archive is not re-read"
         );
         std::fs::remove_file(&zip).unwrap();
-        scan(&mut lib, &root, &root, false, &no).unwrap();
+        scan(&mut lib, &root, &root, Force::Nothing, &no).unwrap();
         assert!(names(&lib, "orc").is_empty());
     }
 
@@ -166,13 +172,33 @@ mod tests {
         fs::write(root.join("a/part.stl"), b"x").unwrap();
         let mut lib = Library::open_in_memory().unwrap();
         let no = AtomicBool::new(false);
-        scan(&mut lib, &root, &root, false, &no).unwrap();
+        scan(&mut lib, &root, &root, Force::Nothing, &no).unwrap();
 
-        let forced = scan(&mut lib, &root, &root.join("a"), true, &no).unwrap();
+        // Rewriting a file leaves its folder's mtime alone; only a forced scan notices.
+        fs::write(root.join("a/part.stl"), b"xy").unwrap();
+        let forced = scan(&mut lib, &root, &root.join("a"), Force::Start, &no).unwrap();
         assert_eq!(forced.changed_dirs, [root.join("a")]);
+        let again = scan(&mut lib, &root, &root.join("a"), Force::Start, &no).unwrap();
+        assert!(again.changed_dirs.is_empty(), "listed again, but nothing changed");
 
         fs::remove_dir_all(root.join("a")).unwrap();
-        scan(&mut lib, &root, &root.join("a"), false, &no).unwrap();
+        scan(&mut lib, &root, &root.join("a"), Force::Nothing, &no).unwrap();
         assert_eq!(lib.counts().unwrap().files, 0);
+    }
+
+    #[test]
+    fn rescanning_a_tree_ignores_folder_times() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        fs::create_dir_all(root.join("a/b")).unwrap();
+        fs::write(root.join("a/b/part.stl"), b"x").unwrap();
+        let mut lib = Library::open_in_memory().unwrap();
+        let no = AtomicBool::new(false);
+        scan(&mut lib, &root, &root, Force::Nothing, &no).unwrap();
+        fs::write(root.join("a/b/part.stl"), b"xyz").unwrap();
+        assert!(scan(&mut lib, &root, &root, Force::Start, &no).unwrap().changed_dirs.is_empty());
+        let tree = scan(&mut lib, &root, &root.join("a"), Force::Tree, &no).unwrap();
+        assert_eq!((tree.dirs_visited, tree.changed_dirs), (2, vec![root.join("a/b")]));
+        assert_eq!(lib.search(&query::parse("part"), 9).unwrap()[0].size, 3);
     }
 }

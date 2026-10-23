@@ -16,6 +16,9 @@ pub enum Kind {
     Pdf,
     /// Sliced print job (`.gcode`, `.gco`, `.g`).
     Gcode,
+    /// Readmes, licences and notes: `.txt`, `.md`, `.markdown`, `.nfo`, and `README`,
+    /// `LICENSE` or `COPYING` without an extension.
+    Text,
     Other,
 }
 
@@ -33,7 +36,12 @@ impl Kind {
         if lower.ends_with(".tar.gz") || lower.ends_with(".tar.xz") || lower.ends_with(".tar.bz2") {
             return Kind::Archive;
         }
-        let ext = lower.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+        let Some((_, ext)) = lower.rsplit_once('.') else {
+            return match lower.as_str() {
+                "readme" | "license" | "licence" | "copying" => Kind::Text,
+                _ => Kind::Other,
+            };
+        };
         match ext {
             "stl" => Kind::Stl,
             "3mf" => Kind::ThreeMf,
@@ -45,6 +53,7 @@ impl Kind {
             "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" => Kind::Image,
             "pdf" => Kind::Pdf,
             "gcode" | "gco" | "g" => Kind::Gcode,
+            "txt" | "md" | "markdown" | "nfo" => Kind::Text,
             _ => Kind::Other,
         }
     }
@@ -63,6 +72,7 @@ impl Kind {
             Kind::Image => "image",
             Kind::Pdf => "pdf",
             Kind::Gcode => "gcode",
+            Kind::Text => "text",
             Kind::Other => "other",
         }
     }
@@ -80,6 +90,7 @@ impl Kind {
             "image" => Kind::Image,
             "pdf" => Kind::Pdf,
             "gcode" => Kind::Gcode,
+            "text" => Kind::Text,
             _ => Kind::Other,
         }
     }
@@ -122,6 +133,12 @@ mod tests {
         assert_eq!(Kind::from_file_name("part.obj"), Kind::Obj);
         assert_eq!(Kind::from_file_name("Deckel_PLA_1h7m.gcode"), Kind::Gcode);
         assert_eq!(Kind::from_file_name("plate.GCO"), Kind::Gcode);
+        assert_eq!(Kind::from_file_name("README"), Kind::Text);
+        assert_eq!(Kind::from_file_name("License"), Kind::Text);
+        assert_eq!(Kind::from_file_name("README.md"), Kind::Text);
+        assert_eq!(Kind::from_file_name("Anleitung.TXT"), Kind::Text);
+        assert_eq!(Kind::from_file_name("release.nfo"), Kind::Text);
+        assert_eq!(Kind::from_file_name("Makefile"), Kind::Other);
         assert!(!Kind::Gcode.is_model() && !Kind::Gcode.is_sliceable() && Kind::Gcode.is_printable());
         assert!(Kind::Stl.is_printable() && !Kind::Image.is_printable());
         assert!(Kind::Step.is_model() && !Kind::Archive.is_model());
@@ -138,6 +155,7 @@ mod tests {
             Kind::Image,
             Kind::Pdf,
             Kind::Gcode,
+            Kind::Text,
             Kind::Other,
         ] {
             assert_eq!(Kind::parse(k.as_str()), k);

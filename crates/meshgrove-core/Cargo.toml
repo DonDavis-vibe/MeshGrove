@@ -29,6 +29,8 @@ gltf.workspace = true
 tobj.workspace = true
 base64.workspace = true
 percent-encoding.workspace = true
+ab_glyph.workspace = true
+epaint_default_fonts.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

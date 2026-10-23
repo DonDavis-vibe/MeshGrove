@@ -7,6 +7,7 @@ pub mod pdf;
 pub mod ply;
 pub mod step;
 pub mod stl;
+pub mod text;
 pub mod texture;
 pub mod threemf;
 

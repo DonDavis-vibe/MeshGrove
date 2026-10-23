@@ -172,6 +172,7 @@ impl Library {
 
     /// Records the current contents of `dir` (below library root `root`): files are diffed
     /// against the index (changed files lose their stale facts), vanished subfolders are removed.
+    /// Returns whether anything in the folder was new, changed or gone.
     pub fn update_dir(
         &mut self,
         root: &Path,
@@ -179,11 +180,12 @@ impl Library {
         mtime_ns: i64,
         files: &[Entry],
         subdirs: &[PathBuf],
-    ) -> Result<(), Error> {
-        let Some(dir_s) = path_str(dir) else { return Ok(()) };
+    ) -> Result<bool, Error> {
+        let Some(dir_s) = path_str(dir) else { return Ok(false) };
         let parent = if dir == root { None } else { dir.parent().and_then(path_str) };
         let rel = dir.strip_prefix(root).unwrap_or(dir).to_string_lossy().to_lowercase();
         let tx = self.conn.transaction()?;
+        let mut changed = tx.query_row("SELECT 1 FROM dirs WHERE path = ?1", [dir_s], |_| Ok(())).optional()?.is_none();
         tx.execute(
             "INSERT INTO dirs (path, parent, mtime_ns) VALUES (?1, ?2, ?3)
              ON CONFLICT(path) DO UPDATE SET parent = excluded.parent, mtime_ns = excluded.mtime_ns",
@@ -213,28 +215,35 @@ impl Library {
                     Some((_, size, old_mtime)) if size == f.size as i64 && old_mtime == mtime => {}
                     Some((id, _, _)) => {
                         update.execute(params![id, f.kind.as_str(), f.size as i64, mtime])?;
+                        changed = true;
                     }
                     None => {
                         let search = format!("{}\n{rel}", f.name.to_lowercase());
                         insert.execute(params![dir_id, f.name, f.kind.as_str(), f.size as i64, mtime, search])?;
+                        changed = true;
                     }
                 }
             }
             let mut delete = tx.prepare_cached("DELETE FROM files WHERE id = ?1")?;
             for (id, _, _) in known.into_values() {
                 delete.execute([id])?;
+                changed = true;
             }
         }
         let children: Vec<String> = {
             let mut stmt = tx.prepare_cached("SELECT path FROM dirs WHERE parent = ?1")?;
             stmt.query_map([dir_s], |r| r.get(0))?.collect::<Result<_, _>>()?
         };
+        // New subfolders are indexed when the scan gets to them; the folder shows them already.
+        changed |= subdirs.iter().any(|s| !children.iter().any(|c| path_str(s) == Some(c.as_str())));
         for child in children {
             if !subdirs.iter().any(|s| path_str(s) == Some(child.as_str())) {
                 remove_tree(&tx, Path::new(&child))?;
+                changed = true;
             }
         }
-        tx.commit()
+        tx.commit()?;
+        Ok(changed)
     }
 
     /// Forgets a folder and everything below it.
@@ -282,11 +291,11 @@ impl Library {
         Ok(())
     }
 
-    /// Models, images, PDFs and G-code whose thumbnail facts are missing or out of date, for background processing.
+    /// Models, images, PDFs, G-code and texts whose thumbnail facts are missing or out of date, for background processing.
     pub fn needing_meta(&self) -> Result<Vec<(Entry, String)>, Error> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns, f.meta_key FROM files f JOIN dirs d ON d.id = f.dir_id
-             WHERE f.kind IN ({MODEL_KINDS}, 'image', 'pdf', 'gcode') ORDER BY d.path, f.name"
+             WHERE f.kind IN ({MODEL_KINDS}, 'image', 'pdf', 'gcode', 'text') ORDER BY d.path, f.name"
         ))?;
         let rows = stmt.query_map([], |r| Ok((entry_from_row(r)?, r.get::<_, Option<String>>(5)?)))?;
         let mut out = Vec::new();
@@ -630,7 +639,7 @@ impl Library {
                 "SELECT COUNT(*),
                         COALESCE(SUM(kind IN ({MODEL_KINDS})), 0),
                         COALESCE(SUM(meta_key IS NOT NULL), 0),
-                        COALESCE(SUM(kind IN ({MODEL_KINDS}, 'image', 'pdf', 'gcode')), 0)
+                        COALESCE(SUM(kind IN ({MODEL_KINDS}, 'image', 'pdf', 'gcode', 'text')), 0)
                  FROM files"
             ),
             [],
@@ -680,7 +689,7 @@ pub fn nanos(t: Option<SystemTime>) -> i64 {
 
 /// Non-UTF-8 paths cannot be stored (and are vanishingly rare); they are skipped.
 /// Files indexed as unknown before Meshgrove learnt their format (OBJ, PLY and glTF in v4,
-/// G-code in 0.4): unchanged folders are not rescanned, so classify them again by name.
+/// G-code and texts in 0.4): unchanged folders are not rescanned, so classify them again by name.
 fn reclassify_unknown(conn: &Connection) -> Result<(), Error> {
     let known: Vec<(i64, Kind)> = conn
         .prepare("SELECT id, name FROM files WHERE kind = 'other'")?
@@ -727,7 +736,7 @@ mod tests {
         let mut lib = Library::open_in_memory().unwrap();
         let root = Path::new("/lib/3D_druck");
         let minis = Path::new("/lib/3D_druck/minis");
-        lib.update_dir(root, root, 1, &[file("/lib/3D_druck", "readme.txt", 5, 1)], &[minis.into()]).unwrap();
+        lib.update_dir(root, root, 1, &[file("/lib/3D_druck", "slicer.ini", 5, 1)], &[minis.into()]).unwrap();
         lib.update_dir(
             root,
             minis,
@@ -932,6 +941,7 @@ mod tests {
             Kind::Image,
             Kind::Pdf,
             Kind::Gcode,
+            Kind::Text,
             Kind::Other,
         ];
         assert_eq!(listed, all.into_iter().filter(|k| k.is_model()).collect::<Vec<_>>());
@@ -945,7 +955,7 @@ mod tests {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(INDEX_SCHEMA).unwrap();
             conn.execute("INSERT INTO dirs (path, parent, mtime_ns) VALUES ('/r', NULL, 1)", []).unwrap();
-            for name in ["Scan.PLY", "fig.glb", "notes.txt", "Deckel.gcode"] {
+            for name in ["Scan.PLY", "fig.glb", "notes.odt", "Deckel.gcode", "README"] {
                 conn.execute(
                     "INSERT INTO files (dir_id, name, kind, size, mtime_ns, search) VALUES (1, ?1, 'other', 1, 1, ?1)",
                     [name],
@@ -964,7 +974,7 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
-        assert_eq!(kinds, ["gcode", "ply", "gltf", "other"], "new formats reclassified");
+        assert_eq!(kinds, ["gcode", "text", "ply", "gltf", "other"], "new formats reclassified");
         lib.update_dir(Path::new("/r"), Path::new("/r"), 2, &[file("/r", "a.stl", 1, 1)], &[]).unwrap();
         lib.store_meta(Path::new("/r/a.stl"), "k", &ThumbMeta { content_hash: Some("h".into()), ..Default::default() })
             .unwrap();

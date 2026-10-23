@@ -15,6 +15,8 @@ pub enum SidebarAction {
     Navigate(PathBuf),
     AddRoot(PathBuf),
     RemoveRoot(PathBuf),
+    /// Index this library folder and everything below it again.
+    Rescan(PathBuf),
     /// Library files carrying all of these tags.
     SearchTags(Vec<String>),
     ShowDuplicates,
@@ -97,6 +99,10 @@ impl Sidebar {
             for root in &config.library_roots {
                 let response = place(ui, "📚", &listing::file_name(root), root, current, &mut action);
                 response.context_menu(|ui| {
+                    if ui.button(t!("menu.rescan")).clicked() {
+                        action = Some(SidebarAction::Rescan(root.clone()));
+                        ui.close();
+                    }
                     if ui.button(t!("sidebar.remove_root")).clicked() {
                         action = Some(SidebarAction::RemoveRoot(root.clone()));
                         ui.close();
@@ -136,7 +142,7 @@ impl Sidebar {
             section(ui, &t!("sidebar.folders"));
             let tree_root = self.tree_root(config, current);
             let reveal = self.revealed.as_deref() != Some(current);
-            self.node(ui, &tree_root, current, reveal, &mut action);
+            self.node(ui, &tree_root, current, &config.library_roots, reveal, &mut action);
             self.revealed = Some(current.to_path_buf());
         });
         action
@@ -272,7 +278,15 @@ impl Sidebar {
             .unwrap_or_else(|| current.ancestors().last().unwrap_or(current).to_path_buf())
     }
 
-    fn node(&mut self, ui: &mut Ui, path: &Path, current: &Path, reveal: bool, action: &mut Option<SidebarAction>) {
+    fn node(
+        &mut self,
+        ui: &mut Ui,
+        path: &Path,
+        current: &Path,
+        roots: &[PathBuf],
+        reveal: bool,
+        action: &mut Option<SidebarAction>,
+    ) {
         let id = ui.make_persistent_id(("tree", path));
         let on_way = current.starts_with(path) && current != path;
         let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, on_way);
@@ -284,8 +298,17 @@ impl Sidebar {
         state
             .show_header(ui, |ui| {
                 let text = if is_current { RichText::new(&name).strong() } else { RichText::new(&name) };
-                if ui.selectable_label(is_current, text).clicked() {
+                let response = ui.selectable_label(is_current, text);
+                if response.clicked() {
                     *action = Some(SidebarAction::Navigate(path.to_path_buf()));
+                }
+                if roots.iter().any(|r| path.starts_with(r)) {
+                    response.context_menu(|ui| {
+                        if ui.button(t!("menu.rescan")).clicked() {
+                            *action = Some(SidebarAction::Rescan(path.to_path_buf()));
+                            ui.close();
+                        }
+                    });
                 }
             })
             .body(|ui| {
@@ -298,7 +321,7 @@ impl Sidebar {
                     ui.weak(t!("sidebar.no_subfolders"));
                 }
                 for child in children {
-                    self.node(ui, &child, current, reveal, action);
+                    self.node(ui, &child, current, roots, reveal, action);
                 }
             });
     }

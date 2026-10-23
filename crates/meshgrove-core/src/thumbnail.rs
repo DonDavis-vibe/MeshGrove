@@ -21,7 +21,7 @@ pub enum ThumbError {
 
 /// Kinds that get a picture (everything else shows an icon).
 pub fn supported(kind: Kind) -> bool {
-    kind.is_model() || matches!(kind, Kind::Image | Kind::Pdf | Kind::Gcode)
+    kind.is_model() || matches!(kind, Kind::Image | Kind::Pdf | Kind::Gcode | Kind::Text)
 }
 
 /// Grey for drawn G-code paths when the slicer names no filament colour.
@@ -104,6 +104,14 @@ pub fn make(
                         .ok_or_else(|| ThumbError::Permanent("no extruded paths and no preview picture".into()))?
                 }
             };
+            Ok(Thumbnail { image, meta })
+        }
+        Kind::Text => {
+            let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+            let image = loaders::text::thumbnail(bytes, loaders::text::is_markdown(&name), size)
+                .ok_or_else(|| ThumbError::Transient("bundled font unreadable".into()))?;
+            // Hashed so readmes can be tagged and put on lists like everything else.
+            let meta = ThumbMeta { content_hash: Some(dedupe::content_hash(bytes)), ..ThumbMeta::default() };
             Ok(Thumbnail { image, meta })
         }
         Kind::Image => {

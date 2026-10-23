@@ -18,6 +18,7 @@ egui.workspace = true
 egui_tiles.workspace = true
 krilla.workspace = true
 epaint_default_fonts.workspace = true
+egui_commonmark.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 egui-wgpu.workspace = true
@@ -34,6 +35,9 @@ image.workspace = true
 dirs.workspace = true
 notify.workspace = true
 trash.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
 
 [build-dependencies]
 winresource = "0.1"

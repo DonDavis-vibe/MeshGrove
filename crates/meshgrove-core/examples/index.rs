@@ -13,7 +13,7 @@ fn main() {
     let (db, root) = (Path::new(&args[0]), Path::new(&args[1]));
     let mut lib = Library::open(db).expect("open database");
     let t = Instant::now();
-    let report = scan::scan(&mut lib, root, root, false, &AtomicBool::new(false)).expect("scan");
+    let report = scan::scan(&mut lib, root, root, scan::Force::Nothing, &AtomicBool::new(false)).expect("scan");
     println!(
         "scan: {} folders visited, {} listed, {:?}; {:?}",
         report.dirs_visited,

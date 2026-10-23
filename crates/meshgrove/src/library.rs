@@ -12,7 +12,8 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
 use meshgrove_core::cache::ThumbMeta;
 use meshgrove_core::db::{Counts, Error, Library};
 use meshgrove_core::lists::{ListKind, PrintResult};
-use meshgrove_core::{scan, userdata};
+use meshgrove_core::scan::{self, Force};
+use meshgrove_core::userdata;
 use notify::{EventKind, RecursiveMode, Watcher};
 
 use crate::thumbs::Job;
@@ -29,6 +30,8 @@ const KEEP_BACKUPS: usize = 7;
 pub enum LibEvent {
     /// A scan finished; the contents of these folders changed.
     Scanned { changed: Vec<PathBuf> },
+    /// A rescan the user asked for is done: how many folders were listed, how many changed.
+    Rescanned { dir: PathBuf, folders: usize, changed: usize },
     /// Files whose thumbnail facts are missing or stale, to process in the background.
     Pending(Vec<Job>),
     /// Tags, notes, lists or prints were changed (by the user or an import).
@@ -54,6 +57,8 @@ pub struct LibStatus {
 enum Cmd {
     SetRoots(Vec<PathBuf>),
     Changed(Vec<PathBuf>),
+    /// Lists this folder again, with `true` every folder below it as well (and reports the result).
+    Rescan(PathBuf, bool),
     StoreMeta(PathBuf, String, ThumbMeta),
     Tag(Vec<PathBuf>, String),
     Untag(Vec<PathBuf>, String),
@@ -175,6 +180,12 @@ impl LibraryService {
         }
     }
 
+    /// Lists `dir` again whatever its modification time says (only for folders in the library);
+    /// with `whole_tree` also every folder below it, answered with [`LibEvent::Rescanned`].
+    pub fn rescan(&self, dir: PathBuf, whole_tree: bool) {
+        let _ = self.tx.send(Cmd::Rescan(dir, whole_tree));
+    }
+
     /// Files were changed by the app itself (e.g. moved to the trash): rescan their folders.
     pub fn changed(&self, paths: Vec<PathBuf>) {
         let _ = self.tx.send(Cmd::Changed(paths));
@@ -239,9 +250,17 @@ impl Worker {
                         log::warn!("index cleanup failed: {e}");
                     }
                     let starts: Vec<(PathBuf, PathBuf)> = self.roots.iter().map(|r| (r.clone(), r.clone())).collect();
-                    self.scan(&mut lib, &starts, false);
+                    self.scan(&mut lib, &starts, Force::Nothing);
                     backup(&lib);
                     next_full = Instant::now() + interval;
+                }
+                Ok(Cmd::Rescan(dir, whole_tree)) => {
+                    let Some(root) = self.root_of(&dir) else { continue };
+                    let force = if whole_tree { Force::Tree } else { Force::Start };
+                    let (folders, changed) = self.scan(&mut lib, &[(root, dir.clone())], force);
+                    if whole_tree {
+                        self.send(LibEvent::Rescanned { dir, folders, changed });
+                    }
                 }
                 Ok(Cmd::Changed(paths)) => {
                     for path in paths {
@@ -302,20 +321,16 @@ impl Worker {
                 Err(RecvTimeoutError::Timeout) if Instant::now() >= next_full => {
                     dirty.clear();
                     let starts: Vec<(PathBuf, PathBuf)> = self.roots.iter().map(|r| (r.clone(), r.clone())).collect();
-                    self.scan(&mut lib, &starts, false);
+                    self.scan(&mut lib, &starts, Force::Nothing);
                     backup(&lib);
                     next_full = Instant::now() + interval;
                 }
                 Err(RecvTimeoutError::Timeout) => {
                     let starts: Vec<(PathBuf, PathBuf)> = std::mem::take(&mut dirty)
                         .into_iter()
-                        .filter_map(|dir| {
-                            let root =
-                                self.roots.iter().filter(|r| dir.starts_with(r)).max_by_key(|r| r.as_os_str().len())?;
-                            Some((root.clone(), dir))
-                        })
+                        .filter_map(|dir| Some((self.root_of(&dir)?, dir)))
                         .collect();
-                    self.scan(&mut lib, &starts, true);
+                    self.scan(&mut lib, &starts, Force::Start);
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     backup(&lib);
@@ -325,16 +340,24 @@ impl Worker {
         }
     }
 
-    /// Scans each (root, start folder) pair and reports what changed.
-    fn scan(&self, lib: &mut Library, starts: &[(PathBuf, PathBuf)], force: bool) {
+    /// The library root `dir` lies in (the innermost one).
+    fn root_of(&self, dir: &Path) -> Option<PathBuf> {
+        self.roots.iter().filter(|r| dir.starts_with(r)).max_by_key(|r| r.as_os_str().len()).cloned()
+    }
+
+    /// Scans each (root, start folder) pair and reports what changed. Returns how many folders
+    /// were visited and how many of them had changed.
+    fn scan(&self, lib: &mut Library, starts: &[(PathBuf, PathBuf)], force: Force) -> (usize, usize) {
         self.status.lock().unwrap().scanning = true;
         self.ctx.request_repaint();
         let mut changed = Vec::new();
+        let mut visited = 0;
         let never = AtomicBool::new(false);
         for (root, start) in starts {
             match scan::scan(lib, root, start, force, &never) {
-                Ok(report) if report.changed_dirs.is_empty() => {}
+                Ok(report) if report.changed_dirs.is_empty() => visited += report.dirs_visited,
                 Ok(report) => {
+                    visited += report.dirs_visited;
                     log::info!(
                         "scanned {}: {} folders, {} changed",
                         start.display(),
@@ -349,10 +372,12 @@ impl Worker {
         let pending = lib.needing_meta().unwrap_or_default();
         let jobs =
             pending.into_iter().map(|(e, key)| Job { key, path: e.path, kind: e.kind, background: true }).collect();
+        let count = changed.len();
         let _ = self.events.send(LibEvent::Scanned { changed });
         let _ = self.events.send(LibEvent::Pending(jobs));
         self.status.lock().unwrap().scanning = false;
         self.refresh_counts(lib);
+        (visited, count)
     }
 
     fn send(&self, event: LibEvent) {

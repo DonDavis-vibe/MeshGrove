@@ -1,5 +1,6 @@
 //! Right panel: 3D view of the selected model (or a large preview) and its facts.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::{Grid, Key, RichText, Ui};
@@ -16,6 +17,7 @@ use super::tags::{self, Group, TagStyle};
 use super::viewer::ModelViewer;
 use crate::i18n;
 use crate::meshes::{self, ModelInfo};
+use crate::text_preview::{TextPreview, TextState};
 
 pub enum ModelStatus {
     Idle,
@@ -63,6 +65,8 @@ pub struct DetailsOutput {
     pub undo_print: bool,
     /// New number of copies on the shown print list.
     pub quantity: Option<u32>,
+    /// A file to open in its default app (a folder's readme).
+    pub open_file: Option<PathBuf>,
 }
 
 /// The selection's print log and, on a shown print list, its copies.
@@ -100,6 +104,7 @@ pub struct DetailsContext<'a> {
     /// Plate previews of a 3MF project (plate number, texture).
     pub plates: &'a [(usize, egui::TextureHandle)],
     pub viewer: &'a mut ModelViewer,
+    pub text: &'a mut TextPreview,
     pub render_state: &'a egui_wgpu::RenderState,
     pub renderer: &'a Renderer,
 }
@@ -143,8 +148,55 @@ pub fn preview(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
         && let Some(Thumb::Ready(texture, _)) = cx.thumb
     {
         ui.add(egui::Image::new(texture).fit_to_exact_size(ui.available_size()).corner_radius(4.0));
+    } else if entry.kind == Kind::Text {
+        text_view(ui, cx.text, None);
+    } else if entry.kind == Kind::Folder {
+        text_view(ui, cx.text, Some(&mut out));
     }
     out
+}
+
+/// A readme or note: Markdown formatted (links open in the browser), other text as it is.
+/// For a folder's readme (`folder` gets the click) its name and an "Open" button come first.
+fn text_view(ui: &mut Ui, preview: &mut TextPreview, folder: Option<&mut DetailsOutput>) {
+    let text = match &preview.state {
+        TextState::Ready(text) => text,
+        TextState::Loading => {
+            ui.centered_and_justified(|ui| ui.spinner());
+            return;
+        }
+        TextState::Failed(e) => {
+            ui.colored_label(ui.visuals().error_fg_color, e);
+            return;
+        }
+        TextState::Idle => return,
+    };
+    if let Some(out) = folder {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("📄 {}", meshgrove_core::listing::file_name(&text.path))).weak());
+            if ui.small_button(t!("text.open")).clicked() {
+                out.open_file = Some(text.path.clone());
+            }
+        });
+        ui.add_space(2.0);
+    }
+    egui::Frame::new().fill(ui.visuals().extreme_bg_color).corner_radius(4.0).inner_margin(10.0).show(ui, |ui| {
+        egui::ScrollArea::both().id_salt("text_preview").auto_shrink(false).show(ui, |ui| {
+            let nfo = text.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("nfo"));
+            if text.markdown {
+                egui_commonmark::CommonMarkViewer::new().show(ui, &mut preview.cache, &text.body);
+            } else if nfo {
+                // Scene .nfo files are ASCII art: monospaced and never wrapped.
+                ui.add(egui::Label::new(RichText::new(&text.body).monospace()).extend());
+            } else {
+                ui.add(egui::Label::new(&text.body).wrap());
+            }
+            if text.truncated {
+                ui.add_space(8.0);
+                ui.weak(t!("text.truncated"));
+            }
+        });
+    });
 }
 
 /// The "Info" pane: facts, plates, tags, note and path of the selection.
@@ -622,6 +674,7 @@ pub fn kind_name(kind: Kind) -> String {
         Kind::Image => t!("kind.image"),
         Kind::Pdf => t!("kind.pdf"),
         Kind::Gcode => t!("kind.gcode"),
+        Kind::Text => t!("kind.text"),
         Kind::Other => t!("kind.other"),
     }
     .into_owned()

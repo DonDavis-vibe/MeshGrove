@@ -48,6 +48,8 @@ pub enum Action {
     /// The following act on the selection.
     /// Large preview of the selected model.
     Preview,
+    /// Index the selected library folder (or archive) and everything below it again.
+    Rescan,
     OpenInSlicer,
     OpenInEditor,
     ShowInFileManager,
@@ -81,6 +83,8 @@ pub struct MenuContext {
     pub favorite: bool,
     /// The hand-made list shown now (id, name), for "remove from …".
     pub current_list: Option<(i64, String)>,
+    /// The selection is one folder or archive of the library, which can be indexed again.
+    pub rescan: bool,
 }
 
 pub struct GalleryOutput {
@@ -424,6 +428,9 @@ impl Gallery {
                                 item(ui, t!("menu.show_in_folder"), Action::ShowInFolder(entry));
                             }
                             item(ui, t!("menu.show_in_file_manager"), Action::ShowInFileManager);
+                            if menu.rescan {
+                                item(ui, t!("menu.rescan"), Action::Rescan);
+                            }
                             item(ui, t!("menu.copy_files"), Action::CopyFiles);
                             item(ui, t!("menu.copy_path"), Action::CopyPaths);
                             if menu.can_tag {
@@ -694,9 +701,9 @@ impl Gallery {
                 }
             }
         }
-        let labelled = entry.kind.is_model() || entry.kind == Kind::Gcode;
-        if labelled || (entry.kind == Kind::Archive && self.mosaics.contains_key(&index)) {
-            let label = icons::extension_label(&entry.name);
+        let labelled = entry.kind.is_model() || matches!(entry.kind, Kind::Gcode | Kind::Text);
+        let label = icons::extension_label(&entry.name);
+        if !label.is_empty() && (labelled || (entry.kind == Kind::Archive && self.mosaics.contains_key(&index))) {
             icons::badge(&painter, img, &label, Color32::from_black_alpha(150), Color32::from_gray(230));
         }
         let fit = self.bed_fit(entry, index);
