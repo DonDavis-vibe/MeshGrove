@@ -10,7 +10,7 @@ use image::RgbaImage;
 
 use base64::Engine;
 
-use crate::config::GltfUnit;
+use crate::config::{GltfUnit, ModelUnits};
 use crate::loaders::gcode::GcodeFacts;
 
 /// Bump whenever thumbnails would look different (camera, lighting, size), to invalidate the cache.
@@ -55,10 +55,16 @@ impl ThumbCache {
 
     /// Identity of one rendered thumbnail: changes when the file (or an archive entry in it) changes.
     pub fn key(path: &Path, size: u64, modified: Option<SystemTime>, entry: Option<&str>) -> String {
-        Self::key_in(path, size, modified, entry, crate::config::gltf_unit())
+        Self::key_in(path, size, modified, entry, (crate::config::gltf_unit(), crate::config::model_units()))
     }
 
-    fn key_in(path: &Path, size: u64, modified: Option<SystemTime>, entry: Option<&str>, unit: GltfUnit) -> String {
+    fn key_in(
+        path: &Path,
+        size: u64,
+        modified: Option<SystemTime>,
+        entry: Option<&str>,
+        (gltf, model): (GltfUnit, ModelUnits),
+    ) -> String {
         let nanos = modified.and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
         let mut h = blake3::Hasher::new();
         // An archive member's own name decides, not the archive's.
@@ -67,7 +73,9 @@ impl ThumbCache {
         let version = match ext.as_deref() {
             Some("3mf") => RENDER_VERSION_3MF.to_string(),
             // glTF sizes follow the unit setting; metres keep the plain version.
-            Some("glb" | "gltf") if unit == GltfUnit::Millimetres => format!("{RENDER_VERSION}mm"),
+            Some("glb" | "gltf") if gltf == GltfUnit::Millimetres => format!("{RENDER_VERSION}mm"),
+            // STL, OBJ and PLY sizes follow the unit of the files.
+            Some("stl" | "obj" | "ply") if model == ModelUnits::Inches => format!("{RENDER_VERSION}in"),
             _ => RENDER_VERSION.to_string(),
         };
         h.update(format!("{version}\0{}\0{size}\0{nanos}\0{}", path.display(), entry.unwrap_or("")).as_bytes());
@@ -249,8 +257,17 @@ mod tests {
         assert_ne!(k, ThumbCache::key(p, 100, Some(t), Some("inner.stl")));
         assert_ne!(k, ThumbCache::key(Path::new("/lib/other.stl"), 100, Some(t), None));
         // The glTF unit setting changes glTF facts, so their keys; other files keep theirs.
-        let key = |p: &str, unit| ThumbCache::key_in(Path::new(p), 100, Some(t), None, unit);
-        assert_ne!(key("/lib/a.glb", GltfUnit::Metres), key("/lib/a.glb", GltfUnit::Millimetres));
-        assert_eq!(key("/lib/a.stl", GltfUnit::Metres), key("/lib/a.stl", GltfUnit::Millimetres));
+        let key = |p: &str, gltf, model| ThumbCache::key_in(Path::new(p), 100, Some(t), None, (gltf, model));
+        let mm = ModelUnits::Millimetres;
+        assert_ne!(key("/lib/a.glb", GltfUnit::Metres, mm), key("/lib/a.glb", GltfUnit::Millimetres, mm));
+        assert_eq!(key("/lib/a.stl", GltfUnit::Metres, mm), key("/lib/a.stl", GltfUnit::Millimetres, mm));
+        // The unit of STL, OBJ and PLY files changes their keys, and only theirs.
+        let inch = ModelUnits::Inches;
+        for ext in ["stl", "obj", "ply"] {
+            let path = format!("/lib/a.{ext}");
+            assert_ne!(key(&path, GltfUnit::Metres, mm), key(&path, GltfUnit::Metres, inch));
+        }
+        assert_eq!(key("/lib/a.glb", GltfUnit::Metres, mm), key("/lib/a.glb", GltfUnit::Metres, inch));
+        assert_eq!(key("/lib/a.3mf", GltfUnit::Metres, mm), key("/lib/a.3mf", GltfUnit::Metres, inch));
     }
 }

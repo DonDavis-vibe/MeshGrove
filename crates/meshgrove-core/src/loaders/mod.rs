@@ -35,12 +35,50 @@ pub fn load_mesh(kind: crate::Kind, bytes: &[u8]) -> Result<crate::Mesh, LoadErr
 
 /// Like [`load_mesh`], with the files next to the model for materials, textures and buffers.
 pub fn load_mesh_with(kind: crate::Kind, bytes: &[u8], sibling: Sibling) -> Result<crate::Mesh, LoadError> {
-    match kind {
+    let mesh = match kind {
         crate::Kind::Stl => stl::parse(bytes),
         crate::Kind::ThreeMf => Ok(threemf::parse(bytes)?.mesh),
         crate::Kind::Obj => obj::parse(bytes, sibling),
         crate::Kind::Ply => ply::parse(bytes),
         crate::Kind::Gltf => gltf::parse(bytes, sibling),
         other => Err(LoadError::Malformed(format!("{other:?} is not a mesh format"))),
+    }?;
+    Ok(in_file_units(kind, mesh))
+}
+
+/// STL, OBJ and PLY carry no unit: they are read in the unit of the settings
+/// ([`crate::config::model_units`]) and given in millimetres from here on. Other formats say
+/// what they use (3MF, STEP) or have their own setting (glTF).
+pub fn in_file_units(kind: crate::Kind, mesh: crate::Mesh) -> crate::Mesh {
+    in_units(kind, mesh, crate::config::model_units())
+}
+
+fn in_units(kind: crate::Kind, mut mesh: crate::Mesh, units: crate::config::ModelUnits) -> crate::Mesh {
+    if matches!(kind, crate::Kind::Stl | crate::Kind::Obj | crate::Kind::Ply) {
+        let factor = units.scale();
+        if factor != 1.0 {
+            mesh.scale(factor);
+        }
+    }
+    mesh
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Kind;
+    use crate::config::ModelUnits;
+
+    #[test]
+    fn stl_obj_and_ply_follow_the_unit_of_the_files_others_do_not() {
+        let cube = crate::Mesh::cube(10.0);
+        let plain = in_units(Kind::Stl, cube.clone(), ModelUnits::Millimetres);
+        assert_eq!(plain, cube, "millimetres: unchanged");
+        let inch = in_units(Kind::Stl, cube.clone(), ModelUnits::Inches);
+        let obj = in_units(Kind::Obj, cube.clone(), ModelUnits::Inches);
+        let threemf = in_units(Kind::ThreeMf, cube.clone(), ModelUnits::Inches);
+        assert!((inch.bounds().unwrap().size().x - 254.0).abs() < 1e-3);
+        assert_eq!(obj, inch);
+        assert_eq!(threemf, cube, "3MF declares its own unit");
     }
 }

@@ -528,7 +528,7 @@ pub fn fit_text(fit: Fit, bed: &Bed) -> String {
                 .iter()
                 .zip(over)
                 .filter(|(_, mm)| *mm > 0.0)
-                .map(|(axis, mm)| format!("{axis} +{} mm", i18n::decimal(mm)))
+                .map(|(axis, mm)| format!("{axis} +{}", i18n::length(mm)))
                 .collect();
             let over = if parts.is_empty() { t!("bed.diagonal").into_owned() } else { parts.join(", ") };
             t!("bed.too_big", bed = bed.name, over = over)
@@ -660,7 +660,7 @@ fn gcode_facts(ui: &mut Ui, g: &GcodeFacts, materials: bool, bed: Option<&Bed>) 
     if !used.is_empty() {
         fact(ui, &t!("gcode.filament_used"), &used.join(" · "));
     }
-    let layer = g.layer_height.map(|h| format!("{} mm", i18n::short_decimal(h)));
+    let layer = g.layer_height.map(i18n::short_length);
     let layers = match (g.layers, layer) {
         (Some(n), Some(h)) => Some(format!("{} × {h}", i18n::count(n as usize))),
         (Some(n), None) => Some(i18n::count(n as usize)),
@@ -670,7 +670,7 @@ fn gcode_facts(ui: &mut Ui, g: &GcodeFacts, materials: bool, bed: Option<&Bed>) 
         fact(ui, &t!("gcode.layers"), &layers);
     }
     if let Some(nozzle) = g.nozzle {
-        fact(ui, &t!("gcode.nozzle"), &format!("{} mm", i18n::short_decimal(nozzle)));
+        fact(ui, &t!("gcode.nozzle"), &i18n::short_length(nozzle));
     }
     // The slicer does not say which currency; the user knows their filament prices.
     if let Some(cost) = g.cost.filter(|c| *c > 0.0) {

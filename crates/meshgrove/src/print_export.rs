@@ -37,6 +37,14 @@ pub struct CsvHeader<'a> {
 }
 
 /// The list as CSV. `separator` is `;` where spreadsheets expect it (German) and `,` elsewhere.
+/// "124.8 × 144.1 × 50.0" (millimetres) or "4.91 × 5.67 × 1.97" (inches), with the unit if asked.
+fn size_text(size_mm: [f32; 3], with_unit: bool) -> String {
+    let units = meshgrove_core::config::display_units();
+    let decimals = if units == meshgrove_core::config::DisplayUnits::Metric { 1 } else { 2 };
+    let [x, y, z] = size_mm.map(|v| format!("{:.decimals$}", units.from_mm(v)));
+    if with_unit { format!("{x} × {y} × {z} {}", units.label()) } else { format!("{x} × {y} × {z}") }
+}
+
 pub fn csv(rows: &[Row], header: &CsvHeader, separator: char) -> String {
     let field = |s: &str| {
         if s.contains([separator, '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_owned() }
@@ -47,7 +55,7 @@ pub fn csv(rows: &[Row], header: &CsvHeader, separator: char) -> String {
     );
     out.push_str("\r\n");
     for r in rows {
-        let size = r.size_mm.map(|[x, y, z]| format!("{x:.1} × {y:.1} × {z:.1}")).unwrap_or_default();
+        let size = r.size_mm.map(|s| size_text(s, false)).unwrap_or_default();
         let filaments: Vec<String> =
             r.filaments.iter().map(|[red, g, b]| format!("#{red:02x}{g:02x}{b:02x}")).collect();
         out.push_str(&line(&[
@@ -138,7 +146,7 @@ fn draw_row(s: &mut Surface, font: &Font, row: &Row, top: f32) {
     write(s, font, 8.5, Point::from_xy(text_left, top + 36.0), &fit(&row.folder, 8.5, text_width), GREY);
     let mut x = text_left;
     if let Some([sx, sy, sz]) = row.size_mm {
-        let size = format!("{sx:.1} × {sy:.1} × {sz:.1} mm");
+        let size = size_text([sx, sy, sz], true);
         write(s, font, 9.0, Point::from_xy(x, top + 52.0), &size, INK);
         x += size.chars().count() as f32 * 4.6 + 10.0;
     }

@@ -1,6 +1,8 @@
 //! Gives meshgrove.exe its icon in Explorer and the taskbar.
 
 fn main() {
+    // The translations are compiled in (rust-i18n): edit a locale file, get a new build.
+    println!("cargo:rerun-if-changed=locales");
     println!("cargo:rerun-if-changed=../../packaging/icons/meshgrove.ico");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut resource = winresource::WindowsResource::new();
