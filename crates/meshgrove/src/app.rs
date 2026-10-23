@@ -370,6 +370,12 @@ impl App {
 
     fn navigate(&mut self, path: PathBuf) {
         self.leave_search();
+        if path == self.nav.current() && matches!(self.view, View::Duplicates { .. } | View::List { .. }) {
+            // The folder is already read; going "there" means leaving the duplicates or the list.
+            self.view = View::Folder;
+            self.on_listing_arrived();
+            return;
+        }
         self.nav.open(path);
     }
 
@@ -517,17 +523,25 @@ impl App {
         }
     }
 
-    /// Reads the current folder again; the selected file stays selected.
+    /// Reads the current folder again; the selected file stays selected. Duplicates and lists
+    /// stay on screen while the folder underneath is read.
     fn reload(&mut self) {
         if matches!(self.view, View::Folder) && self.select_after_load.is_none() {
             self.select_after_load = self.selected_entry().map(|e| e.path.clone());
         }
-        self.nav.reload();
+        if matches!(self.view, View::Duplicates { .. } | View::List { .. }) {
+            self.nav.refresh();
+        } else {
+            self.nav.reload();
+        }
     }
 
     fn on_listing_arrived(&mut self) {
         if matches!(self.view, View::Search(_)) {
             return; // the folder changed underneath the results; it is shown when the search ends
+        }
+        if self.nav.refreshed() && matches!(self.view, View::Duplicates { .. } | View::List { .. }) {
+            return; // likewise: only the folder underneath was read again
         }
         if self.flatten {
             self.start_flatten();
@@ -633,6 +647,9 @@ impl App {
                         self.reload();
                     } else if matches!(self.view, View::Folder) {
                         self.refresh_gallery(false); // the index may now know the folders' contents
+                    }
+                    if matches!(self.view, View::Duplicates { .. }) {
+                        self.show_duplicates(); // files were added, changed or trashed
                     }
                 }
                 LibEvent::Pending(jobs) => {
@@ -914,9 +931,19 @@ impl App {
     }
 
     fn show_duplicates(&mut self) {
+        self.show_duplicates_without(&[]);
+    }
+
+    /// The duplicate groups, leaving out `gone`: files just moved to the trash, which the index
+    /// lists until it has noticed (a moment later, when the view is built again).
+    fn show_duplicates_without(&mut self, gone: &[PathBuf]) {
         let Some(index) = &self.index else { return };
         let (mut entries, mut groups) = (Vec::new(), Vec::new());
-        for g in index.duplicate_groups().unwrap_or_default() {
+        for mut g in index.duplicate_groups().unwrap_or_default() {
+            g.files.retain(|f| !gone.contains(&f.path));
+            if g.files.len() < 2 {
+                continue;
+            }
             let start = entries.len();
             let keep = start + duplicates::suggest_keep(&g.files);
             let others: Vec<PathBuf> =
@@ -1177,11 +1204,13 @@ impl App {
             Err(e) => t!("toast.trash_failed", error = e),
         };
         self.toast(message.into_owned());
+        // What is gone, even if moving the rest failed.
+        let gone: Vec<PathBuf> = paths.iter().filter(|p| !p.exists()).cloned().collect();
         self.library.changed(paths);
         self.duplicates_due = Some(Instant::now() + Duration::from_secs(2));
         match self.view {
-            View::Duplicates { .. } => self.show_duplicates(),
-            _ => self.nav.reload(),
+            View::Duplicates { .. } => self.show_duplicates_without(&gone),
+            _ => self.reload(),
         }
     }
 
@@ -1297,6 +1326,11 @@ impl App {
         if pressed(Modifiers::NONE, Key::F5) {
             self.reload();
             self.sidebar.refresh();
+            match self.view {
+                View::Duplicates { .. } => self.show_duplicates(),
+                View::List { id, .. } => self.show_list(id, false),
+                _ => {}
+            }
             // The index too: what the watcher missed (copied on another system, a network share).
             let current = self.nav.current().to_path_buf();
             if matches!(self.view, View::Folder) && self.in_library(&current) {

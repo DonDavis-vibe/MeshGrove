@@ -20,6 +20,8 @@ pub struct Navigator {
     forward: Vec<PathBuf>,
     pub listing: Listing,
     pending: Option<Receiver<ListingResult>>,
+    /// The listing being read (or read last) is a refresh of the same folder, not a navigation.
+    refreshing: bool,
     ctx: egui::Context,
 }
 
@@ -31,6 +33,7 @@ impl Navigator {
             forward: Vec::new(),
             listing: Listing::Loading,
             pending: None,
+            refreshing: false,
             ctx,
         };
         nav.reload();
@@ -81,7 +84,20 @@ impl Navigator {
         }
     }
 
+    /// Reads the current folder again in the background, for a view that shows something else
+    /// meanwhile (duplicates, a list): see [`Navigator::refreshed`].
+    pub fn refresh(&mut self) {
+        self.reload();
+        self.refreshing = true;
+    }
+
+    /// The listing that arrived last came from [`Navigator::refresh`], not from going somewhere.
+    pub fn refreshed(&self) -> bool {
+        self.refreshing
+    }
+
     pub fn reload(&mut self) {
+        self.refreshing = false;
         let (tx, rx) = bounded(1);
         let dir = self.current.clone();
         let ctx = self.ctx.clone();
@@ -120,5 +136,35 @@ impl Navigator {
             Listing::Ready(entries) => entries,
             _ => &[],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn arrive(nav: &mut Navigator) {
+        let start = std::time::Instant::now();
+        while !nav.poll() {
+            assert!(start.elapsed().as_secs() < 5, "listing never arrived");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn refreshes_are_told_apart_from_navigation() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        let mut nav = Navigator::new(egui::Context::default(), dir.path().to_path_buf());
+        arrive(&mut nav);
+        assert!(!nav.refreshed());
+        nav.refresh();
+        arrive(&mut nav);
+        assert!(nav.refreshed());
+        // Going somewhere while a refresh is under way is a navigation again.
+        nav.refresh();
+        nav.open(dir.path().join("sub"));
+        arrive(&mut nav);
+        assert!(!nav.refreshed());
     }
 }
