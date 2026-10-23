@@ -1,19 +1,29 @@
-//! Left panel: places (home, library roots, drives) and a lazily loaded folder tree.
+//! Left panel: places (home, library roots, drives), lists, tags and a lazily loaded folder tree.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use egui::collapsing_header::CollapsingState;
-use egui::{RichText, Ui};
+use egui::{Color32, RichText, Ui};
 use meshgrove_core::config::Config;
 use meshgrove_core::listing;
+use meshgrove_core::lists::{ListInfo, ListKind};
+
+use super::tags::{self, Group, PALETTE, TagStyle};
 
 pub enum SidebarAction {
     Navigate(PathBuf),
     AddRoot(PathBuf),
     RemoveRoot(PathBuf),
-    SearchTag(String),
+    /// Library files carrying all of these tags.
+    SearchTags(Vec<String>),
     ShowDuplicates,
+    OpenList(i64),
+    CreateList(ListKind, String),
+    RenameList(i64, String),
+    DeleteList(i64),
+    /// A palette slot for a tag, or `None` for its automatic colour.
+    TagColor(String, Option<u8>),
 }
 
 /// Library facts the sidebar lists.
@@ -21,6 +31,13 @@ pub struct LibraryInfo<'a> {
     pub tags: &'a [(String, usize)],
     pub duplicate_groups: usize,
     pub showing_duplicates: bool,
+    pub lists: &'a [ListInfo],
+    pub showing_list: Option<i64>,
+    /// Tags the current search asks for (lower-case), highlighted.
+    pub active_tags: &'a [String],
+    /// Lists and tags need the library index.
+    pub has_index: bool,
+    pub tag_style: &'a TagStyle,
 }
 
 pub struct Sidebar {
@@ -29,11 +46,22 @@ pub struct Sidebar {
     children: HashMap<PathBuf, Vec<PathBuf>>,
     /// The folder the tree last expanded itself for, so the user can still collapse nodes.
     revealed: Option<PathBuf>,
+    /// Name typed for a new list, or for renaming one.
+    list_name: String,
+    /// A list's "delete" was clicked once; the second click deletes.
+    confirm_delete: Option<i64>,
 }
 
 impl Sidebar {
     pub fn new() -> Sidebar {
-        Sidebar { home: dirs::home_dir(), devices: mounted_drives(), children: HashMap::new(), revealed: None }
+        Sidebar {
+            home: dirs::home_dir(),
+            devices: mounted_drives(),
+            children: HashMap::new(),
+            revealed: None,
+            list_name: String::new(),
+            confirm_delete: None,
+        }
     }
 
     pub fn refresh(&mut self) {
@@ -80,13 +108,12 @@ impl Sidebar {
                 }
             }
 
+            if library.has_index {
+                self.lists(ui, &library, &mut action);
+            }
             if !library.tags.is_empty() {
                 section(ui, &t!("sidebar.tags"));
-                for (tag, count) in library.tags {
-                    if ui.selectable_label(false, format!("🏷  {tag}  ({count})")).clicked() {
-                        action = Some(SidebarAction::SearchTag(tag.clone()));
-                    }
-                }
+                tag_groups(ui, &library, &mut action);
             }
 
             if !self.devices.is_empty() {
@@ -103,6 +130,86 @@ impl Sidebar {
             self.revealed = Some(current.to_path_buf());
         });
         action
+    }
+
+    /// Favourites, print lists and collections, and "new list".
+    fn lists(&mut self, ui: &mut Ui, library: &LibraryInfo, action: &mut Option<SidebarAction>) {
+        section(ui, &t!("sidebar.lists"));
+        let favorites = library.lists.iter().find(|l| l.kind == ListKind::Favorites);
+        let label = format!("★  {}  ({})", t!("lists.favorites"), favorites.map_or(0, |l| l.count));
+        match favorites {
+            Some(list) => {
+                if ui.selectable_label(library.showing_list == Some(list.id), label).clicked() {
+                    *action = Some(SidebarAction::OpenList(list.id));
+                }
+            }
+            None => {
+                ui.add_enabled(false, egui::Button::selectable(false, label))
+                    .on_disabled_hover_text(t!("lists.favorites_empty"));
+            }
+        }
+        for list in library.lists.iter().filter(|l| l.kind != ListKind::Favorites && !l.archived) {
+            let icon = match (list.kind, &list.query) {
+                (ListKind::Print, _) => "🖨",
+                (_, Some(_)) => "🔍",
+                _ => "📁",
+            };
+            let count = if list.kind == ListKind::Print {
+                t!("lists.open_of", open = list.open, count = list.count).into_owned()
+            } else {
+                list.count.to_string()
+            };
+            let response =
+                ui.selectable_label(library.showing_list == Some(list.id), format!("{icon}  {}  ({count})", list.name));
+            let response = match &list.query {
+                Some(q) => response.on_hover_text(t!("lists.saved_search", query = q)),
+                None => response,
+            };
+            if response.clicked() {
+                *action = Some(SidebarAction::OpenList(list.id));
+            }
+            response.context_menu(|ui| self.list_menu(ui, list, action));
+        }
+        ui.menu_button(t!("lists.new"), |ui| {
+            ui.add(egui::TextEdit::singleline(&mut self.list_name).hint_text(t!("lists.name_hint")));
+            let name = self.list_name.trim().to_owned();
+            ui.horizontal(|ui| {
+                for (kind, label) in
+                    [(ListKind::Print, t!("lists.new_print")), (ListKind::Collection, t!("lists.new_collection"))]
+                {
+                    if ui.add_enabled(!name.is_empty(), egui::Button::new(label)).clicked() {
+                        *action = Some(SidebarAction::CreateList(kind, name.clone()));
+                        self.list_name.clear();
+                        ui.close();
+                    }
+                }
+            });
+        });
+    }
+
+    fn list_menu(&mut self, ui: &mut Ui, list: &ListInfo, action: &mut Option<SidebarAction>) {
+        ui.label(RichText::new(t!("lists.rename")).weak());
+        if self.list_name.is_empty() {
+            self.list_name = list.name.clone();
+        }
+        let field = ui.text_edit_singleline(&mut self.list_name);
+        let name = self.list_name.trim().to_owned();
+        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (ui.button(t!("lists.rename_apply")).clicked() || enter) && !name.is_empty() && name != list.name {
+            *action = Some(SidebarAction::RenameList(list.id, name));
+            self.list_name.clear();
+            ui.close();
+        }
+        ui.separator();
+        if self.confirm_delete == Some(list.id) {
+            if ui.button(RichText::new(t!("lists.delete_confirm")).color(ui.visuals().warn_fg_color)).clicked() {
+                *action = Some(SidebarAction::DeleteList(list.id));
+                self.confirm_delete = None;
+                ui.close();
+            }
+        } else if ui.button(t!("lists.delete")).clicked() {
+            self.confirm_delete = Some(list.id);
+        }
     }
 
     /// The tree starts at the library root, drive or home folder containing the current folder.
@@ -147,6 +254,71 @@ impl Sidebar {
                     self.node(ui, &child, current, reveal, action);
                 }
             });
+    }
+}
+
+/// Tags grouped like the suggestions (themes, print properties, state, own), each with its
+/// colour dot. A click searches for the tag; Ctrl+click adds it to (or takes it out of) the
+/// current tag search; right-click chooses its colour.
+fn tag_groups(ui: &mut Ui, library: &LibraryInfo, action: &mut Option<SidebarAction>) {
+    for group in [Group::Themes, Group::Properties, Group::State, Group::Own] {
+        let in_group: Vec<&(String, usize)> = library.tags.iter().filter(|(t, _)| tags::group_of(t) == group).collect();
+        if in_group.is_empty() {
+            continue;
+        }
+        ui.label(RichText::new(group.title()).small().weak());
+        for (tag, count) in in_group {
+            let active = library.active_tags.contains(&tag.to_lowercase());
+            let response = ui
+                .horizontal(|ui| {
+                    tags::dot(ui, library.tag_style, tag);
+                    ui.selectable_label(active, format!("{tag}  ({count})"))
+                })
+                .inner
+                .on_hover_text(t!("tags.sidebar_hint"));
+            if response.clicked() {
+                let mut wanted: Vec<String> = Vec::new();
+                if ui.input(|i| i.modifiers.command) {
+                    wanted = library
+                        .tags
+                        .iter()
+                        .map(|(t, _)| t)
+                        .filter(|t| library.active_tags.contains(&t.to_lowercase()))
+                        .cloned()
+                        .collect();
+                    match wanted.iter().position(|t| t == tag) {
+                        Some(i) => {
+                            wanted.remove(i);
+                        }
+                        None => wanted.push(tag.clone()),
+                    }
+                } else {
+                    wanted.push(tag.clone());
+                }
+                if !wanted.is_empty() {
+                    *action = Some(SidebarAction::SearchTags(wanted));
+                }
+            }
+            response.context_menu(|ui| {
+                ui.label(RichText::new(t!("tags.color")).weak());
+                ui.horizontal_wrapped(|ui| {
+                    ui.set_max_width(6.0 * 26.0);
+                    for (slot, (bg, _)) in PALETTE.iter().enumerate() {
+                        let fill = Color32::from_rgb(bg[0], bg[1], bg[2]);
+                        let swatch =
+                            egui::Button::new("").fill(fill).min_size(egui::vec2(20.0, 20.0)).corner_radius(10.0);
+                        if ui.add(swatch).clicked() {
+                            *action = Some(SidebarAction::TagColor(tag.clone(), Some(slot as u8)));
+                            ui.close();
+                        }
+                    }
+                });
+                if ui.button(t!("tags.color_auto")).clicked() {
+                    *action = Some(SidebarAction::TagColor(tag.clone(), None));
+                    ui.close();
+                }
+            });
+        }
     }
 }
 

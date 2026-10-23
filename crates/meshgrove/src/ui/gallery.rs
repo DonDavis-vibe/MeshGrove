@@ -4,7 +4,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{Align, Color32, FontId, Key, Rect, ScrollArea, Sense, TextureOptions, Ui, pos2, vec2};
@@ -12,9 +12,11 @@ use meshgrove_core::Kind;
 use meshgrove_core::cache::{ThumbCache, ThumbMeta};
 use meshgrove_core::config::SortKey;
 use meshgrove_core::listing::{self, Entry};
+use meshgrove_core::lists::{ListKind, Marks};
 use meshgrove_core::printer::{self, Bed, Fit};
 
 use super::icons;
+use super::tags::{self, TagStyle};
 use super::turntable::HoveredTile;
 use crate::thumbs::{self, Job, ThumbResult, ThumbService};
 
@@ -53,6 +55,12 @@ pub enum Action {
     /// Copy the files themselves (Ctrl+C), for pasting in Dolphin or the slicer.
     CopyFiles,
     EditTags,
+    /// Favourite on, or off when every selected file is one already.
+    ToggleFavorite,
+    AddToList(i64),
+    /// A new list with the selection on it.
+    NewList(ListKind, String),
+    RemoveFromList(i64),
     Trash,
 }
 
@@ -65,6 +73,12 @@ pub struct MenuContext {
     /// Why the selection cannot go to the trash (read-only drive, inside an archive).
     pub trash_blocked: Option<String>,
     pub can_tag: bool,
+    /// Lists files can be put on: (id, kind, name).
+    pub lists: Vec<(i64, ListKind, String)>,
+    /// Every selected file is a favourite.
+    pub favorite: bool,
+    /// The hand-made list shown now (id, name), for "remove from …".
+    pub current_list: Option<(i64, String)>,
 }
 
 pub struct GalleryOutput {
@@ -115,6 +129,15 @@ pub struct Gallery {
     tile_dragged: bool,
     /// Printer bed that model tiles are checked against.
     pub bed: Option<Bed>,
+    /// Favourite, print and tag marks of library files.
+    marks: HashMap<PathBuf, Marks>,
+    pub tag_style: TagStyle,
+    /// Tag pills on the tiles (a setting).
+    pub tags_on_tiles: bool,
+    /// Tags a tile shows at most.
+    pub tile_tag_count: usize,
+    /// Colour dots instead of names on the tiles.
+    pub tag_dots: bool,
     /// Folder tiles with more than four pictures fade through them.
     pub cycle_previews: bool,
     /// Soonest moment (seconds from now) a cycling folder tile needs a redraw.
@@ -226,6 +249,14 @@ impl Gallery {
     /// The entries actions apply to: the multi-selection, or the focused entry.
     pub fn selection(&self) -> Vec<usize> {
         if self.marked.is_empty() { self.selected.into_iter().collect() } else { self.marked.iter().copied().collect() }
+    }
+
+    pub fn set_marks(&mut self, marks: HashMap<PathBuf, Marks>) {
+        self.marks = marks;
+    }
+
+    pub fn marks_of(&self, path: &Path) -> Option<&Marks> {
+        self.marks.get(path)
     }
 
     pub fn set_duplicates(&mut self, duplicates: HashMap<PathBuf, usize>) {
@@ -381,6 +412,37 @@ impl Gallery {
                             item(ui, t!("menu.copy_path"), Action::CopyPaths);
                             if menu.can_tag {
                                 item(ui, t!("menu.edit_tags"), Action::EditTags);
+                                let star = if menu.favorite { t!("menu.unfavorite") } else { t!("menu.favorite") };
+                                item(ui, star, Action::ToggleFavorite);
+                                ui.menu_button(t!("menu.add_to_list"), |ui| {
+                                    for (id, kind, name) in &menu.lists {
+                                        let icon = if *kind == ListKind::Print { "🖨" } else { "📁" };
+                                        item(ui, format!("{icon}  {name}").into(), Action::AddToList(*id));
+                                    }
+                                    if !menu.lists.is_empty() {
+                                        ui.separator();
+                                    }
+                                    let mut name =
+                                        ui.data_mut(|d| d.get_temp::<String>(new_list_id())).unwrap_or_default();
+                                    ui.add(egui::TextEdit::singleline(&mut name).hint_text(t!("lists.name_hint")));
+                                    let typed = name.trim().to_owned();
+                                    ui.data_mut(|d| d.insert_temp(new_list_id(), name));
+                                    if !typed.is_empty() {
+                                        item(
+                                            ui,
+                                            t!("lists.new_print_with"),
+                                            Action::NewList(ListKind::Print, typed.clone()),
+                                        );
+                                        item(
+                                            ui,
+                                            t!("lists.new_collection_with"),
+                                            Action::NewList(ListKind::Collection, typed),
+                                        );
+                                    }
+                                });
+                                if let Some((id, name)) = &menu.current_list {
+                                    item(ui, t!("menu.remove_from_list", list = name), Action::RemoveFromList(*id));
+                                }
                             }
                             ui.separator();
                             let trash = ui
@@ -391,6 +453,9 @@ impl Gallery {
                                 ui.close();
                             }
                         });
+                        if matches!(action, Some(Action::NewList(..))) {
+                            ui.data_mut(|d| d.remove::<String>(new_list_id()));
+                        }
                         let e = &entries[entry];
                         // Held button counts too: press-and-scroll without moving should zoom as well.
                         let held = response.dragged() || response.is_pointer_button_down_on();
@@ -576,7 +641,8 @@ impl Gallery {
             colors.retain(|c| seen.insert(*c));
             icons::filament_dots(&painter, img, &colors);
         }
-        if let Some(n) = self.duplicates.get(&entry.path) {
+        let duplicate = self.duplicates.get(&entry.path);
+        if let Some(n) = duplicate {
             icons::corner_badge(
                 &painter,
                 img,
@@ -585,27 +651,55 @@ impl Gallery {
                 Color32::BLACK,
             );
         }
+        let marks = self.marks.get(&entry.path);
+        if self.tags_on_tiles
+            && let Some(marks) = marks.filter(|m| !m.tags.is_empty())
+        {
+            // Top to bottom below the duplicate badge, as many as set and as fit above the
+            // badges at the bottom; the last row says "+N" when there are more.
+            let top = img.min.y + 4.0 + if duplicate.is_some() { icons::BADGE_HEIGHT + 2.0 } else { 0.0 };
+            let row = if self.tag_dots { 13.0 } else { 18.0 };
+            let rows = (((img.max.y - 26.0 - top) / row).floor().max(0.0) as usize).min(self.tile_tag_count);
+            let (right, max_width) = (img.max.x - 4.0, img.width() * 0.45);
+            for (i, tag) in marks.tags.iter().enumerate().take(rows) {
+                let y = top + i as f32 * row;
+                let more = marks.tags.len() - i;
+                if i + 1 == rows && more > 1 {
+                    let grey = (Color32::from_black_alpha(170), Color32::from_gray(230));
+                    tags::paint_pill(&painter, pos2(right, y), &format!("+{more}"), grey, max_width);
+                } else if self.tag_dots {
+                    tags::paint_dot(&painter, pos2(right, y), self.tag_style.colors(tag).0);
+                } else {
+                    tags::paint_pill(&painter, pos2(right, y), tag, self.tag_style.colors(tag), max_width);
+                }
+            }
+        }
         if entry.kind.is_model() || (entry.kind == Kind::Archive && self.mosaics.contains_key(&index)) {
             let label = icons::extension_label(&entry.name);
             icons::badge(&painter, img, &label, Color32::from_black_alpha(150), Color32::from_gray(230));
         }
         let fit = self.bed_fit(entry, index);
-        match fit {
+        let bed_badge = match fit {
             Some((Fit::Rotated(angle), _)) => {
                 let label = format!("↻ {}°", super::details::angle(angle));
-                icons::bottom_right_badge(
+                Some(icons::bottom_right_badge(
                     &painter,
                     img,
                     &label,
                     visuals.warn_fg_color.linear_multiply(0.9),
                     Color32::BLACK,
-                );
+                ))
             }
             Some((Fit::TooBig(_), _)) => {
                 let label = t!("bed.badge_too_big");
-                icons::bottom_right_badge(&painter, img, &label, visuals.error_fg_color, Color32::WHITE);
+                Some(icons::bottom_right_badge(&painter, img, &label, visuals.error_fg_color, Color32::WHITE))
             }
-            _ => {}
+            _ => None,
+        };
+        if marks.is_some_and(|m| m.favorite) {
+            // Left of the bed badge, or in the corner.
+            let corner = bed_badge.map_or(pos2(img.max.x - 4.0, img.max.y - 4.0), |r| pos2(r.min.x - 3.0, r.max.y));
+            icons::badge_left_of(&painter, corner, "★", Color32::from_black_alpha(150), FAVORITE_GOLD);
         }
 
         let wrap = |rows| TextWrapping {
@@ -639,6 +733,9 @@ impl Gallery {
         if let Some(n) = self.duplicates.get(&entry.path) {
             tooltip += &format!("\n{}", t!("gallery.duplicate_hint", count = n));
         }
+        if let Some(marks) = self.marks.get(&entry.path).filter(|m| !m.tags.is_empty()) {
+            tooltip += &format!("\n🏷 {}", marks.tags.join(", "));
+        }
         if let Some((fit @ (Fit::Rotated(_) | Fit::TooBig(_)), bed)) = &fit {
             tooltip += &format!("\n{}", super::details::fit_text(*fit, bed));
         }
@@ -669,6 +766,14 @@ fn tile_background(visuals: &egui::Visuals, selected: bool, hovered: bool) -> Co
     } else {
         Color32::TRANSPARENT
     }
+}
+
+/// The favourite star on tiles.
+const FAVORITE_GOLD: Color32 = Color32::from_rgb(245, 197, 66);
+
+/// Memory slot of the name typed for a new list in the context menu.
+fn new_list_id() -> egui::Id {
+    egui::Id::unique("gallery-new-list-name")
 }
 
 /// `top` painted over `bottom`, fully opaque (egui colours are premultiplied).

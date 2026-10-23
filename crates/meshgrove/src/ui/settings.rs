@@ -6,6 +6,7 @@ use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
 use meshgrove_core::config::{
     Config, DoubleClick, FOLDER_PREVIEW_DEPTH, FolderPreviews, GltfUnit, PreviewQuality, Program, Slicer,
+    TILE_TAG_COUNT, TileTags,
 };
 use meshgrove_core::printer::Bed;
 use meshgrove_core::userdata;
@@ -27,6 +28,13 @@ pub enum SettingsChange {
     DoubleClick(DoubleClick),
     FolderPreviews(FolderPreviews),
     LockPanes(bool),
+    /// Tags in colour; tags on the tiles, how many and how.
+    TagDisplay {
+        colored: bool,
+        on_tiles: bool,
+        count: u8,
+        style: TileTags,
+    },
     ResetLayout,
     Export(PathBuf),
     Import(PathBuf),
@@ -44,6 +52,35 @@ fn panes(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
     ui.weak(t!("settings.panes_hint"));
     if ui.button(t!("pane.reset")).clicked() {
         changes.push(SettingsChange::ResetLayout);
+    }
+}
+
+/// How tags are drawn.
+fn tags(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+    let (mut colored, mut on_tiles) = (config.colored_tags, config.tags_on_tiles);
+    let (mut count, mut style) = (config.tile_tag_count, config.tile_tags);
+    ui.checkbox(&mut colored, t!("settings.tags_colored"));
+    ui.checkbox(&mut on_tiles, t!("settings.tags_on_tiles"));
+    ui.add_enabled_ui(on_tiles, |ui| {
+        ui.indent("tile_tags", |ui| {
+            ui.horizontal(|ui| {
+                ui.label(t!("settings.tags_count"));
+                ui.add(egui::Slider::new(&mut count, TILE_TAG_COUNT));
+            });
+            ui.horizontal(|ui| {
+                ui.label(t!("settings.tags_style"));
+                ui.radio_value(&mut style, TileTags::Names, t!("settings.tags_names"));
+                ui.add_enabled_ui(colored, |ui| {
+                    ui.radio_value(&mut style, TileTags::Dots, t!("settings.tags_dots"))
+                        .on_disabled_hover_text(t!("settings.tags_dots_need_colors"));
+                });
+            });
+        });
+    });
+    ui.weak(t!("settings.tags_hint"));
+    let now = (colored, on_tiles, count, style);
+    if now != (config.colored_tags, config.tags_on_tiles, config.tile_tag_count, config.tile_tags) {
+        changes.push(SettingsChange::TagDisplay { colored, on_tiles, count, style });
     }
 }
 
@@ -136,6 +173,116 @@ pub struct SettingsDialog {
     import_input: String,
     cache_size: Option<u64>,
     cache_rx: Option<Receiver<u64>>,
+    /// The category shown on the right.
+    category: Category,
+}
+
+const CATEGORY_WIDTH: f32 = 190.0;
+
+/// One entry of the category list: the symbol centred in a column of its own, so every name
+/// starts at the same place whatever the symbol's width.
+fn category_item(ui: &mut Ui, category: Category, selected: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(CATEGORY_WIDTH, 28.0), egui::Sense::click());
+    let visuals = ui.style().interact_selectable(&response, selected);
+    if selected || response.hovered() || response.has_focus() {
+        ui.painter().rect(
+            rect,
+            visuals.corner_radius,
+            visuals.weak_bg_fill,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let painter = ui.painter();
+    let middle = rect.center().y;
+    painter.text(
+        egui::pos2(rect.left() + 16.0, middle),
+        egui::Align2::CENTER_CENTER,
+        category.icon(),
+        font.clone(),
+        visuals.text_color(),
+    );
+    painter.text(
+        egui::pos2(rect.left() + 34.0, middle),
+        egui::Align2::LEFT_CENTER,
+        category.title(),
+        font,
+        visuals.text_color(),
+    );
+    response
+}
+
+/// The parts of a category, each with its own heading.
+#[derive(Clone, Copy)]
+enum Section {
+    Language,
+    DoubleClick,
+    Panes,
+    Library,
+    FolderPreviews,
+    Tags,
+    Preview,
+    Models,
+    Slicer,
+    Editor,
+    Printer,
+    UserData,
+    Storage,
+}
+
+/// The settings' categories, listed on the left of the window.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Category {
+    #[default]
+    General,
+    Library,
+    Tags,
+    View,
+    Programs,
+    Printer,
+    Data,
+    About,
+}
+
+impl Category {
+    const ALL: [Category; 8] = [
+        Category::General,
+        Category::Library,
+        Category::Tags,
+        Category::View,
+        Category::Programs,
+        Category::Printer,
+        Category::Data,
+        Category::About,
+    ];
+
+    fn icon(self) -> &'static str {
+        match self {
+            Category::General => "⚙",
+            Category::Library => "📚",
+            Category::Tags => "🏷",
+            Category::View => "🎥",
+            Category::Programs => "🔧",
+            Category::Printer => "🖨",
+            Category::Data => "💾",
+            Category::About => "ℹ",
+        }
+    }
+
+    fn title(self) -> String {
+        match self {
+            Category::General => t!("settings.cat_general"),
+            Category::Library => t!("settings.cat_library"),
+            Category::Tags => t!("settings.cat_tags"),
+            Category::View => t!("settings.cat_view"),
+            Category::Programs => t!("settings.cat_programs"),
+            Category::Printer => t!("settings.cat_printer"),
+            Category::Data => t!("settings.cat_data"),
+            Category::About => t!("settings.cat_about"),
+        }
+        .into_owned()
+    }
 }
 
 /// Where the browser keeps rebuildable data.
@@ -210,39 +357,68 @@ impl SettingsDialog {
         let center = ctx.content_rect().center();
         egui::Window::new(t!("settings.title"))
             .open(&mut open)
-            .default_width(540.0)
-            .default_height(620.0)
+            .default_width(820.0)
+            .default_height(600.0)
+            .min_width(640.0)
+            .min_height(400.0)
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(center)
             .resizable(true)
             .collapsible(false)
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    self.language(ui, config, &mut changes);
+                // Categories on the left, the chosen one's settings on the right.
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(CATEGORY_WIDTH);
+                        for category in Category::ALL {
+                            if category_item(ui, category, self.category == category).clicked() {
+                                self.category = category;
+                            }
+                        }
+                    });
                     ui.separator();
-                    panes(ui, config, &mut changes);
-                    ui.separator();
-                    self.library(ui, config, &mut changes);
-                    ui.separator();
-                    self.slicer(ui, config, slicer, &mut changes);
-                    ui.separator();
-                    self.editor(ui, config, editor, &mut changes);
-                    ui.separator();
-                    self.printer(ui, config, bed, &mut changes);
-                    ui.separator();
-                    models(ui, config, &mut changes);
-                    ui.separator();
-                    double_click(ui, config, &mut changes);
-                    ui.separator();
-                    preview(ui, config, &mut changes);
-                    ui.separator();
-                    folder_previews(ui, config, &mut changes);
-                    ui.separator();
-                    self.user_data(ui, &mut changes);
-                    ui.separator();
-                    self.storage(ui, &mut changes);
-                    ui.separator();
-                    about(ui, &info);
+                    ui.vertical(|ui| {
+                        ui.add_space(2.0);
+                        ui.heading(self.category.title());
+                        ui.add_space(6.0);
+                        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                            let sections: &[Section] = match self.category {
+                                Category::General => &[Section::Language, Section::DoubleClick, Section::Panes],
+                                Category::Library => &[Section::Library, Section::FolderPreviews],
+                                Category::Tags => &[Section::Tags],
+                                Category::View => &[Section::Preview, Section::Models],
+                                Category::Programs => &[Section::Slicer, Section::Editor],
+                                Category::Printer => &[Section::Printer],
+                                Category::Data => &[Section::UserData, Section::Storage],
+                                Category::About => {
+                                    about(ui, &info);
+                                    &[]
+                                }
+                            };
+                            for (i, section) in sections.iter().enumerate() {
+                                if i > 0 {
+                                    ui.add_space(4.0);
+                                    ui.separator();
+                                    ui.add_space(4.0);
+                                }
+                                match section {
+                                    Section::Language => self.language(ui, config, &mut changes),
+                                    Section::DoubleClick => double_click(ui, config, &mut changes),
+                                    Section::Panes => panes(ui, config, &mut changes),
+                                    Section::Library => self.library(ui, config, &mut changes),
+                                    Section::FolderPreviews => folder_previews(ui, config, &mut changes),
+                                    Section::Tags => tags(ui, config, &mut changes),
+                                    Section::Preview => preview(ui, config, &mut changes),
+                                    Section::Models => models(ui, config, &mut changes),
+                                    Section::Slicer => self.slicer(ui, config, slicer, &mut changes),
+                                    Section::Editor => self.editor(ui, config, editor, &mut changes),
+                                    Section::Printer => self.printer(ui, config, bed, &mut changes),
+                                    Section::UserData => self.user_data(ui, &mut changes),
+                                    Section::Storage => self.storage(ui, &mut changes),
+                                }
+                            }
+                        });
+                    });
                 });
             });
         self.open = open;
@@ -503,7 +679,6 @@ pub fn export_path() -> PathBuf {
 }
 
 fn about(ui: &mut Ui, info: &AppInfo) {
-    ui.label(RichText::new(t!("settings.about")).strong());
     egui::Grid::new("about").num_columns(2).show(ui, |ui| {
         let row = |ui: &mut Ui, k: std::borrow::Cow<str>, v: String| {
             ui.weak(k);

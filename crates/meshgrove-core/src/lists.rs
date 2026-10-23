@@ -6,10 +6,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::db::{Error, Library, entry_from_row, nanos};
 use crate::listing::Entry;
+use crate::query;
 use crate::userdata::{ListData, ListItemData, PrintRecord};
 
 /// User data next to the tags: kept across index rebuilds.
@@ -21,6 +22,8 @@ CREATE TABLE IF NOT EXISTS lists (
     -- order in the sidebar, per kind
     position INTEGER NOT NULL,
     archived INTEGER NOT NULL DEFAULT 0,
+    -- automatic collections: a saved search whose results are the entries
+    query TEXT,
     created_ns INTEGER NOT NULL,
     UNIQUE (kind, name)
 );
@@ -51,6 +54,19 @@ CREATE TABLE IF NOT EXISTS tag_colors (
     color INTEGER NOT NULL
 );
 ";
+
+/// Most results an automatic collection shows (and counts).
+const SMART_LIMIT: usize = 10_000;
+
+/// Brings lists tables of early 0.4 builds up to date (they had no `query`); run at every open.
+pub(crate) fn upgrade(conn: &Connection) -> Result<(), Error> {
+    let has_query = conn.prepare("SELECT 1 FROM pragma_table_info('lists') WHERE name = 'query'")?.exists([])?;
+    let has_lists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'lists'")?.exists([])?;
+    if has_lists && !has_query {
+        conn.execute_batch("ALTER TABLE lists ADD COLUMN query TEXT")?;
+    }
+    Ok(())
+}
 
 /// What [`Library::export_lists`] hands to the user-data export.
 pub(crate) struct ExportedLists {
@@ -92,6 +108,8 @@ pub struct ListInfo {
     pub name: String,
     /// Print lists that were finished; they stay for the record.
     pub archived: bool,
+    /// Automatic collections: the saved search that makes up their entries.
+    pub query: Option<String>,
     /// Entries whose content is in the index now.
     pub count: usize,
     /// Print lists: entries with copies still to print.
@@ -151,7 +169,7 @@ impl Library {
     /// Every list, favourites first, then print lists and collections in sidebar order.
     pub fn lists(&self) -> Result<Vec<ListInfo>, Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT l.id, l.kind, l.name, l.archived,
+            "SELECT l.id, l.kind, l.name, l.archived, l.query,
                     COUNT(DISTINCT CASE WHEN f.id IS NOT NULL THEN li.content_hash END),
                     COUNT(DISTINCT CASE WHEN f.id IS NOT NULL AND li.done < li.quantity THEN li.content_hash END)
              FROM lists l
@@ -166,16 +184,21 @@ impl Library {
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
                 r.get::<_, bool>(3)?,
-                r.get::<_, i64>(4)?,
+                r.get::<_, Option<String>>(4)?,
                 r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
             ))
         })?;
         let mut lists = Vec::new();
         for row in rows {
-            let (id, kind, name, archived, count, open) = row?;
+            let (id, kind, name, archived, query, count, open) = row?;
             let Some(kind) = ListKind::parse(&kind) else { continue };
             let open = if kind == ListKind::Print { open as usize } else { 0 };
-            lists.push(ListInfo { id, kind, name, archived, count: count as usize, open });
+            let count = match &query {
+                Some(q) => self.search(&query::parse(q), SMART_LIMIT)?.len(),
+                None => count as usize,
+            };
+            lists.push(ListInfo { id, kind, name, archived, query, count, open });
         }
         Ok(lists)
     }
@@ -198,6 +221,13 @@ impl Library {
         )?;
         self.conn
             .query_row("SELECT id FROM lists WHERE kind = ?1 AND name = ?2", params![kind.as_str(), name], |r| r.get(0))
+    }
+
+    /// An automatic collection: its entries are the results of the search `query`.
+    pub fn create_smart_list(&mut self, name: &str, query: &str) -> Result<i64, Error> {
+        let id = self.create_list(ListKind::Collection, name)?;
+        self.conn.execute("UPDATE lists SET query = ?2 WHERE id = ?1", params![id, query.trim()])?;
+        Ok(id)
     }
 
     /// False if another list of the same kind already has the name.
@@ -271,6 +301,12 @@ impl Library {
     /// The list's files, one per content (the first copy by path). Print lists put entries
     /// with copies left to print first.
     pub fn list_entries(&self, id: i64) -> Result<Vec<ListEntry>, Error> {
+        let saved: Option<String> =
+            self.conn.query_row("SELECT query FROM lists WHERE id = ?1", [id], |r| r.get(0)).optional()?.flatten();
+        if let Some(q) = saved {
+            let found = self.search(&query::parse(&q), SMART_LIMIT)?;
+            return Ok(found.into_iter().map(|entry| ListEntry { entry, quantity: 1, done: 0 }).collect());
+        }
         let mut stmt = self.conn.prepare(
             "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns, li.quantity, li.done
              FROM list_items li
@@ -435,8 +471,9 @@ impl Library {
     /// Lists, print log and tag colours for the user-data export.
     pub(crate) fn export_lists(&self) -> Result<ExportedLists, Error> {
         let mut lists = Vec::new();
-        let mut stmt =
-            self.conn.prepare("SELECT id, kind, name, archived, created_ns FROM lists ORDER BY kind, position, id")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, kind, name, archived, created_ns, query FROM lists ORDER BY kind, position, id")?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
@@ -444,6 +481,7 @@ impl Library {
                 r.get::<_, String>(2)?,
                 r.get::<_, bool>(3)?,
                 r.get::<_, i64>(4)?,
+                r.get::<_, Option<String>>(5)?,
             ))
         })?;
         let mut items_stmt = self.conn.prepare(
@@ -451,7 +489,7 @@ impl Library {
              ORDER BY added_ns, content_hash",
         )?;
         for row in rows {
-            let (id, kind, name, archived, created) = row?;
+            let (id, kind, name, archived, created, query) = row?;
             let Some(kind) = ListKind::parse(&kind) else { continue };
             let items = items_stmt
                 .query_map([id], |r| {
@@ -463,7 +501,7 @@ impl Library {
                     })
                 })?
                 .collect::<Result<_, _>>()?;
-            lists.push(ListData { kind, name, archived, created: secs(created), items });
+            lists.push(ListData { kind, name, archived, query, created: secs(created), items });
         }
         let mut prints: BTreeMap<String, Vec<PrintRecord>> = BTreeMap::new();
         let mut stmt = self.conn.prepare(
@@ -511,9 +549,9 @@ impl Library {
                 continue;
             }
             tx.execute(
-                "INSERT OR IGNORE INTO lists (kind, name, position, archived, created_ns)
-                 VALUES (?1, ?2, (SELECT COALESCE(MAX(position), -1) + 1 FROM lists WHERE kind = ?1), ?3, ?4)",
-                params![list.kind.as_str(), name, list.archived, list.created * 1_000_000_000],
+                "INSERT OR IGNORE INTO lists (kind, name, position, archived, query, created_ns)
+                 VALUES (?1, ?2, (SELECT COALESCE(MAX(position), -1) + 1 FROM lists WHERE kind = ?1), ?3, ?4, ?5)",
+                params![list.kind.as_str(), name, list.archived, list.query, list.created * 1_000_000_000],
             )?;
             let id: i64 = tx.query_row(
                 "SELECT id FROM lists WHERE kind = ?1 AND name = ?2",
@@ -840,5 +878,37 @@ mod tests {
         lib.set_favorite(&[PathBuf::from("/r/a.stl")], true).unwrap();
         assert_eq!(lib.lists().unwrap()[0].count, 1);
         assert!(Library::open_reader(&db).is_some(), "readers see the new version");
+    }
+
+    #[test]
+    fn automatic_collections_are_saved_searches() {
+        let mut lib = library();
+        lib.tag(&[path("Dragon.3mf"), path("Lid.stl")], "Garten").unwrap();
+        lib.tag(&[path("Lid.stl")], "Geschenk").unwrap();
+        let id = lib.create_smart_list("Garten-Geschenke", "tag:garten tag:geschenk").unwrap();
+        assert_eq!(names(&lib.list_entries(id).unwrap()), ["Lid.stl"]);
+        lib.tag(&[path("Dragon.3mf")], "Geschenk").unwrap();
+        assert_eq!(names(&lib.list_entries(id).unwrap()), ["Dragon.3mf", "Lid.stl"], "follows the tags");
+        let info = lib.lists().unwrap().into_iter().find(|l| l.id == id).unwrap();
+        assert_eq!((info.count, info.query.as_deref()), (2, Some("tag:garten tag:geschenk")));
+
+        let data = lib.export_user_data().unwrap();
+        let mut fresh = library();
+        fresh.import_user_data(&data).unwrap();
+        let copy = fresh.lists().unwrap().into_iter().find(|l| l.name == "Garten-Geschenke").unwrap();
+        assert_eq!(copy.query.as_deref(), Some("tag:garten tag:geschenk"));
+    }
+
+    #[test]
+    fn early_list_tables_get_the_query_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.db");
+        {
+            let lib = Library::open(&db).unwrap();
+            lib.conn.execute_batch("ALTER TABLE lists DROP COLUMN query").unwrap();
+        }
+        let mut lib = Library::open(&db).unwrap();
+        let id = lib.create_smart_list("Alles", "ext:stl").unwrap();
+        assert!(lib.lists().unwrap().iter().any(|l| l.id == id && l.query.is_some()));
     }
 }

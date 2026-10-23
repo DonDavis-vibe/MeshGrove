@@ -325,6 +325,20 @@ impl Default for FolderPreviews {
 
 pub const FOLDER_PREVIEW_DEPTH: std::ops::RangeInclusive<u8> = 1..=5;
 
+/// How tags show on gallery tiles.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TileTags {
+    /// Pills with the tag names.
+    #[default]
+    Names,
+    /// Just a dot in each tag's colour (needs coloured tags).
+    Dots,
+}
+
+/// How many tags a tile can show.
+pub const TILE_TAG_COUNT: std::ops::RangeInclusive<u8> = 1..=8;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -357,6 +371,14 @@ pub struct Config {
     pub lock_panes: bool,
     /// Mesh editor or CAD program for "open in …"; `None`: detect one at startup.
     pub editor: Option<Program>,
+    /// Tags in their palette colours (otherwise grey) on tiles, in the details and the sidebar.
+    pub colored_tags: bool,
+    /// Tag pills on the gallery tiles.
+    pub tags_on_tiles: bool,
+    /// Names or colour dots on the tiles.
+    pub tile_tags: TileTags,
+    /// Tags a tile shows at most (the last row says "+N" when there are more).
+    pub tile_tag_count: u8,
 }
 
 impl Default for Config {
@@ -378,6 +400,10 @@ impl Default for Config {
             folder_previews: FolderPreviews::default(),
             lock_panes: false,
             editor: None,
+            colored_tags: true,
+            tags_on_tiles: true,
+            tile_tags: TileTags::Names,
+            tile_tag_count: 3,
         }
     }
 }

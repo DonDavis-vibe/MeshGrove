@@ -130,16 +130,25 @@ pub fn corner_badge(p: &Painter, r: Rect, label: &str, bg: Color32, fg: Color32)
     p.galley(rect.min + pad, galley, fg);
 }
 
-/// Small badge in the lower-right corner (e.g. the print bed check).
-pub fn bottom_right_badge(p: &Painter, r: Rect, label: &str, bg: Color32, fg: Color32) {
+/// Small badge in the lower-right corner (e.g. the print bed check). Returns its rectangle.
+pub fn bottom_right_badge(p: &Painter, r: Rect, label: &str, bg: Color32, fg: Color32) -> Rect {
+    badge_left_of(p, pos2(r.max.x - 4.0, r.max.y - 4.0), label, bg, fg)
+}
+
+/// Small badge whose lower-right corner is `corner` (badges in a row, right to left).
+pub fn badge_left_of(p: &Painter, corner: egui::Pos2, label: &str, bg: Color32, fg: Color32) -> Rect {
     let font = FontId::proportional(10.5);
     let galley = p.layout_no_wrap(label.to_owned(), font, fg);
     let pad = vec2(5.0, 2.0);
     let size = galley.size() + 2.0 * pad;
-    let rect = Rect::from_min_size(pos2(r.max.x - size.x - 4.0, r.max.y - size.y - 4.0), size);
+    let rect = Rect::from_min_size(corner - size, size);
     p.rect(rect, 4.0, bg, Stroke::NONE, StrokeKind::Inside);
     p.galley(rect.min + pad, galley, fg);
+    rect
 }
+
+/// Height of [`corner_badge`] (to stack things below it).
+pub const BADGE_HEIGHT: f32 = 10.5 * 1.3 + 4.0;
 
 /// Filament colours of a slicer project as a row of dots in the upper-left corner.
 pub fn filament_dots(p: &Painter, r: Rect, colors: &[[u8; 3]]) {

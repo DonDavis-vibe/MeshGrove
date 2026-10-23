@@ -6,9 +6,10 @@ use anyhow::Context as _;
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use egui::{Button, Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use meshgrove_core::cache::{ThumbCache, ThumbMeta};
-use meshgrove_core::config::{Config, DoubleClick, Program, Slicer, SortKey};
+use meshgrove_core::config::{Config, DoubleClick, Program, Slicer, SortKey, TileTags};
 use meshgrove_core::db::Library;
 use meshgrove_core::listing::{self, Entry};
+use meshgrove_core::lists::{ListInfo, ListKind};
 use meshgrove_core::printer::Bed;
 use meshgrove_core::{Kind, query};
 use meshgrove_render::Renderer;
@@ -16,17 +17,18 @@ use meshgrove_render::Renderer;
 use crate::actions;
 use crate::folder_scan::FolderScanner;
 use crate::i18n;
-use crate::library::{LibEvent, LibraryService, Transfer};
+use crate::library::{LibEvent, LibraryService, ListOp, Transfer};
 use crate::meshes::{self, MeshState, MeshStore};
 use crate::nav::{Listing, Navigator};
 use crate::thumbs::{ThumbResult, ThumbService};
-use crate::ui::details::{self, DetailsContext, DetailsOutput, ModelStatus, NoteEditor, TagEditor};
+use crate::ui::details::{self, DetailsContext, DetailsOutput, ListsOfSelection, ModelStatus, NoteEditor, TagEditor};
 use crate::ui::duplicates::{self, DupAction, GroupInfo};
 use crate::ui::gallery::{Action, Arrange, Gallery, MenuContext};
 use crate::ui::layout::{Layout, Pane};
 use crate::ui::model_window::{self, ModelWindow, WindowAction, WindowContext};
 use crate::ui::settings::{AppInfo, SettingsChange, SettingsDialog};
 use crate::ui::sidebar::{LibraryInfo, Sidebar, SidebarAction};
+use crate::ui::tags::TagStyle;
 use crate::ui::turntable::Turntable;
 use crate::ui::viewer::{MeshSource, ModelViewer};
 use egui_tiles::Tree;
@@ -55,6 +57,8 @@ enum View {
     Flatten { root: PathBuf, entries: Option<Vec<Entry>> },
     /// Groups of duplicate models from the library index.
     Duplicates { entries: Vec<Entry>, groups: Vec<GroupInfo> },
+    /// The files of a list (favourites, print list, collection).
+    List { id: i64, entries: Vec<Entry> },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -115,6 +119,16 @@ pub struct App {
     selection_tags: Vec<(String, usize)>,
     all_tags: Vec<(String, usize)>,
     tags_dirty: bool,
+    /// Favourites, print lists and collections, for the sidebar and the menus.
+    lists: Vec<ListInfo>,
+    /// Lists holding the selection, with how many of its files each holds.
+    selection_lists: Vec<(ListInfo, usize)>,
+    /// Lists, tile marks and tag colours must be read again (user data changed).
+    marks_dirty: bool,
+    /// How tags are drawn (coloured or not, chosen colours).
+    tag_style: TagStyle,
+    /// Name typed for a new automatic collection (saving a search).
+    new_list_name: String,
     tag_input: String,
     focus_tags: bool,
     layout: Layout,
@@ -228,6 +242,11 @@ impl App {
             selection_tags: Vec::new(),
             all_tags: Vec::new(),
             tags_dirty: true,
+            lists: Vec::new(),
+            selection_lists: Vec::new(),
+            marks_dirty: true,
+            tag_style: TagStyle { colored: config.colored_tags, ..Default::default() },
+            new_list_name: String::new(),
             tag_input: String::new(),
             focus_tags: false,
             layout: Layout::load(),
@@ -325,6 +344,9 @@ impl App {
 
     /// Leaves search results (and the search text) before navigating somewhere.
     fn leave_search(&mut self) {
+        if matches!(self.view, View::List { .. }) {
+            self.view = View::Folder;
+        }
         if matches!(self.view, View::Search(_)) || self.scope == Scope::Library {
             self.search.clear();
             self.search_changed = None;
@@ -586,6 +608,7 @@ impl App {
                         self.index = Library::open_reader(&self.db_path);
                         self.menu_for.clear(); // re-evaluate what the selection allows (tags need the index)
                         self.duplicates_due = Some(Instant::now());
+                        self.marks_dirty = true;
                     }
                     if changed.is_empty() && !first {
                         continue; // periodic safety-net scan found nothing new
@@ -603,8 +626,12 @@ impl App {
                     self.thumbs.set_background(jobs);
                     self.duplicates_due = Some(Instant::now());
                     self.tags_dirty = true;
+                    self.marks_dirty = true;
                 }
-                LibEvent::UserDataChanged => self.tags_dirty = true,
+                LibEvent::UserDataChanged => {
+                    self.tags_dirty = true;
+                    self.marks_dirty = true;
+                }
                 LibEvent::Transfer(result) => {
                     let message = match result {
                         Ok(Transfer::Exported(path, n)) => {
@@ -646,6 +673,9 @@ impl App {
                     .map(|e| e.name.clone()),
                 trash_blocked: actions::trash_blocked(&paths),
                 can_tag: self.index.is_some() && !paths.is_empty() && paths.iter().all(|p| self.in_library(p)),
+                lists: menu_lists(&self.lists),
+                favorite: self.all_favorite(&paths),
+                current_list: self.current_list(),
             };
             self.menu_for = paths;
             self.tags_dirty = true;
@@ -655,6 +685,7 @@ impl App {
         {
             self.all_tags = index.all_tags().unwrap_or_default();
             self.selection_tags = index.tags_of(&self.menu_for).unwrap_or_default();
+            self.selection_lists = index.lists_of(&self.menu_for).unwrap_or_default();
         }
         if self.note_edited.is_none()
             && std::mem::take(&mut self.note_dirty)
@@ -664,6 +695,63 @@ impl App {
             self.note_input = note.unwrap_or_default();
             self.note_mixed = mixed;
         }
+    }
+
+    /// Re-reads lists, tile marks and tag colours after user data changed.
+    fn refresh_marks(&mut self) {
+        if !self.marks_dirty {
+            return;
+        }
+        let Some(index) = &self.index else { return };
+        self.marks_dirty = false;
+        self.lists = index.lists().unwrap_or_default();
+        self.tag_style.chosen = index.tag_colors().unwrap_or_default();
+        self.gallery.tag_style = self.tag_style.clone();
+        self.gallery.set_marks(index.marks().unwrap_or_default());
+        self.menu.lists = menu_lists(&self.lists);
+        self.menu.favorite = self.all_favorite(&self.menu_for);
+        if let View::List { id, .. } = self.view {
+            if self.lists.iter().any(|l| l.id == id) {
+                self.show_list(id, false); // its contents may have changed
+            } else {
+                self.view = View::Folder; // deleted
+                self.on_listing_arrived();
+            }
+        }
+    }
+
+    /// Ctrl+D and the star: favourites on, or off when every selected file already is one.
+    fn toggle_favorite(&mut self) {
+        if !self.menu.can_tag {
+            return;
+        }
+        let paths = self.selected_paths();
+        let on = !self.all_favorite(&paths);
+        self.library.list(ListOp::Favorite(paths, on));
+    }
+
+    /// Every one of `paths` is a favourite.
+    fn all_favorite(&self, paths: &[PathBuf]) -> bool {
+        !paths.is_empty() && paths.iter().all(|p| self.gallery.marks_of(p).is_some_and(|m| m.favorite))
+    }
+
+    /// The hand-made list shown now, for "remove from …".
+    fn current_list(&self) -> Option<(i64, String)> {
+        let View::List { id, .. } = self.view else { return None };
+        self.lists.iter().find(|l| l.id == id && l.query.is_none()).map(|l| (l.id, list_title(l)))
+    }
+
+    /// Shows the files of a list; `reset` when opened (rather than refreshed).
+    fn show_list(&mut self, id: i64, reset: bool) {
+        let Some(index) = &self.index else { return };
+        let entries: Vec<Entry> = index.list_entries(id).unwrap_or_default().into_iter().map(|e| e.entry).collect();
+        if reset {
+            self.leave_search();
+            self.flatten = false;
+        }
+        self.view = View::List { id, entries };
+        self.menu_for.clear(); // "remove from this list" now applies
+        self.refresh_gallery(reset);
     }
 
     /// Stores an edited note for the files it was typed for.
@@ -719,6 +807,20 @@ impl App {
 
     fn handle_action(&mut self, ctx: &egui::Context, action: Action) {
         match action {
+            Action::ToggleFavorite => self.toggle_favorite(),
+            Action::AddToList(id) => {
+                let paths = self.selected_paths();
+                if let Some(list) = self.lists.iter().find(|l| l.id == id) {
+                    self.toast(t!("toast.list_added", count = paths.len(), list = list_title(list)).into_owned());
+                }
+                self.library.list(ListOp::Add(id, paths));
+            }
+            Action::NewList(kind, name) => {
+                let paths = self.selected_paths();
+                self.toast(t!("toast.list_added", count = paths.len(), list = name).into_owned());
+                self.library.list(ListOp::Create(kind, name, paths));
+            }
+            Action::RemoveFromList(id) => self.library.list(ListOp::Remove(id, self.selected_paths())),
             Action::Open(index) => self.open_entry(index),
             Action::OpenWithDefaultApp(index) => {
                 if let Some(entry) = self.entries().get(index).cloned() {
@@ -822,6 +924,14 @@ impl App {
                     self.refresh_gallery(false);
                 }
                 SettingsChange::LockPanes(locked) => self.config.lock_panes = locked,
+                SettingsChange::TagDisplay { colored, on_tiles, count, style } => {
+                    self.config.colored_tags = colored;
+                    self.config.tags_on_tiles = on_tiles;
+                    self.config.tile_tag_count = count;
+                    self.config.tile_tags = style;
+                    self.tag_style.colored = colored;
+                    self.gallery.tag_style = self.tag_style.clone();
+                }
                 SettingsChange::ResetLayout => self.layout.reset(),
                 SettingsChange::DoubleClick(action) => self.config.double_click = action,
                 SettingsChange::PreviewQuality(quality) => {
@@ -1039,6 +1149,9 @@ impl App {
             self.set_scope(Scope::Library);
             self.focus_search = true;
         }
+        if pressed(Modifiers::COMMAND, Key::D) {
+            self.toggle_favorite();
+        }
         if pressed(Modifiers::COMMAND, Key::F) {
             self.set_scope(Scope::Folder);
             self.focus_search = true;
@@ -1188,6 +1301,33 @@ impl App {
                 if ui.button(t!("search.close")).clicked() {
                     self.leave_search();
                     self.on_listing_arrived();
+                    return;
+                }
+                if self.index.is_some() {
+                    ui.menu_button(t!("lists.save_search"), |ui| {
+                        ui.label(t!("lists.save_search_hint"));
+                        let field = ui
+                            .add(egui::TextEdit::singleline(&mut self.new_list_name).hint_text(t!("lists.name_hint")));
+                        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                        if (ui.button(t!("lists.create")).clicked() || enter) && !self.new_list_name.trim().is_empty() {
+                            let name = std::mem::take(&mut self.new_list_name);
+                            self.toast(t!("toast.list_created", list = name).into_owned());
+                            self.library.list(ListOp::CreateSmart(name, self.search.clone()));
+                            ui.close();
+                        }
+                    });
+                }
+                return;
+            }
+            View::List { id, entries } => {
+                let (id, count) = (*id, entries.len());
+                if let Some(list) = self.lists.iter().find(|l| l.id == id) {
+                    ui.label(RichText::new(format!("{} {}", list_icon(list), list_title(list))).strong());
+                }
+                ui.weak(t!("lists.count", count = i18n::count(count)));
+                if ui.button(t!("lists.close")).clicked() {
+                    self.view = View::Folder;
+                    self.on_listing_arrived();
                 }
                 return;
             }
@@ -1305,6 +1445,10 @@ impl App {
                 Some(if self.index.is_none() { t!("search.unavailable") } else { t!("search.none") }.into_owned())
             }
             (View::Duplicates { .. }, _) => None,
+            (View::List { id, entries }, _) if entries.is_empty() => {
+                let favorites = self.lists.iter().any(|l| l.id == *id && l.kind == ListKind::Favorites);
+                Some(if favorites { t!("lists.favorites_empty") } else { t!("lists.empty") }.into_owned())
+            }
             _ if self.entries().is_empty() => Some(t!("gallery.empty").into_owned()),
             _ => None,
         };
@@ -1349,10 +1493,20 @@ static PREVIEW_PANEL: std::sync::LazyLock<egui::Id> = std::sync::LazyLock::new(|
 impl App {
     fn pane_places(&mut self, ui: &mut Ui) {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        let active_tags =
+            if matches!(self.view, View::Search(_)) { query::parse(&self.search).tags } else { Vec::new() };
         let info = LibraryInfo {
             tags: &self.all_tags,
             duplicate_groups: self.duplicate_groups,
             showing_duplicates: matches!(self.view, View::Duplicates { .. }),
+            lists: &self.lists,
+            showing_list: match self.view {
+                View::List { id, .. } => Some(id),
+                _ => None,
+            },
+            active_tags: &active_tags,
+            has_index: self.index.is_some(),
+            tag_style: &self.tag_style,
         };
         match self.sidebar.show(ui, &self.config, self.nav.current(), info) {
             Some(SidebarAction::Navigate(path)) => self.navigate(path),
@@ -1368,12 +1522,24 @@ impl App {
                 self.save_config();
                 self.library.set_roots(self.config.library_roots.clone());
             }
-            Some(SidebarAction::SearchTag(tag)) => {
+            Some(SidebarAction::SearchTags(tags)) => {
                 self.scope = Scope::Library;
-                self.search = if tag.contains(' ') { format!("tag:\"{tag}\"") } else { format!("tag:{tag}") };
+                let terms: Vec<String> = tags
+                    .iter()
+                    .map(|t| if t.contains(' ') { format!("tag:\"{t}\"") } else { format!("tag:{t}") })
+                    .collect();
+                self.search = terms.join(" ");
                 self.run_search();
             }
             Some(SidebarAction::ShowDuplicates) => self.show_duplicates(),
+            Some(SidebarAction::OpenList(id)) => self.show_list(id, true),
+            Some(SidebarAction::CreateList(kind, name)) => {
+                self.toast(t!("toast.list_created", list = name).into_owned());
+                self.library.list(ListOp::Create(kind, name, Vec::new()));
+            }
+            Some(SidebarAction::RenameList(id, name)) => self.library.list(ListOp::Rename(id, name)),
+            Some(SidebarAction::DeleteList(id)) => self.library.list(ListOp::Delete(id)),
+            Some(SidebarAction::TagColor(tag, color)) => self.library.list(ListOp::TagColor(tag, color)),
             None => {}
         }
     }
@@ -1398,6 +1564,8 @@ impl App {
             bed: self.bed.as_ref(),
             slicer: self.slicer.as_ref().map(|s| s.name.as_str()),
             editor: self.editor.as_ref(),
+            lists: ListsOfSelection { lists: &self.selection_lists, favorite: self.menu.favorite },
+            tag_style: &self.tag_style,
             thumb,
             model: &self.model,
             plates: self.plates.as_ref().map_or(&[][..], |(_, p)| p.as_slice()),
@@ -1486,6 +1654,12 @@ impl App {
     }
 
     fn apply_details_output(&mut self, out: DetailsOutput) {
+        if out.toggle_favorite {
+            self.toggle_favorite();
+        }
+        if let Some(id) = out.open_list {
+            self.show_list(id, true);
+        }
         if out.clicked_plate.is_some() {
             self.viewer_plate = out.clicked_plate;
         }
@@ -1629,6 +1803,11 @@ impl eframe::App for App {
         }
         self.library_events();
         self.update_selection_facts();
+        self.refresh_marks();
+        self.gallery.tags_on_tiles = self.config.tags_on_tiles;
+        self.gallery.tile_tag_count = usize::from(self.config.tile_tag_count);
+        // Dots only say something in colour.
+        self.gallery.tag_dots = self.config.tile_tags == TileTags::Dots && self.config.colored_tags;
         self.update_duplicates();
         self.trash_dialog(&ctx);
         self.receive_thumbnails(&ctx);
@@ -1742,6 +1921,34 @@ fn view_entries<'a>(view: &'a View, nav: &'a Navigator) -> &'a [Entry] {
         View::Search(entries) => entries,
         View::Flatten { entries, .. } => entries.as_deref().unwrap_or(&[]),
         View::Duplicates { entries, .. } => entries,
+        View::List { entries, .. } => entries,
+    }
+}
+
+/// Lists files can be put on from the menus: hand-made, not archived, not the favourites.
+fn menu_lists(lists: &[ListInfo]) -> Vec<(i64, ListKind, String)> {
+    lists
+        .iter()
+        .filter(|l| l.kind != ListKind::Favorites && l.query.is_none() && !l.archived)
+        .map(|l| (l.id, l.kind, l.name.clone()))
+        .collect()
+}
+
+/// The symbol in front of a list's name.
+fn list_icon(list: &ListInfo) -> &'static str {
+    match list.kind {
+        ListKind::Favorites => "★",
+        ListKind::Print => "🖨",
+        ListKind::Collection if list.query.is_some() => "🔍",
+        ListKind::Collection => "📁",
+    }
+}
+
+/// A list's name as shown (the favourites have a translated one).
+fn list_title(list: &ListInfo) -> String {
+    match list.kind {
+        ListKind::Favorites => t!("lists.favorites").into_owned(),
+        _ => list.name.clone(),
     }
 }
 

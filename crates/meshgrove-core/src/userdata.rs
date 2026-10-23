@@ -62,6 +62,9 @@ pub struct ListData {
     pub name: String,
     #[serde(default)]
     pub archived: bool,
+    /// Automatic collections: the saved search.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
     #[serde(default)]
     pub created: i64,
     pub items: Vec<ListItemData>,

@@ -6,10 +6,12 @@ use egui::{Grid, Key, RichText, Ui};
 use meshgrove_core::Kind;
 use meshgrove_core::config::Program;
 use meshgrove_core::listing::Entry;
+use meshgrove_core::lists::{ListInfo, ListKind};
 use meshgrove_core::printer::{self, Bed, Fit};
 use meshgrove_render::Renderer;
 
 use super::gallery::Thumb;
+use super::tags::{self, Group, TagStyle};
 use super::viewer::ModelViewer;
 use crate::i18n;
 use crate::meshes::{self, ModelInfo};
@@ -51,6 +53,18 @@ pub struct DetailsOutput {
     pub open_in_slicer: bool,
     /// "Open in" the mesh editor was clicked.
     pub open_in_editor: bool,
+    /// The star was clicked.
+    pub toggle_favorite: bool,
+    /// A list chip was clicked.
+    pub open_list: Option<i64>,
+}
+
+/// The lists holding the selection, for the info pane.
+pub struct ListsOfSelection<'a> {
+    /// Lists with how many of the selected files each holds.
+    pub lists: &'a [(ListInfo, usize)],
+    /// Every selected file is a favourite.
+    pub favorite: bool,
 }
 
 pub struct DetailsContext<'a> {
@@ -63,6 +77,8 @@ pub struct DetailsContext<'a> {
     /// Name of the slicer models can be handed to.
     pub slicer: Option<&'a str>,
     pub editor: Option<&'a Program>,
+    pub lists: ListsOfSelection<'a>,
+    pub tag_style: &'a TagStyle,
     pub thumb: Option<&'a Thumb>,
     pub model: &'a ModelStatus,
     /// Plate previews of a 3MF project (plate number, texture).
@@ -131,7 +147,8 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
             };
             out.clicked_plate = plates(ui, cx.plates, active);
         }
-        tag_editor(ui, cx.tags, count, &mut out);
+        lists_row(ui, &cx.lists, cx.tags.enabled, count, &mut out);
+        tag_editor(ui, cx.tags, cx.tag_style, count, &mut out);
         note_editor(ui, cx.note, &mut out);
         ui.add_space(6.0);
         ui.add(egui::Label::new(RichText::new(entry.path.display().to_string()).small().weak()).wrap());
@@ -161,26 +178,103 @@ pub fn open_buttons(ui: &mut Ui, kind: Kind, slicer: Option<&str>, editor: Optio
     clicked
 }
 
-fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, count: usize, out: &mut DetailsOutput) {
+/// The star and the lists holding the selection (library files only; the tag section says so).
+fn lists_row(ui: &mut Ui, lists: &ListsOfSelection, enabled: bool, count: usize, out: &mut DetailsOutput) {
+    if !enabled {
+        return;
+    }
+    ui.add_space(10.0);
+    ui.label(RichText::new(t!("lists.title")).weak());
+    ui.horizontal_wrapped(|ui| {
+        let (star, hint) = if lists.favorite {
+            (
+                RichText::new(format!("★ {}", t!("lists.favorite"))).color(egui::Color32::from_rgb(245, 197, 66)),
+                t!("lists.unfavorite_hint"),
+            )
+        } else {
+            (RichText::new(format!("☆ {}", t!("lists.favorite"))), t!("lists.favorite_hint"))
+        };
+        if ui.add(egui::Button::new(star.small()).corner_radius(9.0)).on_hover_text(hint).clicked() {
+            out.toggle_favorite = true;
+        }
+        for (list, n) in lists.lists.iter().filter(|(l, _)| l.kind != ListKind::Favorites) {
+            let icon = if list.kind == ListKind::Print { "🖨" } else { "📁" };
+            let label = if count > 1 && *n < count {
+                format!("{icon} {} ({n}/{count})", list.name)
+            } else {
+                format!("{icon} {}", list.name)
+            };
+            if ui
+                .add(egui::Button::new(RichText::new(label).small()).corner_radius(9.0))
+                .on_hover_text(t!("lists.open_hint"))
+                .clicked()
+            {
+                out.open_list = Some(list.id);
+            }
+        }
+    });
+}
+
+fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, out: &mut DetailsOutput) {
     ui.add_space(10.0);
     ui.label(RichText::new(t!("tags.title")).weak());
     if !ed.enabled {
         ui.weak(t!("tags.only_library"));
         return;
     }
-    let chip_fill = ui.visuals().selection.bg_fill.linear_multiply(0.45);
     ui.horizontal_wrapped(|ui| {
         for (tag, n) in ed.on_selection {
-            let label = if count > 1 && *n < count { format!("{tag} ({n}/{count})") } else { tag.clone() };
-            let chip =
-                egui::Button::new(RichText::new(format!("{label}  ✕")).small()).corner_radius(10.0).fill(chip_fill);
-            if ui.add(chip).on_hover_text(t!("tags.remove_hint")).clicked() {
+            let label =
+                if count > 1 && *n < count { format!("{tag} ({n}/{count})  ✕") } else { format!("{tag}  ✕") };
+            if tags::chip(ui, style, tag, &label).on_hover_text(t!("tags.remove_hint")).clicked() {
                 out.remove_tag = Some(tag.clone());
             }
         }
     });
-    let field =
-        ui.add(egui::TextEdit::singleline(ed.input).hint_text(t!("tags.add_hint")).desired_width(f32::INFINITY));
+    let on_all = |tag: &str| ed.on_selection.iter().any(|(t, n)| t.eq_ignore_ascii_case(tag) && *n >= count);
+    let mut field = None;
+    ui.horizontal(|ui| {
+        // Suggested tags by group, the most used own tags first.
+        ui.menu_button("▾", |ui| {
+            let own: Vec<&String> = ed
+                .all
+                .iter()
+                .filter(|(t, _)| tags::group_of(t) == Group::Own && !on_all(t))
+                .take(10)
+                .map(|(t, _)| t)
+                .collect();
+            if !own.is_empty() {
+                ui.label(RichText::new(Group::Own.title()).weak());
+                for tag in own {
+                    if ui.button(tag).clicked() {
+                        out.add_tag = Some(tag.clone());
+                        ui.close();
+                    }
+                }
+                ui.separator();
+            }
+            for group in Group::SUGGESTED {
+                ui.menu_button(group.title(), |ui| {
+                    for tag in tags::suggested(group).into_iter().filter(|t| !on_all(t)) {
+                        let response = ui.horizontal(|ui| {
+                            tags::dot(ui, style, tag);
+                            ui.button(tag)
+                        });
+                        if response.inner.clicked() {
+                            out.add_tag = Some(tag.to_owned());
+                            ui.close();
+                        }
+                    }
+                });
+            }
+        })
+        .response
+        .on_hover_text(t!("tags.suggestions_hint"));
+        field = Some(
+            ui.add(egui::TextEdit::singleline(ed.input).hint_text(t!("tags.add_hint")).desired_width(f32::INFINITY)),
+        );
+    });
+    let Some(field) = field else { return };
     if ed.focus {
         field.request_focus();
     }
@@ -190,7 +284,6 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, count: usize, out: &mut DetailsOut
     }
     // Existing tags not yet on every selected file, matching what is typed.
     let needle = ed.input.trim().to_lowercase();
-    let on_all = |tag: &str| ed.on_selection.iter().any(|(t, n)| t == tag && *n >= count);
     let suggestions: Vec<&String> = ed
         .all
         .iter()
@@ -201,7 +294,7 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, count: usize, out: &mut DetailsOut
     if !suggestions.is_empty() {
         ui.horizontal_wrapped(|ui| {
             for tag in suggestions {
-                if ui.small_button(format!("+ {tag}")).clicked() {
+                if tags::chip(ui, style, tag, &format!("+ {tag}")).clicked() {
                     out.add_tag = Some(tag.clone());
                     ed.input.clear();
                 }

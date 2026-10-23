@@ -156,6 +156,7 @@ impl Library {
             conn.execute_batch(crate::lists::LISTS_SCHEMA)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
+        crate::lists::upgrade(&conn)?;
         Ok(Library { conn })
     }
 

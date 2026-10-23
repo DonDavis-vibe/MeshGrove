@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
 use meshgrove_core::cache::ThumbMeta;
-use meshgrove_core::db::{Counts, Library};
+use meshgrove_core::db::{Counts, Error, Library};
+use meshgrove_core::lists::ListKind;
 use meshgrove_core::{scan, userdata};
 use notify::{EventKind, RecursiveMode, Watcher};
 
@@ -30,7 +31,7 @@ pub enum LibEvent {
     Scanned { changed: Vec<PathBuf> },
     /// Files whose thumbnail facts are missing or stale, to process in the background.
     Pending(Vec<Job>),
-    /// Tags or notes were changed (by the user or an import).
+    /// Tags, notes, lists or prints were changed (by the user or an import).
     UserDataChanged,
     /// Result of an export or import, for a message.
     Transfer(Result<Transfer, String>),
@@ -57,10 +58,43 @@ enum Cmd {
     Tag(Vec<PathBuf>, String),
     Untag(Vec<PathBuf>, String),
     SetNote(Vec<PathBuf>, String),
+    List(ListOp),
     Export(PathBuf),
     Import(PathBuf),
     /// Answered once everything sent before is stored (and backed up).
     Flush(Sender<()>),
+}
+
+/// Changes to favourites, lists and tag colours.
+pub enum ListOp {
+    Favorite(Vec<PathBuf>, bool),
+    /// A new list (or the existing one of that name), with these files on it.
+    Create(ListKind, String, Vec<PathBuf>),
+    /// An automatic collection: name and saved search.
+    CreateSmart(String, String),
+    Rename(i64, String),
+    Delete(i64),
+    Add(i64, Vec<PathBuf>),
+    Remove(i64, Vec<PathBuf>),
+    TagColor(String, Option<u8>),
+}
+
+impl ListOp {
+    fn apply(self, lib: &mut Library) -> Result<(), Error> {
+        match self {
+            ListOp::Favorite(paths, on) => lib.set_favorite(&paths, on),
+            ListOp::Create(kind, name, paths) => {
+                let id = lib.create_list(kind, &name)?;
+                lib.add_to_list(id, &paths).map(|_| ())
+            }
+            ListOp::CreateSmart(name, query) => lib.create_smart_list(&name, &query).map(|_| ()),
+            ListOp::Rename(id, name) => lib.rename_list(id, &name).map(|_| ()),
+            ListOp::Delete(id) => lib.delete_list(id),
+            ListOp::Add(id, paths) => lib.add_to_list(id, &paths).map(|_| ()),
+            ListOp::Remove(id, paths) => lib.remove_from_list(id, &paths),
+            ListOp::TagColor(tag, color) => lib.set_tag_color(&tag, color),
+        }
+    }
 }
 
 pub struct LibraryService {
@@ -106,6 +140,10 @@ impl LibraryService {
 
     pub fn set_note(&self, paths: Vec<PathBuf>, text: String) {
         let _ = self.tx.send(Cmd::SetNote(paths, text));
+    }
+
+    pub fn list(&self, op: ListOp) {
+        let _ = self.tx.send(Cmd::List(op));
     }
 
     /// Writes all tags and notes to a JSON file.
@@ -217,6 +255,12 @@ impl Worker {
                 Ok(Cmd::SetNote(paths, text)) => {
                     if let Err(e) = lib.set_note(&paths, &text) {
                         log::warn!("saving note failed: {e}");
+                    }
+                    self.send(LibEvent::UserDataChanged);
+                }
+                Ok(Cmd::List(op)) => {
+                    if let Err(e) = op.apply(&mut lib) {
+                        log::warn!("changing a list failed: {e}");
                     }
                     self.send(LibEvent::UserDataChanged);
                 }
