@@ -56,6 +56,8 @@ pub enum Action {
     /// Index the selected library folder (or archive) and everything below it again.
     Rescan,
     OpenInSlicer,
+    /// Another slicer than the default, by its index in the settings' list.
+    OpenInSlicerWith(usize),
     OpenInEditor,
     ShowInFileManager,
     CopyPaths,
@@ -76,7 +78,9 @@ pub enum Action {
 /// What the context menu can offer for the current selection.
 #[derive(Default)]
 pub struct MenuContext {
-    pub slicer: Option<String>,
+    /// The slicers (names) and the default one.
+    pub slicers: Vec<String>,
+    pub default_slicer: usize,
     /// The mesh editor, if it opens a file of the selection.
     pub editor: Option<String>,
     /// Why the selection cannot go to the trash (read-only drive, inside an archive).
@@ -772,8 +776,15 @@ fn entry_menu(
             item(ui, t!("menu.preview"), Action::Preview);
             item(ui, t!("menu.open_with_default_app"), Action::OpenWithDefaultApp(entry));
         }
-        if sliceable && let Some(slicer) = &menu.slicer {
+        if sliceable && let Some(slicer) = menu.slicers.get(menu.default_slicer) {
             item(ui, t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);
+            if menu.slicers.len() > 1 {
+                ui.menu_button(t!("menu.open_in_other_slicer"), |ui| {
+                    for (i, other) in menu.slicers.iter().enumerate().filter(|(i, _)| *i != menu.default_slicer) {
+                        item(ui, other.into(), Action::OpenInSlicerWith(i));
+                    }
+                });
+            }
         }
         if model && let Some(editor) = &menu.editor {
             item(ui, t!("menu.open_in_editor", name = editor), Action::OpenInEditor);

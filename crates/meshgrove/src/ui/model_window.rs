@@ -19,7 +19,7 @@ use crate::meshes::{MeshState, MeshStore};
 
 /// What the windows ask the app to do.
 pub enum WindowAction {
-    OpenInSlicer(PathBuf),
+    OpenInSlicer(PathBuf, usize),
     OpenInEditor(PathBuf),
     /// Log a print of the window's model.
     Print(PathBuf, PrintResult),
@@ -33,7 +33,7 @@ pub struct WindowContext<'a> {
     pub render_state: &'a egui_wgpu::RenderState,
     pub renderer: &'a Renderer,
     pub bed: Option<&'a Bed>,
-    pub slicer: Option<&'a str>,
+    pub slicers: super::SlicerList<'a>,
     pub editor: Option<&'a Program>,
     pub quality: PreviewQuality,
     /// The library index is open (prints are logged there).
@@ -116,9 +116,9 @@ impl ModelWindow {
                 ui.label(RichText::new(name).heading().strong());
                 ui.add_space(10.0);
                 details::facts(ui, &self.entry, None, &self.model, cx.bed);
-                let (slicer, editor) = details::open_buttons(ui, self.entry.kind, cx.slicer, cx.editor);
-                if slicer {
-                    actions.push(WindowAction::OpenInSlicer(self.entry.path.clone()));
+                let (slicer, editor) = details::open_buttons(ui, self.entry.kind, cx.slicers, cx.editor);
+                if let Some(index) = slicer {
+                    actions.push(WindowAction::OpenInSlicer(self.entry.path.clone(), index));
                 }
                 if editor {
                     actions.push(WindowAction::OpenInEditor(self.entry.path.clone()));

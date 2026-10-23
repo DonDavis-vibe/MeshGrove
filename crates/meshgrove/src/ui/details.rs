@@ -53,7 +53,7 @@ pub struct DetailsOutput {
     /// Result of a viewer tool (picture saved, …) for the status bar.
     pub message: Option<String>,
     /// "Open in slicer" was clicked.
-    pub open_in_slicer: bool,
+    pub open_in_slicer: Option<usize>,
     /// "Open in" the mesh editor was clicked.
     pub open_in_editor: bool,
     /// The star was clicked.
@@ -93,8 +93,8 @@ pub struct DetailsContext<'a> {
     pub tags: TagEditor<'a>,
     pub note: NoteEditor<'a>,
     pub bed: Option<&'a Bed>,
-    /// Name of the slicer models can be handed to.
-    pub slicer: Option<&'a str>,
+    /// The slicers models can be handed to.
+    pub slicers: super::SlicerList<'a>,
     pub editor: Option<&'a Program>,
     pub lists: ListsOfSelection<'a>,
     pub print: PrintInfo<'a>,
@@ -208,7 +208,7 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         ui.add_space(4.0);
         facts(ui, entry, cx.thumb, cx.model, cx.bed);
-        (out.open_in_slicer, out.open_in_editor) = open_buttons(ui, entry.kind, cx.slicer, cx.editor);
+        (out.open_in_slicer, out.open_in_editor) = open_buttons(ui, entry.kind, cx.slicers, cx.editor);
         if !cx.plates.is_empty() {
             let active = match cx.model {
                 ModelStatus::Ready(info) => info.plate,
@@ -229,19 +229,39 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
 }
 
 /// "Open in Anycubic Slicer Next" and "Open in FreeCAD" for a model, as far as the slicer and
-/// the mesh editor open its kind. Which of them was clicked: (slicer, editor).
-pub fn open_buttons(ui: &mut Ui, kind: Kind, slicer: Option<&str>, editor: Option<&Program>) -> (bool, bool) {
-    let slicer = slicer.filter(|_| kind.is_sliceable());
+/// the mesh editor open its kind; with several slicers a ▾ lists the others. Which was
+/// clicked: (index of the slicer, editor).
+pub fn open_buttons(
+    ui: &mut Ui,
+    kind: Kind,
+    slicers: super::SlicerList<'_>,
+    editor: Option<&Program>,
+) -> (Option<usize>, bool) {
+    let slicers = if kind.is_sliceable() { slicers } else { super::SlicerList::default() };
     let editor = editor.filter(|e| e.opens(kind));
-    let mut clicked = (false, false);
-    if slicer.is_none() && editor.is_none() {
+    let mut clicked = (None, false);
+    if slicers.is_empty() && editor.is_none() {
         return clicked;
     }
     ui.add_space(8.0);
     ui.horizontal_wrapped(|ui| {
         let button = |text: std::borrow::Cow<str>| egui::Button::new(text).min_size(egui::vec2(0.0, 28.0));
-        if let Some(name) = slicer {
-            clicked.0 = ui.add(button(t!("menu.open_in_slicer", name = name))).clicked();
+        if let Some(name) = slicers.names.get(slicers.default) {
+            if ui.add(button(t!("menu.open_in_slicer", name = name))).clicked() {
+                clicked.0 = Some(slicers.default);
+            }
+            if slicers.names.len() > 1 {
+                ui.menu_button("▾", |ui| {
+                    for (i, other) in slicers.names.iter().enumerate().filter(|(i, _)| *i != slicers.default) {
+                        if ui.button(t!("menu.open_in_slicer", name = other)).clicked() {
+                            clicked.0 = Some(i);
+                            ui.close();
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(t!("menu.open_in_other_slicer"));
+            }
         }
         if let Some(editor) = editor {
             clicked.1 = ui.add(button(t!("menu.open_in_editor", name = editor.name))).clicked();

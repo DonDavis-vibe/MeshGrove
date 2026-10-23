@@ -25,3 +25,16 @@ pub fn typing_menu() -> MenuConfig {
 pub fn context_menu_with_field(response: &Response, add_contents: impl FnOnce(&mut Ui)) {
     Popup::context_menu(response).close_behavior(PopupCloseBehavior::CloseOnClickOutside).show(add_contents);
 }
+
+/// The slicers the "open in" entries offer: their names and which one is the default.
+#[derive(Clone, Copy, Default)]
+pub struct SlicerList<'a> {
+    pub names: &'a [String],
+    pub default: usize,
+}
+
+impl SlicerList<'_> {
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+}
