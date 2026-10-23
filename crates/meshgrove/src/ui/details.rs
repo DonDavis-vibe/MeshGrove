@@ -352,37 +352,41 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
     ui.horizontal(|ui| {
         // Suggested tags by group, the most used own tags first.
         ui.menu_button("▾", |ui| {
-            let own: Vec<&String> = ed
-                .all
-                .iter()
-                .filter(|(t, _)| style.group_of(t) == Group::Own && !on_all(t))
-                .take(10)
-                .map(|(t, _)| t)
-                .collect();
-            if !own.is_empty() {
-                ui.label(RichText::new(Group::Own.title()).weak());
-                for tag in own {
-                    if ui.button(tag).clicked() {
-                        out.add_tag = Some(tag.clone());
-                        ui.close();
-                    }
-                }
-                ui.separator();
-            }
-            for group in Group::SUGGESTED {
-                ui.menu_button(group.title(), |ui| {
-                    for tag in tags::suggested(group, style).into_iter().filter(|t| !on_all(t)) {
-                        let response = ui.horizontal(|ui| {
-                            tags::dot(ui, style, &tag);
-                            ui.button(&tag)
-                        });
-                        if response.inner.clicked() {
-                            out.add_tag = Some(tag);
+            super::scroll_menu(ui, "tag-menu", |ui| {
+                let own: Vec<&String> = ed
+                    .all
+                    .iter()
+                    .filter(|(t, _)| style.group_of(t) == Group::Own && !on_all(t))
+                    .take(10)
+                    .map(|(t, _)| t)
+                    .collect();
+                if !own.is_empty() {
+                    ui.label(RichText::new(Group::Own.title()).weak());
+                    for tag in own {
+                        if ui.button(tag).clicked() {
+                            out.add_tag = Some(tag.clone());
                             ui.close();
                         }
                     }
-                });
-            }
+                    ui.separator();
+                }
+                for group in Group::SUGGESTED {
+                    ui.menu_button(group.title(), |ui| {
+                        super::scroll_menu(ui, "tag-group", |ui| {
+                            for tag in tags::suggested(group, style).into_iter().filter(|t| !on_all(t)) {
+                                let response = ui.horizontal(|ui| {
+                                    tags::dot(ui, style, &tag);
+                                    ui.button(&tag)
+                                });
+                                if response.inner.clicked() {
+                                    out.add_tag = Some(tag);
+                                    ui.close();
+                                }
+                            }
+                        });
+                    });
+                }
+            });
         })
         .response
         .on_hover_text(t!("tags.suggestions_hint"));
