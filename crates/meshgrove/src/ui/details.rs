@@ -6,7 +6,7 @@ use egui::{Grid, Key, RichText, Ui};
 use meshgrove_core::Kind;
 use meshgrove_core::config::Program;
 use meshgrove_core::listing::Entry;
-use meshgrove_core::lists::{ListInfo, ListKind};
+use meshgrove_core::lists::{ListInfo, ListKind, PrintResult, PrintStatus};
 use meshgrove_core::printer::{self, Bed, Fit};
 use meshgrove_render::Renderer;
 
@@ -57,6 +57,20 @@ pub struct DetailsOutput {
     pub toggle_favorite: bool,
     /// A list chip was clicked.
     pub open_list: Option<i64>,
+    /// "Printed" or "failed" was clicked.
+    pub print: Option<PrintResult>,
+    pub undo_print: bool,
+    /// New number of copies on the shown print list.
+    pub quantity: Option<u32>,
+}
+
+/// The selection's print log and, on a shown print list, its copies.
+pub struct PrintInfo<'a> {
+    /// The selection is in the library.
+    pub enabled: bool,
+    pub status: &'a PrintStatus,
+    /// On a shown print list: its name and the copies wanted and done.
+    pub on_list: Option<(&'a str, u32, u32)>,
 }
 
 /// The lists holding the selection, for the info pane.
@@ -78,6 +92,7 @@ pub struct DetailsContext<'a> {
     pub slicer: Option<&'a str>,
     pub editor: Option<&'a Program>,
     pub lists: ListsOfSelection<'a>,
+    pub print: PrintInfo<'a>,
     pub tag_style: &'a TagStyle,
     pub thumb: Option<&'a Thumb>,
     pub model: &'a ModelStatus,
@@ -148,6 +163,9 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
             out.clicked_plate = plates(ui, cx.plates, active);
         }
         lists_row(ui, &cx.lists, cx.tags.enabled, count, &mut out);
+        if entry.kind.is_model() {
+            print_row(ui, &cx.print, &mut out);
+        }
         tag_editor(ui, cx.tags, cx.tag_style, count, &mut out);
         note_editor(ui, cx.note, &mut out);
         ui.add_space(6.0);
@@ -213,6 +231,48 @@ fn lists_row(ui: &mut Ui, lists: &ListsOfSelection, enabled: bool, count: usize,
             }
         }
     });
+}
+
+/// What the print log says, the print buttons and, on a print list, the copies.
+fn print_row(ui: &mut Ui, print: &PrintInfo, out: &mut DetailsOutput) {
+    if !print.enabled {
+        return;
+    }
+    ui.add_space(10.0);
+    ui.label(RichText::new(t!("print.title")).weak());
+    let status = print.status;
+    let summary = match (status.last, status.last_printed) {
+        (Some((PrintResult::Failed, at)), _) => {
+            t!("print.last_failed", date = i18n::datetime(at), count = status.printed).into_owned()
+        }
+        (_, Some(at)) => t!("print.printed_times", count = status.printed, date = i18n::datetime(at)).into_owned(),
+        _ => t!("print.never").into_owned(),
+    };
+    ui.label(summary);
+    ui.horizontal_wrapped(|ui| {
+        if ui.button(t!("print.mark_printed")).clicked() {
+            out.print = Some(PrintResult::Printed);
+        }
+        if ui.button(t!("print.mark_failed")).clicked() {
+            out.print = Some(PrintResult::Failed);
+        }
+        if status.last.is_some() && ui.button(t!("print.undo")).on_hover_text(t!("print.undo_hint")).clicked() {
+            out.undo_print = true;
+        }
+    });
+    if let Some((list, wanted, done)) = print.on_list {
+        ui.horizontal(|ui| {
+            ui.label(t!("print.on_list", list = list));
+            if ui.add_enabled(wanted > 1, egui::Button::new("−").small()).clicked() {
+                out.quantity = Some(wanted - 1);
+            }
+            ui.label(RichText::new(wanted.to_string()).strong());
+            if ui.small_button("+").clicked() {
+                out.quantity = Some(wanted + 1);
+            }
+            ui.weak(t!("print.copies_done", done = done));
+        });
+    }
 }
 
 fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, out: &mut DetailsOutput) {

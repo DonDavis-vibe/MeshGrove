@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
 use meshgrove_core::cache::ThumbMeta;
 use meshgrove_core::db::{Counts, Error, Library};
-use meshgrove_core::lists::ListKind;
+use meshgrove_core::lists::{ListKind, PrintResult};
 use meshgrove_core::{scan, userdata};
 use notify::{EventKind, RecursiveMode, Watcher};
 
@@ -77,6 +77,13 @@ pub enum ListOp {
     Add(i64, Vec<PathBuf>),
     Remove(i64, Vec<PathBuf>),
     TagColor(String, Option<u8>),
+    /// Copies wanted on a print list.
+    Quantity(i64, Vec<PathBuf>, u32),
+    /// Logs a print; on a print list, printed also counts a copy as done.
+    Print(Vec<PathBuf>, PrintResult, Option<i64>),
+    /// Takes back the newest logged print of each file.
+    UndoPrint(Vec<PathBuf>),
+    Archive(i64, bool),
 }
 
 impl ListOp {
@@ -93,6 +100,10 @@ impl ListOp {
             ListOp::Add(id, paths) => lib.add_to_list(id, &paths).map(|_| ()),
             ListOp::Remove(id, paths) => lib.remove_from_list(id, &paths),
             ListOp::TagColor(tag, color) => lib.set_tag_color(&tag, color),
+            ListOp::Quantity(id, paths, quantity) => lib.set_quantity(id, &paths, quantity),
+            ListOp::Print(paths, result, list) => lib.record_print(&paths, result, list),
+            ListOp::UndoPrint(paths) => lib.undo_print(&paths),
+            ListOp::Archive(id, archived) => lib.set_list_archived(id, archived),
         }
     }
 }

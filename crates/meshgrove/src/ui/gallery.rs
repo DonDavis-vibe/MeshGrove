@@ -10,9 +10,9 @@ use egui::text::{LayoutJob, TextWrapping};
 use egui::{Align, Color32, FontId, Key, Rect, ScrollArea, Sense, TextureOptions, Ui, pos2, vec2};
 use meshgrove_core::Kind;
 use meshgrove_core::cache::{ThumbCache, ThumbMeta};
-use meshgrove_core::config::SortKey;
+use meshgrove_core::config::{PrintFilter, SortKey};
 use meshgrove_core::listing::{self, Entry};
-use meshgrove_core::lists::{ListKind, Marks};
+use meshgrove_core::lists::{ListKind, Marks, PrintResult};
 use meshgrove_core::printer::{self, Bed, Fit};
 
 use super::icons;
@@ -58,6 +58,8 @@ pub enum Action {
     /// Favourite on, or off when every selected file is one already.
     ToggleFavorite,
     AddToList(i64),
+    /// Log a print of the selection.
+    Print(PrintResult),
     /// A new list with the selection on it.
     NewList(ListKind, String),
     RemoveFromList(i64),
@@ -96,6 +98,7 @@ pub struct Arrange {
     pub only_models: bool,
     pub sort: SortKey,
     pub descending: bool,
+    pub print: PrintFilter,
 }
 
 #[derive(Default)]
@@ -131,6 +134,8 @@ pub struct Gallery {
     pub bed: Option<Bed>,
     /// Favourite, print and tag marks of library files.
     marks: HashMap<PathBuf, Marks>,
+    /// A print list is shown: its copies wanted and done per file.
+    list_counts: HashMap<PathBuf, (u32, u32)>,
     pub tag_style: TagStyle,
     /// Tag pills on the tiles (a setting).
     pub tags_on_tiles: bool,
@@ -186,7 +191,7 @@ impl Gallery {
     }
 
     pub fn apply_filter(&mut self, entries: &[Entry], arrange: &Arrange) {
-        self.shown = arranged(entries, arrange);
+        self.shown = arranged(entries, arrange, &self.marks, &self.list_counts);
         if self.selected.is_some_and(|s| !self.shown.contains(&s)) {
             self.selected = None;
         }
@@ -257,6 +262,15 @@ impl Gallery {
 
     pub fn marks_of(&self, path: &Path) -> Option<&Marks> {
         self.marks.get(path)
+    }
+
+    /// Copies wanted and done of the shown print list's files (empty for other views).
+    pub fn set_list_counts(&mut self, counts: HashMap<PathBuf, (u32, u32)>) {
+        self.list_counts = counts;
+    }
+
+    pub fn list_counts_of(&self, path: &Path) -> Option<(u32, u32)> {
+        self.list_counts.get(path).copied()
     }
 
     pub fn set_duplicates(&mut self, duplicates: HashMap<PathBuf, usize>) {
@@ -414,6 +428,10 @@ impl Gallery {
                                 item(ui, t!("menu.edit_tags"), Action::EditTags);
                                 let star = if menu.favorite { t!("menu.unfavorite") } else { t!("menu.favorite") };
                                 item(ui, star, Action::ToggleFavorite);
+                                if model {
+                                    item(ui, t!("menu.printed"), Action::Print(PrintResult::Printed));
+                                    item(ui, t!("menu.failed"), Action::Print(PrintResult::Failed));
+                                }
                                 ui.menu_button(t!("menu.add_to_list"), |ui| {
                                     for (id, kind, name) in &menu.lists {
                                         let icon = if *kind == ListKind::Print { "🖨" } else { "📁" };
@@ -696,10 +714,26 @@ impl Gallery {
             }
             _ => None,
         };
+        // Right to left along the bottom: bed check, favourite star, print state.
+        let mut corner = bed_badge.map_or(pos2(img.max.x - 4.0, img.max.y - 4.0), |r| pos2(r.min.x - 3.0, r.max.y));
+        let dark = Color32::from_black_alpha(150);
         if marks.is_some_and(|m| m.favorite) {
-            // Left of the bed badge, or in the corner.
-            let corner = bed_badge.map_or(pos2(img.max.x - 4.0, img.max.y - 4.0), |r| pos2(r.min.x - 3.0, r.max.y));
-            icons::badge_left_of(&painter, corner, "★", Color32::from_black_alpha(150), FAVORITE_GOLD);
+            let star = icons::badge_left_of(&painter, corner, "★", dark, FAVORITE_GOLD);
+            corner.x = star.min.x - 3.0;
+        }
+        if let Some(&(wanted, done)) = self.list_counts.get(&entry.path) {
+            // On a print list: copies done of those wanted.
+            let complete = done >= wanted;
+            let (bg, fg) = if complete { (PRINTED_GREEN, Color32::BLACK) } else { (dark, Color32::from_gray(230)) };
+            let label = if complete { format!("✓ {done}/{wanted}") } else { format!("{done}/{wanted}") };
+            icons::badge_left_of(&painter, corner, &label, bg, fg);
+        } else if let Some(m) = marks.filter(|m| m.printed > 0 || m.last_failed) {
+            let (label, fg) = if m.last_failed {
+                ("✗".to_owned(), visuals.error_fg_color)
+            } else {
+                (format!("✓{}", m.printed), PRINTED_GREEN)
+            };
+            icons::badge_left_of(&painter, corner, &label, dark, fg);
         }
 
         let wrap = |rows| TextWrapping {
@@ -770,6 +804,8 @@ fn tile_background(visuals: &egui::Visuals, selected: bool, hovered: bool) -> Co
 
 /// The favourite star on tiles.
 const FAVORITE_GOLD: Color32 = Color32::from_rgb(245, 197, 66);
+/// Printed marks on tiles.
+const PRINTED_GREEN: Color32 = Color32::from_rgb(143, 201, 144);
 
 /// Memory slot of the name typed for a new list in the context menu.
 fn new_list_id() -> egui::Id {
@@ -792,13 +828,28 @@ fn image_rect(tile: Rect) -> Rect {
 /// Indices of the entries to show, in display order: matching the filter text (case-insensitive)
 /// and the model-only switch, folders first, then sorted. Folders stay visible with "only models"
 /// so you can still navigate.
-fn arranged(entries: &[Entry], a: &Arrange) -> Vec<usize> {
+fn arranged(
+    entries: &[Entry],
+    a: &Arrange,
+    marks: &HashMap<PathBuf, Marks>,
+    list_counts: &HashMap<PathBuf, (u32, u32)>,
+) -> Vec<usize> {
     let needle = a.filter.trim().to_lowercase();
+    // Folders stay, as with "models only", so one can still navigate.
+    let printed = |e: &Entry| marks.get(&e.path).is_some_and(|m| m.printed > 0);
+    let failed = |e: &Entry| marks.get(&e.path).is_some_and(|m| m.last_failed);
+    let by_print = |e: &Entry| match a.print {
+        PrintFilter::All => true,
+        PrintFilter::Unprinted => e.is_dir() || (e.kind.is_model() && !printed(e)),
+        PrintFilter::Printed => e.is_dir() || printed(e),
+        PrintFilter::Failed => e.is_dir() || failed(e),
+    };
     let mut shown: Vec<usize> = (0..entries.len())
         .filter(|&i| {
             let e = &entries[i];
             (!a.only_models || e.is_dir() || e.kind.is_model())
                 && (needle.is_empty() || e.name.to_lowercase().contains(&needle))
+                && by_print(e)
         })
         .collect();
     shown.sort_by(|&x, &y| {
@@ -811,8 +862,9 @@ fn arranged(entries: &[Entry], a: &Arrange) -> Vec<usize> {
             SortKey::Type => icons::extension_label(&ex.name).cmp(&icons::extension_label(&ey.name)).then_with(by_name),
         };
         let order = if a.descending { order.reverse() } else { order };
-        // Folders stay on top whatever the direction.
-        ey.is_dir().cmp(&ex.is_dir()).then(order).then(Ordering::Equal)
+        // Folders stay on top whatever the direction; on a print list, finished entries sink.
+        let finished = |e: &Entry| list_counts.get(&e.path).is_some_and(|&(wanted, done)| done >= wanted);
+        ey.is_dir().cmp(&ex.is_dir()).then(finished(ex).cmp(&finished(ey))).then(order).then(Ordering::Equal)
     });
     shown
 }
@@ -839,7 +891,7 @@ mod tests {
     }
 
     fn arrange(filter: &str, only_models: bool, sort: SortKey, descending: bool) -> Arrange {
-        Arrange { filter: filter.into(), only_models, sort, descending }
+        Arrange { filter: filter.into(), only_models, sort, descending, print: PrintFilter::All }
     }
 
     fn entries() -> [Entry; 5] {
@@ -855,19 +907,63 @@ mod tests {
     #[test]
     fn filter_by_text_and_model_switch() {
         let e = entries();
-        assert_eq!(arranged(&e, &arrange("", false, SortKey::Name, false)), [4, 2, 1, 0, 3]);
-        assert_eq!(arranged(&e, &arrange("DRAGON", false, SortKey::Name, false)), [1, 0]);
-        assert_eq!(arranged(&e, &arrange("", true, SortKey::Name, false)), [4, 2, 1, 3]);
-        assert_eq!(arranged(&e, &arrange(" dragon ", true, SortKey::Name, false)), [1]);
+        assert_eq!(
+            arranged(&e, &arrange("", false, SortKey::Name, false), &HashMap::new(), &HashMap::new()),
+            [4, 2, 1, 0, 3]
+        );
+        assert_eq!(
+            arranged(&e, &arrange("DRAGON", false, SortKey::Name, false), &HashMap::new(), &HashMap::new()),
+            [1, 0]
+        );
+        assert_eq!(
+            arranged(&e, &arrange("", true, SortKey::Name, false), &HashMap::new(), &HashMap::new()),
+            [4, 2, 1, 3]
+        );
+        assert_eq!(
+            arranged(&e, &arrange(" dragon ", true, SortKey::Name, false), &HashMap::new(), &HashMap::new()),
+            [1]
+        );
+    }
+
+    #[test]
+    fn print_filter_and_finished_list_entries() {
+        let e = entries();
+        let mut marks = HashMap::new();
+        marks.insert(PathBuf::from("Dragon.stl"), Marks { printed: 2, ..Default::default() });
+        marks.insert(PathBuf::from("plate.3mf"), Marks { last_failed: true, ..Default::default() });
+        let by = |print| Arrange { print, ..arrange("", false, SortKey::Name, false) };
+        let none = HashMap::new();
+        assert_eq!(arranged(&e, &by(PrintFilter::Printed), &marks, &none), [4, 2, 1], "folders stay");
+        assert_eq!(arranged(&e, &by(PrintFilter::Unprinted), &marks, &none), [4, 2, 3], "models only, failed counts");
+        assert_eq!(arranged(&e, &by(PrintFilter::Failed), &marks, &none), [4, 2, 3]);
+        // On a print list the finished Dragon sinks below the plate still to print.
+        let mut counts = HashMap::new();
+        counts.insert(PathBuf::from("Dragon.stl"), (2, 2));
+        counts.insert(PathBuf::from("plate.3mf"), (3, 1));
+        let shown = arranged(&e, &arrange("", true, SortKey::Name, false), &HashMap::new(), &counts);
+        assert_eq!(shown, [4, 2, 3, 1]);
     }
 
     #[test]
     fn sorting_keeps_folders_first() {
         let e = entries();
-        assert_eq!(arranged(&e, &arrange("", false, SortKey::Size, false)), [4, 2, 3, 0, 1]);
-        assert_eq!(arranged(&e, &arrange("", false, SortKey::Size, true)), [2, 4, 1, 0, 3]);
-        assert_eq!(arranged(&e, &arrange("", false, SortKey::Modified, true)), [4, 2, 0, 3, 1], "newest first");
-        assert_eq!(arranged(&e, &arrange("", false, SortKey::Type, false)), [4, 2, 3, 0, 1]);
+        assert_eq!(
+            arranged(&e, &arrange("", false, SortKey::Size, false), &HashMap::new(), &HashMap::new()),
+            [4, 2, 3, 0, 1]
+        );
+        assert_eq!(
+            arranged(&e, &arrange("", false, SortKey::Size, true), &HashMap::new(), &HashMap::new()),
+            [2, 4, 1, 0, 3]
+        );
+        assert_eq!(
+            arranged(&e, &arrange("", false, SortKey::Modified, true), &HashMap::new(), &HashMap::new()),
+            [4, 2, 0, 3, 1],
+            "newest first"
+        );
+        assert_eq!(
+            arranged(&e, &arrange("", false, SortKey::Type, false), &HashMap::new(), &HashMap::new()),
+            [4, 2, 3, 0, 1]
+        );
     }
 
     #[test]

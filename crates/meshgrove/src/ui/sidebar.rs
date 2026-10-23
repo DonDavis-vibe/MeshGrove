@@ -24,6 +24,16 @@ pub enum SidebarAction {
     DeleteList(i64),
     /// A palette slot for a tag, or `None` for its automatic colour.
     TagColor(String, Option<u8>),
+    /// Finish a print list (or open it again).
+    ArchiveList(i64, bool),
+    ExportList(i64, ListExport),
+}
+
+/// File formats a print list can be exported to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListExport {
+    Csv,
+    Pdf,
 }
 
 /// Library facts the sidebar lists.
@@ -170,6 +180,24 @@ impl Sidebar {
             }
             response.context_menu(|ui| self.list_menu(ui, list, action));
         }
+        let archived: Vec<&ListInfo> = library.lists.iter().filter(|l| l.archived).collect();
+        if !archived.is_empty() {
+            egui::CollapsingHeader::new(RichText::new(t!("lists.archived", count = archived.len())).weak())
+                .id_salt("archived-lists")
+                .default_open(false)
+                .show(ui, |ui| {
+                    for list in archived {
+                        let response = ui.selectable_label(
+                            library.showing_list == Some(list.id),
+                            format!("🖨  {}  ({})", list.name, list.count),
+                        );
+                        if response.clicked() {
+                            *action = Some(SidebarAction::OpenList(list.id));
+                        }
+                        response.context_menu(|ui| self.list_menu(ui, list, action));
+                    }
+                });
+        }
         ui.menu_button(t!("lists.new"), |ui| {
             ui.add(egui::TextEdit::singleline(&mut self.list_name).hint_text(t!("lists.name_hint")));
             let name = self.list_name.trim().to_owned();
@@ -188,6 +216,22 @@ impl Sidebar {
     }
 
     fn list_menu(&mut self, ui: &mut Ui, list: &ListInfo, action: &mut Option<SidebarAction>) {
+        if list.kind == ListKind::Print {
+            let (label, archive) = if list.archived { (t!("lists.reopen"), false) } else { (t!("lists.finish"), true) };
+            if ui.button(label).on_hover_text(t!("lists.finish_hint")).clicked() {
+                *action = Some(SidebarAction::ArchiveList(list.id, archive));
+                ui.close();
+            }
+            for (format, label) in
+                [(ListExport::Pdf, t!("lists.export_pdf")), (ListExport::Csv, t!("lists.export_csv"))]
+            {
+                if ui.button(label).clicked() {
+                    *action = Some(SidebarAction::ExportList(list.id, format));
+                    ui.close();
+                }
+            }
+            ui.separator();
+        }
         ui.label(RichText::new(t!("lists.rename")).weak());
         if self.list_name.is_empty() {
             self.list_name = list.name.clone();

@@ -6,10 +6,10 @@ use anyhow::Context as _;
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use egui::{Button, Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use meshgrove_core::cache::{ThumbCache, ThumbMeta};
-use meshgrove_core::config::{Config, DoubleClick, Program, Slicer, SortKey, TileTags};
+use meshgrove_core::config::{Config, DoubleClick, PrintFilter, Program, Slicer, SortKey, TileTags};
 use meshgrove_core::db::Library;
 use meshgrove_core::listing::{self, Entry};
-use meshgrove_core::lists::{ListInfo, ListKind};
+use meshgrove_core::lists::{ListInfo, ListKind, PrintResult, PrintStatus};
 use meshgrove_core::printer::Bed;
 use meshgrove_core::{Kind, query};
 use meshgrove_render::Renderer;
@@ -20,14 +20,17 @@ use crate::i18n;
 use crate::library::{LibEvent, LibraryService, ListOp, Transfer};
 use crate::meshes::{self, MeshState, MeshStore};
 use crate::nav::{Listing, Navigator};
+use crate::print_export;
 use crate::thumbs::{ThumbResult, ThumbService};
-use crate::ui::details::{self, DetailsContext, DetailsOutput, ListsOfSelection, ModelStatus, NoteEditor, TagEditor};
+use crate::ui::details::{
+    self, DetailsContext, DetailsOutput, ListsOfSelection, ModelStatus, NoteEditor, PrintInfo, TagEditor,
+};
 use crate::ui::duplicates::{self, DupAction, GroupInfo};
 use crate::ui::gallery::{Action, Arrange, Gallery, MenuContext};
 use crate::ui::layout::{Layout, Pane};
 use crate::ui::model_window::{self, ModelWindow, WindowAction, WindowContext};
 use crate::ui::settings::{AppInfo, SettingsChange, SettingsDialog};
-use crate::ui::sidebar::{LibraryInfo, Sidebar, SidebarAction};
+use crate::ui::sidebar::{LibraryInfo, ListExport, Sidebar, SidebarAction};
 use crate::ui::tags::TagStyle;
 use crate::ui::turntable::Turntable;
 use crate::ui::viewer::{MeshSource, ModelViewer};
@@ -123,6 +126,8 @@ pub struct App {
     lists: Vec<ListInfo>,
     /// Lists holding the selection, with how many of its files each holds.
     selection_lists: Vec<(ListInfo, usize)>,
+    /// The selection's print log, summed up.
+    selection_print: PrintStatus,
     /// Lists, tile marks and tag colours must be read again (user data changed).
     marks_dirty: bool,
     /// How tags are drawn (coloured or not, chosen colours).
@@ -244,6 +249,7 @@ impl App {
             tags_dirty: true,
             lists: Vec::new(),
             selection_lists: Vec::new(),
+            selection_print: PrintStatus::default(),
             marks_dirty: true,
             tag_style: TagStyle { colored: config.colored_tags, ..Default::default() },
             new_list_name: String::new(),
@@ -291,11 +297,15 @@ impl App {
             only_models: self.config.only_models,
             sort: self.config.sort_by,
             descending: self.config.sort_descending,
+            print: self.config.print_filter,
         }
     }
 
     /// Hands the current entries (and, in folder view, the folders' mosaics) to the gallery.
     fn refresh_gallery(&mut self, reset: bool) {
+        if !matches!(self.view, View::List { .. }) {
+            self.gallery.set_list_counts(HashMap::new());
+        }
         let entries = self.entries().to_vec();
         let mut mosaics = HashMap::new();
         let fp = self.config.folder_previews;
@@ -467,6 +477,7 @@ impl App {
             slicer: self.slicer.as_ref().map(|s| s.name.as_str()),
             editor: self.editor.as_ref(),
             quality: self.config.preview_quality,
+            can_log_prints: self.index.is_some(),
             icon: model_window::icon(crate::app_icon),
         };
         self.model_windows.retain_mut(|window| window.show(ctx, &mut cx, &mut actions));
@@ -474,6 +485,7 @@ impl App {
             match action {
                 WindowAction::OpenInSlicer(path) => self.open_in_slicer(vec![path]),
                 WindowAction::OpenInEditor(path) => self.open_in_editor(vec![path]),
+                WindowAction::Print(path, result) => self.record_print(vec![path], result),
                 WindowAction::Message(message) => self.toast(message),
             }
         }
@@ -686,6 +698,7 @@ impl App {
             self.all_tags = index.all_tags().unwrap_or_default();
             self.selection_tags = index.tags_of(&self.menu_for).unwrap_or_default();
             self.selection_lists = index.lists_of(&self.menu_for).unwrap_or_default();
+            self.selection_print = index.print_status(&self.menu_for).unwrap_or_default();
         }
         if self.note_edited.is_none()
             && std::mem::take(&mut self.note_dirty)
@@ -710,6 +723,7 @@ impl App {
         self.gallery.set_marks(index.marks().unwrap_or_default());
         self.menu.lists = menu_lists(&self.lists);
         self.menu.favorite = self.all_favorite(&self.menu_for);
+        self.reapply_filter(); // the print filter follows the marks
         if let View::List { id, .. } = self.view {
             if self.lists.iter().any(|l| l.id == id) {
                 self.show_list(id, false); // its contents may have changed
@@ -730,6 +744,100 @@ impl App {
         self.library.list(ListOp::Favorite(paths, on));
     }
 
+    /// Writes a print list to the documents folder: a PDF checklist (then opened, to print it)
+    /// or a CSV (then shown in the file manager).
+    fn export_list(&mut self, id: i64, format: ListExport) {
+        let (Some(index), Some(list)) = (&self.index, self.lists.iter().find(|l| l.id == id)) else { return };
+        let cache = ThumbCache::default_location().map(ThumbCache::new);
+        let rows: Vec<print_export::Row> = index
+            .list_entries(id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| {
+                let thumb = cache
+                    .as_ref()
+                    .and_then(|c| c.load(&ThumbCache::key(&e.entry.path, e.entry.size, e.entry.modified, None)))
+                    .and_then(Result::ok);
+                print_export::Row {
+                    name: e.entry.name.clone(),
+                    folder: e.entry.path.parent().map(|p| p.display().to_string()).unwrap_or_default(),
+                    quantity: e.quantity,
+                    done: e.done,
+                    size_mm: thumb.as_ref().and_then(|t| t.meta.size_mm),
+                    filaments: thumb.as_ref().map(|t| t.meta.filaments.clone()).unwrap_or_default(),
+                    picture: thumb.filter(|_| format == ListExport::Pdf).map(|t| t.image),
+                }
+            })
+            .collect();
+        let today = meshgrove_core::userdata::date(std::time::SystemTime::now());
+        let dir = dirs::document_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from("."));
+        let stem = format!("{} {} {today}", t!("print.export_file"), print_export::file_name_part(&list.name));
+        let copies: u32 = rows.iter().map(|r| r.quantity).sum();
+        let result = match format {
+            ListExport::Csv => {
+                let header = print_export::CsvHeader {
+                    name: &t!("print.col_name"),
+                    folder: &t!("print.col_folder"),
+                    quantity: &t!("print.col_quantity"),
+                    done: &t!("print.col_done"),
+                    size: &t!("print.col_size"),
+                    filaments: &t!("print.col_filaments"),
+                };
+                let separator = if rust_i18n::locale().starts_with("de") { ';' } else { ',' };
+                let path = dir.join(format!("{stem}.csv"));
+                std::fs::write(&path, print_export::csv(&rows, &header, separator)).map(|_| path)
+            }
+            ListExport::Pdf => {
+                let subtitle = t!("print.pdf_subtitle", date = today, models = rows.len(), copies = copies);
+                let text =
+                    print_export::PdfText { title: &list.name, subtitle: &subtitle, page: &t!("print.pdf_page") };
+                let path = dir.join(format!("{stem}.pdf"));
+                print_export::pdf(&rows, &text, print_export::font(system_ui_font()))
+                    .map_err(std::io::Error::other)
+                    .and_then(|bytes| std::fs::write(&path, bytes))
+                    .map(|_| path)
+            }
+        };
+        let message = match result {
+            Ok(path) => {
+                let shown = match format {
+                    ListExport::Pdf => actions::open_with_default_app(&path),
+                    ListExport::Csv => actions::show_in_file_manager(std::slice::from_ref(&path)),
+                };
+                if let Err(e) = shown {
+                    log::warn!("could not show the export: {e}");
+                }
+                t!("toast.list_exported", path = path.display().to_string())
+            }
+            Err(e) => t!("toast.list_export_failed", error = e.to_string()),
+        };
+        self.toast(message.into_owned());
+    }
+
+    /// The print list shown now, if any.
+    fn current_print_list(&self) -> Option<&ListInfo> {
+        let View::List { id, .. } = self.view else { return None };
+        self.lists.iter().find(|l| l.id == id && l.kind == ListKind::Print)
+    }
+
+    /// Logs a print of the models among `paths`; on a shown print list it counts there too.
+    fn record_print(&mut self, paths: Vec<PathBuf>, result: PrintResult) {
+        let models: Vec<PathBuf> = paths
+            .into_iter()
+            .filter(|p| self.in_library(p) && Kind::from_file_name(&listing::file_name(p)).is_model())
+            .collect();
+        if models.is_empty() || self.index.is_none() {
+            return;
+        }
+        let message = match result {
+            PrintResult::Printed => t!("toast.printed", count = models.len()),
+            PrintResult::Failed => t!("toast.print_failed", count = models.len()),
+        };
+        self.toast(message.into_owned());
+        let list = self.current_print_list().map(|l| l.id);
+        self.library.list(ListOp::Print(models, result, list));
+    }
+
     /// Every one of `paths` is a favourite.
     fn all_favorite(&self, paths: &[PathBuf]) -> bool {
         !paths.is_empty() && paths.iter().all(|p| self.gallery.marks_of(p).is_some_and(|m| m.favorite))
@@ -744,7 +852,14 @@ impl App {
     /// Shows the files of a list; `reset` when opened (rather than refreshed).
     fn show_list(&mut self, id: i64, reset: bool) {
         let Some(index) = &self.index else { return };
-        let entries: Vec<Entry> = index.list_entries(id).unwrap_or_default().into_iter().map(|e| e.entry).collect();
+        let listed = index.list_entries(id).unwrap_or_default();
+        let print_list = self.lists.iter().any(|l| l.id == id && l.kind == ListKind::Print);
+        let counts = if print_list {
+            listed.iter().map(|e| (e.entry.path.clone(), (e.quantity, e.done))).collect()
+        } else {
+            HashMap::new()
+        };
+        let entries: Vec<Entry> = listed.into_iter().map(|e| e.entry).collect();
         if reset {
             self.leave_search();
             self.flatten = false;
@@ -752,6 +867,8 @@ impl App {
         self.view = View::List { id, entries };
         self.menu_for.clear(); // "remove from this list" now applies
         self.refresh_gallery(reset);
+        self.gallery.set_list_counts(counts);
+        self.reapply_filter(); // finished entries sink
     }
 
     /// Stores an edited note for the files it was typed for.
@@ -808,6 +925,7 @@ impl App {
     fn handle_action(&mut self, ctx: &egui::Context, action: Action) {
         match action {
             Action::ToggleFavorite => self.toggle_favorite(),
+            Action::Print(result) => self.record_print(self.selected_paths(), result),
             Action::AddToList(id) => {
                 let paths = self.selected_paths();
                 if let Some(list) = self.lists.iter().find(|l| l.id == id) {
@@ -1239,6 +1357,16 @@ impl App {
             changed |= ui.checkbox(&mut self.config.only_models, t!("gallery.only_models")).changed();
             ui.checkbox(&mut flatten, t!("gallery.flatten")).on_hover_text(t!("gallery.flatten_hint"));
             ui.separator();
+            ui.label(RichText::new(t!("print.filter")).weak());
+            for (filter, name) in [
+                (PrintFilter::All, t!("print.filter_all")),
+                (PrintFilter::Unprinted, t!("print.filter_unprinted")),
+                (PrintFilter::Printed, t!("print.filter_printed")),
+                (PrintFilter::Failed, t!("print.filter_failed")),
+            ] {
+                changed |= ui.radio_value(&mut self.config.print_filter, filter, name).changed();
+            }
+            ui.separator();
             ui.label(RichText::new(t!("gallery.tile_size")).weak());
             ui.add(egui::Slider::new(&mut self.config.tile_size, TILE_RANGE).show_value(false));
         });
@@ -1540,6 +1668,12 @@ impl App {
             Some(SidebarAction::RenameList(id, name)) => self.library.list(ListOp::Rename(id, name)),
             Some(SidebarAction::DeleteList(id)) => self.library.list(ListOp::Delete(id)),
             Some(SidebarAction::TagColor(tag, color)) => self.library.list(ListOp::TagColor(tag, color)),
+            Some(SidebarAction::ArchiveList(id, archived)) => {
+                let message = if archived { t!("toast.list_finished") } else { t!("toast.list_reopened") };
+                self.toast(message.into_owned());
+                self.library.list(ListOp::Archive(id, archived));
+            }
+            Some(SidebarAction::ExportList(id, format)) => self.export_list(id, format),
             None => {}
         }
     }
@@ -1550,6 +1684,16 @@ impl App {
         let thumb = self.gallery.selected.and_then(|i| self.gallery.thumb(i));
         let picked = self.gallery.selection();
         let selection = (picked.len(), picked.iter().filter_map(|&i| entries.get(i)).map(|e| e.size).sum());
+        // On a shown print list: its name and the selected file's copies.
+        let on_list = match (&self.view, entry) {
+            (View::List { id, .. }, Some(e)) => self
+                .lists
+                .iter()
+                .find(|l| l.id == *id && l.kind == ListKind::Print)
+                .zip(self.gallery.list_counts_of(&e.path))
+                .map(|(list, (wanted, done))| (list.name.as_str(), wanted, done)),
+            _ => None,
+        };
         DetailsContext {
             entry,
             selection,
@@ -1565,6 +1709,7 @@ impl App {
             slicer: self.slicer.as_ref().map(|s| s.name.as_str()),
             editor: self.editor.as_ref(),
             lists: ListsOfSelection { lists: &self.selection_lists, favorite: self.menu.favorite },
+            print: PrintInfo { enabled: self.menu.can_tag, status: &self.selection_print, on_list },
             tag_style: &self.tag_style,
             thumb,
             model: &self.model,
@@ -1659,6 +1804,16 @@ impl App {
         }
         if let Some(id) = out.open_list {
             self.show_list(id, true);
+        }
+        if let Some(result) = out.print {
+            self.record_print(self.selected_paths(), result);
+        }
+        if out.undo_print {
+            self.toast(t!("toast.print_undone").into_owned());
+            self.library.list(ListOp::UndoPrint(self.selected_paths()));
+        }
+        if let (Some(quantity), Some(list)) = (out.quantity, self.current_print_list()) {
+            self.library.list(ListOp::Quantity(list.id, self.selected_paths(), quantity));
         }
         if out.clicked_plate.is_some() {
             self.viewer_plate = out.clicked_plate;

@@ -13,6 +13,7 @@ mod i18n;
 mod library;
 mod meshes;
 mod nav;
+mod print_export;
 mod screenshot;
 mod thumbs;
 mod ui;

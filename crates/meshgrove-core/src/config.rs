@@ -336,6 +336,19 @@ pub enum TileTags {
     Dots,
 }
 
+/// Which files the gallery shows by their print log.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PrintFilter {
+    #[default]
+    All,
+    /// Models never printed successfully.
+    Unprinted,
+    Printed,
+    /// Models whose newest print failed.
+    Failed,
+}
+
 /// How many tags a tile can show.
 pub const TILE_TAG_COUNT: std::ops::RangeInclusive<u8> = 1..=8;
 
@@ -379,6 +392,8 @@ pub struct Config {
     pub tile_tags: TileTags,
     /// Tags a tile shows at most (the last row says "+N" when there are more).
     pub tile_tag_count: u8,
+    /// Files shown by their print log (View menu).
+    pub print_filter: PrintFilter,
 }
 
 impl Default for Config {
@@ -404,6 +419,7 @@ impl Default for Config {
             tags_on_tiles: true,
             tile_tags: TileTags::Names,
             tile_tag_count: 3,
+            print_filter: PrintFilter::All,
         }
     }
 }

@@ -9,6 +9,7 @@ use std::sync::{Arc, OnceLock};
 use egui::{Key, RichText, Ui, ViewportBuilder, ViewportCommand, ViewportId};
 use meshgrove_core::config::{PreviewQuality, Program};
 use meshgrove_core::listing::{self, Entry};
+use meshgrove_core::lists::PrintResult;
 use meshgrove_core::printer::Bed;
 use meshgrove_render::Renderer;
 
@@ -20,6 +21,8 @@ use crate::meshes::{MeshState, MeshStore};
 pub enum WindowAction {
     OpenInSlicer(PathBuf),
     OpenInEditor(PathBuf),
+    /// Log a print of the window's model.
+    Print(PathBuf, PrintResult),
     /// Result of a viewer tool (picture saved, …) for the status bar.
     Message(String),
 }
@@ -33,6 +36,8 @@ pub struct WindowContext<'a> {
     pub slicer: Option<&'a str>,
     pub editor: Option<&'a Program>,
     pub quality: PreviewQuality,
+    /// The library index is open (prints are logged there).
+    pub can_log_prints: bool,
     pub icon: Arc<egui::IconData>,
 }
 
@@ -117,6 +122,16 @@ impl ModelWindow {
                 }
                 if editor {
                     actions.push(WindowAction::OpenInEditor(self.entry.path.clone()));
+                }
+                if cx.can_log_prints {
+                    ui.horizontal(|ui| {
+                        if ui.small_button(t!("print.mark_printed")).clicked() {
+                            actions.push(WindowAction::Print(self.entry.path.clone(), PrintResult::Printed));
+                        }
+                        if ui.small_button(t!("print.mark_failed")).clicked() {
+                            actions.push(WindowAction::Print(self.entry.path.clone(), PrintResult::Failed));
+                        }
+                    });
                 }
                 if !self.plates.is_empty() {
                     let active = match &self.model {
