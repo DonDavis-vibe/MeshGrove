@@ -15,6 +15,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Caches made by a tag's run serve only that tag, so the Rust caches are saved by runs on main
+# (started by hand) alone, which every tag can read. Packages stay as artifacts for a week:
+# a release keeps its own copies.
+
 permissions:
   contents: read
 
@@ -33,6 +37,7 @@ jobs:
           grep -c '^## ' THIRD-PARTY-LICENSES.md
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: licenses
           path: THIRD-PARTY-LICENSES.md
 
@@ -82,6 +87,8 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build --release -p meshgrove -p meshgrove-step
 
       - name: Check the programs
@@ -152,6 +159,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: package-windows
           path: |
             Meshgrove-*-setup.exe
@@ -195,6 +203,8 @@ jobs:
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build (Apple Silicon and Intel)
         run: |
           for arch in aarch64:arm64 x86_64:x64; do
@@ -242,6 +252,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: package-macos
           path: Meshgrove-*-macos-universal.dmg
 
@@ -297,6 +308,8 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
 
       - name: Check the programs
@@ -345,6 +358,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: package-appimage
           path: Meshgrove-*-x86_64.AppImage
 
@@ -378,6 +392,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: ${{ matrix.distro }}
       - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
       - name: Package
@@ -391,6 +406,7 @@ jobs:
           dpkg-deb --contents meshgrove_*.deb
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: package-deb-${{ matrix.distro }}
           path: meshgrove_*.deb
 
@@ -446,6 +462,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: fedora44
       - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
       - name: Package
@@ -462,6 +479,7 @@ jobs:
           rpm -qpl meshgrove-*.rpm
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: package-rpm-fedora44
           path: meshgrove-*.rpm
 
@@ -509,6 +527,7 @@ jobs:
           ls -la opencascade-*-source.tar.gz
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: package-occt-source
           path: opencascade-*-source.tar.gz
 

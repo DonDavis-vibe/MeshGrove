@@ -68,7 +68,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # Only main writes the cache: pull requests read it but would only fill the repository's
+      # 10 GB with entries no other run can use, pushing out the ones that matter.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: cargo fmt --all --check
         if: runner.os == 'Linux'
