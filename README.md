@@ -4,7 +4,7 @@
 
 <p align="center">
   <b>A fast, native gallery for your 3D-print files.</b><br>
-  Browse STL, 3MF, STEP, OBJ and glTF models like photos: real previews for every model, every archive and every PDF.
+  Browse STL, 3MF, STEP, OBJ, glTF and G-code files like photos, keep favourites and print lists, and know what you have printed.
 </p>
 
 <p align="center">
@@ -36,6 +36,10 @@
   - [The details panel](#the-details-panel)
   - [Library, search and filters](#library-search-and-filters)
   - [Tags and notes](#tags-and-notes)
+  - [Favourites, collections and print lists](#favourites-collections-and-print-lists)
+  - [The print log](#the-print-log)
+  - [G-code files](#g-code-files)
+  - [Readmes and text files](#readmes-and-text-files)
   - [Print bed check](#print-bed-check)
   - [Duplicate finder](#duplicate-finder)
   - [Working with your slicer and other apps](#working-with-your-slicer-and-other-apps)
@@ -68,8 +72,8 @@ them, so you open model after model in the slicer just to find the right one.
 Meshgrove shows those folders as a gallery with a rendered preview of every model. That
 includes the models inside ZIP/7z/RAR packs and the plate pictures your slicer stored in 3MF
 projects. It also gives you what a model collection needs: an instant search across the whole
-library, tags and notes, a duplicate finder, a print-bed check, and a one-click hand-over to
-your slicer.
+library, tags and notes, favourites, collections and print lists, a log of what you printed, a
+duplicate finder, a print-bed check, and a one-click hand-over to your slicer.
 
 What makes it different from other model managers:
 
@@ -87,15 +91,19 @@ What makes it different from other model managers:
 
 | Area | What you get |
 |---|---|
-| **Gallery** | Thumbnails for STL, 3MF, STEP, OBJ, PLY, glTF/GLB, images and PDFs; folder and archive tiles show a 2×2 mosaic of what is inside (optionally also models from subfolders on disk, fading through them); resizable tiles (slider in the status bar, growing smoothly towards the pointer); sort by name, date, size or type; "models only"; "include subfolders" (all files below a folder in one grid); multi-selection |
+| **Gallery** | Thumbnails for STL, 3MF, STEP, OBJ, PLY, glTF/GLB, G-code, images, PDFs and readmes; folder and archive tiles show a 2×2 mosaic of what is inside (optionally also models from subfolders on disk, fading through them); **tiles or a sortable list** with the columns you choose; resizable tiles (slider in the status bar, growing smoothly towards the pointer); sort by name, date, size or type; "models and G-code only"; "include subfolders" (all files below a folder in one grid); multi-selection |
 | **Panes** | Places, files, preview and info are panes: drag a header to move one, drop it on an edge to split or on another header to stack; the dividers resize them; *Lock the panes* in the settings keeps them where they are |
 | **Hover turntable** | Point at a model tile and the model spins in place. Drag to turn it yourself, and turn the wheel while dragging to zoom |
 | **3D viewer** | In the side panel, or **double-click a model for a window of its own** (resizable, several at once, with "open in slicer"), or **press Space for a large preview** over the window (just the model until you click ☰); smoother edges and optional studio lighting for both; what a double-click does can be changed (model window, large preview, slicer, mesh editor or the default app); orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **picture export** as a 2048 px PNG |
 | **3MF projects** | Embedded slicer plate pictures (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); click a plate picture to see that plate in 3D; **multi-colour**: filament colours per object and part, painted models (multi-material painting) and 3MF material colours in the viewer and in rendered previews; filament swatches on tiles and in the details; title, designer and application from the metadata |
 | **STEP / STP** | CAD files are tessellated by OpenCascade in a separate helper process, so a broken file cannot crash the app; results are cached |
 | **Archives** | Open ZIP, 7z, RAR and TAR like folders; every model inside gets a preview; files are extracted only when another program needs them |
-| **Library** | Index (SQLite) of all library folders; instant search such as `dragon ext:3mf tag:painted`; changes on disk are picked up automatically |
-| **Tags and notes** | Tags and notes belong to the file *content*, so they survive renames and moves; the search finds note text too; daily automatic backups; export and import as JSON |
+| **Library** | Index (SQLite) of all library folders; instant search such as `dragon ext:3mf tag:painted is:unprinted`; changes on disk are picked up automatically, and *Rescan folder* catches anything else |
+| **Tags and notes** | Tags and notes belong to the file *content*, so they survive renames and moves; **tags in colours**, as pills or dots on the tiles; suggested tags for themes (garden, workshop, kids' room …), print properties and state; the search finds note text too; daily automatic backups; export and import as JSON |
+| **Favourites and lists** | ★ favourites (Ctrl+D); **collections** across folders, hand-picked or a saved search that stays current; **print lists** with the copies you need of each model, ticked off as you print, then archived; a print list becomes a **PDF checklist** with pictures or a CSV file |
+| **Print log** | Log a print as printed or failed (and undo it); tiles show ✓2 or ✗; show only what is not printed yet, printed or failed; search with `is:printed`, `is:unprinted`, `is:failed` |
+| **G-code** | Previews from the picture the slicer embedded (PNG, JPG, QOI), or the toolpaths drawn when there is none; slicer, printer, print time, filament (grams, metres, material, colour), layers, nozzle and cost; a warning when a file was sliced for another printer |
+| **Readmes** | Text files (`.txt`, `.md`, `.nfo`, `README`, `LICENSE`) get a page preview; the preview pane shows them in full, Markdown formatted with links that open in the browser; a selected folder shows its readme |
 | **Print bed check** | Reads the printer selected in Anycubic Slicer Next, OrcaSlicer or Bambu Studio (or takes your own build volume) and marks models that only fit when turned (↻ 41°) or are too big (✕) |
 | **Duplicates** | Finds exact copies and the same model saved differently (ASCII vs binary STL, STL vs 3MF, rotated or moved copies), suggests which copy to keep and can move the others to the trash |
 | **Slicer and apps** | "Open in slicer" for one or many models (auto-detects Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer), into the slicer window that is already open where the slicer allows it; "open in" your **mesh editor or CAD program** (auto-detects Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer); **Ctrl+C copies the files** for pasting into the file manager or slicer; "show in file manager"; open with the default app |
@@ -114,6 +122,18 @@ their painted areas, plain 3MF files their material colours, and OBJ, PLY and gl
 colours and textures. Tiles get a dot per filament; the details list slot and material.
 
 ![A painted 3MF logo in the viewer with its two filaments, next to a textured GLB and 3MF tiles with filament dots](docs/images/screenshot-colours.png)
+
+**Favourites, collections and print lists.** A print list for a market stall: every model with
+the copies done of those needed (`1/3`), finished ones in green at the end, tags in their
+colours, and a 150 MB lithophane in the viewer. The sidebar holds the favourites, print
+lists and collections (hand-picked or a saved search), and the tags in groups.
+
+![A print list with copies per model, coloured tags and a lithophane in the viewer](docs/images/screenshot-lists.png)
+
+**The list view.** The same files as a table, with dimensions, tags, favourites and the print log
+at a glance. Click a column title to sort by it, right-click it to choose the columns.
+
+![The list view of a folder with sizes, dimensions, tags and print state](docs/images/screenshot-list-view.png)
 
 **One search for the whole library.** Here `body` finds every model with "body" in its name,
 from four different folders.
@@ -252,6 +272,8 @@ unpack it anywhere and start `meshgrove.exe`.
    model spin.
 4. **Hand it to your slicer.** Right-click → *Open in Anycubic Slicer Next* (or whichever
    slicer was found). Select several models first to open them all at once.
+5. **Keep track.** Ctrl+D makes a model a favourite. Right-click → *Add to list* puts it on a
+   print list or a collection, and *Log as printed* remembers that you printed it.
 
 ## User guide
 
@@ -262,10 +284,18 @@ unpack it anywhere and start `meshgrove.exe`.
   opens, Backspace or Alt+↑ goes up, Alt+← / Alt+→ or the mouse buttons 4 / 5 go back and forward.
 - **Tile size:** Ctrl + mouse wheel, Ctrl + `+` / `-`, or the slider in the status bar or the
   *View* menu. The tiles grow smoothly, and the one under the pointer stays where it is.
-- **View menu:** sort by name, modified date, size or type (ascending or descending); *3D models
-  only* hides everything except 3D models (folders stay so you can navigate); *Include
-  subfolders* lists every file below the current folder in one grid, each with its folder
-  name under it.
+- **View menu:** tiles or list (also the two buttons next to the size slider, or Ctrl+1 and
+  Ctrl+2); sort by name, modified date, size or type (ascending or descending); *Models and
+  G-code only* hides everything else (folders stay so you can navigate); *Include subfolders*
+  lists every file below the current folder in one grid, each with its folder name under it;
+  *Print state* shows everything, only what is not printed yet, what was printed or what failed
+  last time.
+- **List view:** the same files as a table with a small preview, name, type, size, dimensions,
+  modification date, tags, ★ and print state, plus the folder in search results, lists and
+  *Include subfolders*. Click a column title to sort by it (again for the other direction),
+  drag the borders between the titles to make columns wider, and right-click a title to show or
+  hide columns. The row height follows the size slider. Selecting, the keyboard, the context menu
+  and double-click work as in the grid.
 - **Filter the folder:** type into the search field (Ctrl+F) with the 📁 scope selected to
   narrow the current folder by name.
 - **Select several files:** Ctrl+click toggles, Shift+click selects a range, Ctrl+A selects
@@ -274,8 +304,10 @@ unpack it anywhere and start `meshgrove.exe`.
   left mouse button and drag to turn it by hand; turn the mouse wheel while holding the button
   to zoom into the tile.
 - **Badges on tiles:** the file type at the bottom left; `2×`, `3×` … at the top right when the
-  library holds duplicates of this file; ↻ angle or ✕ at the bottom right from the print bed
-  check.
+  library holds duplicates of this file, and the file's tags below it (as pills or dots, see
+  *Settings → Tags*); at the bottom right the print bed check (↻ angle or ✕), ★ for favourites
+  and the print state (✓2 printed twice, ✗ last print failed, on a print list the copies done
+  of those needed); `⚠ 🖨` on G-code sliced for another printer.
 - **Panes:** drag a pane's header to move it; drop it on the edge of another pane to split
   that, or on another header to stack both as tabs. The dividers between panes resize them.
   *Settings → Panes* can lock them, so they can only be resized, and resets the layout.
@@ -348,6 +380,11 @@ The *Info* pane (below the viewer unless you move it) shows:
 - the **print bed** result (see [Print bed check](#print-bed-check))
 - for 3MF: title, designer, the application that wrote it, the **filaments** (colour, slot and
   material) and whether the preview comes from the slicer's embedded picture
+- for G-code: slicer, printer, print time, filament, layers, nozzle and cost (see
+  [G-code files](#g-code-files))
+- buttons to open the model in the slicer or the mesh editor
+- the **lists** the file is on and its ★ (click a list to show it), the **print log** with
+  *Printed* / *Failed* / *Undo*, and on a shown print list the copies with − and +
 - **tags** and the **note** (for files in the library)
 - the full path
 
@@ -373,18 +410,36 @@ type. Results come from all library folders at once.
 | `ext:3mf` (also `type:` / `typ:`) | only 3MF files; works with `stl`, `step`, `obj`, `ply`, `glb`, `zip`, `pdf`, `png` … |
 | `tag:painted` | only files with that tag |
 | `tag:"to print"` | tags with spaces |
+| `is:fav` | favourites (also `is:favourite`, `is:favorit`) |
+| `is:printed`, `is:unprinted`, `is:failed` | printed at least once, never printed (models and G-code only), newest print failed |
+| `list:market` (also `liste:`) | files on the list "market" |
 | `dragon ext:stl tag:painted` | all conditions combined |
 
 Right-click a search result → *Show in folder* jumps to the folder containing it. *✕ Close
 search* (or Esc in the field) returns to the folder.
 
-The sidebar's **TAGS** section lists every tag with its count. Click one to search for it.
+The sidebar's **TAGS** section lists every tag with its count, grouped into themes, print
+properties, state and your own. Click one to search for it; Ctrl+click adds it to the tags
+searched for, or takes it out again. *Save as collection* in the search bar keeps a search as
+a collection that stays current.
+
+**Rescan folder:** the index normally follows every change by itself. If something was missed,
+for example files copied while Meshgrove was closed onto a drive that another system changed,
+right-click a library folder in the sidebar or its tile → *Rescan folder*. Meshgrove reads that
+folder and everything below it again and says what changed; only changed files are hashed
+again. F5 re-reads the current folder.
 
 ### Tags and notes
 
 - **Add a tag:** select one or more files in the library, type into *Add tag …* in the details
-  panel and press Enter, or click one of the suggested existing tags. Right-click → *Edit
-  tags …* jumps straight into the field.
+  panel and press Enter, or click one of the suggested existing tags. The ▾ button next to the
+  field offers ready-made tags: themes (household, garden, workshop, kids' room, tabletop,
+  cosplay …), print properties (multicolour, print-in-place, no supports, magnets …) and state
+  (own design, remix, tested, needs tweaking …). Right-click → *Edit tags …* jumps straight
+  into the field.
+- **Colours:** every tag gets a colour of its own, the same everywhere. Right-click a tag in the
+  sidebar to choose another one. *Settings → Tags* turns colours off, chooses whether tiles show
+  tags as names or as coloured dots, and how many.
 - **Remove a tag:** click the tag chip (`painted ✕`). With several files selected, chips show
   how many of them carry the tag (`painted (2/5)`).
 - **Notes:** write anything into the *Note* field: print settings, colours, what went wrong
@@ -394,6 +449,70 @@ The sidebar's **TAGS** section lists every tag with its count. Click one to sear
 - **They follow the content:** tags and notes are attached to a fingerprint of the file's
   content (BLAKE3), not to its path. Rename or move a file, even into another library folder,
   and its tags and note come along. Identical copies share them.
+
+### Favourites, collections and print lists
+
+The sidebar's **LISTS** section holds three kinds of lists. All of them hold files of the
+library and, like tags, follow the file's content, so moving or renaming a file keeps it on its
+lists.
+
+- **★ Favourites:** Ctrl+D, the ☆ *Favourite* chip in the *Info* pane or the context menu mark
+  the selection; a gold ★ on the tile shows it.
+- **Collections** (📁) gather files from any folders, for a project or a theme. A collection can
+  also be a saved search: search the library (for example `tag:garden ext:3mf`) and click *Save as
+  collection* above the results. It then always shows the current results.
+- **Print lists** (🖨) are for what you want to print, say for a market stall or a gift. Each file
+  on it has a number of copies (− and + in the *Info* pane while the list is shown). Logging a
+  print while the list is shown counts a copy as done; tiles show `1/3`, turning green when all
+  copies are done, and finished files sink to the end. The sidebar shows how many are still open.
+
+Create a list with *+ New list …*, or right-click files → *Add to list* → type a new name. The
+context menu also takes files off the shown list. Right-click a list in the sidebar to rename or
+delete it (the files stay where they are), or for print lists:
+
+- **✓ Finish the list:** it moves to the collapsed *Finished* section below, where *Open again*
+  brings it back. The print log stays.
+- **Export as PDF checklist:** an A4 page with a picture of each model, its folder, size and
+  filament colours, and a box per copy to tick by hand (copies already done are ticked). It is
+  saved in your Documents folder and opened right away, ready to print.
+- **Export as CSV:** the same as a table for spreadsheets (with `;` as separator in German).
+
+### The print log
+
+*✓ Log as printed* and *✗ Log as failed* (context menu, the *Printing* row in the *Info* pane,
+or the buttons in a model window) record a print with its date. The *Info* pane then says
+*Printed 2×, last on 12.10.2026* or *Last print failed*, and *↶ Undo* takes back the newest
+entry. Tiles show `✓2` in green or a red `✗`. *View → Print state* shows only what is not
+printed yet, what was printed, or what failed last time; the search knows `is:printed`,
+`is:unprinted` and `is:failed`. Models and G-code have a print state; other files do not.
+
+### G-code files
+
+G-code files (`.gcode`, `.gco`, `.g`) get a preview like models:
+
+- **The slicer's own picture** when the file contains one (PrusaSlicer, OrcaSlicer, Bambu Studio,
+  Anycubic Slicer Next, Cura with a thumbnail plugin; PNG, JPG and QOI). The largest one is used.
+- **Otherwise the toolpaths**, drawn from above at an angle in the filament colour and shaded by
+  height. The purge line of the start code is left out. Even a 50 MB file takes well under a
+  second.
+
+The *Info* pane lists what the slicer wrote into the file: slicer and version, the printer, print
+time, filament in grams and metres with material and colour, the number of layers and the layer
+height, nozzle and filament cost (in the currency of your slicer profile). When a file was sliced
+for another printer than yours (see [Print bed check](#print-bed-check)), the printer is shown in
+orange and the tile gets a small `⚠ 🖨` badge, so a file for the wrong machine does not end up on
+the SD card. G-code counts as printable: it has a print log and passes *Models and G-code only*.
+A double-click opens the file in its default app, usually the slicer's G-code viewer.
+
+### Readmes and text files
+
+Readmes, licences and notes (`.txt`, `.md`, `.markdown`, `.nfo`, and `README`, `LICENSE`,
+`COPYING` without an extension) show the beginning of their first page on the tile. Selected,
+the preview pane shows the whole text: Markdown with headings, lists, tables and links (they
+open in your browser), `.nfo` files in a fixed-width font for their ASCII art, everything else
+as wrapped text. Select a **folder** and the preview pane shows its readme (or else its licence),
+with a button to open it. Model packs from Thingiverse and similar sites usually bring one, with
+the designer, the licence and print tips.
 
 ### Print bed check
 
@@ -484,21 +603,24 @@ read-only) and disables the action with an explanation.
 
 ### Backups, export and import
 
-- **Automatic backups:** once a day (when something changed) Meshgrove writes all tags and
-  notes to `user-data-YYYY-MM-DD.json` in the backup folder and keeps the newest seven.
-  *Settings → Back up tags & notes → Open folder* shows them.
-- **Export:** writes all tags and notes to `meshgrove-tags-notes-YYYY-MM-DD.json` in your
-  Documents folder. The file is readable JSON and lists, for each fingerprint, the paths where
-  those files were.
+- **Automatic backups:** once a day (when something changed) Meshgrove writes all tags, notes,
+  lists, the print log and tag colours to `user-data-YYYY-MM-DD.json` in the backup folder and
+  keeps the newest seven.
+  *Settings → Back up tags, notes & lists → Open folder* shows them.
+- **Export:** writes all of that to `meshgrove-tags-notes-YYYY-MM-DD.json` in your Documents
+  folder. The file is readable JSON and lists, for each fingerprint, the paths where those files
+  were.
 - **Import:** reads such a file (or a backup) and merges it: tags are added, notes are taken
-  over for files that have none. Nothing is deleted. Because everything is keyed by content,
-  an import also works after you reorganised your folders or moved to another computer.
+  over for files that have none, lists are merged by name and prints are added once. Nothing is
+  deleted. Because everything is keyed by content, an import also works after you reorganised
+  your folders or moved to another computer. Exports from older versions (tags and notes only)
+  import as well.
 
 ### Thumbnails in Dolphin and file dialogs (Linux)
 
 The .deb and .rpm packages and `install.sh` register a freedesktop thumbnailer, so Dolphin,
 the KDE and GTK file dialogs and other file managers show the same previews for STL, 3MF,
-STEP, OBJ, PLY and glTF files. In
+STEP, OBJ, PLY, glTF and G-code files. In
 Dolphin, enable them once: *Settings → Configure Dolphin → Interface → Previews*. Tick the
 3D-model entries if they are listed, and raise *Skip previews for local files above* for big
 models. Then reopen the folder. The thumbnailer shares Meshgrove's cache, so files you have
@@ -516,7 +638,9 @@ Ctrl means ⌘ Cmd on macOS.
 | Backspace, Alt+↑ | Parent folder |
 | Alt+←, Alt+→, mouse buttons 4 / 5 | Back, forward |
 | Space | Large preview of the selected model (Esc or Space closes it; ☰ shows its tools) |
-| F5 | Reload the folder |
+| F5 | Reload the folder and read it into the index again |
+| Ctrl+D | Favourite on or off |
+| Ctrl+1, Ctrl+2 | Tiles, list |
 | Ctrl+A | Select all shown files |
 | Ctrl+click, Shift+click | Toggle a file, select a range |
 | Ctrl+C | Copy the selected files to the clipboard |
@@ -524,7 +648,7 @@ Ctrl means ⌘ Cmd on macOS.
 | Ctrl+F | Filter the current folder |
 | Ctrl+Shift+F | Search the whole library |
 | Esc (in the search field) | Clear the search |
-| Ctrl + `+` / `-`, Ctrl + wheel | Tile size |
+| Ctrl + `+` / `-`, Ctrl + wheel | Tile size (row height in the list) |
 | Ctrl+, | Settings |
 | **Mouse on a model tile** | Hover: spin · drag: turn · wheel while dragging: zoom |
 | **Mouse on a pane header** | Drag: move the pane (not when locked in the settings) |
@@ -541,16 +665,21 @@ Ctrl means ⌘ Cmd on macOS.
 | PLY | `.ply` | ✔ | ✔ | ASCII and binary; vertex and face colours (scans, MeshLab); point clouds without faces are not shown |
 | glTF | `.glb`, `.gltf` | ✔ | ✔ | All meshes of the scene with base colours, vertex colours and textures; external buffers and textures are read from next to the file. glTF counts in **metres**, so a model 1 unit wide shows as 1000 mm; for models meant in millimetres (AI generators, many exports) choose *Settings → 3D models → Millimetres* |
 | Archives | `.zip`, `.7z`, `.rar`, `.tar`, `.tar.gz`, `.tgz`, … | Mosaic | Members | Browsed like folders through libarchive |
-| Images | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | ✔ | – | Shown large in the details panel |
+| G-code | `.gcode`, `.gco`, `.g` | ✔ | – | The picture the slicer embedded (PNG, JPG, QOI), otherwise the toolpaths; print facts from the comments (OrcaSlicer, Anycubic, Bambu Studio, PrusaSlicer, Cura). Binary G-code (`.bgcode`) is not read yet |
+| Images | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | ✔ | – | Shown large in the preview pane |
 | PDF | `.pdf` | First page | – | Needs `pdftoppm` from poppler |
+| Text | `.txt`, `.md`, `.markdown`, `.nfo`, `README`, `LICENSE`, `COPYING` | First page | – | Shown in full in the preview pane, Markdown formatted; UTF-8, UTF-16 and Latin-1 |
 | Everything else | | File icon | – | Shown with its extension so the folder view is complete |
 
 ## Settings and files on disk
 
-Everything can be changed in the settings window (⚙ at the top right, or Ctrl+,): language,
-the panes, library folders, slicer, mesh editor, printer, the unit of glTF models, what a double-click on a model
-does, the picture quality of the large preview and the model windows, folder previews, backups, and the preview cache (with its size and a *Clear
-cache* button). The *About* section lists the exact paths on your system.
+Everything can be changed in the settings window (⚙ at the top right, or Ctrl+,), sorted into
+categories on the left: *General* (language, what a double-click on a model does, the panes),
+*Library* (library folders, folder previews), *Tags* (colours, names or dots on the tiles, how
+many), *3D view* (picture quality of the large preview and the model windows, the unit of glTF
+models), *Programs* (slicer and mesh editor), *Printer*, *Data and storage* (backups, and the
+preview cache with its size and a *Clear cache* button) and *About Meshgrove*, which lists the
+exact paths on your system.
 
 | What | Linux | Windows | macOS |
 |---|---|---|---|
@@ -558,9 +687,10 @@ cache* button). The *About* section lists the exact paths on your system.
 | Library index (`library.db`) and `backups/` | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Cache: previews, STEP meshes, extracted archive files | `~/.cache/meshgrove/` | `%LOCALAPPDATA%\meshgrove\` | `~/Library/Caches/meshgrove/` |
 | Exported pictures | `~/Pictures/Meshgrove` (localised, e.g. `~/Bilder`) | `Pictures\Meshgrove` | `~/Pictures/Meshgrove` |
+| Exported print lists (PDF, CSV), tags and notes | Documents folder | Documents folder | Documents folder |
 
 The cache can always be deleted; it is rebuilt when needed. The index can be deleted too, but
-**tags and notes live in it**, so export them first or keep the backups.
+**tags, notes, lists and the print log live in it**, so export them first or keep the backups.
 
 `config.toml` is plain text. The settings window covers everything, but for reference:
 
@@ -576,6 +706,16 @@ lock_panes = false         # true: panes can only be resized, not moved
 double_click = "window"    # window | preview | slicer | editor | default_app
 preview_quality = "high"   # large preview and model windows: standard | high | studio
 preview_controls = false   # large preview: show name, tools and hints
+gallery_view = "grid"      # grid | list
+print_filter = "all"       # all | unprinted | printed | failed
+colored_tags = true        # tags in colours (otherwise grey)
+tags_on_tiles = true
+tile_tags = "names"        # names | dots
+tile_tag_count = 3         # 1 … 8
+
+[list_columns]
+hidden = ["type"]          # preview, folder, type, size, dimensions, modified, tags, favorite, print
+widths = { name = 320.0 }  # columns you made wider or narrower
 
 [folder_previews]
 enabled = false            # models from subfolders on folder tiles
@@ -618,7 +758,7 @@ made under the old name.
   accounts.
 - **Read-only by design.** It only reads your model files. It writes to its own settings, index
   and cache folders, and otherwise only when you explicitly move files to the trash, export
-  tags and notes, or save a picture.
+  tags and notes or a print list, or save a picture.
 - **Crash-safe helpers.** STEP tessellation and PDF rendering run as separate processes with
   timeouts, so a malformed file cannot take the app down. A file that fails gets a ⚠ tile with
   the reason in its tooltip.
@@ -642,7 +782,8 @@ Meshgrove is built for collections of thousands of files on ordinary hard drives
 
 | Feature | Linux | Windows | macOS |
 |---|---|---|---|
-| Gallery, viewer, library, tags, notes, duplicates, bed check | ✔ | ✔ | ✔ |
+| Gallery, list view, viewer, library, tags, notes, lists, print log, duplicates, bed check | ✔ | ✔ | ✔ |
+| G-code and readme previews, PDF checklists | ✔ | ✔ | ✔ |
 | ZIP / 7z / RAR / TAR | ✔ | ✔ | ✔ |
 | PDF previews | ✔ with poppler | ✔ with poppler | ✔ with poppler |
 | STEP previews | ✔ all packages; source build with OpenCascade | ✔ | ✔ |
@@ -665,7 +806,8 @@ Linux limits how many programs may watch folders (`fs.inotify.max_user_instances
 On busy desktops that limit is used up, and Meshgrove then falls back to checking every
 minute. To raise the limit: `sudo sysctl fs.inotify.max_user_instances=512`. To keep it
 after a reboot, put `fs.inotify.max_user_instances=512` into
-`/etc/sysctl.d/90-inotify.conf`. F5 reloads a folder immediately.
+`/etc/sysctl.d/90-inotify.conf`. F5 reads the current folder again immediately, and
+right-click → *Rescan folder* a whole library folder with everything below it.
 
 **Dolphin shows no 3D previews.**
 Enable the previews in Dolphin's settings (see
@@ -697,7 +839,7 @@ paths as text.
 
 **Where are my tags if I reinstall?**
 In the library index and in the daily backups (see the [table](#settings-and-files-on-disk)).
-Use *Settings → Back up tags & notes → Export* before moving to another computer, then
+Use *Settings → Back up tags, notes & lists → Export* before moving to another computer, then
 *Import* there.
 
 **Does Meshgrove change my 3MF/STL files?**
@@ -751,7 +893,7 @@ Meshgrove is a Cargo workspace of five crates:
 
 | Crate | Purpose |
 |---|---|
-| [`meshgrove-core`](crates/meshgrove-core) | Everything without a window or GPU: file formats (STL, 3MF, STEP, OBJ, PLY, glTF, archives, images, PDF), the SQLite library index, scanner, search syntax, duplicate signatures, tags, notes and backups, thumbnail cache, settings, printer profiles |
+| [`meshgrove-core`](crates/meshgrove-core) | Everything without a window or GPU: file formats (STL, 3MF, STEP, OBJ, PLY, glTF, G-code, archives, images, PDF, text), the SQLite library index, scanner, search syntax, duplicate signatures, tags, notes, lists, the print log and backups, thumbnail cache, settings, printer profiles |
 | [`meshgrove-render`](crates/meshgrove-render) | The wgpu mesh renderer, shared by thumbnails (headless), the 3D viewer, the hover turntable and the Dolphin thumbnailer |
 | [`meshgrove`](crates/meshgrove) | The egui application |
 | [`meshgrove-step`](crates/meshgrove-step) | `meshgrove-step-mesher`: STEP → STL with OpenCascade, as a separate process |
@@ -763,12 +905,12 @@ How work flows through the app:
 flowchart LR
     UI["UI thread<br/>(egui)"] -- "visible tiles, hover" --> Q["Thumbnail queue<br/>visible first"]
     Q --> IO["Reader thread<br/>one at a time, HDD-friendly"]
-    IO --> P["Parser pool<br/>STL · 3MF · OBJ · PLY · glTF · archives"]
+    IO --> P["Parser pool<br/>STL · 3MF · OBJ · PLY · glTF · G-code · text · archives"]
     P -- "STEP" --> S["meshgrove-step-mesher<br/>(own process)"]
     P --> G["GPU thread<br/>headless wgpu render"]
     G --> C[("Preview cache<br/>PNG + facts")]
     C --> UI
-    L["Library service<br/>scanner + file watcher"] --> DB[("SQLite index<br/>files · tags · notes")]
+    L["Library service<br/>scanner + file watcher"] --> DB[("SQLite index<br/>files · tags · notes · lists · prints")]
     G -- "size, hash, geometry" --> L
     DB -- "search, duplicates" --> UI
 ```
@@ -831,9 +973,19 @@ Ideas and next steps, roughly in order:
 
 - [x] STEP support in all release packages
 - [x] AppImage, .deb and .rpm for Linux, an installer for Windows, a universal DMG for macOS
+- [x] OBJ, PLY and glTF with their colours and textures (0.2)
+- [x] Favourites, collections, print lists and a print log; G-code and readme previews; a list
+  view (0.4)
+- [ ] Tag suggestions from file and folder names, optionally from a local AI model (Ollama with a
+  vision model) that also describes what a model looks like
+- [ ] Source, designer and licence per model; multi-part models as one set
+- [ ] A light theme (light, dark or as the system)
+- [ ] "Open in slicer" links from Printables, MakerWorld and Thingiverse straight into the library
+- [ ] Filament: your own spool list or Spoolman, and whether a project's colours are in stock
+- [ ] Viewer: angle measuring, orthographic view, a G-code layer preview, a large view for
+  G-code, pictures and texts
+- [ ] Several printers; fonts for Chinese and Japanese text; Prusa's binary G-code (`.bgcode`)
 - [ ] Flatpak, a notarized macOS app
-- [ ] More formats: OBJ, PLY, G-code previews (embedded thumbnails)
-- [ ] Collections (hand-picked sets across folders) and print status (printed, failed, to do)
 - [ ] Thumbnails in Windows Explorer and macOS Finder
 - [ ] More languages (contributions welcome)
 
@@ -861,7 +1013,11 @@ are just as welcome.
 Meshgrove is developed by **Davis** as a project of
 **[German Redneck Engineering](https://redneck-design.de/)**.
 
-Built on excellent open-source work: [egui/eframe](https://github.com/emilk/egui),
+Built on excellent open-source work: [egui/eframe](https://github.com/emilk/egui) with
+[egui_tiles](https://github.com/rerun-io/egui_tiles),
+[egui_extras](https://github.com/emilk/egui) and
+[egui_commonmark](https://github.com/lampsitter/egui_commonmark) (with
+[pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark)),
 [wgpu](https://wgpu.rs), [glam](https://github.com/bitshifter/glam-rs),
 [rusqlite](https://github.com/rusqlite/rusqlite) with [SQLite](https://sqlite.org),
 [libarchive](https://libarchive.org) through
@@ -869,6 +1025,8 @@ Built on excellent open-source work: [egui/eframe](https://github.com/emilk/egui
 [OpenCascade](https://dev.opencascade.org), [poppler](https://poppler.freedesktop.org),
 [notify](https://github.com/notify-rs/notify), [zip](https://github.com/zip-rs/zip2),
 [quick-xml](https://github.com/tafia/quick-xml), [image](https://github.com/image-rs/image),
+[krilla](https://github.com/LaurenzV/krilla) (PDF checklists),
+[ab_glyph](https://github.com/alexheretic/ab-glyph),
 [BLAKE3](https://github.com/BLAKE3-team/BLAKE3), [trash](https://github.com/Byron/trash-rs),
 [wl-clipboard-rs](https://github.com/YaLTeR/wl-clipboard-rs),
 [clipboard-rs](https://github.com/ChurchTao/clipboard-rs) and

@@ -41,7 +41,7 @@ If Meshgrove saves you time, you can leave a tip on [Ko-fi](https://ko-fi.com/do
 <details>
 <summary><b>🇩🇪 Kurzfassung auf Deutsch</b></summary>
 
-**Meshgrove @VERSION@**: eine schnelle, native Galerie für 3D-Druck-Dateien unter Linux, Windows und macOS, mit echten Vorschauen für STL, 3MF, STEP, OBJ, PLY, glTF, Modelle in ZIP/7z/RAR und PDFs.
+**Meshgrove @VERSION@**: eine schnelle, native Galerie für 3D-Druck-Dateien unter Linux, Windows und macOS, mit echten Vorschauen für STL, 3MF, STEP, OBJ, PLY, glTF, G-code, Modelle in ZIP/7z/RAR, PDFs und Readmes, dazu Favoriten, Drucklisten und einem Druckprotokoll.
 
 **Installation** (alle Pakete können STEP, nichts muss gebaut werden):
 - **Windows:** `…-windows-x64-setup.exe` ausführen. Installiert ohne Adminrechte für dich (oder für alle Benutzer), mit Startmenü-Eintrag und „Öffnen mit“ für STL, 3MF, STEP, OBJ, PLY und glTF. Bei der SmartScreen-Warnung *Weitere Informationen → Trotzdem ausführen* wählen. Ohne Installation: die `…-portable.zip` entpacken und `meshgrove.exe` starten.

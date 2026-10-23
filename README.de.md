@@ -4,7 +4,7 @@
 
 <p align="center">
   <b>Eine schnelle, native Galerie für deine 3D-Druck-Dateien.</b><br>
-  STL-, 3MF-, STEP-, OBJ- und glTF-Modelle durchblättern wie Fotos: echte Vorschauen für jedes Modell, jedes Archiv und jedes PDF.
+  STL, 3MF, STEP, OBJ, glTF und G-code durchblättern wie Fotos, Favoriten und Drucklisten führen und wissen, was du schon gedruckt hast.
 </p>
 
 <p align="center">
@@ -36,6 +36,10 @@
   - [Die Detailansicht](#die-detailansicht)
   - [Bibliothek, Suche und Filter](#bibliothek-suche-und-filter)
   - [Tags und Notizen](#tags-und-notizen)
+  - [Favoriten, Sammlungen und Drucklisten](#favoriten-sammlungen-und-drucklisten)
+  - [Das Druckprotokoll](#das-druckprotokoll)
+  - [G-code-Dateien](#g-code-dateien)
+  - [Readmes und Textdateien](#readmes-und-textdateien)
   - [Druckbett-Check](#druckbett-check)
   - [Duplikate finden](#duplikate-finden)
   - [Zusammenarbeit mit Slicer und anderen Programmen](#zusammenarbeit-mit-slicer-und-anderen-programmen)
@@ -68,8 +72,9 @@ Standard-Symbol. Also öffnet man Modell für Modell im Slicer, bis man das rich
 Meshgrove zeigt solche Ordner als Galerie mit einer gerenderten Vorschau jedes Modells. Das
 gilt auch für die Modelle in ZIP-, 7z- und RAR-Paketen und für die Plattenbilder, die dein
 Slicer in 3MF-Projekten speichert. Dazu kommt, was eine Modellsammlung braucht: eine
-blitzschnelle Suche über die ganze Bibliothek, Tags und Notizen, eine Duplikatsuche, ein
-Druckbett-Check und die Übergabe an den Slicer mit einem Klick.
+blitzschnelle Suche über die ganze Bibliothek, Tags und Notizen, Favoriten, Sammlungen und
+Drucklisten, ein Protokoll deiner Drucke, eine Duplikatsuche, ein Druckbett-Check und die
+Übergabe an den Slicer mit einem Klick.
 
 Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 
@@ -88,15 +93,19 @@ Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 
 | Bereich | Was du bekommst |
 |---|---|
-| **Galerie** | Vorschauen für STL, 3MF, STEP, OBJ, PLY, glTF/GLB, Bilder und PDFs; Ordner- und Archiv-Kacheln zeigen ein 2×2-Mosaik ihres Inhalts (auf Wunsch auch Modelle aus Unterordnern auf der Platte, die langsam durchblenden); Kachelgröße einstellbar (Regler in der Statusleiste, Kacheln wachsen fließend zur Maus hin); Sortieren nach Name, Datum, Größe oder Typ; „Nur 3D-Modelle“; „Unterordner einbeziehen“ (alle Dateien unter einem Ordner in einem Raster); Mehrfachauswahl |
+| **Galerie** | Vorschauen für STL, 3MF, STEP, OBJ, PLY, glTF/GLB, G-code, Bilder, PDFs und Readmes; Ordner- und Archiv-Kacheln zeigen ein 2×2-Mosaik ihres Inhalts (auf Wunsch auch Modelle aus Unterordnern auf der Platte, die langsam durchblenden); **Kacheln oder sortierbare Liste** mit den Spalten, die du willst; Kachelgröße einstellbar (Regler in der Statusleiste, Kacheln wachsen fließend zur Maus hin); Sortieren nach Name, Datum, Größe oder Typ; „Nur Modelle und G-code“; „Unterordner einbeziehen“ (alle Dateien unter einem Ordner in einem Raster); Mehrfachauswahl |
 | **Bereiche** | Orte, Dateien, Vorschau und Info sind Bereiche: Kopfzeile ziehen verschiebt einen, am Rand eines anderen ablegen teilt ihn, auf einer anderen Kopfzeile ablegen stapelt beide; die Trennlinien ändern die Größe; *Bereiche fixieren* in den Einstellungen hält sie an ihrem Platz |
 | **Drehvorschau** | Mit der Maus über eine Modell-Kachel fahren, und das Modell dreht sich. Ziehen dreht es von Hand, Mausrad beim Ziehen zoomt |
 | **3D-Viewer** | In der Seitenleiste, oder **Doppelklick auf ein Modell für ein eigenes Fenster** (frei vergrößerbar, mehrere gleichzeitig, mit „In Slicer öffnen“), oder **Leertaste für eine große Vorschau** über dem Fenster (nur das Modell, bis du auf ☰ klickst); für beide glattere Kanten und auf Wunsch Studiolicht; was ein Doppelklick tut, ist einstellbar (Modellfenster, große Vorschau, Slicer, Mesh-Editor oder Standardprogramm); Drehen, Verschieben und Zoomen um einen festen Drehpunkt (das Modell springt beim Drehen nie); Standardansichten (vorne, hinten, links, rechts, oben, unten, schräg); **Messen zwischen zwei Punkten in mm**; **Bildexport** als PNG mit 2048 px |
 | **3MF-Projekte** | Eingebettete Plattenbilder der Slicer (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); Klick auf ein Plattenbild zeigt diese Platte in 3D; **mehrfarbig**: Filamentfarben pro Objekt und Teil, bemalte Modelle (Multi-Material-Bemalung) und 3MF-Materialfarben im Viewer und in selbst gerenderten Vorschauen; Filament-Farbfelder auf Kacheln und in den Details; Titel, Designer und Programm aus den Metadaten |
 | **STEP / STP** | CAD-Dateien werden von OpenCascade in einem eigenen Hilfsprozess vernetzt, eine kaputte Datei kann die App also nicht abstürzen lassen; das Ergebnis wird zwischengespeichert |
 | **Archive** | ZIP, 7z, RAR und TAR öffnen wie Ordner; jedes enthaltene Modell bekommt eine Vorschau; entpackt wird nur, wenn ein anderes Programm die Datei braucht |
-| **Bibliothek** | Index (SQLite) aller Bibliotheksordner; Sofortsuche wie `drache ext:3mf tag:bemalt`; Änderungen auf der Platte werden automatisch erkannt |
-| **Tags und Notizen** | Tags und Notizen hängen am *Inhalt* der Datei und überleben so Umbenennen und Verschieben; die Suche findet auch Notiztext; tägliche automatische Sicherung; Export und Import als JSON |
+| **Bibliothek** | Index (SQLite) aller Bibliotheksordner; Sofortsuche wie `drache ext:3mf tag:bemalt is:ungedruckt`; Änderungen auf der Platte werden automatisch erkannt, und *Ordner neu einlesen* holt den Rest |
+| **Tags und Notizen** | Tags und Notizen hängen am *Inhalt* der Datei und überleben so Umbenennen und Verschieben; **farbige Tags**, als Kärtchen oder Punkte auf den Kacheln; vorgeschlagene Tags für Themen (Garten, Werkstatt, Kinderzimmer …), Druck-Eigenschaften und Zustand; die Suche findet auch Notiztext; tägliche automatische Sicherung; Export und Import als JSON |
+| **Favoriten und Listen** | ★ Favoriten (Strg+D); **Sammlungen** über Ordner hinweg, von Hand oder als gespeicherte Suche, die aktuell bleibt; **Drucklisten** mit der gewünschten Stückzahl je Modell, beim Drucken abgehakt und danach archiviert; eine Druckliste wird zur **PDF-Checkliste** mit Bildern oder zur CSV-Datei |
+| **Druckprotokoll** | Drucke als gedruckt oder fehlgeschlagen eintragen (und zurücknehmen); Kacheln zeigen ✓2 oder ✗; nur Ungedrucktes, Gedrucktes oder Fehlgeschlagenes zeigen; Suche mit `is:gedruckt`, `is:ungedruckt`, `is:fehlgeschlagen` |
+| **G-code** | Vorschau aus dem Bild, das der Slicer eingebettet hat (PNG, JPG, QOI), sonst aus den gezeichneten Druckbahnen; Slicer, Drucker, Druckzeit, Filament (Gramm, Meter, Material, Farbe), Schichten, Düse und Kosten; eine Warnung, wenn eine Datei für einen anderen Drucker gesliced wurde |
+| **Readmes** | Textdateien (`.txt`, `.md`, `.nfo`, `README`, `LICENSE`) bekommen eine Seitenvorschau; der Vorschau-Bereich zeigt sie ganz, Markdown formatiert, Links öffnen im Browser; ein gewählter Ordner zeigt sein Readme |
 | **Druckbett-Check** | Liest den in Anycubic Slicer Next, OrcaSlicer oder Bambu Studio gewählten Drucker (oder deinen eigenen Bauraum) und markiert Modelle, die nur gedreht passen (↻ 41°) oder zu groß sind (✕) |
 | **Duplikate** | Findet exakte Kopien und dasselbe Modell in anderer Form (ASCII- statt Binär-STL, STL statt 3MF, gedrehte oder verschobene Kopien), schlägt vor, welche Kopie bleiben soll, und kann die anderen in den Papierkorb legen |
 | **Slicer und Programme** | „In Slicer öffnen“ für ein oder viele Modelle (erkennt Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer), ins schon offene Slicer-Fenster, wo der Slicer das erlaubt; „In … öffnen“ für deinen **Mesh-Editor oder dein CAD-Programm** (erkennt Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer); **Strg+C kopiert die Dateien** zum Einfügen im Dateimanager oder Slicer; „Im Dateimanager zeigen“; Öffnen mit dem Standardprogramm |
@@ -116,6 +125,19 @@ Vertex-Farben und Texturen. Kacheln bekommen einen Punkt pro Filament, die Detai
 und Material.
 
 ![Ein bemaltes 3MF-Logo im Viewer mit seinen zwei Filamenten, daneben eine texturierte GLB und 3MF-Kacheln mit Filamentpunkten](docs/images/screenshot-colours.png)
+
+**Favoriten, Sammlungen und Drucklisten.** Eine Druckliste für einen Marktstand: jedes Modell
+mit den fertigen von den gewünschten Stück (`1/3`), fertige grün am Ende, Tags in ihren Farben
+und ein 150 MB großes Lithophane im Viewer. Die Seitenleiste hält die Favoriten, Drucklisten und
+Sammlungen (von Hand oder als gespeicherte Suche) und die Tags in Gruppen.
+
+![Eine Druckliste mit Stückzahlen pro Modell, farbigen Tags und einem Lithophane im Viewer](docs/images/screenshot-lists.png)
+
+**Die Listenansicht.** Dieselben Dateien als Tabelle, mit Maßen, Tags, Favoriten und
+Druckprotokoll auf einen Blick. Ein Klick auf einen Spaltentitel sortiert, ein Rechtsklick wählt
+die Spalten.
+
+![Die Listenansicht eines Ordners mit Größen, Maßen, Tags und Druckstatus](docs/images/screenshot-list-view.png)
 
 **Eine Suche für die ganze Bibliothek.** Hier findet `body` jedes Modell mit „body“ im Namen,
 aus vier verschiedenen Ordnern.
@@ -261,6 +283,9 @@ Programme: irgendwohin entpacken und `meshgrove.exe` starten.
    Maus über eine Kachel fahren, und das Modell dreht sich.
 4. **An den Slicer geben.** Rechtsklick → *In Anycubic Slicer Next öffnen* (oder welcher
    Slicer gefunden wurde). Vorher mehrere Modelle auswählen, um alle auf einmal zu öffnen.
+5. **Den Überblick behalten.** Strg+D macht ein Modell zum Favoriten. Rechtsklick → *Zur Liste*
+   legt es auf eine Druckliste oder in eine Sammlung, und *Als gedruckt eintragen* merkt sich,
+   dass du es gedruckt hast.
 
 ## Anleitung
 
@@ -273,10 +298,18 @@ Programme: irgendwohin entpacken und `meshgrove.exe` starten.
   Alt+→ oder die Maustasten 4 / 5 gehen zurück und vor.
 - **Kachelgröße:** Strg + Mausrad, Strg + `+` / `-` oder der Regler in der Statusleiste oder im
   Menü *Ansicht*. Die Kacheln wachsen fließend, die Kachel unter der Maus bleibt an ihrem Platz.
-- **Menü Ansicht:** Sortieren nach Name, Änderungsdatum, Größe oder Typ (auf- oder absteigend);
-  *Nur 3D-Modelle* blendet alles außer 3D-Modellen aus (Ordner bleiben zum Navigieren
-  sichtbar); *Unterordner einbeziehen* zeigt alle Dateien unterhalb des aktuellen Ordners in
-  einem Raster, jeweils mit dem Ordnernamen darunter.
+- **Menü Ansicht:** Kacheln oder Liste (auch die zwei Knöpfe neben dem Größenregler, oder Strg+1
+  und Strg+2); Sortieren nach Name, Änderungsdatum, Größe oder Typ (auf- oder absteigend); *Nur
+  Modelle und G-code* blendet alles andere aus (Ordner bleiben zum Navigieren sichtbar);
+  *Unterordner einbeziehen* zeigt alle Dateien unterhalb des aktuellen Ordners in einem Raster,
+  jeweils mit dem Ordnernamen darunter; *Druckstatus* zeigt alles, nur noch nicht Gedrucktes,
+  Gedrucktes oder zuletzt Fehlgeschlagenes.
+- **Listenansicht:** dieselben Dateien als Tabelle mit kleiner Vorschau, Name, Typ, Größe, Maßen,
+  Änderungsdatum, Tags, ★ und Druckstatus, dazu der Ordner bei Suchergebnissen, Listen und
+  *Unterordner einbeziehen*. Ein Klick auf einen Spaltentitel sortiert danach (noch einmal: in
+  die andere Richtung), die Grenzen zwischen den Titeln ziehen macht Spalten breiter, ein
+  Rechtsklick auf einen Titel blendet Spalten ein und aus. Die Zeilenhöhe folgt dem
+  Größenregler. Auswählen, Tastatur, Kontextmenü und Doppelklick funktionieren wie im Raster.
 - **Ordner filtern:** Mit dem 📁-Bereich gewählt ins Suchfeld tippen (Strg+F), um den aktuellen
   Ordner nach Namen einzugrenzen.
 - **Mehrere Dateien auswählen:** Strg+Klick schaltet einzelne um, Umschalt+Klick wählt einen
@@ -286,8 +319,11 @@ Programme: irgendwohin entpacken und `meshgrove.exe` starten.
   langsam um die eigene Achse. Mit gedrückter linker Maustaste ziehen dreht es von Hand;
   Mausrad bei gedrückter Taste zoomt in die Kachel.
 - **Markierungen auf Kacheln:** unten links der Dateityp; oben rechts `2×`, `3×` …, wenn es in
-  der Bibliothek Duplikate dieser Datei gibt; unten rechts ↻ mit Winkel oder ✕ vom
-  Druckbett-Check.
+  der Bibliothek Duplikate dieser Datei gibt, darunter die Tags der Datei (als Kärtchen oder
+  Punkte, siehe *Einstellungen → Tags*); unten rechts der Druckbett-Check (↻ mit Winkel oder ✕),
+  ★ für Favoriten und der Druckstatus (✓2 zweimal gedruckt, ✗ letzter Druck fehlgeschlagen, auf
+  einer Druckliste die fertigen von den gewünschten Stück); `⚠ 🖨` bei G-code für einen anderen
+  Drucker.
 - **Bereiche:** Die Kopfzeile eines Bereichs ziehen verschiebt ihn; am Rand eines anderen
   Bereichs abgelegt teilt er diesen, auf einer anderen Kopfzeile werden beide zu Tabs. Die
   Trennlinien zwischen den Bereichen ändern ihre Größe. *Einstellungen → Bereiche* fixiert sie,
@@ -364,6 +400,12 @@ Der Bereich *Info* (unter dem Viewer, solange du ihn nicht verschiebst) zeigt:
 - das Ergebnis des **Druckbett-Checks** (siehe [Druckbett-Check](#druckbett-check))
 - bei 3MF: Titel, Designer, das erzeugende Programm, die **Filamente** (Farbe, Slot und
   Material) und ob die Vorschau das eingebettete Bild des Slicers ist
+- bei G-code: Slicer, Drucker, Druckzeit, Filament, Schichten, Düse und Kosten (siehe
+  [G-code-Dateien](#g-code-dateien))
+- Knöpfe, um das Modell im Slicer oder im Mesh-Editor zu öffnen
+- die **Listen**, auf denen die Datei steht, und ihr ★ (ein Klick auf eine Liste zeigt sie), das
+  **Druckprotokoll** mit *Gedruckt* / *Fehlgeschlagen* / *Rückgängig*, und auf einer gezeigten
+  Druckliste die Stückzahl mit − und +
 - **Tags** und die **Notiz** (für Dateien in der Bibliothek)
 - der vollständige Pfad
 
@@ -389,19 +431,37 @@ und tippen. Die Treffer kommen aus allen Bibliotheksordnern zugleich.
 | `ext:3mf` (auch `type:` / `typ:`) | nur 3MF-Dateien; funktioniert mit `stl`, `step`, `obj`, `ply`, `glb`, `zip`, `pdf`, `png` … |
 | `tag:bemalt` | nur Dateien mit diesem Tag |
 | `tag:"zu drucken"` | Tags mit Leerzeichen |
+| `is:favorit` | Favoriten (auch `is:fav`, `is:favoriten`) |
+| `is:gedruckt`, `is:ungedruckt`, `is:fehlgeschlagen` | mindestens einmal gedruckt, nie gedruckt (nur Modelle und G-code), letzter Druck fehlgeschlagen; auch englisch `is:printed` … |
+| `liste:markt` (auch `list:`) | Dateien auf der Liste „markt“ |
 | `drache ext:stl tag:bemalt` | alle Bedingungen zusammen |
 
 Rechtsklick auf einen Treffer → *Im Ordner anzeigen* springt in den Ordner der Datei.
 *✕ Suche beenden* (oder Esc im Suchfeld) kehrt zum Ordner zurück.
 
-Der Abschnitt **TAGS** in der Seitenleiste listet alle Tags mit ihrer Anzahl. Ein Klick sucht
-danach.
+Der Abschnitt **TAGS** in der Seitenleiste listet alle Tags mit ihrer Anzahl, gruppiert nach
+Themen, Druck-Eigenschaften, Zustand und Herkunft und deinen eigenen. Ein Klick sucht danach;
+Strg+Klick nimmt den Tag zu den gesuchten dazu oder wieder heraus. *Als Sammlung speichern* über
+den Treffern hebt eine Suche als Sammlung auf, die immer aktuell bleibt.
+
+**Ordner neu einlesen:** Normalerweise folgt der Index jeder Änderung von selbst. Falls doch
+etwas fehlt, etwa weil Dateien kopiert wurden, während Meshgrove zu war, auf ein Laufwerk, das
+ein anderes System geändert hat: Rechtsklick auf einen Bibliotheksordner in der Seitenleiste oder
+auf seine Kachel → *Ordner neu einlesen*. Meshgrove liest diesen Ordner und alles darunter neu
+und meldet, was sich geändert hat; neu berechnet werden nur die Fingerabdrücke geänderter
+Dateien. F5 liest den aktuellen Ordner neu ein.
 
 ### Tags und Notizen
 
 - **Tag hinzufügen:** Eine oder mehrere Dateien der Bibliothek auswählen, in der Detailansicht
   in *Tag hinzufügen …* tippen und Enter drücken, oder einen der vorgeschlagenen vorhandenen
-  Tags anklicken. Rechtsklick → *Tags bearbeiten …* springt direkt ins Feld.
+  Tags anklicken. Der Knopf ▾ neben dem Feld bietet fertige Tags an: Themen (Haushalt, Garten,
+  Werkstatt, Kinderzimmer, Tabletop, Cosplay …), Druck-Eigenschaften (mehrfarbig, Print-in-Place,
+  ohne Stützen, Magnete …) und Zustand (eigenes Design, Remix, getestet, muss angepasst werden …).
+  Rechtsklick → *Tags bearbeiten …* springt direkt ins Feld.
+- **Farben:** Jeder Tag bekommt eine eigene Farbe, überall dieselbe. Per Rechtsklick auf einen Tag
+  in der Seitenleiste wählst du eine andere. *Einstellungen → Tags* schaltet die Farben ab und
+  legt fest, ob Kacheln Tags als Namen oder als Farbpunkte zeigen, und wie viele.
 - **Tag entfernen:** auf das Tag-Kärtchen klicken (`bemalt ✕`). Bei mehreren ausgewählten
   Dateien zeigen die Kärtchen, wie viele davon den Tag tragen (`bemalt (2/5)`).
 - **Notizen:** Ins Feld *Notiz* schreiben, was du willst: Druckeinstellungen, Farben, was
@@ -411,6 +471,76 @@ danach.
 - **Sie folgen dem Inhalt:** Tags und Notizen hängen an einem Fingerabdruck des Dateiinhalts
   (BLAKE3), nicht am Pfad. Benenne eine Datei um oder verschiebe sie, sogar in einen anderen
   Bibliotheksordner, und Tags und Notiz ziehen mit. Identische Kopien teilen sie sich.
+
+### Favoriten, Sammlungen und Drucklisten
+
+Der Abschnitt **LISTEN** in der Seitenleiste kennt drei Arten von Listen. Alle enthalten Dateien
+der Bibliothek und folgen wie Tags dem Inhalt: Eine verschobene oder umbenannte Datei bleibt auf
+ihren Listen.
+
+- **★ Favoriten:** Strg+D, das Kärtchen ☆ *Favorit* im Bereich *Info* oder das Kontextmenü
+  markieren die Auswahl; ein goldener ★ auf der Kachel zeigt es.
+- **Sammlungen** (📁) fassen Dateien aus beliebigen Ordnern zusammen, für ein Projekt oder ein
+  Thema. Eine Sammlung kann auch eine gespeicherte Suche sein: die Bibliothek durchsuchen (etwa
+  `tag:garten ext:3mf`) und über den Treffern *Als Sammlung speichern* klicken. Sie zeigt dann
+  immer die aktuellen Treffer.
+- **Drucklisten** (🖨) sind für das, was du drucken willst, etwa für einen Marktstand oder als
+  Geschenk. Jede Datei darauf hat eine Stückzahl (− und + im Bereich *Info*, solange die Liste
+  gezeigt wird). Wer einen Druck einträgt, während die Liste gezeigt wird, hakt damit ein Stück
+  ab; Kacheln zeigen `1/3` und werden grün, wenn alle Stück fertig sind, und fertige Dateien
+  rutschen ans Ende. Die Seitenleiste zeigt, wie viele noch offen sind.
+
+Eine Liste legst du mit *+ Neue Liste …* an, oder per Rechtsklick auf Dateien → *Zur Liste* →
+neuen Namen eintippen. Das Kontextmenü nimmt Dateien auch wieder von der gezeigten Liste.
+Rechtsklick auf eine Liste in der Seitenleiste benennt sie um oder löscht sie (die Dateien bleiben,
+wo sie sind), und bei Drucklisten:
+
+- **✓ Liste abschließen:** Sie wandert in den zugeklappten Abschnitt *Abgeschlossen* darunter;
+  *Wieder öffnen* holt sie zurück. Das Druckprotokoll bleibt.
+- **Als PDF-Checkliste exportieren:** eine A4-Seite mit Bild jedes Modells, Ordner, Maßen und
+  Filamentfarben und einem Kästchen je Stück zum Abhaken von Hand (schon fertige sind
+  angehakt). Sie landet in deinem Dokumente-Ordner und öffnet sich gleich zum Drucken.
+- **Als CSV exportieren:** dasselbe als Tabelle für Tabellenkalkulationen (auf Deutsch mit `;`
+  als Trennzeichen).
+
+### Das Druckprotokoll
+
+*✓ Als gedruckt eintragen* und *✗ Als fehlgeschlagen eintragen* (Kontextmenü, die Zeile *Druck*
+im Bereich *Info* oder die Knöpfe im Modellfenster) halten einen Druck mit Datum fest. Der Bereich
+*Info* zeigt dann *2× gedruckt, zuletzt am 12.10.2026* oder *Zuletzt fehlgeschlagen*, und
+*↶ Rückgängig* nimmt den letzten Eintrag zurück. Kacheln zeigen ein grünes `✓2` oder ein rotes
+`✗`. *Ansicht → Druckstatus* zeigt nur noch nicht Gedrucktes, Gedrucktes oder zuletzt
+Fehlgeschlagenes; die Suche kennt `is:gedruckt`, `is:ungedruckt` und `is:fehlgeschlagen`.
+Modelle und G-code haben einen Druckstatus, andere Dateien nicht.
+
+### G-code-Dateien
+
+G-code-Dateien (`.gcode`, `.gco`, `.g`) bekommen eine Vorschau wie Modelle:
+
+- **Das Bild des Slicers**, wenn die Datei eines enthält (PrusaSlicer, OrcaSlicer, Bambu Studio,
+  Anycubic Slicer Next, Cura mit Vorschau-Plugin; PNG, JPG und QOI). Genommen wird das größte.
+- **Sonst die Druckbahnen**, schräg von oben in der Filamentfarbe gezeichnet und nach der Höhe
+  schattiert. Die Reinigungslinie des Start-Codes bleibt weg. Selbst eine 50-MB-Datei braucht
+  deutlich unter einer Sekunde.
+
+Der Bereich *Info* zeigt, was der Slicer in die Datei geschrieben hat: Slicer und Version, den
+Drucker, die Druckzeit, das Filament in Gramm und Metern mit Material und Farbe, die Zahl der
+Schichten und die Schichthöhe, die Düse und die Filamentkosten (in der Währung deines
+Slicer-Profils). Wurde eine Datei für einen anderen als deinen Drucker gesliced (siehe
+[Druckbett-Check](#druckbett-check)), steht der Drucker in Orange da und die Kachel bekommt ein
+kleines `⚠ 🖨`, damit keine Datei für die falsche Maschine auf der SD-Karte landet. G-code zählt
+als druckbar: Er hat ein Druckprotokoll und bleibt bei *Nur Modelle und G-code* sichtbar. Ein
+Doppelklick öffnet die Datei im Standardprogramm, meist der G-code-Ansicht des Slicers.
+
+### Readmes und Textdateien
+
+Readmes, Lizenzen und Notizen (`.txt`, `.md`, `.markdown`, `.nfo` sowie `README`, `LICENSE`,
+`COPYING` ohne Endung) zeigen auf der Kachel den Anfang ihrer ersten Seite. Ausgewählt zeigt der
+Vorschau-Bereich den ganzen Text: Markdown mit Überschriften, Listen, Tabellen und Links (die im
+Browser aufgehen), `.nfo`-Dateien in fester Zeichenbreite für ihre ASCII-Kunst, alles andere als
+umbrochenen Text. Wählst du einen **Ordner**, zeigt der Vorschau-Bereich sein Readme (oder sonst
+seine Lizenz), mit einem Knopf zum Öffnen. Modellpakete von Thingiverse und ähnlichen Seiten
+bringen meist eins mit, mit Designer, Lizenz und Drucktipps.
 
 ### Druckbett-Check
 
@@ -508,21 +638,24 @@ Erklärung.
 ### Sicherung, Export und Import
 
 - **Automatische Sicherung:** Einmal am Tag (wenn sich etwas geändert hat) schreibt Meshgrove
-  alle Tags und Notizen in `user-data-JJJJ-MM-TT.json` im Sicherungsordner und behält die
-  sieben neuesten. *Einstellungen → Tags & Notizen sichern → Ordner öffnen* zeigt sie.
-- **Export:** schreibt alle Tags und Notizen nach `meshgrove-tags-notizen-JJJJ-MM-TT.json` in
-  deinen Dokumente-Ordner. Die Datei ist lesbares JSON und nennt zu jedem Fingerabdruck die
-  Pfade, unter denen die Dateien lagen.
+  alle Tags, Notizen, Listen, das Druckprotokoll und die Tag-Farben in
+  `user-data-JJJJ-MM-TT.json` im Sicherungsordner und behält die sieben neuesten.
+  *Einstellungen → Tags, Notizen & Listen sichern → Ordner öffnen* zeigt sie.
+- **Export:** schreibt all das nach `meshgrove-tags-notizen-JJJJ-MM-TT.json` in deinen
+  Dokumente-Ordner. Die Datei ist lesbares JSON und nennt zu jedem Fingerabdruck die Pfade, unter
+  denen die Dateien lagen.
 - **Import:** liest so eine Datei (oder eine Sicherung) und führt sie zusammen: Tags kommen
-  dazu, Notizen werden für Dateien ohne Notiz übernommen. Gelöscht wird nichts. Weil alles am
-  Inhalt hängt, klappt der Import auch, nachdem du deine Ordner umsortiert hast oder auf einen
-  anderen Rechner umgezogen bist.
+  dazu, Notizen werden für Dateien ohne Notiz übernommen, Listen werden nach Namen
+  zusammengeführt und Drucke einmal übernommen. Gelöscht wird nichts. Weil alles am Inhalt
+  hängt, klappt der Import auch, nachdem du deine Ordner umsortiert hast oder auf einen anderen
+  Rechner umgezogen bist. Exporte älterer Versionen (nur Tags und Notizen) lassen sich ebenfalls
+  importieren.
 
 ### Vorschauen in Dolphin und Dateidialogen (Linux)
 
 Die .deb- und .rpm-Pakete und `install.sh` richten einen freedesktop-Thumbnailer ein. Dolphin,
 die Dateidialoge von KDE und GTK und andere Dateimanager zeigen dann dieselben Vorschauen für
-STL-, 3MF-, STEP-, OBJ-, PLY- und glTF-Dateien. In Dolphin einmal einschalten: *Einstellungen → Dolphin einrichten → Oberfläche →
+STL-, 3MF-, STEP-, OBJ-, PLY-, glTF- und G-code-Dateien. In Dolphin einmal einschalten: *Einstellungen → Dolphin einrichten → Oberfläche →
 Vorschauen*. Dort die 3D-Modell-Einträge anhaken, falls sie aufgeführt sind, und für große
 Modelle die Größengrenze für Vorschauen lokaler Dateien erhöhen. Danach den Ordner neu öffnen. Der
 Thumbnailer teilt sich den Cache mit Meshgrove, also erscheinen Dateien, die du schon in der
@@ -540,7 +673,9 @@ Strg heißt auf macOS ⌘ Cmd.
 | Rücktaste, Alt+↑ | Übergeordneter Ordner |
 | Alt+←, Alt+→, Maustasten 4 / 5 | Zurück, vor |
 | Leertaste | Große Vorschau des gewählten Modells (Esc oder Leertaste schließt sie; ☰ zeigt ihre Werkzeuge) |
-| F5 | Ordner neu laden |
+| F5 | Ordner neu laden und neu in den Index einlesen |
+| Strg+D | Favorit an oder aus |
+| Strg+1, Strg+2 | Kacheln, Liste |
 | Strg+A | Alle angezeigten Dateien auswählen |
 | Strg+Klick, Umschalt+Klick | Datei umschalten, Bereich auswählen |
 | Strg+C | Ausgewählte Dateien in die Zwischenablage kopieren |
@@ -548,7 +683,7 @@ Strg heißt auf macOS ⌘ Cmd.
 | Strg+F | Aktuellen Ordner filtern |
 | Strg+Umschalt+F | Ganze Bibliothek durchsuchen |
 | Esc (im Suchfeld) | Suche leeren |
-| Strg + `+` / `-`, Strg + Mausrad | Kachelgröße |
+| Strg + `+` / `-`, Strg + Mausrad | Kachelgröße (Zeilenhöhe in der Liste) |
 | Strg+, | Einstellungen |
 | **Maus auf einer Modell-Kachel** | Darüberfahren: dreht sich · Ziehen: von Hand drehen · Mausrad beim Ziehen: zoomen |
 | **Maus auf der Kopfzeile eines Bereichs** | Ziehen: Bereich verschieben (nicht, wenn in den Einstellungen fixiert) |
@@ -565,16 +700,21 @@ Strg heißt auf macOS ⌘ Cmd.
 | PLY | `.ply` | ✔ | ✔ | ASCII und binär; Vertex- und Flächenfarben (Scans, MeshLab); Punktwolken ohne Flächen werden nicht gezeigt |
 | glTF | `.glb`, `.gltf` | ✔ | ✔ | Alle Netze der Szene mit Grundfarben, Vertex-Farben und Texturen; externe Puffer und Texturen werden neben der Datei gelesen. glTF rechnet in **Metern**, ein Modell mit 1 Einheit Breite erscheint also als 1000 mm; für Modelle in Millimetern (KI-Generatoren, viele Exporte) *Einstellungen → 3D-Modelle → Millimeter* wählen |
 | Archive | `.zip`, `.7z`, `.rar`, `.tar`, `.tar.gz`, `.tgz`, … | Mosaik | Inhalt | Wie Ordner durchsuchbar, über libarchive |
-| Bilder | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | ✔ | – | In der Detailansicht groß angezeigt |
+| G-code | `.gcode`, `.gco`, `.g` | ✔ | – | Das vom Slicer eingebettete Bild (PNG, JPG, QOI), sonst die Druckbahnen; Druckangaben aus den Kommentaren (OrcaSlicer, Anycubic, Bambu Studio, PrusaSlicer, Cura). Binärer G-code (`.bgcode`) wird noch nicht gelesen |
+| Bilder | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | ✔ | – | Im Vorschau-Bereich groß angezeigt |
 | PDF | `.pdf` | Erste Seite | – | Braucht `pdftoppm` von poppler |
+| Text | `.txt`, `.md`, `.markdown`, `.nfo`, `README`, `LICENSE`, `COPYING` | Erste Seite | – | Im Vorschau-Bereich ganz angezeigt, Markdown formatiert; UTF-8, UTF-16 und Latin-1 |
 | Alles andere | | Dateisymbol | – | Mit Endung angezeigt, damit die Ordneransicht vollständig ist |
 
 ## Einstellungen und Dateien auf der Platte
 
-Alles lässt sich im Einstellungsfenster ändern (⚙ oben rechts oder Strg+,): Sprache,
-die Bereiche, Bibliotheksordner, Slicer, Mesh-Editor, Drucker, die Einheit von glTF-Modellen, was ein Doppelklick auf
-ein Modell tut, die Bildqualität der großen Vorschau und der Modellfenster, die Ordnervorschau, Sicherungen und der Vorschau-Cache (mit Größe und *Cache
-leeren*). Der Abschnitt *Über* nennt die genauen Pfade auf deinem System.
+Alles lässt sich im Einstellungsfenster ändern (⚙ oben rechts oder Strg+,), links nach
+Kategorien geordnet: *Allgemein* (Sprache, was ein Doppelklick auf ein Modell tut, die Bereiche),
+*Bibliothek* (Bibliotheksordner, Ordnervorschau), *Tags* (Farben, Namen oder Punkte auf den
+Kacheln, wie viele), *3D-Ansicht* (Bildqualität der großen Vorschau und der Modellfenster, die
+Einheit von glTF-Modellen), *Programme* (Slicer und Mesh-Editor), *Drucker*, *Daten und Speicher*
+(Sicherungen und der Vorschau-Cache mit Größe und *Cache leeren*) und *Über Meshgrove*, das die
+genauen Pfade auf deinem System nennt.
 
 | Was | Linux | Windows | macOS |
 |---|---|---|---|
@@ -582,10 +722,11 @@ leeren*). Der Abschnitt *Über* nennt die genauen Pfade auf deinem System.
 | Bibliotheks-Index (`library.db`) und `backups/` | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Cache: Vorschauen, STEP-Netze, entpackte Archivdateien | `~/.cache/meshgrove/` | `%LOCALAPPDATA%\meshgrove\` | `~/Library/Caches/meshgrove/` |
 | Exportierte Bilder | `~/Bilder/Meshgrove` | `Bilder\Meshgrove` | `~/Bilder/Meshgrove` |
+| Exportierte Drucklisten (PDF, CSV), Tags und Notizen | Dokumente-Ordner | Dokumente-Ordner | Dokumente-Ordner |
 
 Den Cache kannst du jederzeit löschen; er wird bei Bedarf neu aufgebaut. Auch den Index kannst
-du löschen, aber **darin stehen deine Tags und Notizen**: Exportiere sie vorher oder behalte die
-Sicherungen.
+du löschen, aber **darin stehen deine Tags, Notizen, Listen und das Druckprotokoll**: Exportiere
+sie vorher oder behalte die Sicherungen.
 
 `config.toml` ist reiner Text. Das Einstellungsfenster deckt alles ab, aber zum Nachschlagen:
 
@@ -601,6 +742,16 @@ lock_panes = false         # true: Bereiche nur in der Größe änderbar
 double_click = "window"    # window | preview | slicer | editor | default_app
 preview_quality = "high"   # große Vorschau und Modellfenster: standard | high | studio
 preview_controls = false   # große Vorschau: Name, Werkzeuge und Hinweise zeigen
+gallery_view = "grid"      # grid (Kacheln) | list (Liste)
+print_filter = "all"       # all | unprinted | printed | failed
+colored_tags = true        # Tags farbig (sonst grau)
+tags_on_tiles = true
+tile_tags = "names"        # names | dots
+tile_tag_count = 3         # 1 … 8
+
+[list_columns]
+hidden = ["type"]          # preview, folder, type, size, dimensions, modified, tags, favorite, print
+widths = { name = 320.0 }  # Spalten, die du breiter oder schmaler gezogen hast
 
 [folder_previews]
 enabled = false            # Modelle aus Unterordnern auf Ordnerkacheln
@@ -643,7 +794,8 @@ Namen lassen sich weiter importieren.
   Update-Prüfung, keine Konten.
 - **Grundsätzlich nur lesend.** Deine Modelldateien werden nur gelesen. Meshgrove schreibt in
   seine eigenen Ordner für Einstellungen, Index und Cache, und sonst nur, wenn du ausdrücklich
-  Dateien in den Papierkorb legst, Tags und Notizen exportierst oder ein Bild speicherst.
+  Dateien in den Papierkorb legst, Tags und Notizen oder eine Druckliste exportierst oder ein Bild
+  speicherst.
 - **Absturzsichere Helfer.** STEP-Vernetzung und PDF-Darstellung laufen als eigene Prozesse mit
   Zeitlimit; eine kaputte Datei kann die App nicht mitreißen. Eine Datei, die nicht klappt,
   bekommt eine ⚠-Kachel mit dem Grund im Tooltip.
@@ -669,7 +821,8 @@ Meshgrove ist für Sammlungen mit Tausenden Dateien auf ganz normalen Festplatte
 
 | Funktion | Linux | Windows | macOS |
 |---|---|---|---|
-| Galerie, Viewer, Bibliothek, Tags, Notizen, Duplikate, Druckbett-Check | ✔ | ✔ | ✔ |
+| Galerie, Listenansicht, Viewer, Bibliothek, Tags, Notizen, Listen, Druckprotokoll, Duplikate, Druckbett-Check | ✔ | ✔ | ✔ |
+| G-code- und Readme-Vorschauen, PDF-Checklisten | ✔ | ✔ | ✔ |
 | ZIP / 7z / RAR / TAR | ✔ | ✔ | ✔ |
 | PDF-Vorschauen | ✔ mit poppler | ✔ mit poppler | ✔ mit poppler |
 | STEP-Vorschauen | ✔ alle Pakete; Eigenbau mit OpenCascade | ✔ | ✔ |
@@ -692,8 +845,9 @@ Linux begrenzt, wie viele Programme Ordner beobachten dürfen
 (`fs.inotify.max_user_instances`, oft 128). Auf vollen Desktops ist das Limit aufgebraucht;
 Meshgrove prüft dann jede Minute selbst. Das Limit anheben:
 `sudo sysctl fs.inotify.max_user_instances=512`. Damit es einen Neustart übersteht,
-`fs.inotify.max_user_instances=512` in `/etc/sysctl.d/90-inotify.conf` eintragen. F5 lädt
-einen Ordner sofort neu.
+`fs.inotify.max_user_instances=512` in `/etc/sysctl.d/90-inotify.conf` eintragen. F5 liest den
+aktuellen Ordner sofort neu ein, Rechtsklick → *Ordner neu einlesen* einen ganzen
+Bibliotheksordner mit allem darunter.
 
 **Dolphin zeigt keine 3D-Vorschauen.**
 Die Vorschauen in Dolphins Einstellungen einschalten (siehe
@@ -727,7 +881,7 @@ ersatzweise die Pfade als Text.
 **Wo sind meine Tags nach einer Neuinstallation?**
 Im Bibliotheks-Index und in den täglichen Sicherungen (siehe die
 [Tabelle](#einstellungen-und-dateien-auf-der-platte)). Vor einem Umzug auf einen anderen
-Rechner *Einstellungen → Tags & Notizen sichern → Exportieren* nutzen, dort dann
+Rechner *Einstellungen → Tags, Notizen & Listen sichern → Exportieren* nutzen, dort dann
 *Importieren*.
 
 **Verändert Meshgrove meine 3MF-/STL-Dateien?**
@@ -782,7 +936,7 @@ Meshgrove ist ein Cargo-Workspace aus fünf Crates:
 
 | Crate | Aufgabe |
 |---|---|
-| [`meshgrove-core`](crates/meshgrove-core) | Alles ohne Fenster und Grafikkarte: Dateiformate (STL, 3MF, STEP, OBJ, PLY, glTF, Archive, Bilder, PDF), der SQLite-Bibliotheks-Index, Scanner, Suchsyntax, Duplikat-Signaturen, Tags, Notizen und Sicherungen, Vorschau-Cache, Einstellungen, Druckerprofile |
+| [`meshgrove-core`](crates/meshgrove-core) | Alles ohne Fenster und Grafikkarte: Dateiformate (STL, 3MF, STEP, OBJ, PLY, glTF, G-code, Archive, Bilder, PDF, Text), der SQLite-Bibliotheks-Index, Scanner, Suchsyntax, Duplikat-Signaturen, Tags, Notizen, Listen, das Druckprotokoll und Sicherungen, Vorschau-Cache, Einstellungen, Druckerprofile |
 | [`meshgrove-render`](crates/meshgrove-render) | Der wgpu-Renderer, gemeinsam für Vorschauen (ohne Fenster), 3D-Viewer, Drehvorschau und den Dolphin-Thumbnailer |
 | [`meshgrove`](crates/meshgrove) | Die egui-Anwendung |
 | [`meshgrove-step`](crates/meshgrove-step) | `meshgrove-step-mesher`: STEP → STL mit OpenCascade, als eigener Prozess |
@@ -794,12 +948,12 @@ Wie die Arbeit durch die App läuft:
 flowchart LR
     UI["UI-Thread<br/>(egui)"] -- "sichtbare Kacheln, Maus" --> Q["Vorschau-Warteschlange<br/>Sichtbares zuerst"]
     Q --> IO["Lese-Thread<br/>eins nach dem anderen, festplattenschonend"]
-    IO --> P["Einlese-Pool<br/>STL · 3MF · OBJ · PLY · glTF · Archive"]
+    IO --> P["Einlese-Pool<br/>STL · 3MF · OBJ · PLY · glTF · G-code · Text · Archive"]
     P -- "STEP" --> S["meshgrove-step-mesher<br/>(eigener Prozess)"]
     P --> G["GPU-Thread<br/>wgpu-Rendering ohne Fenster"]
     G --> C[("Vorschau-Cache<br/>PNG + Fakten")]
     C --> UI
-    L["Bibliotheksdienst<br/>Scanner + Dateibeobachter"] --> DB[("SQLite-Index<br/>Dateien · Tags · Notizen")]
+    L["Bibliotheksdienst<br/>Scanner + Dateibeobachter"] --> DB[("SQLite-Index<br/>Dateien · Tags · Notizen · Listen · Drucke")]
     G -- "Maße, Hash, Geometrie" --> L
     DB -- "Suche, Duplikate" --> UI
 ```
@@ -863,10 +1017,20 @@ Ideen und nächste Schritte, grob nach Reihenfolge:
 
 - [x] STEP-Unterstützung in allen Release-Paketen
 - [x] AppImage, .deb und .rpm für Linux, ein Installer für Windows, eine universelle DMG für macOS
+- [x] OBJ, PLY und glTF mit ihren Farben und Texturen (0.2)
+- [x] Favoriten, Sammlungen, Drucklisten und ein Druckprotokoll; G-code- und Readme-Vorschauen;
+  eine Listenansicht (0.4)
+- [ ] Tag-Vorschläge aus Datei- und Ordnernamen, auf Wunsch von einem lokalen KI-Modell (Ollama
+  mit Vision-Modell), das auch beschreibt, wie ein Modell aussieht
+- [ ] Quelle, Designer und Lizenz pro Modell; mehrteilige Modelle als ein Set
+- [ ] Helles Design (hell, dunkel oder wie das System)
+- [ ] „In Slicer öffnen“-Links von Printables, MakerWorld und Thingiverse direkt in die Bibliothek
+- [ ] Filament: eigene Spulenliste oder Spoolman, und ob die Farben eines Projekts vorrätig sind
+- [ ] Viewer: Winkel messen, Ortho-Ansicht, G-code-Schichtvorschau, große Ansicht für G-code,
+  Bilder und Texte
+- [ ] Mehrere Drucker; Schrift für chinesische und japanische Texte; Prusas binärer G-code
+  (`.bgcode`)
 - [ ] Flatpak, eine notarisierte macOS-App
-- [ ] Mehr Formate: OBJ, PLY, G-Code-Vorschauen (eingebettete Bilder)
-- [ ] Sammlungen (handverlesene Sets über Ordner hinweg) und Druckstatus (gedruckt,
-  misslungen, offen)
 - [ ] Vorschauen im Windows-Explorer und im macOS-Finder
 - [ ] Weitere Sprachen (Beiträge willkommen)
 
@@ -894,7 +1058,11 @@ dalassen. Fehlermeldungen, Ideen und ein ⭐ auf GitHub sind genauso willkommen.
 Meshgrove wird von **Davis** als Projekt von
 **[German Redneck Engineering](https://redneck-design.de/)** entwickelt.
 
-Es baut auf großartiger Open-Source-Arbeit auf: [egui/eframe](https://github.com/emilk/egui),
+Es baut auf großartiger Open-Source-Arbeit auf: [egui/eframe](https://github.com/emilk/egui) mit
+[egui_tiles](https://github.com/rerun-io/egui_tiles),
+[egui_extras](https://github.com/emilk/egui) und
+[egui_commonmark](https://github.com/lampsitter/egui_commonmark) (mit
+[pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark)),
 [wgpu](https://wgpu.rs), [glam](https://github.com/bitshifter/glam-rs),
 [rusqlite](https://github.com/rusqlite/rusqlite) mit [SQLite](https://sqlite.org),
 [libarchive](https://libarchive.org) über
@@ -902,6 +1070,8 @@ Es baut auf großartiger Open-Source-Arbeit auf: [egui/eframe](https://github.co
 [OpenCascade](https://dev.opencascade.org), [poppler](https://poppler.freedesktop.org),
 [notify](https://github.com/notify-rs/notify), [zip](https://github.com/zip-rs/zip2),
 [quick-xml](https://github.com/tafia/quick-xml), [image](https://github.com/image-rs/image),
+[krilla](https://github.com/LaurenzV/krilla) (PDF-Checklisten),
+[ab_glyph](https://github.com/alexheretic/ab-glyph),
 [BLAKE3](https://github.com/BLAKE3-team/BLAKE3), [trash](https://github.com/Byron/trash-rs),
 [wl-clipboard-rs](https://github.com/YaLTeR/wl-clipboard-rs),
 [clipboard-rs](https://github.com/ChurchTao/clipboard-rs) und
