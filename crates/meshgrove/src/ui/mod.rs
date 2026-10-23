@@ -26,6 +26,50 @@ pub fn context_menu_with_field(response: &Response, add_contents: impl FnOnce(&m
     Popup::context_menu(response).close_behavior(PopupCloseBehavior::CloseOnClickOutside).show(add_contents);
 }
 
+/// The slicers the "open in" entries offer: their names and which one is the default.
+#[derive(Clone, Copy, Default)]
+pub struct SlicerList<'a> {
+    pub names: &'a [String],
+    pub default: usize,
+}
+
+impl SlicerList<'_> {
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+}
+
+/// The mesh editors the "open in" entries offer, and which one is the default. Not every
+/// editor opens every kind of file.
+#[derive(Clone, Copy, Default)]
+pub struct EditorList<'a> {
+    pub programs: &'a [meshgrove_core::config::Program],
+    pub default: usize,
+}
+
+impl EditorList<'_> {
+    /// The editors that open this kind of file as (index, name), the default one first.
+    pub fn usable(&self, kind: meshgrove_core::Kind) -> Vec<(usize, &str)> {
+        self.usable_for_any(&[kind])
+    }
+
+    /// The editors that open at least one of these kinds, the default one first.
+    pub fn usable_for_any(&self, kinds: &[meshgrove_core::Kind]) -> Vec<(usize, &str)> {
+        let mut list: Vec<(usize, &str)> = self
+            .programs
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| kinds.iter().any(|k| e.opens(*k)))
+            .map(|(i, e)| (i, e.name.as_str()))
+            .collect();
+        if let Some(at) = list.iter().position(|(i, _)| *i == self.default) {
+            let first = list.remove(at);
+            list.insert(0, first);
+        }
+        list
+    }
+}
+
 /// Menu contents that scroll when the window is too small to show them all, with an arrow above
 /// and below that is greyed out at the end of the list (and scrolls a few rows when clicked).
 pub fn scroll_menu(ui: &mut Ui, id_salt: impl std::hash::Hash + std::fmt::Debug, add_contents: impl FnOnce(&mut Ui)) {

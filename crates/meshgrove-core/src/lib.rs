@@ -13,6 +13,7 @@ pub mod loaders;
 pub mod mesh;
 pub mod printer;
 pub mod process;
+pub mod programs;
 pub mod query;
 pub mod scan;
 pub mod thumbnail;
