@@ -760,7 +760,7 @@ impl Gallery {
     /// What the printability check says about a model tile: the problems known from its
     /// thumbnail (the check made with it, its size), and whether the library flagged its content.
     /// Fitting the printers is the bed badge's business.
-    fn check_problems(&self, entry: &Entry, index: usize) -> (Vec<Problem>, bool) {
+    pub fn check_problems(&self, entry: &Entry, index: usize) -> (Vec<Problem>, bool) {
         let flagged = self.marks.get(&entry.path).is_some_and(|m| m.problem);
         if !entry.kind.is_model() {
             return (Vec::new(), false);

@@ -51,6 +51,8 @@ pub enum SettingsChange {
     DoubleClick(DoubleClick),
     FolderPreviews(FolderPreviews),
     LockPanes(bool),
+    /// The inbox of new files in the sidebar.
+    Inbox(bool),
     /// Tags in colour; tags on the tiles, how many and how.
     TagDisplay {
         colored: bool,
@@ -82,6 +84,15 @@ fn panes(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
     if ui.button(t!("pane.reset")).clicked() {
         changes.push(SettingsChange::ResetLayout);
     }
+}
+
+fn inbox(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+    ui.label(RichText::new(t!("settings.inbox")).strong());
+    let mut on = config.inbox;
+    if ui.checkbox(&mut on, t!("settings.inbox_show")).changed() {
+        changes.push(SettingsChange::Inbox(on));
+    }
+    ui.weak(t!("settings.inbox_hint"));
 }
 
 /// How tags are drawn.
@@ -313,6 +324,7 @@ enum Section {
     DoubleClick,
     Panes,
     Library,
+    Inbox,
     FolderPreviews,
     Tags,
     Themes,
@@ -525,7 +537,7 @@ impl SettingsDialog {
                         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                             let sections: &[Section] = match self.category {
                                 Category::General => &[Section::Language, Section::DoubleClick, Section::Panes],
-                                Category::Library => &[Section::Library, Section::FolderPreviews],
+                                Category::Library => &[Section::Library, Section::Inbox, Section::FolderPreviews],
                                 Category::Tags => {
                                     &[Section::Tags, Section::Themes, Section::Properties, Section::States]
                                 }
@@ -550,6 +562,7 @@ impl SettingsDialog {
                                     Section::DoubleClick => double_click(ui, config, &mut changes),
                                     Section::Panes => panes(ui, config, &mut changes),
                                     Section::Library => self.library(ui, config, &mut changes),
+                                    Section::Inbox => inbox(ui, config, &mut changes),
                                     Section::FolderPreviews => folder_previews(ui, config, &mut changes),
                                     Section::Tags => tags(ui, config, &mut changes),
                                     Section::Themes => self.suggestions(ui, config, Group::Themes, &mut changes),

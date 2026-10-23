@@ -20,6 +20,7 @@ pub enum SidebarAction {
     /// Library files carrying all of these tags.
     SearchTags(Vec<String>),
     ShowDuplicates,
+    ShowInbox,
     OpenList(i64),
     CreateList(ListKind, String),
     RenameList(i64, String),
@@ -43,6 +44,9 @@ pub struct LibraryInfo<'a> {
     pub tags: &'a [(String, usize)],
     pub duplicate_groups: usize,
     pub showing_duplicates: bool,
+    /// Files waiting in the inbox; `None` when the inbox is switched off.
+    pub inbox: Option<usize>,
+    pub showing_inbox: bool,
     pub lists: &'a [ListInfo],
     pub showing_list: Option<i64>,
     /// Tags the current search asks for (lower-case), highlighted.
@@ -115,6 +119,13 @@ impl Sidebar {
                 let label = format!("⧉  {}", t!("sidebar.duplicates", count = library.duplicate_groups));
                 if ui.selectable_label(library.showing_duplicates, label).clicked() {
                     action = Some(SidebarAction::ShowDuplicates);
+                }
+            }
+            // Only once something arrived: an empty inbox would just take room.
+            if let Some(count) = library.inbox.filter(|&n| n > 0 || library.showing_inbox) {
+                let label = format!("📥  {}", t!("sidebar.inbox", count = count));
+                if ui.selectable_label(library.showing_inbox, label).on_hover_text(t!("sidebar.inbox_hint")).clicked() {
+                    action = Some(SidebarAction::ShowInbox);
                 }
             }
             if !config.library_roots.iter().any(|r| current.starts_with(r)) {

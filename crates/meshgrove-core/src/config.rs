@@ -329,6 +329,8 @@ pub struct Config {
     pub folder_previews: FolderPreviews,
     /// The panes of the main window can only be resized, not moved.
     pub lock_panes: bool,
+    /// The sidebar lists the inbox of new files.
+    pub inbox: bool,
     /// Mesh editors and CAD programs for "open in …"; `None`: take the ones found on this computer.
     pub editors: Option<Vec<Program>>,
     /// Name of the default editor (double-click); `None`: the first that opens the file.
@@ -526,6 +528,7 @@ impl Default for Config {
             double_click: DoubleClick::Window,
             folder_previews: FolderPreviews::default(),
             lock_panes: false,
+            inbox: true,
             editors: None,
             default_editor: None,
             editor: None,

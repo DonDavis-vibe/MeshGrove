@@ -2,7 +2,7 @@
 //! learned while making thumbnails. SQLite in WAL mode, so the UI can read while the
 //! background scanner writes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -159,6 +159,8 @@ pub struct Library {
     pub(crate) conn: Connection,
     /// The user's printers, for `passt:` and `is:zugross` ([`Library::set_printers`]).
     printers: Arc<Vec<Printer>>,
+    /// Libraries in their first (baseline) scan: what it finds is not new ([`crate::inbox`]).
+    baseline_roots: HashSet<PathBuf>,
 }
 
 impl Library {
@@ -188,7 +190,7 @@ impl Library {
         }
         let printers = Arc::new(Vec::new());
         printer_functions(&conn, &printers).ok()?;
-        Some(Library { conn, printers })
+        Some(Library { conn, printers, baseline_roots: HashSet::new() })
     }
 
     pub fn open_in_memory() -> Result<Library, Error> {
@@ -217,9 +219,19 @@ impl Library {
         }
         crate::lists::upgrade(&conn)?;
         reclassify_unknown(&conn)?;
+        crate::inbox::start(&conn)?;
         let printers = Arc::new(Vec::new());
         printer_functions(&conn, &printers)?;
-        Ok(Library { conn, printers })
+        Ok(Library { conn, printers, baseline_roots: HashSet::new() })
+    }
+
+    /// While on, folders and files indexed below `root` count as there before (not new).
+    pub fn set_baseline_root(&mut self, root: &Path, on: bool) {
+        if on {
+            self.baseline_roots.insert(root.to_path_buf());
+        } else {
+            self.baseline_roots.remove(root);
+        }
     }
 
     /// The printers `passt:`/`fits:` and `is:zugross` check against.
@@ -272,12 +284,14 @@ impl Library {
         let Some(dir_s) = path_str(dir) else { return Ok(false) };
         let parent = if dir == root { None } else { dir.parent().and_then(path_str) };
         let rel = dir.strip_prefix(root).unwrap_or(dir).to_string_lossy().to_lowercase();
+        // When it was found: for the inbox; nothing in a baseline scan.
+        let added = (!self.baseline_roots.contains(root)).then(|| nanos(Some(SystemTime::now())));
         let tx = self.conn.transaction()?;
         let mut changed = tx.query_row("SELECT 1 FROM dirs WHERE path = ?1", [dir_s], |_| Ok(())).optional()?.is_none();
         tx.execute(
-            "INSERT INTO dirs (path, parent, mtime_ns) VALUES (?1, ?2, ?3)
+            "INSERT INTO dirs (path, parent, mtime_ns, added_ns) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(path) DO UPDATE SET parent = excluded.parent, mtime_ns = excluded.mtime_ns",
-            params![dir_s, parent, mtime_ns],
+            params![dir_s, parent, mtime_ns, added],
         )?;
         let dir_id: i64 = tx.query_row("SELECT id FROM dirs WHERE path = ?1", [dir_s], |r| r.get(0))?;
 
@@ -291,23 +305,25 @@ impl Library {
         }
         {
             let mut insert = tx.prepare_cached(
-                "INSERT INTO files (dir_id, name, kind, size, mtime_ns, search) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO files (dir_id, name, kind, size, mtime_ns, search, added_ns) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
+            // New contents: new for the inbox as well (unless the content is known).
             let mut update = tx.prepare_cached(
                 "UPDATE files SET kind = ?2, size = ?3, mtime_ns = ?4, meta_key = NULL, triangles = NULL,
-                 size_x = NULL, size_y = NULL, size_z = NULL, content_hash = NULL, geo_sig = NULL WHERE id = ?1",
+                 size_x = NULL, size_y = NULL, size_z = NULL, content_hash = NULL, geo_sig = NULL,
+                 print_s = NULL, gcode_printer = NULL, filament_g = NULL, title = NULL, added_ns = ?5 WHERE id = ?1",
             )?;
             for f in files.iter().filter(|f| !f.is_dir()) {
                 let mtime = nanos(f.modified);
                 match known.remove(&f.name) {
                     Some((_, size, old_mtime)) if size == f.size as i64 && old_mtime == mtime => {}
                     Some((id, _, _)) => {
-                        update.execute(params![id, f.kind.as_str(), f.size as i64, mtime])?;
+                        update.execute(params![id, f.kind.as_str(), f.size as i64, mtime, added])?;
                         changed = true;
                     }
                     None => {
                         let search = format!("{}\n{rel}", f.name.to_lowercase());
-                        insert.execute(params![dir_id, f.name, f.kind.as_str(), f.size as i64, mtime, search])?;
+                        insert.execute(params![dir_id, f.name, f.kind.as_str(), f.size as i64, mtime, search, added])?;
                         changed = true;
                     }
                 }
@@ -385,6 +401,9 @@ impl Library {
         )?;
         if let (Some(checks), Some(hash)) = (&meta.checks, &meta.content_hash) {
             self.store_checks(hash, checks)?;
+        }
+        if let Some(hash) = &meta.content_hash {
+            crate::inbox::note_seen(&self.conn, hash)?;
         }
         Ok(())
     }
@@ -494,6 +513,10 @@ impl Library {
                 " AND f.kind IN ({MODEL_KINDS}, 'gcode') AND (f.content_hash IS NULL
                    OR f.content_hash NOT IN (SELECT content_hash FROM prints WHERE result = 'printed'))"
             );
+            let untagged = format!(
+                " AND f.kind IN ({MODEL_KINDS}, 'gcode')
+                   AND (f.content_hash IS NULL OR f.content_hash NOT IN (SELECT content_hash FROM file_tags))"
+            );
             let too_big = format!(
                 " AND f.kind IN ({MODEL_KINDS}) AND f.size_x IS NOT NULL AND NOT mg_fits_any(f.size_x, f.size_y, f.size_z)"
             );
@@ -525,6 +548,8 @@ impl Library {
                 Mark::TooBig if self.printers.is_empty() => " AND 0",
                 Mark::TooBig => &too_big,
                 Mark::Problem => &problem,
+                Mark::New => " AND f.content_hash IN (SELECT content_hash FROM inbox WHERE done_ns IS NULL)",
+                Mark::Untagged => &untagged,
             };
         }
         if !query.kinds.is_empty() {

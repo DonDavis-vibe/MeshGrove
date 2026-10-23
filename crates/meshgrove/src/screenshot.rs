@@ -31,7 +31,7 @@ pub struct ScreenshotHook {
     /// `MESHGROVE_FLATTEN=1`: start with "include subfolders" on.
     pub flatten: bool,
     /// `MESHGROVE_VIEW`: what to open once it can be shown. `duplicates` (the duplicates view),
-    /// `settings` or `settings:<category>` (the settings window, e.g. `settings:printer`).
+    /// `inbox`, `settings` or `settings:<category>` (the settings window, e.g. `settings:printer`).
     pub view: Option<String>,
     path: String,
     at: Instant,

@@ -32,6 +32,7 @@ use crate::ui::details::{
     self, DetailsContext, DetailsOutput, ListsOfSelection, ModelStatus, NoteEditor, PrintInfo, TagEditor,
 };
 use crate::ui::duplicates::{self, DupAction, GroupInfo};
+use crate::ui::inbox::{self as inbox_view, InboxGroupInfo};
 use crate::ui::gallery::{Action, Arrange, Gallery, ListSettings, MenuContext};
 use crate::ui::layout::{Layout, Pane};
 use crate::ui::model_window::{self, ModelWindow, WindowAction, WindowContext};
@@ -54,6 +55,8 @@ const TILE_RANGE: std::ops::RangeInclusive<f32> = 96.0..=384.0;
 const MAX_RESULTS: usize = 5000;
 /// Texture uploads per frame; more would stutter when a whole folder comes out of the cache at once.
 const UPLOADS_PER_FRAME: usize = 24;
+/// New files are counted for the inbox this long after their facts came in (batched).
+const INBOX_RECOUNT: Duration = Duration::from_secs(2);
 
 /// Files that were (to be) moved to the trash, and how it went.
 type TrashResult = (Vec<PathBuf>, Result<(), String>);
@@ -70,6 +73,8 @@ enum View {
     Duplicates { entries: Vec<Entry>, groups: Vec<GroupInfo> },
     /// The files of a list (favourites, print list, collection).
     List { id: i64, entries: Vec<Entry> },
+    /// New files waiting to be sorted, by the drop they came with.
+    Inbox { entries: Vec<Entry>, groups: Vec<InboxGroupInfo> },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -79,6 +84,7 @@ enum Scope {
 }
 
 mod checks;
+mod inbox;
 
 /// Which switch to inches the question is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,6 +175,9 @@ pub struct App {
     checks_flushed: Instant,
     checks_queued: HashSet<String>,
     checks_next: Instant,
+    /// Files waiting in the inbox, and when to count them again (new files were processed).
+    inbox_count: usize,
+    inbox_due: Option<Instant>,
     /// How tags are drawn (coloured or not, chosen colours).
     tag_style: TagStyle,
     /// Name typed for a new automatic collection (saving a search).
@@ -334,6 +343,8 @@ impl App {
             checks_flushed: Instant::now(),
             checks_queued: HashSet::new(),
             checks_next: Instant::now(),
+            inbox_count: 0,
+            inbox_due: None,
             tag_style: TagStyle {
                 colored: config.colored_tags,
                 themes: config.themes(),
@@ -456,7 +467,7 @@ impl App {
 
     fn navigate(&mut self, path: PathBuf) {
         self.leave_search();
-        if path == self.nav.current() && matches!(self.view, View::Duplicates { .. } | View::List { .. }) {
+        if path == self.nav.current() && matches!(self.view, View::Duplicates { .. } | View::List { .. } | View::Inbox { .. }) {
             // The folder is already read; going "there" means leaving the duplicates or the list.
             self.view = View::Folder;
             self.on_listing_arrived();
@@ -636,7 +647,7 @@ impl App {
         if matches!(self.view, View::Folder) && self.select_after_load.is_none() {
             self.select_after_load = self.selected_entry().map(|e| e.path.clone());
         }
-        if matches!(self.view, View::Duplicates { .. } | View::List { .. }) {
+        if matches!(self.view, View::Duplicates { .. } | View::List { .. } | View::Inbox { .. }) {
             self.nav.refresh();
         } else {
             self.nav.reload();
@@ -647,7 +658,7 @@ impl App {
         if matches!(self.view, View::Search(_)) {
             return; // the folder changed underneath the results; it is shown when the search ends
         }
-        if self.nav.refreshed() && matches!(self.view, View::Duplicates { .. } | View::List { .. }) {
+        if self.nav.refreshed() && matches!(self.view, View::Duplicates { .. } | View::List { .. } | View::Inbox { .. }) {
             return; // likewise: only the folder underneath was read again
         }
         if self.flatten {
@@ -727,6 +738,7 @@ impl App {
                     uploads += usize::from(image.is_some());
                     self.library.store_meta(job.path.clone(), job.key.clone(), meta.clone());
                     self.note_selection_checks(&job.path, meta.checks.as_deref());
+                    self.inbox_due.get_or_insert(Instant::now() + INBOX_RECOUNT);
                 }
                 ThumbResult::Failed { job, error, content_hash } => {
                     // A broken model is still noted (by content), as unreadable.
@@ -767,6 +779,9 @@ impl App {
                     }
                     if matches!(self.view, View::Duplicates { .. }) {
                         self.show_duplicates(); // files were added, changed or trashed
+                    }
+                    if matches!(self.view, View::Inbox { .. }) {
+                        self.show_inbox();
                     }
                 }
                 LibEvent::Pending(jobs) => {
@@ -884,7 +899,11 @@ impl App {
         self.gallery.set_marks(index.marks().unwrap_or_default());
         self.menu.lists = menu_lists(&self.lists);
         self.menu.favorite = self.all_favorite(&self.menu_for);
+        self.inbox_count = index.inbox_count().unwrap_or_default();
         self.reapply_filter(); // the print filter follows the marks
+        if matches!(self.view, View::Inbox { .. }) {
+            self.show_inbox(); // files were marked as done (or arrived)
+        }
         if let View::List { id, .. } = self.view {
             if self.lists.iter().any(|l| l.id == id) {
                 self.show_list(id, false); // its contents may have changed
@@ -1244,6 +1263,13 @@ impl App {
                     self.refresh_gallery(false);
                 }
                 SettingsChange::LockPanes(locked) => self.config.lock_panes = locked,
+                SettingsChange::Inbox(on) => {
+                    self.config.inbox = on;
+                    if !on && matches!(self.view, View::Inbox { .. }) {
+                        self.view = View::Folder;
+                        self.on_listing_arrived();
+                    }
+                }
                 SettingsChange::SpaceMouse(config) => self.config.spacemouse = config,
                 SettingsChange::FreeOrbit(on) => self.config.free_orbit = on,
                 SettingsChange::TagDisplay { colored, on_tiles, count, style } => {
@@ -1468,6 +1494,7 @@ impl App {
         self.duplicates_due = Some(Instant::now() + Duration::from_secs(2));
         match self.view {
             View::Duplicates { .. } => self.show_duplicates_without(&gone),
+            View::Inbox { .. } => self.show_inbox(),
             _ => self.reload(),
         }
     }
@@ -1587,6 +1614,7 @@ impl App {
             match self.view {
                 View::Duplicates { .. } => self.show_duplicates(),
                 View::List { id, .. } => self.show_list(id, false),
+                View::Inbox { .. } => self.show_inbox(),
                 _ => {}
             }
             // The index too: what the watcher missed (copied on another system, a network share).
@@ -1812,6 +1840,14 @@ impl App {
                 }
                 return;
             }
+            View::Inbox { entries, .. } => {
+                ui.label(RichText::new(format!("📥 {}", t!("inbox.title", count = entries.len()))).strong());
+                if ui.button(t!("search.close")).clicked() {
+                    self.view = View::Folder;
+                    self.on_listing_arrived();
+                }
+                return;
+            }
             View::Folder => {}
         }
         let current = self.nav.current().to_path_buf();
@@ -1918,7 +1954,7 @@ impl App {
             (View::Search(results), _) if results.is_empty() => {
                 Some(if self.index.is_none() { t!("search.unavailable") } else { t!("search.none") }.into_owned())
             }
-            (View::Duplicates { .. }, _) => None,
+            (View::Duplicates { .. } | View::Inbox { .. }, _) => None,
             (View::List { id, entries }, _) if entries.is_empty() => {
                 let favorites = self.lists.iter().any(|l| l.id == *id && l.kind == ListKind::Favorites);
                 Some(if favorites { t!("lists.favorites_empty") } else { t!("lists.empty") }.into_owned())
@@ -1933,6 +1969,11 @@ impl App {
         let zoom = ui.input(|i| i.zoom_delta());
         if zoom != 1.0 && ui.rect_contains_pointer(ui.max_rect()) {
             self.config.tile_size = (self.config.tile_size * zoom).clamp(*TILE_RANGE.start(), *TILE_RANGE.end());
+        }
+        if let View::Inbox { entries, groups } = &self.view {
+            let action = inbox_view::show(ui, entries, groups, &self.gallery);
+            self.inbox_action(action);
+            return;
         }
         if let View::Duplicates { entries, groups } = &self.view {
             match duplicates::show(ui, entries, groups, &self.gallery) {
@@ -1987,6 +2028,8 @@ impl App {
             tags: &self.all_tags,
             duplicate_groups: self.duplicate_groups,
             showing_duplicates: matches!(self.view, View::Duplicates { .. }),
+            inbox: self.config.inbox.then_some(self.inbox_count),
+            showing_inbox: matches!(self.view, View::Inbox { .. }),
             lists: &self.lists,
             showing_list: match self.view {
                 View::List { id, .. } => Some(id),
@@ -2022,6 +2065,7 @@ impl App {
                 self.run_search();
             }
             Some(SidebarAction::ShowDuplicates) => self.show_duplicates(),
+            Some(SidebarAction::ShowInbox) => self.show_inbox(),
             Some(SidebarAction::OpenList(id)) => self.show_list(id, true),
             Some(SidebarAction::CreateList(kind, name)) => {
                 self.toast(t!("toast.list_created", list = name).into_owned());
@@ -2340,6 +2384,7 @@ impl eframe::App for App {
         self.units_dialog(&ctx);
         self.receive_thumbnails(&ctx);
         self.poll_checks();
+        self.recount_inbox();
         self.shortcuts(&ctx);
         if let Some(changed) = self.search_changed {
             if changed.elapsed() >= SEARCH_DEBOUNCE {
@@ -2385,6 +2430,10 @@ impl eframe::App for App {
                 ("duplicates", _) if self.index.is_some() && self.duplicate_groups > 0 => {
                     hook.view = None;
                     self.show_duplicates();
+                }
+                ("inbox", _) if self.index.is_some() && self.inbox_count > 0 => {
+                    hook.view = None;
+                    self.show_inbox();
                 }
                 _ => {}
             }
@@ -2468,6 +2517,7 @@ fn view_entries<'a>(view: &'a View, nav: &'a Navigator) -> &'a [Entry] {
         View::Flatten { entries, .. } => entries.as_deref().unwrap_or(&[]),
         View::Duplicates { entries, .. } => entries,
         View::List { entries, .. } => entries,
+        View::Inbox { entries, .. } => entries,
     }
 }
 

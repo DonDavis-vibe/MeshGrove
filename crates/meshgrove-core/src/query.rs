@@ -33,6 +33,10 @@ pub enum Mark {
     TooBig,
     /// Something may make printing fail: mesh holes, suspicious size, too big for every printer.
     Problem,
+    /// Waiting in the inbox.
+    New,
+    /// Models and G-code without any tag.
+    Untagged,
 }
 
 impl Mark {
@@ -44,6 +48,8 @@ impl Mark {
             "failed" | "fehlgeschlagen" => Mark::Failed,
             "toobig" | "too-big" | "zugross" | "zugroß" | "zu-gross" | "zu-groß" => Mark::TooBig,
             "problem" | "problems" | "probleme" | "fehler" => Mark::Problem,
+            "new" | "neu" | "inbox" | "eingang" => Mark::New,
+            "untagged" | "ohne-tags" | "ohnetags" => Mark::Untagged,
             _ => return None,
         })
     }
@@ -153,9 +159,9 @@ mod tests {
 
     #[test]
     fn printer_filters() {
-        let q = parse(r#"passt:"Kobra S1" fits:a1 is:zugroß is:TooBig"#);
+        let q = parse(r#"passt:"Kobra S1" fits:a1 is:zugroß is:TooBig is:neu is:ohne-tags"#);
         assert_eq!(q.fits, ["kobra s1", "a1"]);
-        assert_eq!(q.marks, [Mark::TooBig]);
+        assert_eq!(q.marks, [Mark::TooBig, Mark::New, Mark::Untagged]);
         assert!(!parse("is:zugross").is_empty());
     }
 }

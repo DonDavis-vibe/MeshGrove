@@ -65,6 +65,8 @@ enum Cmd {
     StoreMeta(PathBuf, String, ThumbMeta),
     /// Printability checks by content hash.
     StoreChecks(Vec<(String, MeshChecks)>),
+    /// Takes these files out of the inbox; `None`: everything.
+    InboxDone(Option<Vec<PathBuf>>),
     Tag(Vec<PathBuf>, String),
     Untag(Vec<PathBuf>, String),
     SetNote(Vec<PathBuf>, String),
@@ -149,6 +151,11 @@ impl LibraryService {
 
     pub fn store_meta(&self, path: PathBuf, key: String, meta: ThumbMeta) {
         let _ = self.tx.send(Cmd::StoreMeta(path, key, meta));
+    }
+
+    /// Marks files of the inbox as done (`None`: all of them).
+    pub fn inbox_done(&self, paths: Option<Vec<PathBuf>>) {
+        let _ = self.tx.send(Cmd::InboxDone(paths));
     }
 
     pub fn store_checks(&self, checks: Vec<(String, MeshChecks)>) {
@@ -327,6 +334,16 @@ impl Worker {
                     }
                     self.refresh_counts(&lib);
                 }
+                Ok(Cmd::InboxDone(paths)) => {
+                    let result = match &paths {
+                        Some(paths) => lib.inbox_done(paths, "user").map(|done| done.len()),
+                        None => lib.inbox_done_all("user"),
+                    };
+                    if let Err(e) = result {
+                        log::warn!("inbox update failed: {e}");
+                    }
+                    self.send(LibEvent::UserDataChanged);
+                }
                 Ok(Cmd::StoreChecks(checks)) => {
                     for (hash, c) in &checks {
                         if let Err(e) = lib.store_checks(hash, c) {
@@ -371,7 +388,19 @@ impl Worker {
         let mut visited = 0;
         let never = AtomicBool::new(false);
         for (root, start) in starts {
-            match scan::scan(lib, root, start, force, &never) {
+            // Until a library's first full scan is through, what it finds is not new (inbox).
+            let baseline = lib.baseline_pending(root);
+            lib.set_baseline_root(root, baseline);
+            let result = scan::scan(lib, root, start, force, &never);
+            lib.set_baseline_root(root, false);
+            if baseline
+                && start == root
+                && result.is_ok()
+                && let Err(e) = lib.finish_baseline(root)
+            {
+                log::warn!("could not note the first scan of {}: {e}", root.display());
+            }
+            match result {
                 Ok(report) if report.changed_dirs.is_empty() => visited += report.dirs_visited,
                 Ok(report) => {
                     visited += report.dirs_visited;

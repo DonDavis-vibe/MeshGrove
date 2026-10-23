@@ -69,8 +69,10 @@ pub fn show(ui: &mut Ui, entries: &[Entry], groups: &[GroupInfo], gallery: &Gall
                 });
                 ui.horizontal_wrapped(|ui| {
                     for i in group.range.clone() {
-                        if let Some(a) =
-                            tile(ui, &entries[i], gallery.thumb(i), i == group.keep, gallery.selected == Some(i))
+                        let keep = format!("★ {}", t!("dupes.keep"));
+                        let badge = (i == group.keep).then_some((keep.as_str(), KEEP_GREEN));
+                        if let (_, Some(a)) =
+                            tile(ui, &entries[i], gallery.thumb(i), badge, false, gallery.selected == Some(i))
                         {
                             action = Some(match a {
                                 TileClick::Select => DupAction::Select(i),
@@ -86,12 +88,23 @@ pub fn show(ui: &mut Ui, entries: &[Entry], groups: &[GroupInfo], gallery: &Gall
     action
 }
 
-enum TileClick {
+const KEEP_GREEN: Color32 = Color32::from_rgb(90, 170, 90);
+
+pub(super) enum TileClick {
     Select,
     Open,
 }
 
-fn tile(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, keep: bool, selected: bool) -> Option<TileClick> {
+/// A file of a group: picture, name, folder, size and date; `badge` (text, colour) in the top
+/// corner, `warn` a printability warning at the bottom. The response is for context menus.
+pub(super) fn tile(
+    ui: &mut Ui,
+    entry: &Entry,
+    thumb: Option<&Thumb>,
+    badge: Option<(&str, Color32)>,
+    warn: bool,
+    selected: bool,
+) -> (egui::Response, Option<TileClick>) {
     let width = 170.0;
     let (rect, response) = ui.allocate_exact_size(vec2(width, width + 64.0), Sense::click());
     let visuals = ui.visuals();
@@ -111,14 +124,11 @@ fn tile(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, keep: bool, selected:
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
         painter.image(texture.id(), egui::Rect::from_center_size(img.center(), size * scale), uv, Color32::WHITE);
     }
-    if keep {
-        super::icons::corner_badge(
-            &painter,
-            img,
-            &format!("★ {}", t!("dupes.keep")),
-            Color32::from_rgb(90, 170, 90),
-            Color32::BLACK,
-        );
+    if let Some((label, color)) = badge {
+        super::icons::corner_badge(&painter, img, label, color, Color32::BLACK);
+    }
+    if warn {
+        super::icons::bottom_right_badge(&painter, img, "⚠", visuals.warn_fg_color.linear_multiply(0.9), Color32::BLACK);
     }
     let text = visuals.text_color();
     let weak = visuals.weak_text_color();
@@ -140,11 +150,12 @@ fn tile(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, keep: bool, selected:
         y += h + 1.0;
     }
     let response = response.on_hover_text_at_pointer(entry.path.display().to_string());
-    if response.double_clicked() {
+    let click = if response.double_clicked() {
         Some(TileClick::Open)
     } else if response.clicked() {
         Some(TileClick::Select)
     } else {
         None
-    }
+    };
+    (response, click)
 }

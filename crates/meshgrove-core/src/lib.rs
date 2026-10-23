@@ -8,6 +8,7 @@ pub mod db;
 pub mod dedupe;
 pub mod formats;
 pub mod fsinfo;
+pub mod inbox;
 pub mod listing;
 pub mod lists;
 pub mod loaders;
