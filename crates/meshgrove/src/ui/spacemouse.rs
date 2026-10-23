@@ -7,6 +7,7 @@ use egui::{Color32, Painter, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2
 use glam::{Mat4, Vec2, Vec3};
 use meshgrove_core::Mesh;
 use meshgrove_core::config::Config;
+use meshgrove_core::mesh::Aabb;
 use meshgrove_core::spacemouse::{
     Axis, AxisMapping, CALIBRATION_STEPS, CalibrationNote, Calibrator, CameraMotion, DEADZONE_RANGE, SPEED_RANGE,
     SpaceMouseConfig,
@@ -24,7 +25,7 @@ use crate::spacemouse::{Snapshot, Status};
 const TRAVEL: Vec3 = Vec3::new(0.35, 0.35, 0.3);
 const TILT_DEGREES: f32 = 22.0;
 const TWIST_DEGREES: f32 = 30.0;
-const SEGMENTS: usize = 40;
+const SEGMENTS: usize = 64;
 
 /// One face to paint: corners in world space, its outward normal and a base colour.
 struct Face {
@@ -99,19 +100,56 @@ fn mouse_faces(motion: [f32; 6], active: [bool; 6]) -> Vec<Face> {
     faces
 }
 
-/// The camera: in front of and above the mouse.
-const EYE: Vec3 = Vec3::new(0.0, -5.2, 3.3);
-
-fn camera(rect: Rect) -> Mat4 {
-    let aspect = rect.width() / rect.height().max(1.0);
-    glam::camera::rh::proj::directx::perspective(30f32.to_radians(), aspect, 0.1, 50.0)
-        * glam::camera::rh::view::look_at_mat4(EYE, Vec3::new(0.0, 0.0, 0.2), Vec3::Z)
+/// How the picture is looked at: in front of and above the mouse.
+fn mouse_view() -> ViewParams {
+    ViewParams {
+        azimuth_deg: 0.0,
+        elevation_deg: 30.0,
+        zoom: 1.6,
+        framing: Framing::Orbit,
+        model_color: [0.6, 0.6, 0.62],
+        ..ViewParams::default()
+    }
 }
 
-fn project(view_proj: &Mat4, rect: Rect, p: Vec3) -> Pos2 {
-    let clip = *view_proj * p.extend(1.0);
-    let ndc = clip.truncate() / clip.w;
-    pos2(rect.center().x + ndc.x * rect.width() * 0.5, rect.center().y - ndc.y * rect.height() * 0.5)
+/// The corners of the box the picture's bounds are pinned to, whatever the knob does: two
+/// triangles with no area at the ends of the box, so the camera never shifts with the knob.
+const BOX_MIN: Vec3 = Vec3::new(-1.35, -1.35, -0.35);
+const BOX_MAX: Vec3 = Vec3::new(1.35, 1.35, 1.3);
+
+/// The faces as a mesh with one colour per triangle, wound outwards.
+fn mouse_mesh(motion: [f32; 6], active: [bool; 6]) -> Mesh {
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut colors: Vec<[u8; 4]> = Vec::new();
+    for face in mouse_faces(motion, active) {
+        let c = face.corners;
+        let outwards = (c[1] - c[0]).cross(c[2] - c[0]).dot(face.normal) >= 0.0;
+        let quad = if outwards { [c[0], c[1], c[2], c[3]] } else { [c[0], c[3], c[2], c[1]] };
+        for tri in [[0, 1, 2], [0, 2, 3]] {
+            let [a, b, d] = tri.map(|i| quad[i]);
+            // A corner collapsed to a point makes a triangle with no area: leave it out.
+            if (b - a).cross(d - a).length_squared() < 1e-10 {
+                continue;
+            }
+            positions.extend([a, b, d].map(|v| v.to_array()));
+            // The renderer's lighting darkens what it draws: lift the colours to make up for it.
+            let lift = |v: u8| (f32::from(v) * 1.2).min(255.0) as u8;
+            colors.push([lift(face.color.r()), lift(face.color.g()), lift(face.color.b()), 255]);
+        }
+    }
+    let grey = [90, 90, 94, 255];
+    for corner in [BOX_MIN, BOX_MAX] {
+        positions.extend([corner.to_array(); 3]);
+        colors.push(grey);
+    }
+    Mesh { positions, indices: None, colors: Some(colors), vertex_colors: None }
+}
+
+/// Where a point of the picture (the knob's own coordinates) lands in the rectangle.
+fn project(bounds: &Aabb, view: &ViewParams, rect: Rect, p: Vec3) -> Option<Pos2> {
+    let aspect = rect.width() / rect.height().max(1.0);
+    let ndc = meshgrove_render::project_point(bounds, view, aspect, p - bounds.center())?;
+    Some(pos2(rect.center().x + ndc.x * rect.width() * 0.5, rect.center().y - ndc.y * rect.height() * 0.5))
 }
 
 /// The path of an arrow showing a movement's positive direction, over the knob.
@@ -133,8 +171,11 @@ fn arrow_path(axis: Axis) -> Vec<Vec3> {
     }
 }
 
-fn paint_arrow(painter: &Painter, view_proj: &Mat4, rect: Rect, path: &[Vec3], color: Color32) {
-    let points: Vec<Pos2> = path.iter().map(|p| project(view_proj, rect, *p)).collect();
+fn paint_arrow(painter: &Painter, bounds: &Aabb, view: &ViewParams, rect: Rect, path: &[Vec3], color: Color32) {
+    let points: Vec<Pos2> = path.iter().filter_map(|p| project(bounds, view, rect, *p)).collect();
+    if points.len() < 2 {
+        return;
+    }
     painter.add(egui::Shape::line(points.clone(), Stroke::new(3.0, color)));
     if let [.., a, b] = points.as_slice() {
         let dir = (*b - *a).normalized();
@@ -148,50 +189,30 @@ fn paint_arrow(painter: &Painter, view_proj: &Mat4, rect: Rect, path: &[Vec3], c
     }
 }
 
-/// Paints the faces that look at the eye, far to near, shaded by a light from the front left
-/// above. They are drawn as plain triangles: outlined polygons grew long spikes where a face is
-/// seen edge-on or collapses to a point (the middle of a disc), and filled polygons show seams.
-fn paint_faces(painter: &Painter, rect: Rect, view_proj: &Mat4, mut faces: Vec<Face>) {
-    let centre = |f: &Face| f.corners.iter().copied().sum::<Vec3>() / 4.0;
-    faces.retain(|f| f.normal.dot(EYE - centre(f)) > 0.0);
-    faces.sort_by(|a, b| (centre(b) - EYE).length().total_cmp(&(centre(a) - EYE).length()));
-    let light = Vec3::new(-0.4, -0.5, 0.8).normalize();
-    let mut mesh = egui::Mesh::default();
-    for face in &faces {
-        let shade = 0.5 + 0.5 * face.normal.normalize_or_zero().dot(light).max(0.0);
-        let c = face.color;
-        let color = Color32::from_rgb(
-            (f32::from(c.r()) * shade) as u8,
-            (f32::from(c.g()) * shade) as u8,
-            (f32::from(c.b()) * shade) as u8,
-        );
-        let p: Vec<Pos2> = face.corners.iter().map(|p| project(view_proj, rect, *p)).collect();
-        for [a, b, c] in [[0, 1, 2], [0, 2, 3]] {
-            // A triangle with no area (a collapsed corner) would add nothing but noise.
-            if (p[b] - p[a]).x * (p[c] - p[a]).y - (p[b] - p[a]).y * (p[c] - p[a]).x == 0.0 {
-                continue;
-            }
-            let base = mesh.vertices.len() as u32;
-            for i in [a, b, c] {
-                mesh.colored_vertex(p[i], color);
-            }
-            mesh.add_triangle(base, base + 1, base + 2);
-        }
-    }
-    painter.add(egui::Shape::mesh(mesh));
-}
-
-/// Draws the 3D mouse, its knob moved by `motion` (the order of [`Axis::ALL`], −1…1); `arrow`
-/// shows a movement's direction (the calibration asks for it).
-pub fn draw_mouse(ui: &mut Ui, size: egui::Vec2, motion: [f32; 6], arrow: Option<Axis>) {
+/// Draws the 3D mouse with the renderer of the models (smooth edges), its knob moved by
+/// `motion` (the order of [`Axis::ALL`], −1…1); `arrow` shows a movement's direction (the
+/// calibration asks for it).
+pub fn draw_mouse(
+    target: &mut OffscreenView,
+    ui: &mut Ui,
+    size: egui::Vec2,
+    (rs, renderer): (&egui_wgpu::RenderState, &Renderer),
+    motion: [f32; 6],
+    arrow: Option<Axis>,
+) {
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 6.0, ui.visuals().extreme_bg_color);
-    let view_proj = camera(rect);
-    let active = motion.map(|v| v.abs() > 0.08);
-    paint_faces(&painter, rect, &view_proj, mouse_faces(motion, active));
+    let mesh = mouse_mesh(motion, motion.map(|v| v.abs() > 0.08));
+    let (Some(bounds), Some(gpu)) = (mesh.bounds(), renderer.upload(&rs.device, &mesh)) else { return };
+    let (w, h) = pixel_size(ui.ctx(), rect);
+    // Sharpen the edges: render at twice the size, the display scales it down.
+    target.ensure_size(rs, renderer, w * 2, h * 2);
+    let view = mouse_view();
+    target.render(rs, renderer, &gpu, &view);
+    target.paint(&painter, rect);
     if let Some(axis) = arrow {
-        paint_arrow(&painter, &view_proj, rect, &arrow_path(axis), Color32::from_rgb(255, 196, 60));
+        paint_arrow(&painter, &bounds, &view, rect, &arrow_path(axis), Color32::from_rgb(255, 196, 60));
     }
 }
 
@@ -291,6 +312,9 @@ fn udev_command() -> String {
 pub struct MouseSettings {
     calibrator: Option<(Calibrator, CalibrationNote)>,
     cube: Option<ResultCube>,
+    /// The textures of the knob picture and of the one in the calibration window.
+    knob: OffscreenView,
+    knob_calibration: OffscreenView,
 }
 
 impl MouseSettings {
@@ -353,7 +377,7 @@ impl MouseSettings {
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.weak(t!("mouse.picture_knob"));
-                draw_mouse(ui, vec2(250.0, 190.0), physical, None);
+                draw_mouse(&mut self.knob, ui, vec2(250.0, 190.0), render, physical, None);
             });
             ui.vertical(|ui| {
                 ui.weak(t!("mouse.picture_result"));
@@ -450,6 +474,7 @@ impl MouseSettings {
         ctx: &egui::Context,
         config: &Config,
         mouse: &Snapshot,
+        render: (&egui_wgpu::RenderState, &Renderer),
         changes: &mut Vec<SettingsChange>,
     ) {
         let Some((calibrator, note)) = &mut self.calibrator else { return };
@@ -470,6 +495,7 @@ impl MouseSettings {
         let progress = calibrator.progress();
         let note = *note;
         let mut cancel = false;
+        let knob = &mut self.knob_calibration;
         egui::Modal::new(egui::Id::unique("mouse-calibration")).show(ctx, |ui| {
             ui.set_max_width(420.0);
             ui.heading(t!("mouse.calibrate"));
@@ -480,7 +506,7 @@ impl MouseSettings {
             }
             ui.add_space(4.0);
             let motion = config.spacemouse.physical(mouse.raw);
-            draw_mouse(ui, vec2(ui.available_width().min(380.0), 210.0), motion, target);
+            draw_mouse(knob, ui, vec2(ui.available_width().min(380.0), 210.0), render, motion, target);
             ui.add_space(6.0);
             ui.add(egui::ProgressBar::new(progress).desired_width(f32::INFINITY));
             ui.weak(note_text(note));

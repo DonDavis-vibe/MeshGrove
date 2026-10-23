@@ -445,7 +445,7 @@ impl SettingsDialog {
                     });
                 });
             });
-        self.mouse.calibration_modal(ctx, config, info.mouse, &mut changes);
+        self.mouse.calibration_modal(ctx, config, info.mouse, info.render, &mut changes);
         self.open = open;
         changes
     }
