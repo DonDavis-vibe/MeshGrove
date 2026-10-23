@@ -149,12 +149,14 @@ fn paint_arrow(painter: &Painter, view_proj: &Mat4, rect: Rect, path: &[Vec3], c
 }
 
 /// Paints the faces that look at the eye, far to near, shaded by a light from the front left
-/// above. Each gets an outline in its own colour, so no seams show between neighbours.
+/// above. They are drawn as plain triangles: outlined polygons grew long spikes where a face is
+/// seen edge-on or collapses to a point (the middle of a disc), and filled polygons show seams.
 fn paint_faces(painter: &Painter, rect: Rect, view_proj: &Mat4, mut faces: Vec<Face>) {
     let centre = |f: &Face| f.corners.iter().copied().sum::<Vec3>() / 4.0;
     faces.retain(|f| f.normal.dot(EYE - centre(f)) > 0.0);
     faces.sort_by(|a, b| (centre(b) - EYE).length().total_cmp(&(centre(a) - EYE).length()));
     let light = Vec3::new(-0.4, -0.5, 0.8).normalize();
+    let mut mesh = egui::Mesh::default();
     for face in &faces {
         let shade = 0.5 + 0.5 * face.normal.normalize_or_zero().dot(light).max(0.0);
         let c = face.color;
@@ -163,9 +165,20 @@ fn paint_faces(painter: &Painter, rect: Rect, view_proj: &Mat4, mut faces: Vec<F
             (f32::from(c.g()) * shade) as u8,
             (f32::from(c.b()) * shade) as u8,
         );
-        let points = face.corners.iter().map(|p| project(view_proj, rect, *p)).collect();
-        painter.add(egui::Shape::convex_polygon(points, color, Stroke::new(1.0, color)));
+        let p: Vec<Pos2> = face.corners.iter().map(|p| project(view_proj, rect, *p)).collect();
+        for [a, b, c] in [[0, 1, 2], [0, 2, 3]] {
+            // A triangle with no area (a collapsed corner) would add nothing but noise.
+            if (p[b] - p[a]).x * (p[c] - p[a]).y - (p[b] - p[a]).y * (p[c] - p[a]).x == 0.0 {
+                continue;
+            }
+            let base = mesh.vertices.len() as u32;
+            for i in [a, b, c] {
+                mesh.colored_vertex(p[i], color);
+            }
+            mesh.add_triangle(base, base + 1, base + 2);
+        }
     }
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 /// Draws the 3D mouse, its knob moved by `motion` (the order of [`Axis::ALL`], −1…1); `arrow`
