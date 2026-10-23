@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
 use meshgrove_core::config::{
-    Config, DoubleClick, FOLDER_PREVIEW_DEPTH, FolderPreviews, GltfUnit, PreviewQuality, Program, Slicer,
-    TILE_TAG_COUNT, ThemeTag, TileTags, default_themes,
+    Config, DoubleClick, FOLDER_PREVIEW_DEPTH, FolderPreviews, GltfUnit, PreviewQuality, Program, Slicer, SuggestedTag,
+    TILE_TAG_COUNT, TileTags, default_properties, default_states, default_themes,
 };
 use meshgrove_core::printer::Bed;
 use meshgrove_core::userdata;
 
-use super::tags::{self, PALETTE};
+use super::tags::{self, Group, PALETTE};
 use crate::i18n;
 
 pub enum SettingsChange {
@@ -38,8 +38,8 @@ pub enum SettingsChange {
     },
     /// The sidebar lists tags alphabetically, not grouped.
     FlatTagList(bool),
-    /// The theme tags; `None`: the built-in set.
-    Themes(Option<Vec<ThemeTag>>),
+    /// The suggested tags of a group (themes, properties, states); `None`: the built-in set.
+    Suggestions(Group, Option<Vec<SuggestedTag>>),
     ResetLayout,
     Export(PathBuf),
     Import(PathBuf),
@@ -181,7 +181,7 @@ pub struct SettingsDialog {
     printer_form: Option<[String; 4]>,
     printer_error: bool,
     /// A new theme as typed.
-    theme_input: String,
+    suggest_input: [String; 3],
     import_input: String,
     cache_size: Option<u64>,
     cache_rx: Option<Receiver<u64>>,
@@ -235,6 +235,8 @@ enum Section {
     FolderPreviews,
     Tags,
     Themes,
+    Properties,
+    States,
     Preview,
     Models,
     Slicer,
@@ -398,7 +400,9 @@ impl SettingsDialog {
                             let sections: &[Section] = match self.category {
                                 Category::General => &[Section::Language, Section::DoubleClick, Section::Panes],
                                 Category::Library => &[Section::Library, Section::FolderPreviews],
-                                Category::Tags => &[Section::Tags, Section::Themes],
+                                Category::Tags => {
+                                    &[Section::Tags, Section::Themes, Section::Properties, Section::States]
+                                }
                                 Category::View => &[Section::Preview, Section::Models],
                                 Category::Programs => &[Section::Slicer, Section::Editor],
                                 Category::Printer => &[Section::Printer],
@@ -421,7 +425,11 @@ impl SettingsDialog {
                                     Section::Library => self.library(ui, config, &mut changes),
                                     Section::FolderPreviews => folder_previews(ui, config, &mut changes),
                                     Section::Tags => tags(ui, config, &mut changes),
-                                    Section::Themes => self.themes(ui, config, &mut changes),
+                                    Section::Themes => self.suggestions(ui, config, Group::Themes, &mut changes),
+                                    Section::Properties => {
+                                        self.suggestions(ui, config, Group::Properties, &mut changes)
+                                    }
+                                    Section::States => self.suggestions(ui, config, Group::State, &mut changes),
                                     Section::Preview => preview(ui, config, &mut changes),
                                     Section::Models => models(ui, config, &mut changes),
                                     Section::Slicer => self.slicer(ui, config, slicer, &mut changes),
@@ -439,15 +447,37 @@ impl SettingsDialog {
         changes
     }
 
-    /// The theme tags offered in the tag menu: rename, recolour, remove, add.
-    fn themes(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
-        ui.label(RichText::new(t!("settings.themes")).strong());
-        ui.weak(t!("settings.themes_hint"));
+    /// The suggested tags of one group (themes, print properties, states) offered in the tag menu:
+    /// rename, recolour, remove, add.
+    fn suggestions(&mut self, ui: &mut Ui, config: &Config, group: Group, changes: &mut Vec<SettingsChange>) {
+        let (slot, defaults) = match group {
+            Group::Themes => (0, default_themes as fn() -> Vec<SuggestedTag>),
+            Group::Properties => (1, default_properties as fn() -> Vec<SuggestedTag>),
+            _ => (2, default_states as fn() -> Vec<SuggestedTag>),
+        };
+        let current = match group {
+            Group::Themes => config.themes(),
+            Group::Properties => config.properties(),
+            _ => config.states(),
+        };
+        ui.push_id(slot, |ui| self.suggestion_list(ui, group, current, defaults, slot, changes));
+    }
+
+    fn suggestion_list(
+        &mut self,
+        ui: &mut Ui,
+        group: Group,
+        original: Vec<SuggestedTag>,
+        defaults: fn() -> Vec<SuggestedTag>,
+        slot: usize,
+        changes: &mut Vec<SettingsChange>,
+    ) {
+        ui.label(RichText::new(group.title()).strong());
+        ui.weak(t!("settings.suggest_hint", group = group.title()));
         let german = rust_i18n::locale().starts_with("de");
-        let original = config.themes();
         let mut themes = original.clone();
         let mut remove = None;
-        egui::ScrollArea::vertical().id_salt("themes").max_height(260.0).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("list").max_height(260.0).show(ui, |ui| {
             for (i, theme) in themes.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
                     let (bg, _) = PALETTE[usize::from(tags::theme_slot(theme))];
@@ -479,7 +509,7 @@ impl SettingsDialog {
                         theme.de = name.clone();
                         theme.en = name;
                     }
-                    if ui.small_button("✕").on_hover_text(t!("settings.themes_remove")).clicked() {
+                    if ui.small_button("✕").on_hover_text(t!("settings.suggest_remove")).clicked() {
                         remove = Some(i);
                     }
                 });
@@ -490,38 +520,38 @@ impl SettingsDialog {
         }
         ui.horizontal(|ui| {
             let field = ui.add(
-                egui::TextEdit::singleline(&mut self.theme_input)
-                    .hint_text(t!("settings.themes_new"))
+                egui::TextEdit::singleline(&mut self.suggest_input[slot])
+                    .hint_text(t!("settings.suggest_new"))
                     .desired_width(220.0),
             );
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let name = self.theme_input.trim().to_owned();
+            let name = self.suggest_input[slot].trim().to_owned();
             let can_add = !name.is_empty() && !themes.iter().any(|t| t.matches(&name));
             if (ui.add_enabled(can_add, egui::Button::new("＋")).clicked() || enter) && can_add {
-                themes.push(ThemeTag::named(&name));
-                self.theme_input.clear();
+                themes.push(SuggestedTag::named(&name));
+                self.suggest_input[slot].clear();
                 field.request_focus();
             }
         });
         ui.horizontal(|ui| {
-            if ui.button(t!("settings.themes_missing")).clicked() {
-                for theme in default_themes() {
+            if ui.button(t!("settings.suggest_missing")).clicked() {
+                for theme in defaults() {
                     if !themes.iter().any(|t| t.matches(&theme.de) || t.matches(&theme.en)) {
                         themes.push(theme);
                     }
                 }
             }
-            if ui.button(t!("settings.themes_reset")).clicked() {
-                themes = default_themes();
+            if ui.button(t!("settings.suggest_reset")).clicked() {
+                themes = defaults();
                 if themes == original {
                     return;
                 }
-                changes.push(SettingsChange::Themes(None));
+                changes.push(SettingsChange::Suggestions(group, None));
                 themes = original.clone();
             }
         });
         if themes != original {
-            changes.push(SettingsChange::Themes(Some(themes)));
+            changes.push(SettingsChange::Suggestions(group, Some(themes)));
         }
     }
 

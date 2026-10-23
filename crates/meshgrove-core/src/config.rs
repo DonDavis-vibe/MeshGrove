@@ -406,7 +406,11 @@ pub struct Config {
     /// Tag pills on the gallery tiles.
     pub tags_on_tiles: bool,
     /// The theme tags offered in the tag menu; `None`: the built-in set ([`default_themes`]).
-    pub themes: Option<Vec<ThemeTag>>,
+    pub themes: Option<Vec<SuggestedTag>>,
+    /// The print-property tags offered; `None`: [`default_properties`].
+    pub properties: Option<Vec<SuggestedTag>>,
+    /// The state-and-origin tags offered; `None`: [`default_states`].
+    pub states: Option<Vec<SuggestedTag>>,
     /// The sidebar lists all tags alphabetically instead of grouped (themes, properties, state, own).
     pub flat_tag_list: bool,
     /// Names or colour dots on the tiles.
@@ -420,20 +424,20 @@ pub struct Config {
     pub list_columns: ListColumns,
 }
 
-/// A theme tag the user can pick from the tag menu: its name in both languages and its palette
-/// slot (`None`: a colour from the name).
+/// A tag the user can pick from the tag menu (a theme, a print property or a state): its name in
+/// both languages and its palette slot (`None`: a colour from the name).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ThemeTag {
+pub struct SuggestedTag {
     pub de: String,
     pub en: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<u8>,
 }
 
-impl ThemeTag {
+impl SuggestedTag {
     /// A theme with one name for both languages.
-    pub fn named(name: &str) -> ThemeTag {
-        ThemeTag { de: name.to_owned(), en: name.to_owned(), color: None }
+    pub fn named(name: &str) -> SuggestedTag {
+        SuggestedTag { de: name.to_owned(), en: name.to_owned(), color: None }
     }
 
     /// Whether `tag` is this theme's German or English name.
@@ -492,15 +496,70 @@ const DEFAULT_THEMES: &[(&str, &str, u8)] = &[
     ("Kalibrierung", "Calibration", 5),
 ];
 
+/// The built-in print properties: (German, English, palette slot).
+const DEFAULT_PROPERTIES: &[(&str, &str, u8)] = &[
+    ("mehrfarbig", "multicolour", 10),
+    ("Print-in-Place", "print-in-place", 5),
+    ("ohne Stützen", "no supports", 4),
+    ("braucht Stützen", "needs supports", 0),
+    ("mehrteilig", "multi-part", 6),
+    ("Funktionsteil", "functional", 8),
+    ("beweglich", "articulated", 9),
+    ("Gewinde", "threads", 7),
+    ("Magnete", "magnets", 2),
+    ("Gewindeeinsätze", "heat-set inserts", 1),
+    ("Vasenmodus", "vase mode", 6),
+    ("PLA", "PLA", 4),
+    ("PETG", "PETG", 7),
+    ("TPU", "TPU", 10),
+    ("ASA", "ASA", 1),
+    ("Resin", "resin", 9),
+];
+
+/// The built-in states and origins: (German, English, palette slot).
+const DEFAULT_STATES: &[(&str, &str, u8)] = &[
+    ("eigenes Design", "own design", 4),
+    ("Remix", "remix", 9),
+    ("gekauft", "bought", 2),
+    ("kostenlos", "free", 5),
+    ("getestet", "tested", 5),
+    ("muss angepasst werden", "needs tweaking", 1),
+    ("fehlerhaft", "broken", 0),
+];
+
+fn suggested_tags(list: &[(&str, &str, u8)]) -> Vec<SuggestedTag> {
+    list.iter().map(|&(de, en, slot)| SuggestedTag { de: de.into(), en: en.into(), color: Some(slot) }).collect()
+}
+
 /// The built-in set of themes.
-pub fn default_themes() -> Vec<ThemeTag> {
-    DEFAULT_THEMES.iter().map(|&(de, en, slot)| ThemeTag { de: de.into(), en: en.into(), color: Some(slot) }).collect()
+pub fn default_themes() -> Vec<SuggestedTag> {
+    suggested_tags(DEFAULT_THEMES)
+}
+
+/// The built-in set of print properties.
+pub fn default_properties() -> Vec<SuggestedTag> {
+    suggested_tags(DEFAULT_PROPERTIES)
+}
+
+/// The built-in set of states and origins.
+pub fn default_states() -> Vec<SuggestedTag> {
+    suggested_tags(DEFAULT_STATES)
 }
 
 impl Config {
     /// The themes in use: the user's own list, or the built-in set.
-    pub fn themes(&self) -> Vec<ThemeTag> {
+    pub fn themes(&self) -> Vec<SuggestedTag> {
         self.themes.clone().unwrap_or_else(default_themes)
+    }
+
+    /// The print properties in use.
+    pub fn properties(&self) -> Vec<SuggestedTag> {
+        self.properties.clone().unwrap_or_else(default_properties)
+    }
+
+    /// The states and origins in use.
+    pub fn states(&self) -> Vec<SuggestedTag> {
+        self.states.clone().unwrap_or_else(default_states)
     }
 }
 
@@ -526,6 +585,8 @@ impl Default for Config {
             colored_tags: true,
             tags_on_tiles: true,
             themes: None,
+            properties: None,
+            states: None,
             flat_tag_list: false,
             tile_tags: TileTags::Names,
             tile_tag_count: 3,
@@ -666,12 +727,14 @@ mod tests {
         let mut config = Config::default();
         assert_eq!(config.themes(), default_themes());
         let mut seen = std::collections::HashSet::new();
-        for t in default_themes() {
+        for t in default_themes().into_iter().chain(default_properties()).chain(default_states()) {
             assert!(t.color.is_some_and(|c| c < 12));
             assert!(seen.insert(t.de.to_lowercase()), "{} twice", t.de);
         }
-        config.themes =
-            Some(vec![ThemeTag::named("Drachen"), ThemeTag { de: "Burg".into(), en: "Castle".into(), color: Some(3) }]);
+        config.themes = Some(vec![
+            SuggestedTag::named("Drachen"),
+            SuggestedTag { de: "Burg".into(), en: "Castle".into(), color: Some(3) },
+        ]);
         config.flat_tag_list = true;
         let back: Config = toml::from_str(&toml::to_string_pretty(&config).unwrap()).unwrap();
         assert_eq!(back, config);
@@ -680,7 +743,9 @@ mod tests {
         let back: Config = toml::from_str(&toml::to_string_pretty(&config).unwrap()).unwrap();
         assert!(back.themes().is_empty(), "an emptied list stays empty");
         let old: Config = toml::from_str("tile_size = 200.0\n").unwrap();
-        assert!(old.themes.is_none() && !old.flat_tag_list);
+        assert!(old.themes.is_none() && old.properties.is_none() && old.states.is_none() && !old.flat_tag_list);
+        assert_eq!(old.properties().len(), 16);
+        assert_eq!(old.states().len(), 7);
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use meshgrove_core::config::ThemeTag;
+use meshgrove_core::config::SuggestedTag;
 
 use egui::{Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, Ui, pos2, vec2};
 
@@ -51,52 +51,16 @@ impl Group {
     }
 }
 
-/// Built-in suggested tags: (group, German, English, palette slot). The themes are not here, they
-/// are the user's list (`Config::themes`).
-const SUGGESTIONS: &[(Group, &str, &str, u8)] = &[
-    (Group::Properties, "mehrfarbig", "multicolour", 10),
-    (Group::Properties, "Print-in-Place", "print-in-place", 5),
-    (Group::Properties, "ohne Stützen", "no supports", 4),
-    (Group::Properties, "braucht Stützen", "needs supports", 0),
-    (Group::Properties, "mehrteilig", "multi-part", 6),
-    (Group::Properties, "Funktionsteil", "functional", 8),
-    (Group::Properties, "beweglich", "articulated", 9),
-    (Group::Properties, "Gewinde", "threads", 7),
-    (Group::Properties, "Magnete", "magnets", 2),
-    (Group::Properties, "Gewindeeinsätze", "heat-set inserts", 1),
-    (Group::Properties, "Vasenmodus", "vase mode", 6),
-    (Group::Properties, "PLA", "PLA", 4),
-    (Group::Properties, "PETG", "PETG", 7),
-    (Group::Properties, "TPU", "TPU", 10),
-    (Group::Properties, "ASA", "ASA", 1),
-    (Group::Properties, "Resin", "resin", 9),
-    (Group::State, "eigenes Design", "own design", 4),
-    (Group::State, "Remix", "remix", 9),
-    (Group::State, "gekauft", "bought", 2),
-    (Group::State, "kostenlos", "free", 5),
-    (Group::State, "getestet", "tested", 5),
-    (Group::State, "muss angepasst werden", "needs tweaking", 1),
-    (Group::State, "fehlerhaft", "broken", 0),
-];
-
-fn suggestion(tag: &str) -> Option<&'static (Group, &'static str, &'static str, u8)> {
-    SUGGESTIONS.iter().find(|(_, de, en, _)| de.eq_ignore_ascii_case(tag) || en.eq_ignore_ascii_case(tag))
-}
-
 /// The suggested tags of `group` in the UI language.
 pub fn suggested(group: Group, style: &TagStyle) -> Vec<String> {
     let german = rust_i18n::locale().starts_with("de");
-    match group {
-        Group::Themes => style
-            .themes
-            .iter()
-            .map(|t| if german { &t.de } else { &t.en })
-            .filter(|name| !name.trim().is_empty())
-            .cloned()
-            .collect(),
-        Group::Own => Vec::new(),
-        _ => SUGGESTIONS.iter().filter(|s| s.0 == group).map(|s| (if german { s.1 } else { s.2 }).to_owned()).collect(),
-    }
+    style
+        .list(group)
+        .iter()
+        .map(|t| if german { &t.de } else { &t.en })
+        .filter(|name| !name.trim().is_empty())
+        .cloned()
+        .collect()
 }
 
 /// Palette slot from the tag name alone (FNV-1a of the lower-case name).
@@ -105,8 +69,8 @@ fn hashed_slot(tag: &str) -> u8 {
     (hash % PALETTE.len() as u32) as u8
 }
 
-/// The palette slot a theme is drawn in: its own, else from its name.
-pub fn theme_slot(theme: &ThemeTag) -> u8 {
+/// The palette slot a suggested tag is drawn in: its own, else from its name.
+pub fn theme_slot(theme: &SuggestedTag) -> u8 {
     theme.color.filter(|&s| usize::from(s) < PALETTE.len()).unwrap_or_else(|| hashed_slot(&theme.de))
 }
 
@@ -114,29 +78,41 @@ pub fn theme_slot(theme: &ThemeTag) -> u8 {
 #[derive(Debug, Clone, Default)]
 pub struct TagStyle {
     pub colored: bool,
-    /// The themes the user offers (`Config::themes`).
-    pub themes: Vec<ThemeTag>,
+    /// The suggested tags by group (`Config::themes`, `properties`, `states`).
+    pub themes: Vec<SuggestedTag>,
+    pub properties: Vec<SuggestedTag>,
+    pub states: Vec<SuggestedTag>,
     /// Chosen palette slots by lower-case tag name.
     pub chosen: HashMap<String, u8>,
 }
 
 impl TagStyle {
-    /// The group a tag belongs to: a theme of the user, a built-in property or state, else the
-    /// user's own.
-    pub fn group_of(&self, tag: &str) -> Group {
-        if self.themes.iter().any(|t| t.matches(tag)) {
-            Group::Themes
-        } else {
-            suggestion(tag).map_or(Group::Own, |s| s.0)
+    /// The suggested tags of a group (none for the user's own).
+    pub fn list(&self, group: Group) -> &[SuggestedTag] {
+        match group {
+            Group::Themes => &self.themes,
+            Group::Properties => &self.properties,
+            Group::State => &self.states,
+            Group::Own => &[],
         }
     }
 
-    /// The palette slot of a tag: chosen, else its theme's or suggestion's colour, else from its name.
+    /// The group and suggestion a tag belongs to, if it is a suggested one.
+    fn find(&self, tag: &str) -> Option<(Group, &SuggestedTag)> {
+        Group::SUGGESTED.into_iter().find_map(|g| self.list(g).iter().find(|t| t.matches(tag)).map(|t| (g, t)))
+    }
+
+    /// The group a tag belongs to: one of the suggested lists, else the user's own.
+    pub fn group_of(&self, tag: &str) -> Group {
+        self.find(tag).map_or(Group::Own, |(g, _)| g)
+    }
+
+    /// The palette slot of a tag: chosen, else its suggestion's colour, else from its name.
     pub fn slot(&self, tag: &str) -> u8 {
         let valid = |s: &u8| usize::from(*s) < PALETTE.len();
         let chosen = self.chosen.get(&tag.to_lowercase()).copied().filter(valid);
-        let theme = || self.themes.iter().find(|t| t.matches(tag)).and_then(|t| t.color).filter(valid);
-        chosen.or_else(theme).or_else(|| suggestion(tag).map(|s| s.3)).unwrap_or_else(|| hashed_slot(tag))
+        let suggested = || self.find(tag).and_then(|(_, t)| t.color).filter(valid);
+        chosen.or_else(suggested).unwrap_or_else(|| hashed_slot(tag))
     }
 
     /// (background, text) of a tag's pill.
@@ -206,9 +182,19 @@ fn pill(p: &Painter, anchor: Pos2, from_right: bool, label: &str, colors: (Color
 
 #[cfg(test)]
 mod tests {
-    use meshgrove_core::config::default_themes;
+    use meshgrove_core::config::{default_properties, default_states, default_themes};
 
     use super::*;
+
+    fn default_style(colored: bool) -> TagStyle {
+        TagStyle {
+            colored,
+            themes: default_themes(),
+            properties: default_properties(),
+            states: default_states(),
+            ..Default::default()
+        }
+    }
 
     fn luminance(c: [u8; 3]) -> f32 {
         let lin = |v: u8| {
@@ -228,7 +214,7 @@ mod tests {
 
     #[test]
     fn slots_are_stable_and_chosen_ones_win() {
-        let mut style = TagStyle { colored: true, themes: default_themes(), ..Default::default() };
+        let mut style = default_style(true);
         assert_eq!(style.slot("Mein Projekt"), style.slot("mein projekt"), "case does not matter");
         assert_eq!(style.slot("Garten"), 4);
         assert_eq!(style.slot("garden"), 4, "both languages of a suggestion");
@@ -240,21 +226,13 @@ mod tests {
     }
 
     #[test]
-    fn suggestions_are_unique_and_grouped() {
-        let mut seen: std::collections::HashSet<String> =
-            default_themes().iter().flat_map(|t| [t.de.to_lowercase(), t.en.to_lowercase()]).collect();
-        for (_, de, en, slot) in SUGGESTIONS {
-            assert!(usize::from(*slot) < PALETTE.len());
-            assert!(seen.insert(de.to_lowercase()), "{de} twice");
-            if !de.eq_ignore_ascii_case(en) {
-                assert!(seen.insert(en.to_lowercase()), "{en} twice");
-            }
-        }
-        let style = TagStyle { themes: default_themes(), ..Default::default() };
+    fn defaults_are_grouped() {
+        let style = default_style(false);
         assert_eq!(style.group_of("PETG"), Group::Properties);
         assert_eq!(style.group_of("Remix"), Group::State);
         assert_eq!(style.group_of("garden"), Group::Themes);
         assert_eq!(style.group_of("Meine Sachen"), Group::Own);
+        assert_eq!(suggested(Group::State, &style).len(), 7);
     }
 
     #[test]
@@ -262,8 +240,8 @@ mod tests {
         let style = TagStyle {
             colored: true,
             themes: vec![
-                ThemeTag::named("Drachen"),
-                ThemeTag { de: "Burg".into(), en: "Castle".into(), color: Some(3) },
+                SuggestedTag::named("Drachen"),
+                SuggestedTag { de: "Burg".into(), en: "Castle".into(), color: Some(3) },
             ],
             ..Default::default()
         };

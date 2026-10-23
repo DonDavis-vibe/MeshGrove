@@ -392,23 +392,66 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
     if ed.focus {
         field.request_focus();
     }
-    if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) && !ed.input.trim().is_empty() {
-        out.add_tag = Some(std::mem::take(ed.input).trim().to_owned());
-        field.request_focus();
-    }
-    // Existing tags not yet on every selected file, matching what is typed.
+    // Existing tags and suggestions that match what is typed (all existing ones while the field
+    // is empty): the ones that start with it first. Up/Down pick one, Enter takes it.
     let needle = ed.input.trim().to_lowercase();
-    let suggestions: Vec<&String> = ed
-        .all
-        .iter()
-        .filter(|(tag, _)| !on_all(tag) && (needle.is_empty() || tag.to_lowercase().contains(&needle)))
-        .map(|(tag, _)| tag)
-        .take(8)
-        .collect();
-    if !suggestions.is_empty() {
+    let mut candidates: Vec<(String, bool)> =
+        ed.all.iter().filter(|(tag, _)| !on_all(tag)).map(|(tag, _)| (tag.clone(), true)).collect();
+    if !needle.is_empty() {
+        for group in Group::SUGGESTED {
+            for tag in tags::suggested(group, style) {
+                if !on_all(&tag) && !candidates.iter().any(|(t, _)| t.eq_ignore_ascii_case(&tag)) {
+                    candidates.push((tag, false));
+                }
+            }
+        }
+        candidates.retain(|(tag, _)| tag.to_lowercase().contains(&needle));
+        candidates.sort_by_key(|(tag, existing)| (!tag.to_lowercase().starts_with(&needle), !existing));
+    }
+    candidates.truncate(8);
+    let state_id = field.id.with("pick");
+    let (seen_needle, mut picked): (String, Option<usize>) = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
+    if seen_needle != needle {
+        picked = None;
+    }
+    if field.has_focus() && !candidates.is_empty() {
+        let down = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowDown));
+        let up = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowUp));
+        let last = candidates.len() - 1;
+        if down {
+            picked = Some(picked.map_or(0, |i| (i + 1).min(last)));
+        } else if up {
+            picked = picked.and_then(|i| i.checked_sub(1));
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(state_id, (needle.clone(), picked)));
+    if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+        if let Some((tag, _)) = picked.and_then(|i| candidates.get(i)) {
+            out.add_tag = Some(tag.clone());
+            ed.input.clear();
+            field.request_focus();
+        } else if !ed.input.trim().is_empty() {
+            out.add_tag = Some(std::mem::take(ed.input).trim().to_owned());
+            field.request_focus();
+        }
+    }
+    if !candidates.is_empty() {
         ui.horizontal_wrapped(|ui| {
-            for tag in suggestions {
-                if tags::chip(ui, style, tag, &format!("+ {tag}")).clicked() {
+            for (i, (tag, existing)) in candidates.iter().enumerate() {
+                let label = if *existing { format!("+ {tag}") } else { format!("+ {tag} ✦") };
+                let mut response = tags::chip(ui, style, tag, &label);
+                if !*existing {
+                    response = response.on_hover_text(t!("tags.suggestion_unused"));
+                }
+                if picked == Some(i) {
+                    ui.painter().rect_stroke(
+                        response.rect.expand(1.5),
+                        9.0,
+                        egui::Stroke::new(1.5, ui.visuals().strong_text_color()),
+                        egui::StrokeKind::Outside,
+                    );
+                }
+                if response.clicked() {
                     out.add_tag = Some(tag.clone());
                     ed.input.clear();
                 }
