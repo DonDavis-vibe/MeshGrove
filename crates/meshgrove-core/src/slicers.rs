@@ -82,13 +82,13 @@ const fn def(
 
 use SlicerKind::{Fdm, Sla};
 
-/// The catalogue, the first entries being the ones a new user most likely wants as default.
+/// The catalogue (ten filament slicers, plus Snapmaker Orca, and ten for resin), the first entries being the ones a new user most likely wants as default.
 const CATALOGUE: &[Def] = &[
     def(
         "Anycubic Slicer Next",
         Fdm,
         &["AnycubicSlicerNext"],
-        &[],
+        &["com.anycubic.AnycubicSlicer"],
         &["anycubicslicer"],
         &["anycubicslicernext.exe"],
         &["anycubicslicer"],
@@ -146,6 +146,15 @@ const CATALOGUE: &[Def] = &[
         &["superslicer"],
         &["superslicer.exe"],
         &["superslicer"],
+    ),
+    def(
+        "Snapmaker Orca",
+        Fdm,
+        &["snapmaker-orca", "Snapmaker_Orca"],
+        &[],
+        &["snapmakerorca"],
+        &["snapmaker-orca.exe", "snapmaker_orca.exe"],
+        &["snapmakerorca"],
     ),
     def("Simplify3D", Fdm, &["Simplify3D"], &[], &[], &["simplify3d.exe"], &["simplify3d"]),
     def("IdeaMaker", Fdm, &["ideamaker"], &[], &["ideamaker"], &["ideamaker.exe"], &["ideamaker"]),
@@ -519,13 +528,13 @@ mod tests {
     }
 
     #[test]
-    fn the_catalogue_has_ten_of_each_and_unique_names() {
-        assert_eq!(CATALOGUE.iter().filter(|d| d.kind == SlicerKind::Fdm).count(), 10);
+    fn the_catalogue_has_the_common_slicers_and_unique_names() {
+        assert_eq!(CATALOGUE.iter().filter(|d| d.kind == SlicerKind::Fdm).count(), 11);
         assert_eq!(CATALOGUE.iter().filter(|d| d.kind == SlicerKind::Sla).count(), 10);
         let mut names: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 20);
+        assert_eq!(names.len(), 21);
         for d in CATALOGUE {
             assert!(d.win.iter().all(|e| e.to_lowercase() == *e), "{}: Windows names are lower-case", d.name);
             assert!(d.appimage.iter().chain(d.mac).all(|k| !k.contains([' ', '-', '_']) && k.to_lowercase() == *k));
