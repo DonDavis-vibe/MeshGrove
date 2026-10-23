@@ -218,6 +218,7 @@ jobs:
       - name: Package
         run: |
           packaging/licenses/native-licenses.sh vcpkg "$VCPKG_ROOT/installed/arm64-osx-meshgrove" >> THIRD-PARTY-LICENSES.md
+          packaging/licenses/native-licenses.sh hidapi >> THIRD-PARTY-LICENSES.md
           grep -c '^## ' THIRD-PARTY-LICENSES.md
           version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           packaging/macos/package.sh "$version" target/aarch64-apple-darwin/release target/x86_64-apple-darwin/release .
