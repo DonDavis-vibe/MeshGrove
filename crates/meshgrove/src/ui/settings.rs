@@ -9,7 +9,7 @@ use meshgrove_core::config::{
     TILE_TAG_COUNT, TileTags,
 };
 use meshgrove_core::printer::Bed;
-use meshgrove_core::slicers::{Detected, SlicerKind, detect_all};
+use meshgrove_core::programs::{Detected, ProgramKind, detect_editors, detect_slicers};
 use meshgrove_core::userdata;
 
 use crate::i18n;
@@ -23,8 +23,11 @@ pub enum SettingsChange {
         list: Vec<Slicer>,
         default: Option<String>,
     },
-    /// `None`: detect a mesh editor.
-    Editor(Option<Program>),
+    /// The mesh editor list and the name of the default one.
+    Editors {
+        list: Vec<Program>,
+        default: Option<String>,
+    },
     /// `None`: take the printer selected in the slicer.
     Printer(Option<Bed>),
     GltfUnit(GltfUnit),
@@ -173,8 +176,8 @@ pub struct SettingsDialog {
     /// The slicers found on this computer, and the scan that looks for them.
     detected: Vec<Detected>,
     detect_rx: Option<Receiver<Vec<Detected>>>,
-    /// Name and program as typed.
-    editor_form: Option<(String, String)>,
+    /// Name, program and working folder of an editor being added by hand.
+    editor_form: (String, String, String),
     /// Name and X/Y/Z as typed.
     printer_form: Option<[String; 4]>,
     printer_error: bool,
@@ -314,7 +317,7 @@ fn dir_size(dir: &Path) -> u64 {
 }
 
 impl SettingsDialog {
-    pub fn open(&mut self, active_editor: Option<&Program>, bed: Option<&Bed>) {
+    pub fn open(&mut self, bed: Option<&Bed>) {
         self.open = true;
         self.printer_form = Some(printer_form(bed));
         self.printer_error = false;
@@ -323,7 +326,7 @@ impl SettingsDialog {
         }
         self.slicer_form = Default::default();
         self.rescan_slicers();
-        self.editor_form = active_editor.map(|e| (e.name.clone(), e.program.display().to_string()));
+        self.editor_form = Default::default();
         self.refresh_cache_size();
     }
 
@@ -331,7 +334,9 @@ impl SettingsDialog {
     fn rescan_slicers(&mut self) {
         let (tx, rx) = bounded(1);
         std::thread::spawn(move || {
-            let _ = tx.send(detect_all());
+            let mut found = detect_slicers();
+            found.extend(detect_editors());
+            let _ = tx.send(found);
         });
         self.detect_rx = Some(rx);
     }
@@ -350,7 +355,7 @@ impl SettingsDialog {
         ctx: &egui::Context,
         config: &Config,
         (slicers, default_slicer): (&[Slicer], usize),
-        editor: Option<&Program>,
+        (editors, default_editor): (&[Program], usize),
         bed: Option<&Bed>,
         info: AppInfo,
     ) -> Vec<SettingsChange> {
@@ -427,8 +432,12 @@ impl SettingsDialog {
                                     Section::Tags => tags(ui, config, &mut changes),
                                     Section::Preview => preview(ui, config, &mut changes),
                                     Section::Models => models(ui, config, &mut changes),
-                                    Section::Slicer => self.slicer(ui, slicers, default_slicer, &mut changes),
-                                    Section::Editor => self.editor(ui, config, editor, &mut changes),
+                                    Section::Slicer => {
+                                        self.program_list(ui, false, slicers, default_slicer, &mut changes)
+                                    }
+                                    Section::Editor => {
+                                        self.program_list(ui, true, editors, default_editor, &mut changes)
+                                    }
                                     Section::Printer => self.printer(ui, config, bed, &mut changes),
                                     Section::UserData => self.user_data(ui, &mut changes),
                                     Section::Storage => self.storage(ui, &mut changes),
@@ -488,45 +497,68 @@ impl SettingsDialog {
         }
     }
 
-    /// The slicers models are sent to: the added ones (one is the default), the installed ones
-    /// that can be added with a click, and a form for any other.
-    fn slicer(&mut self, ui: &mut Ui, slicers: &[Slicer], default: usize, changes: &mut Vec<SettingsChange>) {
-        ui.label(RichText::new(t!("settings.slicer")).strong());
-        let send = |list: Vec<Slicer>, default: Option<String>, changes: &mut Vec<SettingsChange>| {
-            changes.push(SettingsChange::Slicers { list, default });
+    /// The slicers (or, with `editors`, the mesh editors) models are sent to: the added ones (one
+    /// is the default), the installed ones that can be added with a click, and a form for any
+    /// other.
+    fn program_list(
+        &mut self,
+        ui: &mut Ui,
+        editors: bool,
+        programs: &[Program],
+        default: usize,
+        changes: &mut Vec<SettingsChange>,
+    ) {
+        let (title, none, hint) = if editors {
+            ("settings.editor", "settings.editor_none", "settings.editor_hint")
+        } else {
+            ("settings.slicer", "settings.slicer_none", "settings.slicers_hint")
         };
-        let default_name = slicers.get(default).map(|s| s.name.clone());
-        if slicers.is_empty() {
-            ui.weak(t!("settings.slicer_none"));
+        ui.label(RichText::new(t!(title)).strong());
+        let send = move |list: Vec<Program>, default: Option<String>, changes: &mut Vec<SettingsChange>| {
+            changes.push(if editors {
+                SettingsChange::Editors { list, default }
+            } else {
+                SettingsChange::Slicers { list, default }
+            });
+        };
+        let default_name = programs.get(default).map(|s| s.name.clone());
+        if programs.is_empty() {
+            ui.weak(t!(none));
         }
-        for (i, slicer) in slicers.iter().enumerate() {
+        for (i, program) in programs.iter().enumerate() {
             ui.horizontal(|ui| {
                 if ui.radio(i == default, "").on_hover_text(t!("settings.slicers_default")).clicked() && i != default {
-                    send(slicers.to_vec(), Some(slicer.name.clone()), changes);
+                    send(programs.to_vec(), Some(program.name.clone()), changes);
                 }
-                ui.label(RichText::new(&slicer.name).strong());
-                ui.weak(slicer.program.display().to_string());
+                ui.label(RichText::new(&program.name).strong());
+                ui.weak(program.program.display().to_string());
                 if ui.small_button("✕").on_hover_text(t!("settings.slicers_remove")).clicked() {
-                    let list: Vec<Slicer> = slicers.iter().filter(|s| s.name != slicer.name).cloned().collect();
-                    send(list, default_name.clone().filter(|n| *n != slicer.name), changes);
+                    let list: Vec<Program> = programs.iter().filter(|s| s.name != program.name).cloned().collect();
+                    send(list, default_name.clone().filter(|n| *n != program.name), changes);
                 }
             });
         }
         ui.add_space(6.0);
         ui.label(RichText::new(t!("settings.slicers_found")).small().weak());
-        let addable: Vec<&Detected> =
-            self.detected.iter().filter(|d| !slicers.iter().any(|s| s.program == d.program.program)).collect();
+        let addable: Vec<&Detected> = self
+            .detected
+            .iter()
+            .filter(|d| d.kind.is_slicer() != editors)
+            .filter(|d| !programs.iter().any(|s| s.program == d.program.program))
+            .collect();
         for d in &addable {
             ui.horizontal(|ui| {
                 if ui.button("＋").on_hover_text(t!("settings.slicers_add")).clicked() {
-                    let mut list = slicers.to_vec();
+                    let mut list = programs.to_vec();
                     list.push(d.program.clone());
                     send(list, default_name.clone().or_else(|| Some(d.program.name.clone())), changes);
                 }
                 ui.label(&d.name);
-                let kind =
-                    if d.kind == SlicerKind::Sla { t!("settings.slicers_sla") } else { t!("settings.slicers_fdm") };
-                ui.weak(kind);
+                match d.kind {
+                    ProgramKind::Fdm => ui.weak(t!("settings.slicers_fdm")),
+                    ProgramKind::Sla => ui.weak(t!("settings.slicers_sla")),
+                    ProgramKind::Editor => ui.weak(""),
+                };
             });
         }
         if addable.is_empty() && self.detect_rx.is_none() {
@@ -540,82 +572,48 @@ impl SettingsDialog {
                 ui.spinner();
             }
         });
-        ui.collapsing(t!("settings.slicers_by_hand"), |ui| {
-            let (name, program, workdir) = &mut self.slicer_form;
-            egui::Grid::new("slicer_form").num_columns(2).show(ui, |ui| {
+        let by_hand = if editors { "settings.editors_by_hand" } else { "settings.slicers_by_hand" };
+        ui.collapsing(t!(by_hand), |ui| {
+            let form = if editors { &mut self.editor_form } else { &mut self.slicer_form };
+            let (name, program, workdir) = form;
+            egui::Grid::new(("program_form", editors)).num_columns(2).show(ui, |ui| {
                 ui.label(t!("settings.slicer_name"));
                 ui.add(egui::TextEdit::singleline(name).desired_width(320.0));
                 ui.end_row();
                 ui.label(t!("settings.slicer_program"));
                 ui.add(egui::TextEdit::singleline(program).desired_width(320.0));
                 ui.end_row();
-                ui.label(t!("settings.slicer_workdir"));
-                ui.add(egui::TextEdit::singleline(workdir).desired_width(320.0));
-                ui.end_row();
+                if !editors {
+                    ui.label(t!("settings.slicer_workdir"));
+                    ui.add(egui::TextEdit::singleline(workdir).desired_width(320.0));
+                    ui.end_row();
+                }
             });
             if ui.button(t!("settings.slicers_add")).clicked() && !program.trim().is_empty() {
-                // Keep the environment of a detected slicer with the same program (e.g. Anycubic's libraries).
+                // Keep the environment of a detected program with the same path (e.g. Anycubic's libraries).
                 let env = self
                     .detected
                     .iter()
                     .find(|d| d.program.program == Path::new(program.trim()))
                     .map(|d| d.program.env.clone())
                     .unwrap_or_default();
-                let new = Slicer {
-                    name: if name.trim().is_empty() { "Slicer".into() } else { name.trim().to_owned() },
+                let fallback = if editors { "Editor" } else { "Slicer" };
+                let new = Program {
+                    name: if name.trim().is_empty() { fallback.into() } else { name.trim().to_owned() },
                     program: program.trim().into(),
                     args: Vec::new(),
                     env,
                     workdir: (!workdir.trim().is_empty()).then(|| workdir.trim().into()),
                 };
-                let mut list: Vec<Slicer> = slicers.iter().filter(|s| s.name != new.name).cloned().collect();
+                let mut list: Vec<Program> = programs.iter().filter(|s| s.name != new.name).cloned().collect();
                 let first = list.is_empty();
                 let new_name = new.name.clone();
                 list.push(new);
                 send(list, if first { Some(new_name) } else { default_name.clone() }, changes);
-                self.slicer_form = Default::default();
+                *form = Default::default();
             }
         });
-        ui.weak(t!("settings.slicers_hint"));
-    }
-
-    fn editor(&mut self, ui: &mut Ui, config: &Config, active: Option<&Program>, changes: &mut Vec<SettingsChange>) {
-        ui.label(RichText::new(t!("settings.editor")).strong());
-        let status = match (active, &config.editor) {
-            (Some(e), None) => t!("settings.slicer_detected", name = e.name),
-            (Some(e), Some(_)) => t!("settings.slicer_custom", name = e.name),
-            (None, _) => t!("settings.editor_none"),
-        };
-        ui.weak(status);
-        let mut detect = false;
-        let (name, program) = self.editor_form.get_or_insert_with(Default::default);
-        egui::Grid::new("editor_form").num_columns(2).show(ui, |ui| {
-            ui.label(t!("settings.slicer_name"));
-            ui.add(egui::TextEdit::singleline(name).desired_width(320.0));
-            ui.end_row();
-            ui.label(t!("settings.slicer_program"));
-            ui.add(egui::TextEdit::singleline(program).desired_width(320.0));
-            ui.end_row();
-        });
-        ui.horizontal(|ui| {
-            if ui.button(t!("settings.apply")).clicked() && !program.trim().is_empty() {
-                changes.push(SettingsChange::Editor(Some(Program {
-                    name: if name.trim().is_empty() { "Editor".into() } else { name.trim().to_owned() },
-                    program: program.trim().into(),
-                    args: Vec::new(),
-                    env: Vec::new(),
-                    workdir: None,
-                })));
-            }
-            if ui.button(t!("settings.slicer_auto")).clicked() {
-                changes.push(SettingsChange::Editor(None));
-                detect = true;
-            }
-        });
-        ui.weak(t!("settings.editor_hint"));
-        if detect {
-            self.editor_form = Program::detect_editor().map(|e| (e.name, e.program.display().to_string()));
-        }
+        ui.weak(t!(hint));
     }
 
     fn printer(&mut self, ui: &mut Ui, config: &Config, active: Option<&Bed>, changes: &mut Vec<SettingsChange>) {

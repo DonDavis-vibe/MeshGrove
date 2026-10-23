@@ -26,17 +26,6 @@ pub struct Program {
 pub type Slicer = Program;
 
 impl Program {
-    /// The first installed slicer of the catalogue (see [`crate::slicers`]).
-    pub fn detect_slicer() -> Option<Program> {
-        crate::slicers::detect_all().into_iter().next().map(|d| d.program)
-    }
-
-    /// Finds an installed mesh editor or CAD program: Autodesk Fusion (Windows, macOS),
-    /// FreeCAD, Blender, MeshLab, Meshmixer.
-    pub fn detect_editor() -> Option<Program> {
-        detect_editor()
-    }
-
     /// Blender opens only its own files; models go in through its importers.
     pub fn is_blender(&self) -> bool {
         self.program.file_stem().is_some_and(|n| n.to_string_lossy().to_lowercase().contains("blender"))
@@ -52,64 +41,14 @@ pub(crate) fn plain(name: &str, program: PathBuf) -> Program {
     Program { name: name.into(), program, args: Vec::new(), env: Vec::new(), workdir: None }
 }
 
-#[cfg(target_os = "linux")]
-fn flatpak(home: &Path, id: &str) -> Option<PathBuf> {
-    ["/var/lib/flatpak/exports/bin", &format!("{}/.local/share/flatpak/exports/bin", home.display())]
-        .iter()
-        .map(|dir| Path::new(dir).join(id))
-        .find(|p| p.exists())
-}
-
-#[cfg(target_os = "linux")]
-fn detect_editor() -> Option<Program> {
-    let home = dirs::home_dir()?;
-    let flatpak = |id: &str| flatpak(&home, id);
-    let candidates = [
-        ("FreeCAD", Some(PathBuf::from("/usr/bin/freecad"))),
-        ("FreeCAD", Some(PathBuf::from("/usr/bin/FreeCAD"))),
-        ("FreeCAD", flatpak("org.freecad.FreeCAD")),
-        ("Blender", Some(PathBuf::from("/usr/bin/blender"))),
-        ("Blender", Some(PathBuf::from("/snap/bin/blender"))),
-        ("Blender", flatpak("org.blender.Blender")),
-        ("MeshLab", Some(PathBuf::from("/usr/bin/meshlab"))),
-        ("MeshLab", flatpak("net.meshlab.MeshLab")),
-    ];
-    candidates.into_iter().find_map(|(name, program)| Some(plain(name, program.filter(|p| p.exists())?)))
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-const WINDOWS_EDITORS: &[(&str, &str)] = &[
-    ("Autodesk Fusion", "fusion360.exe"),
-    ("FreeCAD", "freecad.exe"),
-    ("Blender", "blender.exe"),
-    ("MeshLab", "meshlab.exe"),
-    ("Meshmixer", "meshmixer.exe"),
-];
-
-/// Bundle names without spaces; "autodeskfusion" so VMware Fusion does not count.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-const MACOS_EDITORS: &[(&str, &str)] = &[
-    ("Autodesk Fusion", "autodeskfusion"),
-    ("FreeCAD", "freecad"),
-    ("Blender", "blender"),
-    ("MeshLab", "meshlab"),
-    ("Meshmixer", "meshmixer"),
-];
-
 #[cfg(windows)]
 pub(crate) fn program_folders() -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> =
         ["ProgramFiles", "ProgramFiles(x86)"].into_iter().filter_map(std::env::var_os).map(PathBuf::from).collect();
     roots.extend(dirs::data_local_dir().map(|d| d.join("Programs")));
-    roots
-}
-
-#[cfg(windows)]
-fn detect_editor() -> Option<Program> {
-    let mut roots = program_folders();
-    // Fusion installs per user, into %LOCALAPPDATA%\Autodesk\webdeploy\production\<version>\.
+    // Autodesk Fusion installs per user, into %LOCALAPPDATA%\Autodesk\webdeploy\production\<version>\.
     roots.extend(dirs::data_local_dir().map(|d| d.join("Autodesk").join("webdeploy").join("production")));
-    find_program(&roots, WINDOWS_EDITORS)
+    roots
 }
 
 #[cfg(target_os = "macos")]
@@ -119,56 +58,9 @@ pub(crate) fn app_folders() -> Vec<PathBuf> {
     folders
 }
 
-#[cfg(target_os = "macos")]
-fn detect_editor() -> Option<Program> {
-    find_app_bundle(&app_folders(), MACOS_EDITORS)
-}
-
 pub(crate) fn subdirs(dir: &Path) -> Vec<PathBuf> {
     let entries = std::fs::read_dir(dir).into_iter().flatten().flatten();
     entries.map(|e| e.path()).filter(|p| p.is_dir()).collect()
-}
-
-/// Windows installers pick different folders, so programs (lower-case file names) are looked up
-/// one and two levels below the program folders: `Program Files\OrcaSlicer\orca-slicer.exe`,
-/// `Program Files\Prusa3D\PrusaSlicer\prusa-slicer.exe`.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn find_program(roots: &[PathBuf], programs: &[(&str, &str)]) -> Option<Program> {
-    let folders: Vec<PathBuf> = roots
-        .iter()
-        .flat_map(|root| subdirs(root))
-        .flat_map(|dir| {
-            let below = subdirs(&dir);
-            std::iter::once(dir).chain(below)
-        })
-        .collect();
-    programs.iter().find_map(|&(name, exe)| {
-        folders.iter().find_map(|folder| {
-            let mut entries = std::fs::read_dir(folder).into_iter().flatten().flatten();
-            entries.find(|e| e.file_name().to_string_lossy().to_lowercase() == exe).map(|e| plain(name, e.path()))
-        })
-    })
-}
-
-/// macOS apps by bundle name (`OrcaSlicer.app`); `actions` starts a `.app` through `open -a`.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn find_app_bundle(folders: &[PathBuf], apps: &[(&str, &str)]) -> Option<Program> {
-    let bundles: Vec<PathBuf> = folders
-        .iter()
-        .flat_map(|f| std::fs::read_dir(f).into_iter().flatten().flatten().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "app"))
-        .collect();
-    apps.iter().find_map(|&(name, key)| {
-        bundles.iter().find_map(|bundle| {
-            let stem = bundle.file_stem()?.to_string_lossy().to_lowercase().replace([' ', '-', '_'], "");
-            stem.contains(key).then(|| plain(name, bundle.clone()))
-        })
-    })
-}
-
-#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
-fn detect_editor() -> Option<Program> {
-    None
 }
 
 /// What one glTF unit stands for. The glTF standard says metres, but generated models (AI
@@ -342,7 +234,12 @@ pub struct Config {
     pub folder_previews: FolderPreviews,
     /// The panes of the main window can only be resized, not moved.
     pub lock_panes: bool,
-    /// Mesh editor or CAD program for "open in …"; `None`: detect one at startup.
+    /// Mesh editors and CAD programs for "open in …"; `None`: take the ones found on this computer.
+    pub editors: Option<Vec<Program>>,
+    /// Name of the default editor (double-click); `None`: the first that opens the file.
+    pub default_editor: Option<String>,
+    /// The single editor of earlier versions; moved into `editors` when the file is read.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub editor: Option<Program>,
     /// Tags in their palette colours (otherwise grey) on tiles, in the details and the sidebar.
     pub colored_tags: bool,
@@ -379,6 +276,8 @@ impl Default for Config {
             double_click: DoubleClick::Window,
             folder_previews: FolderPreviews::default(),
             lock_panes: false,
+            editors: None,
+            default_editor: None,
             editor: None,
             colored_tags: true,
             tags_on_tiles: true,
@@ -422,7 +321,7 @@ impl Config {
         match std::fs::read_to_string(&path) {
             Ok(text) => {
                 let mut config: Config = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-                config.migrate_slicer();
+                config.migrate_programs();
                 Ok(config)
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Config::default()),
@@ -430,13 +329,20 @@ impl Config {
         }
     }
 
-    /// Earlier versions kept one slicer in `slicer`: it becomes the one entry of `slicers`.
-    fn migrate_slicer(&mut self) {
+    /// Earlier versions kept one slicer in `slicer` and one editor in `editor`: they become the
+    /// one entry of `slicers` and `editors`.
+    fn migrate_programs(&mut self) {
         if let Some(old) = self.slicer.take()
             && self.slicers.is_none()
         {
             self.default_slicer = Some(old.name.clone());
             self.slicers = Some(vec![old]);
+        }
+        if let Some(old) = self.editor.take()
+            && self.editors.is_none()
+        {
+            self.default_editor = Some(old.name.clone());
+            self.editors = Some(vec![old]);
         }
     }
 
@@ -468,50 +374,6 @@ mod tests {
     }
 
     #[test]
-    fn finds_windows_programs_and_mac_bundles() {
-        let dir = tempfile::tempdir().unwrap();
-        let programs = dir.path().join("Program Files");
-        std::fs::create_dir_all(programs.join("Prusa3D/PrusaSlicer")).unwrap();
-        std::fs::write(programs.join("Prusa3D/PrusaSlicer/prusa-slicer.exe"), b"").unwrap();
-        std::fs::create_dir_all(programs.join("OrcaSlicer")).unwrap();
-        std::fs::write(programs.join("OrcaSlicer/Orca-Slicer.exe"), b"").unwrap();
-        let table = [("OrcaSlicer", "orca-slicer.exe"), ("PrusaSlicer", "prusa-slicer.exe")];
-        let found = find_program(std::slice::from_ref(&programs), &table).unwrap();
-        assert_eq!(found.name, "OrcaSlicer", "earlier entries win, file names compare case-insensitively");
-        assert_eq!(found.program, programs.join("OrcaSlicer/Orca-Slicer.exe"));
-
-        let apps = dir.path().join("Applications");
-        std::fs::create_dir_all(apps.join("Bambu Studio.app")).unwrap();
-        std::fs::create_dir_all(apps.join("Safari.app")).unwrap();
-        let found = find_app_bundle(std::slice::from_ref(&apps), &[("Bambu Studio", "bambustudio")]).unwrap();
-        assert_eq!((found.name.as_str(), found.program), ("Bambu Studio", apps.join("Bambu Studio.app")));
-    }
-
-    #[test]
-    fn finds_mesh_editors() {
-        let dir = tempfile::tempdir().unwrap();
-        // Fusion's per-user folder: webdeploy\production\<version>\Fusion360.exe.
-        let production = dir.path().join("production");
-        std::fs::create_dir_all(production.join("6a0c9611291d45bb9226980209917c3d")).unwrap();
-        std::fs::write(production.join("6a0c9611291d45bb9226980209917c3d/Fusion360.exe"), b"").unwrap();
-        let programs = dir.path().join("Program Files");
-        std::fs::create_dir_all(programs.join("Blender Foundation/Blender 4.2")).unwrap();
-        std::fs::write(programs.join("Blender Foundation/Blender 4.2/blender.exe"), b"").unwrap();
-        let found = find_program(&[programs.clone(), production], WINDOWS_EDITORS).unwrap();
-        assert_eq!(found.name, "Autodesk Fusion");
-        let found = find_program(std::slice::from_ref(&programs), WINDOWS_EDITORS).unwrap();
-        assert_eq!(found.name, "Blender");
-        assert!(found.is_blender());
-
-        let apps = dir.path().join("Applications");
-        std::fs::create_dir_all(apps.join("VMware Fusion.app")).unwrap();
-        assert!(find_app_bundle(std::slice::from_ref(&apps), MACOS_EDITORS).is_none());
-        std::fs::create_dir_all(apps.join("Autodesk Fusion.app")).unwrap();
-        let found = find_app_bundle(std::slice::from_ref(&apps), MACOS_EDITORS).unwrap();
-        assert_eq!(found.name, "Autodesk Fusion");
-    }
-
-    #[test]
     fn blender_opens_only_what_it_imports() {
         let blender = plain("Blender", "/usr/bin/blender".into());
         assert!(blender.opens(Kind::Stl) && blender.opens(Kind::Gltf));
@@ -537,10 +399,10 @@ mod tests {
     }
 
     #[test]
-    fn the_single_slicer_of_old_files_becomes_the_list() {
+    fn the_single_program_of_old_files_becomes_the_list() {
         let mut old: Config =
             toml::from_str("[slicer]\nname = \"OrcaSlicer\"\nprogram = \"/usr/bin/orca-slicer\"\n").unwrap();
-        old.migrate_slicer();
+        old.migrate_programs();
         assert!(old.slicer.is_none());
         let list = old.slicers.clone().unwrap();
         assert_eq!(list.len(), 1);
@@ -553,6 +415,11 @@ mod tests {
         assert_eq!(Config::default_slicer_index(&two, Some("PrusaSlicer")), 1);
         assert_eq!(Config::default_slicer_index(&two, Some("gone")), 0);
         assert!(Config::default().slicers.is_none(), "nothing chosen yet: detect at startup");
+        let mut old: Config = toml::from_str("[editor]\nname = \"FreeCAD\"\nprogram = \"/usr/bin/freecad\"\n").unwrap();
+        old.migrate_programs();
+        assert!(old.editor.is_none());
+        assert_eq!(old.editors.as_ref().map(Vec::len), Some(1));
+        assert_eq!(old.default_editor.as_deref(), Some("FreeCAD"));
     }
 
     #[test]

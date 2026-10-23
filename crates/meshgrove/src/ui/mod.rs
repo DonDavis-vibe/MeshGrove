@@ -38,3 +38,34 @@ impl SlicerList<'_> {
         self.names.is_empty()
     }
 }
+
+/// The mesh editors the "open in" entries offer, and which one is the default. Not every
+/// editor opens every kind of file.
+#[derive(Clone, Copy, Default)]
+pub struct EditorList<'a> {
+    pub programs: &'a [meshgrove_core::config::Program],
+    pub default: usize,
+}
+
+impl EditorList<'_> {
+    /// The editors that open this kind of file as (index, name), the default one first.
+    pub fn usable(&self, kind: meshgrove_core::Kind) -> Vec<(usize, &str)> {
+        self.usable_for_any(&[kind])
+    }
+
+    /// The editors that open at least one of these kinds, the default one first.
+    pub fn usable_for_any(&self, kinds: &[meshgrove_core::Kind]) -> Vec<(usize, &str)> {
+        let mut list: Vec<(usize, &str)> = self
+            .programs
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| kinds.iter().any(|k| e.opens(*k)))
+            .map(|(i, e)| (i, e.name.as_str()))
+            .collect();
+        if let Some(at) = list.iter().position(|(i, _)| *i == self.default) {
+            let first = list.remove(at);
+            list.insert(0, first);
+        }
+        list
+    }
+}

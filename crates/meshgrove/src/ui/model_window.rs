@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use egui::{Key, RichText, Ui, ViewportBuilder, ViewportCommand, ViewportId};
-use meshgrove_core::config::{PreviewQuality, Program};
+use meshgrove_core::config::PreviewQuality;
 use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::lists::PrintResult;
 use meshgrove_core::printer::Bed;
@@ -20,7 +20,7 @@ use crate::meshes::{MeshState, MeshStore};
 /// What the windows ask the app to do.
 pub enum WindowAction {
     OpenInSlicer(PathBuf, usize),
-    OpenInEditor(PathBuf),
+    OpenInEditor(PathBuf, usize),
     /// Log a print of the window's model.
     Print(PathBuf, PrintResult),
     /// Result of a viewer tool (picture saved, …) for the status bar.
@@ -34,7 +34,7 @@ pub struct WindowContext<'a> {
     pub renderer: &'a Renderer,
     pub bed: Option<&'a Bed>,
     pub slicers: super::SlicerList<'a>,
-    pub editor: Option<&'a Program>,
+    pub editors: super::EditorList<'a>,
     pub quality: PreviewQuality,
     /// The library index is open (prints are logged there).
     pub can_log_prints: bool,
@@ -116,12 +116,12 @@ impl ModelWindow {
                 ui.label(RichText::new(name).heading().strong());
                 ui.add_space(10.0);
                 details::facts(ui, &self.entry, None, &self.model, cx.bed);
-                let (slicer, editor) = details::open_buttons(ui, self.entry.kind, cx.slicers, cx.editor);
+                let (slicer, editor) = details::open_buttons(ui, self.entry.kind, cx.slicers, cx.editors);
                 if let Some(index) = slicer {
                     actions.push(WindowAction::OpenInSlicer(self.entry.path.clone(), index));
                 }
-                if editor {
-                    actions.push(WindowAction::OpenInEditor(self.entry.path.clone()));
+                if let Some(index) = editor {
+                    actions.push(WindowAction::OpenInEditor(self.entry.path.clone(), index));
                 }
                 if cx.can_log_prints {
                     ui.horizontal(|ui| {

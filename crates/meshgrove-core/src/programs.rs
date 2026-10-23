@@ -1,19 +1,27 @@
-//! Finding the slicers installed on this computer: the ten most common FDM slicers and ten
+//! Finding the slicers and mesh editors installed on this computer: the ten most common FDM slicers and ten
 //! resin (SLA/MSLA) slicers, in every way they get installed (a distribution package, a Flatpak,
 //! a Snap, an AppImage, a vendor's folder in /opt on Linux; the usual program folders on
 //! Windows; application bundles on macOS). The settings list what was found and the user adds
-//! the ones they want.
+//! the ones they want. Mesh editors and CAD programs are found the same way.
 
 use std::path::{Path, PathBuf};
 
 use crate::config::{Program, Slicer, plain, subdirs};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SlicerKind {
-    /// Filament printers.
+pub enum ProgramKind {
+    /// Slicer for filament printers.
     Fdm,
-    /// Resin printers.
+    /// Slicer for resin printers.
     Sla,
+    /// Mesh editor or CAD program.
+    Editor,
+}
+
+impl ProgramKind {
+    pub fn is_slicer(self) -> bool {
+        self != ProgramKind::Editor
+    }
 }
 
 /// How a slicer was installed.
@@ -38,12 +46,12 @@ impl Variant {
     }
 }
 
-/// A slicer found on this computer, ready to be added to the settings.
+/// A slicer or editor found on this computer, ready to be added to the settings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Detected {
     /// Slicer name and how it is installed: "OrcaSlicer (Flatpak)".
     pub name: String,
-    pub kind: SlicerKind,
+    pub kind: ProgramKind,
     pub variant: Variant,
     pub program: Slicer,
 }
@@ -53,13 +61,12 @@ pub struct Detected {
 #[allow(dead_code)] // each platform reads only its own fields
 struct Def {
     name: &'static str,
-    kind: SlicerKind,
-    /// Linux: program names in the usual bin folders, `$PATH` and the vendors' folders in /opt.
+    kind: ProgramKind,
+    /// Linux: program names in the usual bin folders, `$PATH`, the vendors' folders in /opt and
+    /// /snap/bin.
     bins: &'static [&'static str],
     /// Linux: Flatpak application ids.
     flatpak: &'static [&'static str],
-    /// Linux: Snap names.
-    snap: &'static [&'static str],
     /// Linux: keys of AppImage file names.
     appimage: &'static [&'static str],
     /// Windows: lower-case file names of the program.
@@ -70,20 +77,20 @@ struct Def {
 
 const fn def(
     name: &'static str,
-    kind: SlicerKind,
+    kind: ProgramKind,
     bins: &'static [&'static str],
     flatpak: &'static [&'static str],
     appimage: &'static [&'static str],
     win: &'static [&'static str],
     mac: &'static [&'static str],
 ) -> Def {
-    Def { name, kind, bins, flatpak, snap: &[], appimage, win, mac }
+    Def { name, kind, bins, flatpak, appimage, win, mac }
 }
 
-use SlicerKind::{Fdm, Sla};
-
 /// The catalogue (ten filament slicers, plus Snapmaker Orca, and ten for resin), the first entries being the ones a new user most likely wants as default.
-const CATALOGUE: &[Def] = &[
+use ProgramKind::{Editor, Fdm, Sla};
+
+const SLICERS: &[Def] = &[
     def(
         "Anycubic Slicer Next",
         Fdm,
@@ -212,10 +219,67 @@ const CATALOGUE: &[Def] = &[
     def("Asiga Composer", Sla, &[], &[], &[], &["asigacomposer.exe"], &["asigacomposer"]),
 ];
 
-/// Every catalogue slicer installed here, each in every way it is installed. The same program
-/// is listed once.
-pub fn detect_all() -> Vec<Detected> {
-    let mut found = platform_detect();
+/// Mesh editors and CAD programs. The first ones are what earlier versions looked for.
+const EDITORS: &[Def] = &[
+    // "autodeskfusion" so VMware Fusion does not count.
+    def("Autodesk Fusion", Editor, &[], &[], &[], &["fusion360.exe"], &["autodeskfusion"]),
+    def(
+        "FreeCAD",
+        Editor,
+        &["freecad", "FreeCAD"],
+        &["org.freecad.FreeCAD"],
+        &["freecad"],
+        &["freecad.exe"],
+        &["freecad"],
+    ),
+    def("Blender", Editor, &["blender"], &["org.blender.Blender"], &[], &["blender.exe"], &["blender"]),
+    def("MeshLab", Editor, &["meshlab"], &["net.meshlab.MeshLab"], &["meshlab"], &["meshlab.exe"], &["meshlab"]),
+    def("Meshmixer", Editor, &[], &[], &[], &["meshmixer.exe"], &["meshmixer"]),
+    def(
+        "SolidCraft",
+        Editor,
+        &["solidcraft"],
+        &["ai.storyteller.solidcraft"],
+        &["solidcraft"],
+        &["solidcraft.exe"],
+        &["solidcraft"],
+    ),
+    def("OpenSCAD", Editor, &["openscad"], &["org.openscad.OpenSCAD"], &["openscad"], &["openscad.exe"], &["openscad"]),
+    def(
+        "SolveSpace",
+        Editor,
+        &["solvespace"],
+        &["com.solvespace.SolveSpace"],
+        &["solvespace"],
+        &["solvespace.exe"],
+        &["solvespace"],
+    ),
+    def(
+        "CloudCompare",
+        Editor,
+        &["CloudCompare", "cloudcompare"],
+        &["org.cloudcompare.CloudCompare"],
+        &["cloudcompare"],
+        &["cloudcompare.exe"],
+        &["cloudcompare"],
+    ),
+    def("Rhino", Editor, &[], &[], &[], &["rhino.exe"], &["rhino"]),
+    def("SketchUp", Editor, &[], &[], &[], &["sketchup.exe"], &["sketchup"]),
+];
+
+/// Every catalogue slicer installed here, each in every way it is installed.
+pub fn detect_slicers() -> Vec<Detected> {
+    detect(SLICERS)
+}
+
+/// Every mesh editor and CAD program of the catalogue installed here.
+pub fn detect_editors() -> Vec<Detected> {
+    detect(EDITORS)
+}
+
+/// Each program is listed once, even when several catalogue entries match it.
+fn detect(catalogue: &[Def]) -> Vec<Detected> {
+    let mut found = platform_detect(catalogue);
     let mut seen = Vec::new();
     found.retain(|d: &Detected| {
         let fresh = !seen.contains(&d.program.program);
@@ -295,7 +359,9 @@ mod linux {
     /// folder below /opt.
     fn native(places: &Places, bins: &[&str]) -> Option<PathBuf> {
         for bin in bins {
-            if let Some(p) = places.bin_dirs.iter().map(|d| d.join(bin)).find(|p| executable(p)) {
+            if let Some(p) =
+                places.bin_dirs.iter().filter(|d| **d != places.snap_dir).map(|d| d.join(bin)).find(|p| executable(p))
+            {
                 return Some(p);
             }
             for root in &places.opt_roots {
@@ -350,9 +416,9 @@ mod linux {
         })
     }
 
-    pub fn detect(places: &Places) -> Vec<Detected> {
+    pub fn detect(places: &Places, catalogue: &[Def]) -> Vec<Detected> {
         let mut found = Vec::new();
-        for def in CATALOGUE {
+        for def in catalogue {
             if def.name == "Anycubic Slicer Next"
                 && let Some(program) = anycubic_unpacked(&places.home)
             {
@@ -366,11 +432,9 @@ mod linux {
                     found.push(detected(def, Variant::Flatpak, plain(def.name, path)));
                 }
             }
-            for name in def.snap {
-                let path = places.snap_dir.join(name);
-                if path.exists() {
-                    found.push(detected(def, Variant::Snap, plain(def.name, path)));
-                }
+            // Snaps put a command of the program's name into /snap/bin.
+            if let Some(path) = def.bins.iter().map(|b| places.snap_dir.join(b)).find(|p| executable(p)) {
+                found.push(detected(def, Variant::Snap, plain(def.name, path)));
             }
             if let Some(path) = appimage(places, def.appimage) {
                 found.push(detected(def, Variant::AppImage, plain(def.name, path)));
@@ -412,12 +476,12 @@ mod linux {
             touch(&root.join("opt/Simplify3D-5.1.2/Simplify3D"), true);
             touch(&root.join("opt/PreForm/bin/PreForm"), true);
             touch(&root.join("home/Applications/Lychee-Slicer.AppImage"), false); // not executable
-            let found = detect(&places(root));
+            let found = detect(&places(root), SLICERS);
             let names: Vec<&str> = found.iter().map(|d| d.name.as_str()).collect();
             assert_eq!(names, ["OrcaSlicer", "OrcaSlicer (Flatpak)", "OrcaSlicer (AppImage)", "Simplify3D", "PreForm"]);
             let appimage = found.iter().find(|d| d.variant == Variant::AppImage).unwrap();
             assert!(appimage.program.program.ends_with("OrcaSlicer_Linux_V2.3.0.AppImage"), "the newest one");
-            assert_eq!(found.iter().find(|d| d.name == "PreForm").unwrap().kind, SlicerKind::Sla);
+            assert_eq!(found.iter().find(|d| d.name == "PreForm").unwrap().kind, ProgramKind::Sla);
             assert_eq!(found[0].program.name, "OrcaSlicer");
         }
 
@@ -425,23 +489,43 @@ mod linux {
         fn an_unpacked_anycubic_slicer_keeps_its_libraries() {
             let dir = tempfile::tempdir().unwrap();
             touch(&dir.path().join("home/opt/AnycubicSlicer/app/bin/AnycubicSlicerNext"), true);
-            let found = detect(&places(dir.path()));
+            let found = detect(&places(dir.path()), SLICERS);
             let anycubic = found.iter().find(|d| d.name == "Anycubic Slicer Next").unwrap();
             assert!(anycubic.program.env.iter().any(|(k, _)| k == "LD_LIBRARY_PATH"));
             assert!(anycubic.program.workdir.is_some());
         }
 
         #[test]
+        fn finds_mesh_editors_and_solidcraft() {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            touch(&root.join("usr/bin/blender"), true);
+            touch(&root.join("flatpak/org.freecad.FreeCAD"), true);
+            touch(&root.join("flatpak/ai.storyteller.solidcraft"), true);
+            touch(&root.join("snap/solidcraft"), true);
+            touch(&root.join("home/Applications/solidcraft-linux-x86_64.AppImage"), true);
+            touch(&root.join("home/Applications/Snapmaker_Orca.AppImage"), true);
+            let found = detect(&places(root), EDITORS);
+            let names: Vec<&str> = found.iter().map(|d| d.name.as_str()).collect();
+            assert_eq!(
+                names,
+                ["FreeCAD (Flatpak)", "Blender", "SolidCraft (Flatpak)", "SolidCraft (Snap)", "SolidCraft (AppImage)"]
+            );
+            assert!(found.iter().all(|d| d.kind == ProgramKind::Editor));
+            assert!(found.iter().find(|d| d.name == "Blender").unwrap().program.is_blender());
+        }
+
+        #[test]
         fn nothing_installed_finds_nothing() {
             let dir = tempfile::tempdir().unwrap();
-            assert!(detect(&places(dir.path())).is_empty());
+            assert!(detect(&places(dir.path()), SLICERS).is_empty());
         }
     }
 }
 
 #[cfg(target_os = "linux")]
-fn platform_detect() -> Vec<Detected> {
-    linux::Places::real().map(|p| linux::detect(&p)).unwrap_or_default()
+fn platform_detect(catalogue: &[Def]) -> Vec<Detected> {
+    linux::Places::real().map(|p| linux::detect(&p, catalogue)).unwrap_or_default()
 }
 
 /// The first of the slicer's Windows file names among `files` (lower-case name, path).
@@ -460,7 +544,7 @@ fn pick_mac(def: &Def, bundles: &[(String, PathBuf)]) -> Option<Detected> {
 }
 
 #[cfg(windows)]
-fn platform_detect() -> Vec<Detected> {
+fn platform_detect(catalogue: &[Def]) -> Vec<Detected> {
     // Installers pick different folders: look one and two levels below the program folders.
     let mut folders = Vec::new();
     for root in crate::config::program_folders() {
@@ -475,22 +559,22 @@ fn platform_detect() -> Vec<Detected> {
         .flat_map(|f| std::fs::read_dir(f).into_iter().flatten().flatten())
         .map(|e| (e.file_name().to_string_lossy().to_lowercase(), e.path()))
         .collect();
-    CATALOGUE.iter().filter_map(|def| pick_windows(def, &files)).collect()
+    catalogue.iter().filter_map(|def| pick_windows(def, &files)).collect()
 }
 
 #[cfg(target_os = "macos")]
-fn platform_detect() -> Vec<Detected> {
+fn platform_detect(catalogue: &[Def]) -> Vec<Detected> {
     let bundles: Vec<(String, PathBuf)> = crate::config::app_folders()
         .iter()
         .flat_map(|f| std::fs::read_dir(f).into_iter().flatten().flatten().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|x| x == "app"))
         .filter_map(|p| Some((p.file_stem()?.to_string_lossy().to_lowercase().replace([' ', '-', '_'], ""), p)))
         .collect();
-    CATALOGUE.iter().filter_map(|def| pick_mac(def, &bundles)).collect()
+    catalogue.iter().filter_map(|def| pick_mac(def, &bundles)).collect()
 }
 
 #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
-fn platform_detect() -> Vec<Detected> {
+fn platform_detect(_: &[Def]) -> Vec<Detected> {
     Vec::new()
 }
 
@@ -499,7 +583,7 @@ mod tests {
     use super::*;
 
     fn by_name(name: &str) -> &'static Def {
-        CATALOGUE.iter().find(|d| d.name == name).unwrap()
+        SLICERS.iter().chain(EDITORS).find(|d| d.name == name).unwrap()
     }
 
     #[test]
@@ -509,15 +593,23 @@ mod tests {
             ("lychee slicer.exe".to_owned(), PathBuf::from("C:/Lychee Slicer/Lychee Slicer.exe")),
         ];
         assert_eq!(pick_windows(by_name("OrcaSlicer"), &files).unwrap().name, "OrcaSlicer");
-        assert_eq!(pick_windows(by_name("Lychee Slicer"), &files).unwrap().kind, SlicerKind::Sla);
+        assert_eq!(pick_windows(by_name("Lychee Slicer"), &files).unwrap().kind, ProgramKind::Sla);
         assert!(pick_windows(by_name("PrusaSlicer"), &files).is_none());
+        // Autodesk Fusion installs per user; VMware Fusion is not it.
+        let fusion = vec![(
+            "fusion360.exe".to_owned(),
+            PathBuf::from("C:/Users/x/AppData/Local/Autodesk/webdeploy/production/6a0c/Fusion360.exe"),
+        )];
+        assert_eq!(pick_windows(by_name("Autodesk Fusion"), &fusion).unwrap().kind, ProgramKind::Editor);
+        let vmware = vec![("vmwarefusion".to_owned(), PathBuf::from("/Applications/VMware Fusion.app"))];
+        assert!(pick_mac(by_name("Autodesk Fusion"), &vmware).is_none());
         let bundles = vec![
             ("chituboxpro".to_owned(), PathBuf::from("/Applications/CHITUBOX Pro.app")),
             ("safari".to_owned(), PathBuf::from("/Applications/Safari.app")),
         ];
         assert_eq!(pick_mac(by_name("ChiTuBox Pro"), &bundles).unwrap().name, "ChiTuBox Pro");
         // The basic ChiTuBox matches the Pro bundle too; the list shows each program once.
-        let mut all: Vec<Detected> = CATALOGUE.iter().filter_map(|d| pick_mac(d, &bundles)).collect();
+        let mut all: Vec<Detected> = SLICERS.iter().filter_map(|d| pick_mac(d, &bundles)).collect();
         let mut seen = Vec::new();
         all.retain(|d| {
             let fresh = !seen.contains(&d.program.program);
@@ -528,14 +620,17 @@ mod tests {
     }
 
     #[test]
-    fn the_catalogue_has_the_common_slicers_and_unique_names() {
-        assert_eq!(CATALOGUE.iter().filter(|d| d.kind == SlicerKind::Fdm).count(), 11);
-        assert_eq!(CATALOGUE.iter().filter(|d| d.kind == SlicerKind::Sla).count(), 10);
-        let mut names: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
+    fn the_catalogues_have_the_common_programs_and_unique_names() {
+        assert_eq!(EDITORS.len(), 11, "ten common editors and SolidCraft");
+        assert!(EDITORS.iter().all(|d| d.kind == ProgramKind::Editor));
+        assert!(EDITORS.iter().any(|d| d.name == "SolidCraft"));
+        assert_eq!(SLICERS.iter().filter(|d| d.kind == ProgramKind::Fdm).count(), 11);
+        assert_eq!(SLICERS.iter().filter(|d| d.kind == ProgramKind::Sla).count(), 10);
+        let mut names: Vec<&str> = SLICERS.iter().map(|d| d.name).collect();
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), 21);
-        for d in CATALOGUE {
+        for d in SLICERS.iter().chain(EDITORS) {
             assert!(d.win.iter().all(|e| e.to_lowercase() == *e), "{}: Windows names are lower-case", d.name);
             assert!(d.appimage.iter().chain(d.mac).all(|k| !k.contains([' ', '-', '_']) && k.to_lowercase() == *k));
         }

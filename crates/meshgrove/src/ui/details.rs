@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use egui::{Grid, Key, RichText, Ui};
 use meshgrove_core::Kind;
-use meshgrove_core::config::Program;
 use meshgrove_core::listing::Entry;
 use meshgrove_core::lists::{ListInfo, ListKind, PrintResult, PrintStatus};
 use meshgrove_core::loaders::gcode::GcodeFacts;
@@ -55,7 +54,7 @@ pub struct DetailsOutput {
     /// "Open in slicer" was clicked.
     pub open_in_slicer: Option<usize>,
     /// "Open in" the mesh editor was clicked.
-    pub open_in_editor: bool,
+    pub open_in_editor: Option<usize>,
     /// The star was clicked.
     pub toggle_favorite: bool,
     /// A list chip was clicked.
@@ -95,7 +94,7 @@ pub struct DetailsContext<'a> {
     pub bed: Option<&'a Bed>,
     /// The slicers models can be handed to.
     pub slicers: super::SlicerList<'a>,
-    pub editor: Option<&'a Program>,
+    pub editors: super::EditorList<'a>,
     pub lists: ListsOfSelection<'a>,
     pub print: PrintInfo<'a>,
     pub tag_style: &'a TagStyle,
@@ -208,7 +207,7 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         ui.add_space(4.0);
         facts(ui, entry, cx.thumb, cx.model, cx.bed);
-        (out.open_in_slicer, out.open_in_editor) = open_buttons(ui, entry.kind, cx.slicers, cx.editor);
+        (out.open_in_slicer, out.open_in_editor) = open_buttons(ui, entry.kind, cx.slicers, cx.editors);
         if !cx.plates.is_empty() {
             let active = match cx.model {
                 ModelStatus::Ready(info) => info.plate,
@@ -228,19 +227,19 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
     out
 }
 
-/// "Open in Anycubic Slicer Next" and "Open in FreeCAD" for a model, as far as the slicer and
-/// the mesh editor open its kind; with several slicers a ▾ lists the others. Which was
-/// clicked: (index of the slicer, editor).
+/// "Open in Anycubic Slicer Next" and "Open in FreeCAD" for a model, as far as the slicers and
+/// the mesh editors open its kind; with several of either a ▾ lists the others. Which was
+/// clicked: (index of the slicer, index of the editor).
 pub fn open_buttons(
     ui: &mut Ui,
     kind: Kind,
     slicers: super::SlicerList<'_>,
-    editor: Option<&Program>,
-) -> (Option<usize>, bool) {
+    editors: super::EditorList<'_>,
+) -> (Option<usize>, Option<usize>) {
     let slicers = if kind.is_sliceable() { slicers } else { super::SlicerList::default() };
-    let editor = editor.filter(|e| e.opens(kind));
-    let mut clicked = (None, false);
-    if slicers.is_empty() && editor.is_none() {
+    let usable = editors.usable(kind);
+    let mut clicked = (None, None);
+    if slicers.is_empty() && usable.is_empty() {
         return clicked;
     }
     ui.add_space(8.0);
@@ -263,8 +262,22 @@ pub fn open_buttons(
                 .on_hover_text(t!("menu.open_in_other_slicer"));
             }
         }
-        if let Some(editor) = editor {
-            clicked.1 = ui.add(button(t!("menu.open_in_editor", name = editor.name))).clicked();
+        if let Some((index, name)) = usable.first() {
+            if ui.add(button(t!("menu.open_in_editor", name = name))).clicked() {
+                clicked.1 = Some(*index);
+            }
+            if usable.len() > 1 {
+                ui.menu_button("▾", |ui| {
+                    for (index, other) in &usable[1..] {
+                        if ui.button(t!("menu.open_in_editor", name = other)).clicked() {
+                            clicked.1 = Some(*index);
+                            ui.close();
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(t!("menu.open_in_other_editor"));
+            }
         }
     });
     clicked
