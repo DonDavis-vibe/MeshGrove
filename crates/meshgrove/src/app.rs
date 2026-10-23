@@ -1241,7 +1241,7 @@ impl App {
         self.menu_for.clear();
     }
 
-    /// The question before inches: a quote on why metric is better, and Yes / No.
+    /// The question before inches: why metric is easier, and Yes / No.
     fn units_dialog(&mut self, ctx: &egui::Context) {
         let Some(pending) = self.units_confirm else { return };
         let mut decision = None;
@@ -1249,9 +1249,7 @@ impl App {
             ui.set_max_width(520.0);
             ui.heading(t!("units.title"));
             ui.add_space(6.0);
-            ui.label(RichText::new(t!("units.quote")).italics());
-            ui.add_space(2.0);
-            ui.label(RichText::new(t!("units.quote_source")).weak());
+            ui.label(t!("units.quote"));
             ui.add_space(10.0);
             ui.label(RichText::new(t!("units.question")).strong());
             ui.add_space(8.0);

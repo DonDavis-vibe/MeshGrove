@@ -203,6 +203,8 @@ pub struct SettingsDialog {
     editor_form: Option<(String, String)>,
     /// Name and X/Y/Z as typed.
     printer_form: Option<[String; 4]>,
+    /// The display unit the X/Y/Z of `printer_form` are in.
+    printer_form_units: DisplayUnits,
     printer_error: bool,
     import_input: String,
     cache_size: Option<u64>,
@@ -348,6 +350,7 @@ impl SettingsDialog {
     pub fn open(&mut self, active_slicer: Option<&Slicer>, active_editor: Option<&Program>, bed: Option<&Bed>) {
         self.open = true;
         self.printer_form = Some(printer_form(bed));
+        self.printer_form_units = config::display_units();
         self.printer_error = false;
         if self.import_input.is_empty() {
             self.import_input = export_path().display().to_string();
@@ -612,6 +615,18 @@ impl SettingsDialog {
         };
         ui.weak(status);
         let mut detect = false;
+        // The display unit changed since the form was filled: convert what is typed, so Apply
+        // does not read millimetres as inches (or the other way round).
+        let units = config::display_units();
+        if let Some(form) = self.printer_form.as_mut().filter(|_| self.printer_form_units != units) {
+            let before = self.printer_form_units;
+            for value in &mut form[1..] {
+                if let Ok(v) = value.trim().replace(',', ".").parse::<f32>() {
+                    *value = mm(units.from_mm(before.to_mm(v)));
+                }
+            }
+        }
+        self.printer_form_units = units;
         let form = self.printer_form.get_or_insert_with(|| printer_form(active));
         egui::Grid::new("printer_form").num_columns(2).show(ui, |ui| {
             ui.label(t!("settings.printer_name"));
