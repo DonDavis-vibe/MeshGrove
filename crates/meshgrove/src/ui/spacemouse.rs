@@ -5,7 +5,8 @@ use egui::{Color32, Painter, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2
 use glam::{Mat4, Vec3};
 use meshgrove_core::config::Config;
 use meshgrove_core::spacemouse::{
-    Axis, AxisMapping, CALIBRATION_STEPS, CalibrationNote, Calibrator, DEADZONE_RANGE, SPEED_RANGE, SpaceMouseConfig,
+    Axis, AxisMapping, CALIBRATION_STEPS, CalibrationNote, Calibrator, CameraMotion, DEADZONE_RANGE, SPEED_RANGE,
+    SpaceMouseConfig,
 };
 
 use super::settings::SettingsChange;
@@ -115,17 +116,8 @@ fn paint_arrow(painter: &Painter, view_proj: &Mat4, rect: Rect, path: &[Vec3], c
     }
 }
 
-/// Draws the 3D mouse, its knob moved by `motion` (the order of [`Axis::ALL`], −1…1); `arrow`
-/// shows a movement's direction (the calibration asks for it).
-pub fn draw_mouse(ui: &mut Ui, size: egui::Vec2, motion: [f32; 6], arrow: Option<Axis>) {
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 6.0, ui.visuals().extreme_bg_color);
-    let view_proj = camera(rect);
-    let active = motion.map(|v| v.abs() > 0.08);
-    let mut faces = mouse_faces(motion, active);
-    let eye = Vec3::new(0.0, -5.2, 3.3);
-    // Far faces first.
+/// Paints faces far to near, shaded by a light from the front left above.
+fn paint_faces(painter: &Painter, rect: Rect, view_proj: &Mat4, eye: Vec3, mut faces: Vec<Face>) {
     faces.sort_by(|a, b| {
         let depth = |f: &Face| f.corners.iter().map(|c| (*c - eye).length()).sum::<f32>() / f.corners.len() as f32;
         depth(b).total_cmp(&depth(a))
@@ -140,12 +132,103 @@ pub fn draw_mouse(ui: &mut Ui, size: egui::Vec2, motion: [f32; 6], arrow: Option
             (f32::from(c.g()) * shade) as u8,
             (f32::from(c.b()) * shade) as u8,
         );
-        let points = face.corners.iter().map(|p| project(&view_proj, rect, *p)).collect();
+        let points = face.corners.iter().map(|p| project(view_proj, rect, *p)).collect();
         painter.add(egui::Shape::convex_polygon(points, color, Stroke::new(0.5, Color32::from_black_alpha(90))));
     }
+}
+
+/// Draws the 3D mouse, its knob moved by `motion` (the order of [`Axis::ALL`], −1…1); `arrow`
+/// shows a movement's direction (the calibration asks for it).
+pub fn draw_mouse(ui: &mut Ui, size: egui::Vec2, motion: [f32; 6], arrow: Option<Axis>) {
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 6.0, ui.visuals().extreme_bg_color);
+    let view_proj = camera(rect);
+    let active = motion.map(|v| v.abs() > 0.08);
+    paint_faces(&painter, rect, &view_proj, Vec3::new(0.0, -5.2, 3.3), mouse_faces(motion, active));
     if let Some(axis) = arrow {
         paint_arrow(&painter, &view_proj, rect, &arrow_path(axis), Color32::from_rgb(255, 196, 60));
     }
+}
+
+// ---- the model that shows what the settings do ----
+
+/// The model turns, looks up or down, slides and zooms by this much at full deflection, and
+/// goes back when the knob does: it shows the effect of the settings, it does not move on.
+const RESULT_TURN_DEGREES: f32 = 40.0;
+const RESULT_LOOK_DEGREES: f32 = 28.0;
+const RESULT_SLIDE: f32 = 1.1;
+const RESULT_ZOOM: f32 = 0.55;
+
+/// An axis-aligned box as faces, each side in its own tone so turning it is easy to see.
+fn block(min: Vec3, max: Vec3, tint: [u8; 3], faces: &mut Vec<Face>) {
+    let c = |x: bool, y: bool, z: bool| {
+        Vec3::new(if x { max.x } else { min.x }, if y { max.y } else { min.y }, if z { max.z } else { min.z })
+    };
+    let tone = |k: i16| {
+        Color32::from_rgb(
+            (i16::from(tint[0]) + k).clamp(0, 255) as u8,
+            (i16::from(tint[1]) + k).clamp(0, 255) as u8,
+            (i16::from(tint[2]) + k).clamp(0, 255) as u8,
+        )
+    };
+    let sides = [
+        ([c(false, false, false), c(true, false, false), c(true, false, true), c(false, false, true)], tone(-10)), // front
+        ([c(true, true, false), c(false, true, false), c(false, true, true), c(true, true, true)], tone(-30)), // back
+        ([c(false, true, false), c(false, false, false), c(false, false, true), c(false, true, true)], tone(-20)), // left
+        ([c(true, false, false), c(true, true, false), c(true, true, true), c(true, false, true)], tone(0)), // right
+        ([c(false, false, true), c(true, false, true), c(true, true, true), c(false, true, true)], tone(25)), // top
+        ([c(false, true, false), c(true, true, false), c(true, false, false), c(false, false, false)], tone(-40)), // bottom
+    ];
+    for (corners, color) in sides {
+        faces.push(Face { corners: corners.to_vec(), color });
+    }
+}
+
+/// A small part that looks different from every side: a plate with a tower at one end and a
+/// peg at the front.
+fn part_faces() -> Vec<Face> {
+    let mut faces = Vec::new();
+    block(Vec3::new(-1.2, -0.7, -0.3), Vec3::new(1.2, 0.7, 0.2), [120, 150, 190], &mut faces);
+    block(Vec3::new(-1.2, -0.7, 0.2), Vec3::new(-0.4, 0.7, 1.1), [190, 140, 110], &mut faces);
+    block(Vec3::new(0.5, -1.1, -0.1), Vec3::new(0.9, -0.7, 0.2), [130, 190, 130], &mut faces);
+    faces
+}
+
+/// The eye, the view and the projection for the part, after the camera movement `m` (what the
+/// settings make of the knob's current position): a bounded offset from a fixed start.
+fn result_camera(rect: Rect, m: &CameraMotion) -> (Vec3, Mat4) {
+    let m = CameraMotion {
+        orbit_h: m.orbit_h.clamp(-1.2, 1.2),
+        orbit_v: m.orbit_v.clamp(-1.2, 1.2),
+        pan_x: m.pan_x.clamp(-1.2, 1.2),
+        pan_y: m.pan_y.clamp(-1.2, 1.2),
+        zoom: m.zoom.clamp(-1.2, 1.2),
+    };
+    let azimuth = (30.0 + m.orbit_h * RESULT_TURN_DEGREES).to_radians();
+    let elevation = (24.0 + m.orbit_v * RESULT_LOOK_DEGREES).clamp(-80.0, 80.0).to_radians();
+    let distance = 7.0 / (m.zoom * RESULT_ZOOM).exp();
+    // Positive azimuth moves the eye to the right, like the viewer's.
+    let direction = Vec3::new(azimuth.sin() * elevation.cos(), -azimuth.cos() * elevation.cos(), elevation.sin());
+    let right = Vec3::new(azimuth.cos(), azimuth.sin(), 0.0);
+    let up = right.cross(-direction).normalize_or_zero();
+    // The part follows the knob: the camera slides the other way.
+    let target = Vec3::new(0.0, 0.0, 0.3) - (right * m.pan_x + up * m.pan_y) * RESULT_SLIDE;
+    let eye = target + direction * distance;
+    let aspect = rect.width() / rect.height().max(1.0);
+    let view_proj = glam::camera::rh::proj::directx::perspective(30f32.to_radians(), aspect, 0.1, 80.0)
+        * glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Z);
+    (eye, view_proj)
+}
+
+/// Draws a small part as the viewer would show it for the camera movement `motion`: turned,
+/// slid or zoomed a bit while the knob is held that way, and back when it is let go.
+pub fn draw_result(ui: &mut Ui, size: egui::Vec2, motion: &CameraMotion) {
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 6.0, ui.visuals().extreme_bg_color);
+    let (eye, view_proj) = result_camera(rect, motion);
+    paint_faces(&painter, rect, &view_proj, eye, part_faces());
 }
 
 // ---- texts ----
@@ -227,24 +310,31 @@ impl MouseSettings {
         ui.add_space(6.0);
 
         let physical = config.spacemouse.physical(mouse.raw);
+        // The pictures show the settings as they are being changed here.
+        let motion = c.camera(c.process(mouse.raw));
         ui.horizontal_top(|ui| {
-            draw_mouse(ui, vec2(250.0, 210.0), physical, None);
             ui.vertical(|ui| {
-                egui::Grid::new("mouse_axes").num_columns(4).spacing([8.0, 4.0]).show(ui, |ui| {
-                    for axis in Axis::ALL {
-                        let i = axis.index();
-                        ui.label(axis_name(axis));
-                        ui.checkbox(&mut c.invert[i], t!("mouse.invert"));
-                        ui.add(
-                            egui::Slider::new(&mut c.sensitivity[i], SPEED_RANGE)
-                                .custom_formatter(|v, _| format!("{v:.2}×")),
-                        );
-                        let level = physical[i].abs().clamp(0.0, 1.0);
-                        ui.add(egui::ProgressBar::new(level).desired_width(60.0).desired_height(8.0));
-                        ui.end_row();
-                    }
-                });
+                ui.weak(t!("mouse.picture_knob"));
+                draw_mouse(ui, vec2(250.0, 190.0), physical, None);
             });
+            ui.vertical(|ui| {
+                ui.weak(t!("mouse.picture_result"));
+                draw_result(ui, vec2(250.0, 190.0), &motion);
+            });
+        });
+        ui.add_space(4.0);
+        egui::Grid::new("mouse_axes").num_columns(4).spacing([8.0, 4.0]).show(ui, |ui| {
+            for axis in Axis::ALL {
+                let i = axis.index();
+                ui.label(axis_name(axis));
+                ui.checkbox(&mut c.invert[i], t!("mouse.invert"));
+                ui.add(
+                    egui::Slider::new(&mut c.sensitivity[i], SPEED_RANGE).custom_formatter(|v, _| format!("{v:.2}×")),
+                );
+                let level = physical[i].abs().clamp(0.0, 1.0);
+                ui.add(egui::ProgressBar::new(level).desired_width(60.0).desired_height(8.0));
+                ui.end_row();
+            }
         });
         ui.add_space(6.0);
         ui.horizontal(|ui| {
@@ -391,6 +481,32 @@ mod tests {
     fn the_rule_for_the_device_access_is_part_of_the_hint() {
         let command = udev_command();
         assert!(command.contains("256f") && command.contains("uaccess") && command.contains("udevadm"));
+    }
+
+    #[test]
+    fn the_result_part_moves_a_bit_and_returns() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(250.0, 190.0));
+        let at = |m: CameraMotion| {
+            let (eye, view_proj) = result_camera(rect, &m);
+            (eye, project(&view_proj, rect, Vec3::ZERO))
+        };
+        let (eye0, centre0) = at(CameraMotion::default());
+        assert_eq!(
+            at(CameraMotion::default()),
+            (eye0, centre0),
+            "no integration: the same knob gives the same picture"
+        );
+        let (eye_turned, _) = at(CameraMotion { orbit_h: 1.0, ..Default::default() });
+        assert!(eye_turned.x > eye0.x, "twisting clockwise moves the eye to the right");
+        let (_, centre_pushed) = at(CameraMotion { pan_x: 1.0, ..Default::default() });
+        assert!(centre_pushed.x > centre0.x + 5.0, "pushing right moves the part right");
+        let (eye_zoomed, _) = at(CameraMotion { zoom: 1.0, ..Default::default() });
+        assert!(eye_zoomed.length() < eye0.length(), "zooming in comes closer");
+        let (_, centre_up) = at(CameraMotion { pan_y: 1.0, ..Default::default() });
+        assert!(centre_up.y < centre0.y - 5.0, "lifting moves the part up (smaller y on screen)");
+        let extreme = at(CameraMotion { orbit_h: 50.0, orbit_v: 50.0, pan_x: 50.0, pan_y: 50.0, zoom: 50.0 });
+        assert!(extreme.0.is_finite() && extreme.1.x.is_finite(), "a huge deflection stays bounded");
+        assert!(!part_faces().is_empty());
     }
 
     #[test]
