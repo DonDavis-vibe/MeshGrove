@@ -56,7 +56,10 @@ pub enum Action {
     /// Index the selected library folder (or archive) and everything below it again.
     Rescan,
     OpenInSlicer,
-    OpenInEditor,
+    /// Another slicer than the default, by its index in the settings' list.
+    OpenInSlicerWith(usize),
+    /// An editor by its index in the settings' list.
+    OpenInEditor(usize),
     ShowInFileManager,
     CopyPaths,
     /// Copy the files themselves (Ctrl+C), for pasting in Dolphin or the slicer.
@@ -76,9 +79,12 @@ pub enum Action {
 /// What the context menu can offer for the current selection.
 #[derive(Default)]
 pub struct MenuContext {
-    pub slicer: Option<String>,
+    /// The slicers (names) and the default one.
+    pub slicers: Vec<String>,
+    pub default_slicer: usize,
     /// The mesh editor, if it opens a file of the selection.
-    pub editor: Option<String>,
+    /// The editors that open a file of the selection as (index, name), the default one first.
+    pub editors: Vec<(usize, String)>,
     /// Why the selection cannot go to the trash (read-only drive, inside an archive).
     pub trash_blocked: Option<String>,
     pub can_tag: bool,
@@ -772,11 +778,25 @@ fn entry_menu(
             item(ui, t!("menu.preview"), Action::Preview);
             item(ui, t!("menu.open_with_default_app"), Action::OpenWithDefaultApp(entry));
         }
-        if sliceable && let Some(slicer) = &menu.slicer {
+        if sliceable && let Some(slicer) = menu.slicers.get(menu.default_slicer) {
             item(ui, t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);
+            if menu.slicers.len() > 1 {
+                ui.menu_button(t!("menu.open_in_other_slicer"), |ui| {
+                    for (i, other) in menu.slicers.iter().enumerate().filter(|(i, _)| *i != menu.default_slicer) {
+                        item(ui, other.into(), Action::OpenInSlicerWith(i));
+                    }
+                });
+            }
         }
-        if model && let Some(editor) = &menu.editor {
-            item(ui, t!("menu.open_in_editor", name = editor), Action::OpenInEditor);
+        if model && let Some((index, editor)) = menu.editors.first() {
+            item(ui, t!("menu.open_in_editor", name = editor), Action::OpenInEditor(*index));
+            if menu.editors.len() > 1 {
+                ui.menu_button(t!("menu.open_in_other_editor"), |ui| {
+                    for (index, other) in &menu.editors[1..] {
+                        item(ui, other.into(), Action::OpenInEditor(*index));
+                    }
+                });
+            }
         }
         if show_folders {
             item(ui, t!("menu.show_in_folder"), Action::ShowInFolder(entry));
