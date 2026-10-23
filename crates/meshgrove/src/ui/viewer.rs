@@ -9,6 +9,7 @@ use egui::{Color32, PointerButton, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2
 use glam::{Vec2, Vec3};
 use meshgrove_core::Kind;
 use meshgrove_core::config::PreviewQuality;
+use meshgrove_core::spacemouse::CameraMotion;
 use meshgrove_render::{Framing, GpuMesh, Renderer, ViewParams, project_point, view_ray};
 
 use super::offscreen::{OffscreenView, pixel_size};
@@ -53,6 +54,17 @@ pub struct ModelViewer {
     studio: bool,
     /// The buttons over the view (standard views, measuring, picture).
     tools: bool,
+    /// The standard view the 3D mouse's second button showed last.
+    preset: usize,
+}
+
+/// What the 3D mouse did since the last frame, for the viewer that has the focus.
+pub struct SpaceInput {
+    pub motion: CameraMotion,
+    /// Seconds since the last frame.
+    pub dt: f32,
+    /// The buttons pressed since the last frame.
+    pub presses: Vec<u8>,
 }
 
 impl ModelViewer {
@@ -69,6 +81,7 @@ impl ModelViewer {
             scripted_view: None,
             supersample: 1.0,
             studio: false,
+            preset: 0,
             tools: true,
         }
     }
@@ -122,6 +135,30 @@ impl ModelViewer {
             if self.measure.is_some() {
                 self.measure = Some(Measure::default()); // other model: pick again
             }
+        }
+    }
+
+    /// Moves the camera with the 3D mouse: the first button resets the view, the second shows the
+    /// next standard view.
+    pub fn apply_space(&mut self, input: &SpaceInput) {
+        if self.mesh.is_none() {
+            return;
+        }
+        for button in &input.presses {
+            match button {
+                0 => self.reset_view(),
+                1 => {
+                    let &(_, azimuth_deg, elevation_deg) = &PRESETS[self.preset % PRESETS.len()];
+                    self.preset += 1;
+                    self.view = ViewParams { azimuth_deg, elevation_deg, ..orbit_view() };
+                    self.dirty = true;
+                }
+                _ => {}
+            }
+        }
+        if !input.motion.is_still() {
+            self.view = driven(&self.view, &input.motion, input.dt);
+            self.dirty = true;
         }
     }
 
@@ -385,6 +422,47 @@ const PRESETS: &[(&str, f32, f32)] = &[
 ];
 
 /// Turning the model must not zoom or shift it: fixed pivot and distance.
+/// Full deflection of the 3D mouse turns the model this fast (degrees per second)...
+const ORBIT_DEGREES_PER_SECOND: f32 = 110.0;
+/// ...pans this many bounding radii per second at zoom 1...
+const PAN_RADII_PER_SECOND: f32 = 0.9;
+/// ...and zooms by this factor (as e^x) per second.
+const ZOOM_PER_SECOND: f32 = 1.3;
+
+/// The view after the camera moved for `dt` seconds. Twisting the knob clockwise turns the model
+/// clockwise seen from above; pushing or lifting moves the model the same way.
+fn driven(view: &ViewParams, m: &CameraMotion, dt: f32) -> ViewParams {
+    let zoom = view.zoom.max(0.01);
+    ViewParams {
+        azimuth_deg: view.azimuth_deg + m.orbit_h * ORBIT_DEGREES_PER_SECOND * dt,
+        elevation_deg: (view.elevation_deg + m.orbit_v * ORBIT_DEGREES_PER_SECOND * dt).clamp(-89.5, 89.5),
+        pan: view.pan - glam::Vec2::new(m.pan_x, m.pan_y) * (PAN_RADII_PER_SECOND * dt / zoom),
+        zoom: (zoom * (m.zoom * ZOOM_PER_SECOND * dt).exp()).clamp(0.2, 50.0),
+        ..*view
+    }
+}
+
 fn orbit_view() -> ViewParams {
     ViewParams { framing: Framing::Orbit, ..ViewParams::default() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_3d_mouse_moves_the_camera_and_stays_within_limits() {
+        let view = orbit_view();
+        let still = driven(&view, &CameraMotion::default(), 0.016);
+        assert_eq!(still, view);
+        let turn = driven(&view, &CameraMotion { orbit_h: 1.0, ..Default::default() }, 0.5);
+        assert!((turn.azimuth_deg - view.azimuth_deg - 55.0).abs() < 1e-3, "110 degrees per second at full travel");
+        let up = driven(&view, &CameraMotion { orbit_v: 1.0, ..Default::default() }, 10.0);
+        assert_eq!(up.elevation_deg, 89.5, "never over the pole");
+        let pushed = driven(&view, &CameraMotion { pan_x: 1.0, pan_y: 1.0, ..Default::default() }, 0.1);
+        assert!(pushed.pan.x < 0.0 && pushed.pan.y < 0.0, "the model follows the knob");
+        let zoomed = driven(&view, &CameraMotion { zoom: 1.0, ..Default::default() }, 1.0);
+        assert!(zoomed.zoom > view.zoom);
+        assert_eq!(driven(&view, &CameraMotion { zoom: -1.0, ..Default::default() }, 100.0).zoom, 0.2);
+    }
 }

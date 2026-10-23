@@ -9,9 +9,12 @@ use meshgrove_core::config::{
     TILE_TAG_COUNT, TileTags,
 };
 use meshgrove_core::printer::Bed;
+use meshgrove_core::spacemouse::SpaceMouseConfig;
 use meshgrove_core::userdata;
 
+use super::spacemouse::MouseSettings;
 use crate::i18n;
+use crate::spacemouse::Snapshot;
 
 pub enum SettingsChange {
     Language(Option<String>),
@@ -24,6 +27,8 @@ pub enum SettingsChange {
     /// `None`: take the printer selected in the slicer.
     Printer(Option<Bed>),
     GltfUnit(GltfUnit),
+    /// The 3D mouse settings, as a whole.
+    SpaceMouse(SpaceMouseConfig),
     PreviewQuality(PreviewQuality),
     DoubleClick(DoubleClick),
     FolderPreviews(FolderPreviews),
@@ -157,6 +162,8 @@ fn models(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
 pub struct AppInfo<'a> {
     pub gpu: &'a str,
     pub db_path: &'a Path,
+    /// The 3D mouse as the reader sees it.
+    pub mouse: &'a Snapshot,
 }
 
 #[derive(Default)]
@@ -173,6 +180,8 @@ pub struct SettingsDialog {
     import_input: String,
     cache_size: Option<u64>,
     cache_rx: Option<Receiver<u64>>,
+    /// The 3D mouse's part: the calibration in progress.
+    mouse: MouseSettings,
     /// The category shown on the right.
     category: Category,
 }
@@ -223,6 +232,7 @@ enum Section {
     FolderPreviews,
     Tags,
     Preview,
+    SpaceMouse,
     Models,
     Slicer,
     Editor,
@@ -322,6 +332,7 @@ impl SettingsDialog {
             None => Default::default(),
         });
         self.editor_form = active_editor.map(|e| (e.name.clone(), e.program.display().to_string()));
+        self.mouse.reset();
         self.refresh_cache_size();
     }
 
@@ -386,7 +397,7 @@ impl SettingsDialog {
                                 Category::General => &[Section::Language, Section::DoubleClick, Section::Panes],
                                 Category::Library => &[Section::Library, Section::FolderPreviews],
                                 Category::Tags => &[Section::Tags],
-                                Category::View => &[Section::Preview, Section::Models],
+                                Category::View => &[Section::Preview, Section::SpaceMouse, Section::Models],
                                 Category::Programs => &[Section::Slicer, Section::Editor],
                                 Category::Printer => &[Section::Printer],
                                 Category::Data => &[Section::UserData, Section::Storage],
@@ -409,6 +420,7 @@ impl SettingsDialog {
                                     Section::FolderPreviews => folder_previews(ui, config, &mut changes),
                                     Section::Tags => tags(ui, config, &mut changes),
                                     Section::Preview => preview(ui, config, &mut changes),
+                                    Section::SpaceMouse => self.mouse.section(ui, config, info.mouse, &mut changes),
                                     Section::Models => models(ui, config, &mut changes),
                                     Section::Slicer => self.slicer(ui, config, slicer, &mut changes),
                                     Section::Editor => self.editor(ui, config, editor, &mut changes),
@@ -421,6 +433,7 @@ impl SettingsDialog {
                     });
                 });
             });
+        self.mouse.calibration_modal(ctx, config, info.mouse, &mut changes);
         self.open = open;
         changes
     }

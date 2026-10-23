@@ -15,6 +15,7 @@ pub mod printer;
 pub mod process;
 pub mod query;
 pub mod scan;
+pub mod spacemouse;
 pub mod thumbnail;
 pub mod userdata;
 

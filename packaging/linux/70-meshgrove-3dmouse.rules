@@ -1,0 +1,4 @@
+# 3D mice (3Dconnexion SpaceMouse and DIY builds that copy them): let the logged-in user read
+# them, so Meshgrove can navigate with them.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="256f", TAG+="uaccess"
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c6[0-4]?", TAG+="uaccess"

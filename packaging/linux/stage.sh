@@ -17,6 +17,7 @@ sed "s|@BIN@|/usr/bin|g" packaging/meshgrove.desktop > "$dest/usr/share/applicat
 sed "s|@BIN@|/usr/bin|g" packaging/meshgrove.thumbnailer > "$dest/usr/share/thumbnailers/meshgrove.thumbnailer"
 chmod 644 "$dest/usr/share/applications/meshgrove.desktop" "$dest/usr/share/thumbnailers/meshgrove.thumbnailer"
 install -Dm644 packaging/mime/meshgrove-step.xml "$dest/usr/share/mime/packages/meshgrove-step.xml"
+install -Dm644 packaging/linux/70-meshgrove-3dmouse.rules "$dest/usr/lib/udev/rules.d/70-meshgrove-3dmouse.rules"
 for size in 16 24 32 48 64 128 256 512; do
     install -Dm644 "packaging/icons/meshgrove-$size.png" "$dest/usr/share/icons/hicolor/${size}x${size}/apps/meshgrove.png"
 done

@@ -14,7 +14,7 @@ use meshgrove_core::printer::Bed;
 use meshgrove_render::Renderer;
 
 use super::details::{self, ModelStatus};
-use super::viewer::{MeshSource, ModelViewer};
+use super::viewer::{MeshSource, ModelViewer, SpaceInput};
 use crate::meshes::{MeshState, MeshStore};
 
 /// What the windows ask the app to do.
@@ -33,6 +33,8 @@ pub struct WindowContext<'a> {
     pub render_state: &'a egui_wgpu::RenderState,
     pub renderer: &'a Renderer,
     pub bed: Option<&'a Bed>,
+    /// What the 3D mouse did this frame; the window that has the focus follows it.
+    pub space: Option<&'a SpaceInput>,
     pub slicer: Option<&'a str>,
     pub editor: Option<&'a Program>,
     pub quality: PreviewQuality,
@@ -102,6 +104,11 @@ impl ModelWindow {
             }
             if ui.input(|i| i.viewport().close_requested() || i.key_pressed(Key::Escape)) {
                 open = false;
+            }
+            if let Some(input) = cx.space
+                && ui.input(|i| i.viewport().focused == Some(true))
+            {
+                self.viewer.apply_space(input);
             }
             // Widget ids must not collide with the main window's or other model windows'.
             ui.push_id(self.id, |ui| self.contents(ui, &name, cx, actions));

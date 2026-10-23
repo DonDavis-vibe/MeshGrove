@@ -388,6 +388,8 @@ pub struct Config {
     pub printer: Option<crate::printer::Bed>,
     /// What one glTF unit stands for.
     pub gltf_unit: GltfUnit,
+    /// 3D mouse (SpaceMouse) navigation.
+    pub spacemouse: crate::spacemouse::SpaceMouseConfig,
     /// Picture quality of the large preview (Space) and the model windows.
     pub preview_quality: PreviewQuality,
     /// The large preview shows the file name, the viewer's tools and the hints; otherwise just
@@ -429,6 +431,7 @@ impl Default for Config {
             slicer: None,
             printer: None,
             gltf_unit: GltfUnit::Metres,
+            spacemouse: Default::default(),
             preview_quality: PreviewQuality::High,
             preview_controls: false,
             double_click: DoubleClick::Window,

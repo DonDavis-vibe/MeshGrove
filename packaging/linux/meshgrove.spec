@@ -39,6 +39,7 @@ mv %{buildroot}%{_docdir}/%{name}/LICENSE %{buildroot}%{_docdir}/%{name}/THIRD-P
 %{_datadir}/icons/hicolor/*/apps/meshgrove.png
 %{_datadir}/mime/packages/meshgrove-step.xml
 %{_datadir}/thumbnailers/meshgrove.thumbnailer
+/usr/lib/udev/rules.d/70-meshgrove-3dmouse.rules
 %doc %{_docdir}/%{name}/README.md
 %license %{_licensedir}/%{name}/LICENSE
 %license %{_licensedir}/%{name}/THIRD-PARTY-LICENSES.md
