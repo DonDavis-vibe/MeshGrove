@@ -8,7 +8,10 @@ use std::time::SystemTime;
 
 use image::RgbaImage;
 
+use base64::Engine;
+
 use crate::config::GltfUnit;
+use crate::loaders::gcode::GcodeFacts;
 
 /// Bump whenever thumbnails would look different (camera, lighting, size), to invalidate the cache.
 pub const RENDER_VERSION: u32 = 1;
@@ -25,6 +28,8 @@ pub struct ThumbMeta {
     pub embedded: bool,
     /// Filament colours (sRGB) a slicer project prints with.
     pub filaments: Vec<[u8; 3]>,
+    /// What a G-code file's comments say about the print.
+    pub gcode: Option<Box<GcodeFacts>>,
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +113,8 @@ const KEY_CONTENT: &str = "stlb:content_hash";
 const KEY_GEO: &str = "stlb:geo_sig";
 const KEY_SOURCE: &str = "stlb:source";
 const KEY_FILAMENTS: &str = "stlb:filaments";
+/// JSON in base64, since text chunks only hold Latin-1 and printer names may not.
+const KEY_GCODE: &str = "stlb:gcode";
 
 fn encode(thumb: &Thumbnail) -> io::Result<Vec<u8>> {
     let mut out = Vec::new();
@@ -127,6 +134,13 @@ fn encode(thumb: &Thumbnail) -> io::Result<Vec<u8>> {
             (!m.filaments.is_empty()).then(|| {
                 m.filaments.iter().map(|[r, g, b]| format!("{r:02X}{g:02X}{b:02X}")).collect::<Vec<_>>().join(" ")
             }),
+        ),
+        (
+            KEY_GCODE,
+            m.gcode
+                .as_ref()
+                .and_then(|g| serde_json::to_vec(g).ok())
+                .map(|json| base64::engine::general_purpose::STANDARD.encode(json)),
         ),
     ];
     for (k, v) in texts {
@@ -171,6 +185,13 @@ fn decode(bytes: &[u8]) -> Result<Thumbnail, png::DecodingError> {
                     })
                     .collect();
             }
+            KEY_GCODE => {
+                meta.gcode = base64::engine::general_purpose::STANDARD
+                    .decode(text)
+                    .ok()
+                    .and_then(|json| serde_json::from_slice(&json).ok())
+                    .map(Box::new);
+            }
             _ => {}
         }
     }
@@ -199,6 +220,13 @@ mod tests {
             geo_sig: Some("12|2.4e3|...".into()),
             embedded: true,
             filaments: vec![[255, 0, 0], [0, 128, 255]],
+            gcode: Some(Box::new(GcodeFacts {
+                printer: Some("Creality Ender-3 V3 SE – Düse 0.4".into()),
+                filament_g: Some(31.52),
+                materials: vec!["PLA".into(), "PETG".into()],
+                layers: Some(10),
+                ..Default::default()
+            })),
         };
         cache.store(&key, &Thumbnail { image: image.clone(), meta: meta.clone() }).unwrap();
         let back = cache.load(&key).unwrap().unwrap();

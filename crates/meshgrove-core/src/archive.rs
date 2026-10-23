@@ -145,13 +145,11 @@ pub fn read_member(archive: &Path, member: &str) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Unpacks all previewable members (models, images, PDFs) in one pass, within the memory caps.
+/// Unpacks all previewable members (models, images, PDFs, G-code) in one pass, within the memory caps.
 fn unpack_all(archive: &Path) -> io::Result<HashMap<String, Arc<Vec<u8>>>> {
     let wanted = |name: &str, size: u64| {
         size <= MAX_CACHED_MEMBER
-            && (matches!(Kind::from_file_name(name), Kind::Image | Kind::Pdf)
-                || Kind::from_file_name(name).is_model()
-                || is_model_resource(name))
+            && (crate::thumbnail::supported(Kind::from_file_name(name)) || is_model_resource(name))
     };
     let mut iter = compress_tools::ArchiveIteratorBuilder::new(File::open(archive)?)
         .decoder(lossy)

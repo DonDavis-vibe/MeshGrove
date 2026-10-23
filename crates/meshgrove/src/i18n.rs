@@ -43,6 +43,17 @@ pub fn decimal(value: f32) -> String {
     decimal_in(Lang::current(), value)
 }
 
+/// "0,2" (de) / "0.2" (en): up to two decimals without trailing zeros — layer heights, nozzles.
+pub fn short_decimal(value: f32) -> String {
+    let text = format!("{value:.2}");
+    text.trim_end_matches('0').trim_end_matches('.').replace('.', &Lang::current().decimal_sep().to_string())
+}
+
+/// "0,82" (de) / "0.82" (en): an amount of money without currency.
+pub fn money(value: f32) -> String {
+    format!("{value:.2}").replace('.', &Lang::current().decimal_sep().to_string())
+}
+
 /// "1.234.567" (de) / "1,234,567" (en).
 pub fn count(n: usize) -> String {
     count_in(Lang::current(), n)

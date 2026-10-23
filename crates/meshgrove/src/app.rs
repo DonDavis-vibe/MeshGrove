@@ -325,7 +325,7 @@ impl App {
                     preview = self.folder_scan.get_or_request(&e.path, fp.depth, limit).cloned().unwrap_or_default();
                 }
                 if self.config.only_models {
-                    preview.retain(|f| f.kind.is_model());
+                    preview.retain(|f| f.kind.is_printable());
                 }
                 if !preview.is_empty() {
                     mosaics.insert(i, preview);
@@ -820,11 +820,11 @@ impl App {
         self.lists.iter().find(|l| l.id == id && l.kind == ListKind::Print)
     }
 
-    /// Logs a print of the models among `paths`; on a shown print list it counts there too.
+    /// Logs a print of the models and G-code among `paths`; on a shown print list it counts there too.
     fn record_print(&mut self, paths: Vec<PathBuf>, result: PrintResult) {
         let models: Vec<PathBuf> = paths
             .into_iter()
-            .filter(|p| self.in_library(p) && Kind::from_file_name(&listing::file_name(p)).is_model())
+            .filter(|p| self.in_library(p) && Kind::from_file_name(&listing::file_name(p)).is_printable())
             .collect();
         if models.is_empty() || self.index.is_none() {
             return;

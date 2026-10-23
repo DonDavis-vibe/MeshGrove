@@ -7,6 +7,7 @@ use meshgrove_core::Kind;
 use meshgrove_core::config::Program;
 use meshgrove_core::listing::Entry;
 use meshgrove_core::lists::{ListInfo, ListKind, PrintResult, PrintStatus};
+use meshgrove_core::loaders::gcode::GcodeFacts;
 use meshgrove_core::printer::{self, Bed, Fit};
 use meshgrove_render::Renderer;
 
@@ -103,7 +104,8 @@ pub struct DetailsContext<'a> {
     pub renderer: &'a Renderer,
 }
 
-/// The "Preview" pane: file name and the 3D view (or a large picture), filling the pane.
+/// The "Preview" pane: file name and the 3D view (or a large picture: photos, G-code previews),
+/// filling the pane.
 pub fn preview(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
     let mut out = DetailsOutput::default();
     let Some(entry) = cx.entry else {
@@ -137,7 +139,7 @@ pub fn preview(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
             _ => out.message = cx.viewer.ui(&mut child, cx.render_state, cx.renderer),
         }
         ui.add(egui::Label::new(RichText::new(t!("viewer.hint")).weak()).truncate());
-    } else if entry.kind == Kind::Image
+    } else if matches!(entry.kind, Kind::Image | Kind::Gcode)
         && let Some(Thumb::Ready(texture, _)) = cx.thumb
     {
         ui.add(egui::Image::new(texture).fit_to_exact_size(ui.available_size()).corner_radius(4.0));
@@ -163,7 +165,7 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
             out.clicked_plate = plates(ui, cx.plates, active);
         }
         lists_row(ui, &cx.lists, cx.tags.enabled, count, &mut out);
-        if entry.kind.is_model() {
+        if entry.kind.is_printable() {
             print_row(ui, &cx.print, &mut out);
         }
         tag_editor(ui, cx.tags, cx.tag_style, count, &mut out);
@@ -417,9 +419,11 @@ pub fn facts(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, model: &ModelSta
         };
         let size = info.map(|i| i.size_mm).or_else(|| meta.and_then(|m| m.size_mm).map(glam::Vec3::from));
         let triangles = info.map(|i| i.triangles).or_else(|| meta.and_then(|m| m.triangles));
+        let gcode = meta.and_then(|m| m.gcode.as_ref());
         if let Some(size) = size {
             fact(ui, &t!("details.dimensions"), &i18n::dimensions(size));
-            if let Some(bed) = bed {
+            // G-code is placed already; whether it suits the printer is told by its printer row.
+            if let Some(bed) = bed.filter(|_| gcode.is_none()) {
                 let fit = printer::fit(size.to_array(), bed);
                 ui.label(RichText::new(t!("bed.label")).weak());
                 let text = fit_text(fit, bed);
@@ -451,12 +455,19 @@ pub fn facts(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, model: &ModelSta
                 }
             }
         }
-        // The viewer's plate knows the materials; the thumbnail only the colours of the first plate.
+        if let Some(gcode) = gcode {
+            gcode_facts(ui, gcode, meta.is_some_and(|m| m.filaments.is_empty()), bed);
+        }
+        // The viewer's plate knows the materials; the thumbnail only the colours of the first
+        // plate, G-code the materials of its extruders as well.
+        let material = |i: usize| gcode.and_then(|g| g.materials.get(i)).map(String::as_str);
         let filaments: Vec<(Option<u32>, [u8; 3], Option<&str>)> = match info {
             Some(info) if !info.filaments.is_empty() => {
                 info.filaments.iter().map(|f| (Some(f.slot), f.color, f.material.as_deref())).collect()
             }
-            _ => meta.map(|m| m.filaments.iter().map(|&c| (None, c, None)).collect()).unwrap_or_default(),
+            _ => meta
+                .map(|m| m.filaments.iter().enumerate().map(|(i, &c)| (None, c, material(i))).collect())
+                .unwrap_or_default(),
         };
         if !filaments.is_empty() {
             ui.label(RichText::new(t!("details.filaments")).weak());
@@ -472,6 +483,62 @@ pub fn facts(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, model: &ModelSta
             ui.end_row();
         }
     });
+}
+
+/// What the slicer wrote into a G-code file; warns when it was sliced for another printer.
+/// `materials` adds the materials to the filament row (when no colour swatches show them).
+fn gcode_facts(ui: &mut Ui, g: &GcodeFacts, materials: bool, bed: Option<&Bed>) {
+    if let Some(slicer) = &g.slicer {
+        fact(ui, &t!("gcode.slicer"), slicer);
+    }
+    if let Some(printer) = &g.printer {
+        ui.label(RichText::new(t!("gcode.printer")).weak());
+        match bed.filter(|bed| !printer::same_printer(printer, bed)) {
+            Some(bed) => {
+                ui.colored_label(ui.visuals().warn_fg_color, format!("⚠ {printer}")).on_hover_text(t!(
+                    "gcode.other_printer",
+                    printer = printer,
+                    bed = bed.name
+                ));
+            }
+            None => {
+                ui.add(egui::Label::new(printer).wrap());
+            }
+        }
+        ui.end_row();
+    }
+    if let Some(time) = &g.print_time {
+        fact(ui, &t!("gcode.print_time"), time);
+    }
+    let mut used: Vec<String> = Vec::new();
+    if materials && !g.materials.is_empty() {
+        used.push(g.materials.join(", "));
+    }
+    if let Some(grams) = g.filament_g {
+        used.push(format!("{} g", i18n::decimal(grams)));
+    }
+    if let Some(metres) = g.filament_m {
+        used.push(format!("{} m", i18n::decimal(metres)));
+    }
+    if !used.is_empty() {
+        fact(ui, &t!("gcode.filament_used"), &used.join(" · "));
+    }
+    let layer = g.layer_height.map(|h| format!("{} mm", i18n::short_decimal(h)));
+    let layers = match (g.layers, layer) {
+        (Some(n), Some(h)) => Some(format!("{} × {h}", i18n::count(n as usize))),
+        (Some(n), None) => Some(i18n::count(n as usize)),
+        (None, h) => h,
+    };
+    if let Some(layers) = layers {
+        fact(ui, &t!("gcode.layers"), &layers);
+    }
+    if let Some(nozzle) = g.nozzle {
+        fact(ui, &t!("gcode.nozzle"), &format!("{} mm", i18n::short_decimal(nozzle)));
+    }
+    // The slicer does not say which currency; the user knows their filament prices.
+    if let Some(cost) = g.cost.filter(|c| *c > 0.0) {
+        fact(ui, &t!("gcode.cost"), &i18n::money(cost));
+    }
 }
 
 /// Plate pictures; clicking one shows that plate in the viewer. Returns the clicked plate.
@@ -554,6 +621,7 @@ pub fn kind_name(kind: Kind) -> String {
         Kind::Archive => t!("kind.archive"),
         Kind::Image => t!("kind.image"),
         Kind::Pdf => t!("kind.pdf"),
+        Kind::Gcode => t!("kind.gcode"),
         Kind::Other => t!("kind.other"),
     }
     .into_owned()

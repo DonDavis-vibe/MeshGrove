@@ -142,14 +142,6 @@ impl Library {
                 // The index is only a cache of the disk: rebuild it instead of migrating.
                 conn.execute_batch("DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS dirs;")?;
                 conn.execute_batch(INDEX_SCHEMA)?;
-            } else if version < 4 {
-                // v4 knows OBJ, PLY and glTF; unchanged folders are not rescanned, so reclassify.
-                for (kind, ext) in [("obj", "obj"), ("ply", "ply"), ("gltf", "glb"), ("gltf", "gltf")] {
-                    conn.execute(
-                        "UPDATE files SET kind = ?1, meta_key = NULL WHERE kind = 'other' AND name LIKE '%.' || ?2",
-                        params![kind, ext],
-                    )?;
-                }
             }
             // v2 added tags, v3 notes, v5 lists, prints and tag colours; the index tables are unchanged.
             conn.execute_batch(TAGS_SCHEMA)?;
@@ -157,6 +149,7 @@ impl Library {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         crate::lists::upgrade(&conn)?;
+        reclassify_unknown(&conn)?;
         Ok(Library { conn })
     }
 
@@ -289,11 +282,11 @@ impl Library {
         Ok(())
     }
 
-    /// Models, images and PDFs whose thumbnail facts are missing or out of date, for background processing.
+    /// Models, images, PDFs and G-code whose thumbnail facts are missing or out of date, for background processing.
     pub fn needing_meta(&self) -> Result<Vec<(Entry, String)>, Error> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns, f.meta_key FROM files f JOIN dirs d ON d.id = f.dir_id
-             WHERE f.kind IN ({MODEL_KINDS}, 'image', 'pdf') ORDER BY d.path, f.name"
+             WHERE f.kind IN ({MODEL_KINDS}, 'image', 'pdf', 'gcode') ORDER BY d.path, f.name"
         ))?;
         let rows = stmt.query_map([], |r| Ok((entry_from_row(r)?, r.get::<_, Option<String>>(5)?)))?;
         let mut out = Vec::new();
@@ -340,7 +333,7 @@ impl Library {
         }
         for mark in &query.marks {
             let unprinted = format!(
-                " AND f.kind IN ({MODEL_KINDS}) AND (f.content_hash IS NULL
+                " AND f.kind IN ({MODEL_KINDS}, 'gcode') AND (f.content_hash IS NULL
                    OR f.content_hash NOT IN (SELECT content_hash FROM prints WHERE result = 'printed'))"
             );
             sql += match mark {
@@ -349,7 +342,7 @@ impl Library {
                        WHERE l.kind = 'favorites')"
                 }
                 Mark::Printed => " AND f.content_hash IN (SELECT content_hash FROM prints WHERE result = 'printed')",
-                // Only models are printed; a readme is not "unprinted".
+                // Only models and G-code are printed; a readme is not "unprinted".
                 Mark::Unprinted => &unprinted,
                 Mark::Failed => {
                     " AND (SELECT p.result FROM prints p WHERE p.content_hash = f.content_hash
@@ -366,14 +359,14 @@ impl Library {
         stmt.query_map(params_from_iter(args), entry_from_row)?.collect()
     }
 
-    /// Up to `n` thumbnail-capable files in or below `dir` for its mosaic: models before images,
-    /// files directly inside before those in subfolders.
+    /// Up to `n` thumbnail-capable files in or below `dir` for its mosaic: models before images
+    /// before G-code, files directly inside before those in subfolders.
     pub fn folder_preview(&self, dir: &Path, n: usize) -> Result<Vec<Entry>, Error> {
         let Some(d) = path_str(dir) else { return Ok(Vec::new()) };
         let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns FROM files f JOIN dirs d ON d.id = f.dir_id
-             WHERE (d.path = ?1 OR (d.path > ?2 AND d.path < ?3)) AND f.kind IN ({MODEL_KINDS}, 'image')
-             ORDER BY (f.kind = 'image'), (d.path = ?1) DESC, d.path, f.name COLLATE NOCASE LIMIT ?4"
+             WHERE (d.path = ?1 OR (d.path > ?2 AND d.path < ?3)) AND f.kind IN ({MODEL_KINDS}, 'image', 'gcode')
+             ORDER BY CASE f.kind WHEN 'image' THEN 1 WHEN 'gcode' THEN 2 ELSE 0 END, (d.path = ?1) DESC, d.path, f.name COLLATE NOCASE LIMIT ?4"
         ))?;
         stmt.query_map(params![d, format!("{d}/"), format!("{d}0"), n as i64], entry_from_row)?.collect()
     }
@@ -637,7 +630,7 @@ impl Library {
                 "SELECT COUNT(*),
                         COALESCE(SUM(kind IN ({MODEL_KINDS})), 0),
                         COALESCE(SUM(meta_key IS NOT NULL), 0),
-                        COALESCE(SUM(kind IN ({MODEL_KINDS}, 'image', 'pdf')), 0)
+                        COALESCE(SUM(kind IN ({MODEL_KINDS}, 'image', 'pdf', 'gcode')), 0)
                  FROM files"
             ),
             [],
@@ -686,6 +679,27 @@ pub fn nanos(t: Option<SystemTime>) -> i64 {
 }
 
 /// Non-UTF-8 paths cannot be stored (and are vanishingly rare); they are skipped.
+/// Files indexed as unknown before Meshgrove learnt their format (OBJ, PLY and glTF in v4,
+/// G-code in 0.4): unchanged folders are not rescanned, so classify them again by name.
+fn reclassify_unknown(conn: &Connection) -> Result<(), Error> {
+    let known: Vec<(i64, Kind)> = conn
+        .prepare("SELECT id, name FROM files WHERE kind = 'other'")?
+        .query_map([], |r| Ok((r.get(0)?, r.get::<_, String>(1)?)))?
+        .filter_map(Result::ok)
+        .map(|(id, name)| (id, Kind::from_file_name(&name)))
+        .filter(|(_, kind)| *kind != Kind::Other)
+        .collect();
+    if known.is_empty() {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+    for (id, kind) in known {
+        tx.execute("UPDATE files SET kind = ?2, meta_key = NULL WHERE id = ?1", params![id, kind.as_str()])?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 fn path_str(p: &Path) -> Option<&str> {
     p.to_str()
 }
@@ -917,6 +931,7 @@ mod tests {
             Kind::Archive,
             Kind::Image,
             Kind::Pdf,
+            Kind::Gcode,
             Kind::Other,
         ];
         assert_eq!(listed, all.into_iter().filter(|k| k.is_model()).collect::<Vec<_>>());
@@ -930,7 +945,7 @@ mod tests {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(INDEX_SCHEMA).unwrap();
             conn.execute("INSERT INTO dirs (path, parent, mtime_ns) VALUES ('/r', NULL, 1)", []).unwrap();
-            for name in ["Scan.PLY", "fig.glb", "notes.txt"] {
+            for name in ["Scan.PLY", "fig.glb", "notes.txt", "Deckel.gcode"] {
                 conn.execute(
                     "INSERT INTO files (dir_id, name, kind, size, mtime_ns, search) VALUES (1, ?1, 'other', 1, 1, ?1)",
                     [name],
@@ -949,7 +964,7 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
-        assert_eq!(kinds, ["ply", "gltf", "other"], "new model formats reclassified");
+        assert_eq!(kinds, ["gcode", "ply", "gltf", "other"], "new formats reclassified");
         lib.update_dir(Path::new("/r"), Path::new("/r"), 2, &[file("/r", "a.stl", 1, 1)], &[]).unwrap();
         lib.store_meta(Path::new("/r/a.stl"), "k", &ThumbMeta { content_hash: Some("h".into()), ..Default::default() })
             .unwrap();

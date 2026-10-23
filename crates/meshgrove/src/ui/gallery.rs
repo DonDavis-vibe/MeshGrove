@@ -399,6 +399,7 @@ impl Gallery {
                         let show_folders = self.show_folders;
                         let sliceable = entries[entry].kind.is_sliceable();
                         let model = entries[entry].kind.is_model();
+                        let printable = entries[entry].kind.is_printable();
                         let viewable = crate::meshes::viewable(entries[entry].kind);
                         // Stays open on clicks inside: "Add to list" has a name field.
                         super::context_menu_with_field(&response, |ui| {
@@ -429,7 +430,7 @@ impl Gallery {
                                 item(ui, t!("menu.edit_tags"), Action::EditTags);
                                 let star = if menu.favorite { t!("menu.unfavorite") } else { t!("menu.favorite") };
                                 item(ui, star, Action::ToggleFavorite);
-                                if model {
+                                if printable {
                                     item(ui, t!("menu.printed"), Action::Print(PrintResult::Printed));
                                     item(ui, t!("menu.failed"), Action::Print(PrintResult::Failed));
                                 }
@@ -693,7 +694,8 @@ impl Gallery {
                 }
             }
         }
-        if entry.kind.is_model() || (entry.kind == Kind::Archive && self.mosaics.contains_key(&index)) {
+        let labelled = entry.kind.is_model() || entry.kind == Kind::Gcode;
+        if labelled || (entry.kind == Kind::Archive && self.mosaics.contains_key(&index)) {
             let label = icons::extension_label(&entry.name);
             icons::badge(&painter, img, &label, Color32::from_black_alpha(150), Color32::from_gray(230));
         }
@@ -713,7 +715,11 @@ impl Gallery {
                 let label = t!("bed.badge_too_big");
                 Some(icons::bottom_right_badge(&painter, img, &label, visuals.error_fg_color, Color32::WHITE))
             }
-            _ => None,
+            // Kept small: a folder of G-code for a second printer would otherwise shout on every tile.
+            _ => self.other_printer(index).map(|_| {
+                let warn = visuals.warn_fg_color.linear_multiply(0.9);
+                icons::bottom_right_badge(&painter, img, "⚠ 🖨", warn, Color32::BLACK)
+            }),
         };
         // Right to left along the bottom: bed check, favourite star, print state.
         let mut corner = bed_badge.map_or(pos2(img.max.x - 4.0, img.max.y - 4.0), |r| pos2(r.min.x - 3.0, r.max.y));
@@ -774,6 +780,9 @@ impl Gallery {
         if let Some((fit @ (Fit::Rotated(_) | Fit::TooBig(_)), bed)) = &fit {
             tooltip += &format!("\n{}", super::details::fit_text(*fit, bed));
         }
+        if let Some((printer, bed)) = self.other_printer(index) {
+            tooltip += &format!("\n⚠ {}", t!("gcode.other_printer", printer = printer, bed = bed.name));
+        }
         if let Some(Thumb::Failed(error)) = self.thumb(index) {
             tooltip += &format!("\n⚠ {error}");
         }
@@ -790,6 +799,14 @@ impl Gallery {
             Thumb::Ready(_, meta) => Some((printer::fit(meta.size_mm?, bed), bed)),
             _ => None,
         }
+    }
+
+    /// G-code sliced for another printer than the one set up: (its printer, the bed).
+    fn other_printer(&self, index: usize) -> Option<(&str, &Bed)> {
+        let bed = self.bed.as_ref()?;
+        let Thumb::Ready(_, meta) = self.thumb(index)? else { return None };
+        let printer = meta.gcode.as_ref()?.printer.as_deref()?;
+        (!printer::same_printer(printer, bed)).then_some((printer, bed))
     }
 }
 
@@ -841,14 +858,14 @@ fn arranged(
     let failed = |e: &Entry| marks.get(&e.path).is_some_and(|m| m.last_failed);
     let by_print = |e: &Entry| match a.print {
         PrintFilter::All => true,
-        PrintFilter::Unprinted => e.is_dir() || (e.kind.is_model() && !printed(e)),
+        PrintFilter::Unprinted => e.is_dir() || (e.kind.is_printable() && !printed(e)),
         PrintFilter::Printed => e.is_dir() || printed(e),
         PrintFilter::Failed => e.is_dir() || failed(e),
     };
     let mut shown: Vec<usize> = (0..entries.len())
         .filter(|&i| {
             let e = &entries[i];
-            (!a.only_models || e.is_dir() || e.kind.is_model())
+            (!a.only_models || e.is_dir() || e.kind.is_printable())
                 && (needle.is_empty() || e.name.to_lowercase().contains(&needle))
                 && by_print(e)
         })

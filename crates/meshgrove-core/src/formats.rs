@@ -14,6 +14,8 @@ pub enum Kind {
     Archive,
     Image,
     Pdf,
+    /// Sliced print job (`.gcode`, `.gco`, `.g`).
+    Gcode,
     Other,
 }
 
@@ -42,6 +44,7 @@ impl Kind {
             "zip" | "7z" | "rar" | "tar" | "tgz" => Kind::Archive,
             "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" => Kind::Image,
             "pdf" => Kind::Pdf,
+            "gcode" | "gco" | "g" => Kind::Gcode,
             _ => Kind::Other,
         }
     }
@@ -59,6 +62,7 @@ impl Kind {
             Kind::Archive => "archive",
             Kind::Image => "image",
             Kind::Pdf => "pdf",
+            Kind::Gcode => "gcode",
             Kind::Other => "other",
         }
     }
@@ -75,6 +79,7 @@ impl Kind {
             "archive" => Kind::Archive,
             "image" => Kind::Image,
             "pdf" => Kind::Pdf,
+            "gcode" => Kind::Gcode,
             _ => Kind::Other,
         }
     }
@@ -82,6 +87,12 @@ impl Kind {
     /// Files that become a 3D mesh (rendered thumbnail, viewer, hover turntable, duplicate geometry).
     pub fn is_model(self) -> bool {
         matches!(self, Kind::Stl | Kind::ThreeMf | Kind::Step | Kind::Obj | Kind::Ply | Kind::Gltf)
+    }
+
+    /// What gets printed: models and sliced G-code. These have a print status and pass the
+    /// "models and G-code only" filter.
+    pub fn is_printable(self) -> bool {
+        self.is_model() || self == Kind::Gcode
     }
 
     /// Models the slicers open (Bambu Studio, OrcaSlicer, Anycubic Slicer Next, PrusaSlicer);
@@ -109,6 +120,10 @@ mod tests {
         assert_eq!(Kind::from_file_name("figure.glb"), Kind::Gltf);
         assert_eq!(Kind::from_file_name("figure.gltf"), Kind::Gltf);
         assert_eq!(Kind::from_file_name("part.obj"), Kind::Obj);
+        assert_eq!(Kind::from_file_name("Deckel_PLA_1h7m.gcode"), Kind::Gcode);
+        assert_eq!(Kind::from_file_name("plate.GCO"), Kind::Gcode);
+        assert!(!Kind::Gcode.is_model() && !Kind::Gcode.is_sliceable() && Kind::Gcode.is_printable());
+        assert!(Kind::Stl.is_printable() && !Kind::Image.is_printable());
         assert!(Kind::Step.is_model() && !Kind::Archive.is_model());
         assert!(Kind::Gltf.is_model() && !Kind::Gltf.is_sliceable() && Kind::Obj.is_sliceable());
         for k in [
@@ -122,6 +137,7 @@ mod tests {
             Kind::Archive,
             Kind::Image,
             Kind::Pdf,
+            Kind::Gcode,
             Kind::Other,
         ] {
             assert_eq!(Kind::parse(k.as_str()), k);

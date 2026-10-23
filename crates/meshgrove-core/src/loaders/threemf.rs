@@ -148,7 +148,7 @@ pub fn plate_images(bytes: &[u8]) -> Vec<(usize, RgbaImage)> {
         .collect()
 }
 
-fn fit(image: RgbaImage, max: u32) -> RgbaImage {
+pub(crate) fn fit(image: RgbaImage, max: u32) -> RgbaImage {
     if image.width() <= max && image.height() <= max {
         return image;
     }

@@ -124,9 +124,27 @@ pub fn fit(size: [f32; 3], bed: &Bed) -> Fit {
     Fit::TooBig(over)
 }
 
+/// Whether G-code sliced for `printer` (the name the slicer wrote) was made for `bed`'s printer.
+/// Profile names add nozzle sizes and the like, so either name may contain the other.
+pub fn same_printer(printer: &str, bed: &Bed) -> bool {
+    let simple = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
+    let (a, b) = (simple(printer), simple(&bed.name));
+    !a.is_empty() && !b.is_empty() && (a.contains(&b) || b.contains(&a))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn printer_names_are_compared_loosely() {
+        let bed = Bed { name: "Creality Ender-3 V3 SE".into(), x: 220.0, y: 220.0, z: 250.0 };
+        assert!(same_printer("Creality Ender-3 V3 SE", &bed));
+        assert!(same_printer("Creality Ender-3 V3 SE 0.4 nozzle", &bed));
+        assert!(same_printer("creality ender3 v3 se", &bed));
+        assert!(!same_printer("Anycubic Kobra S1", &bed));
+        assert!(!same_printer("", &bed));
+    }
 
     fn s1() -> Bed {
         Bed { name: "Anycubic Kobra S1".into(), x: 250.0, y: 250.0, z: 250.0 }

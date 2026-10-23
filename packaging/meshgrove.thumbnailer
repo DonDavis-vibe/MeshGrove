@@ -1,4 +1,4 @@
 [Thumbnailer Entry]
 TryExec=@BIN@/meshgrove-thumbnailer
 Exec=@BIN@/meshgrove-thumbnailer -s %s %i %o
-MimeType=model/stl;model/x.stl-binary;model/x.stl-ascii;application/sla;model/3mf;application/vnd.ms-3mfdocument;model/step;model/obj;model/x-ply;model/gltf-binary;model/gltf+json;
+MimeType=model/stl;model/x.stl-binary;model/x.stl-ascii;application/sla;model/3mf;application/vnd.ms-3mfdocument;model/step;model/obj;model/x-ply;model/gltf-binary;model/gltf+json;text/x.gcode;
