@@ -10,7 +10,7 @@ use egui::{Key, RichText, Ui, ViewportBuilder, ViewportCommand, ViewportId};
 use meshgrove_core::config::PreviewQuality;
 use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::lists::PrintResult;
-use meshgrove_core::printer::Bed;
+use meshgrove_core::printer::Printer;
 use meshgrove_render::Renderer;
 
 use super::details::{self, ModelStatus};
@@ -32,7 +32,7 @@ pub struct WindowContext<'a> {
     pub meshes: &'a mut MeshStore,
     pub render_state: &'a egui_wgpu::RenderState,
     pub renderer: &'a Renderer,
-    pub bed: Option<&'a Bed>,
+    pub printers: &'a [Printer],
     /// What the 3D mouse did this frame; the window that has the focus follows it.
     pub space: Option<&'a SpaceInput>,
     /// Free orbit in the viewer.
@@ -125,7 +125,7 @@ impl ModelWindow {
                 ui.add_space(6.0);
                 ui.label(RichText::new(name).heading().strong());
                 ui.add_space(10.0);
-                details::facts(ui, &self.entry, None, &self.model, cx.bed);
+                details::facts(ui, &self.entry, None, &self.model, cx.printers, (None, false));
                 let (slicer, editor) = details::open_buttons(ui, self.entry.kind, cx.slicers, cx.editors);
                 if let Some(index) = slicer {
                     actions.push(WindowAction::OpenInSlicer(self.entry.path.clone(), index));

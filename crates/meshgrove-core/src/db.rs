@@ -4,19 +4,22 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
 use crate::cache::{ThumbCache, ThumbMeta};
+use crate::checks::{CHECKS_VERSION, MeshChecks};
 use crate::formats::Kind;
 use crate::listing::Entry;
+use crate::printer::{self, Fit, Printer};
 use crate::query::{Mark, Query};
 use crate::userdata::{UserData, UserEntry};
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i32 = 5;
+const SCHEMA_VERSION: i32 = 6;
 /// `kind` values of model files ([`Kind::is_model`]) for SQL `IN (…)` lists.
 const MODEL_KINDS: &str = "'stl', '3mf', 'step', 'obj', 'ply', 'gltf'";
 /// The index proper: a cache of the disk, rebuilt when its layout changes.
@@ -25,7 +28,9 @@ CREATE TABLE dirs (
     id INTEGER PRIMARY KEY,
     path TEXT NOT NULL UNIQUE,
     parent TEXT,
-    mtime_ns INTEGER NOT NULL
+    mtime_ns INTEGER NOT NULL,
+    -- when the scan first found the folder; NULL for folders of a first (baseline) scan
+    added_ns INTEGER
 );
 CREATE INDEX dirs_parent ON dirs(parent);
 CREATE TABLE files (
@@ -45,6 +50,14 @@ CREATE TABLE files (
     size_z REAL,
     content_hash TEXT,
     geo_sig TEXT,
+    -- when the scan first found the file (or its new contents); NULL in a baseline scan
+    added_ns INTEGER,
+    -- G-code facts, for filters: print time estimate, printer sliced for, filament used
+    print_s INTEGER,
+    gcode_printer TEXT,
+    filament_g REAL,
+    -- the title a 3MF project names
+    title TEXT,
     UNIQUE (dir_id, name)
 );
 CREATE INDEX files_content ON files(content_hash);
@@ -71,6 +84,50 @@ CREATE TABLE IF NOT EXISTS notes (
     updated_ns INTEGER NOT NULL
 );
 ";
+/// More user data (v6): small settings of the index, the inbox of new files, mesh checks and
+/// the journal of applied suggestions. Keyed by content like the tags.
+const USER_SCHEMA_V6: &str = "
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS inbox (
+    content_hash TEXT PRIMARY KEY,
+    first_seen_ns INTEGER NOT NULL,
+    -- NULL while the file waits in the inbox
+    done_ns INTEGER,
+    -- 'baseline', 'user' or 'proposal:<batch uid>'
+    done_by TEXT
+);
+CREATE INDEX IF NOT EXISTS inbox_open ON inbox(first_seen_ns) WHERE done_ns IS NULL;
+CREATE TABLE IF NOT EXISTS mesh_checks (
+    content_hash TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    -- problem bits, so searches need not parse the facts
+    flags INTEGER NOT NULL,
+    facts TEXT NOT NULL,
+    checked_ns INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS changes (
+    id INTEGER PRIMARY KEY,
+    -- 'proposal:<batch uid>'
+    origin TEXT NOT NULL,
+    title TEXT NOT NULL,
+    applied_ns INTEGER NOT NULL,
+    undone_ns INTEGER,
+    -- JSON list of steps that revert the change, applied in reverse order
+    undo TEXT NOT NULL
+);
+";
+/// Columns v6 added to the index tables of v1–v5 databases, which are upgraded in place.
+const INDEX_COLUMNS_V6: [(&str, &str, &str); 6] = [
+    ("dirs", "added_ns", "INTEGER"),
+    ("files", "added_ns", "INTEGER"),
+    ("files", "print_s", "INTEGER"),
+    ("files", "gcode_printer", "TEXT"),
+    ("files", "filament_g", "REAL"),
+    ("files", "title", "TEXT"),
+];
 
 /// Files that share content (exact copies) or geometry (re-exports, moved/rotated copies).
 #[derive(Debug, Clone, PartialEq)]
@@ -100,6 +157,8 @@ pub struct Counts {
 
 pub struct Library {
     pub(crate) conn: Connection,
+    /// The user's printers, for `passt:` and `is:zugross` ([`Library::set_printers`]).
+    printers: Arc<Vec<Printer>>,
 }
 
 impl Library {
@@ -124,7 +183,12 @@ impl Library {
                 .ok()?;
         conn.busy_timeout(Duration::from_secs(2)).ok()?;
         let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).ok()?;
-        (version == SCHEMA_VERSION).then_some(Library { conn })
+        if version != SCHEMA_VERSION {
+            return None;
+        }
+        let printers = Arc::new(Vec::new());
+        printer_functions(&conn, &printers).ok()?;
+        Some(Library { conn, printers })
     }
 
     pub fn open_in_memory() -> Result<Library, Error> {
@@ -143,14 +207,38 @@ impl Library {
                 conn.execute_batch("DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS dirs;")?;
                 conn.execute_batch(INDEX_SCHEMA)?;
             }
-            // v2 added tags, v3 notes, v5 lists, prints and tag colours; the index tables are unchanged.
+            // v2 added tags, v3 notes, v5 lists, prints and tag colours, v6 the inbox, mesh checks
+            // and the change journal plus a few index columns.
             conn.execute_batch(TAGS_SCHEMA)?;
             conn.execute_batch(crate::lists::LISTS_SCHEMA)?;
+            conn.execute_batch(USER_SCHEMA_V6)?;
+            upgrade_index(&conn)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         crate::lists::upgrade(&conn)?;
         reclassify_unknown(&conn)?;
-        Ok(Library { conn })
+        let printers = Arc::new(Vec::new());
+        printer_functions(&conn, &printers)?;
+        Ok(Library { conn, printers })
+    }
+
+    /// The printers `passt:`/`fits:` and `is:zugross` check against.
+    pub fn set_printers(&mut self, printers: &[Printer]) -> Result<(), Error> {
+        self.printers = Arc::new(printers.to_vec());
+        printer_functions(&self.conn, &self.printers)
+    }
+
+    /// A value of the `meta` table (small facts about the index, e.g. `last_scan_ns`).
+    pub fn meta_get(&self, key: &str) -> Option<String> {
+        self.conn.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional().ok()?
+    }
+
+    pub fn meta_set(&mut self, key: &str, value: &str) -> Result<(), Error> {
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [key, value],
+        )?;
+        Ok(())
     }
 
     pub fn dir_mtime(&self, dir: &Path) -> Option<i64> {
@@ -265,16 +353,20 @@ impl Library {
         Ok(())
     }
 
-    /// Stores the facts learned while making `path`'s thumbnail (cache key `key`).
+    /// Stores the facts learned while making `path`'s thumbnail (cache key `key`). A missing
+    /// content hash keeps the known one (a failure from the cache does not know it; changed
+    /// contents already cleared it in [`Library::update_dir`]).
     pub fn store_meta(&mut self, path: &Path, key: &str, meta: &ThumbMeta) -> Result<(), Error> {
         let (Some(dir), Some(name)) = (path.parent().and_then(path_str), path.file_name().and_then(|n| n.to_str()))
         else {
             return Ok(());
         };
         let size = meta.size_mm.unwrap_or([f32::NAN; 3]).map(|v| if v.is_finite() { Some(v as f64) } else { None });
+        let gcode = meta.gcode.as_deref();
         self.conn.execute(
             "UPDATE files SET meta_key = ?3, triangles = ?4, size_x = ?5, size_y = ?6, size_z = ?7,
-                 content_hash = ?8, geo_sig = ?9
+                 content_hash = COALESCE(?8, content_hash), geo_sig = ?9, print_s = ?10, gcode_printer = ?11,
+                 filament_g = ?12
              WHERE name = ?2 AND dir_id = (SELECT id FROM dirs WHERE path = ?1)",
             params![
                 dir,
@@ -285,10 +377,54 @@ impl Library {
                 size[1],
                 size[2],
                 meta.content_hash,
-                meta.geo_sig
+                meta.geo_sig,
+                gcode.and_then(|g| g.print_time.as_deref()).and_then(crate::loaders::gcode::print_seconds),
+                gcode.and_then(|g| g.printer.as_deref()),
+                gcode.and_then(|g| g.filament_g).map(f64::from),
             ],
         )?;
+        if let (Some(checks), Some(hash)) = (&meta.checks, &meta.content_hash) {
+            self.store_checks(hash, checks)?;
+        }
         Ok(())
+    }
+
+    /// Saves the printability check of the content `hash`.
+    pub fn store_checks(&mut self, hash: &str, checks: &MeshChecks) -> Result<(), Error> {
+        let facts = serde_json::to_string(checks).map_err(|e| Error::ToSqlConversionFailure(Box::new(e)))?;
+        self.conn.execute(
+            "INSERT INTO mesh_checks (content_hash, version, flags, facts, checked_ns) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(content_hash) DO UPDATE SET version = excluded.version, flags = excluded.flags,
+                 facts = excluded.facts, checked_ns = excluded.checked_ns",
+            params![hash, checks.version, checks.flags(), facts, nanos(Some(SystemTime::now()))],
+        )?;
+        Ok(())
+    }
+
+    /// The stored printability check of `path`'s content (current check version only).
+    pub fn checks_of(&self, path: &Path) -> Result<Option<MeshChecks>, Error> {
+        let Some(hash) = self.content_hash_of(path)? else { return Ok(None) };
+        let facts: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT facts FROM mesh_checks WHERE content_hash = ?1 AND version = ?2",
+                params![hash, CHECKS_VERSION],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(facts.and_then(|f| serde_json::from_str(&f).ok()))
+    }
+
+    /// Model files whose content has no current printability check, one per content, smallest
+    /// first: (file, content hash). Their facts must be known (thumbnail processed).
+    pub fn needing_checks(&self, limit: usize) -> Result<Vec<(Entry, String)>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns, f.content_hash FROM files f JOIN dirs d ON d.id = f.dir_id
+             WHERE f.kind IN ('stl', '3mf', 'obj', 'ply', 'gltf') AND f.content_hash IS NOT NULL
+               AND f.content_hash NOT IN (SELECT content_hash FROM mesh_checks WHERE version = ?1)
+             GROUP BY f.content_hash ORDER BY f.size LIMIT ?2",
+        )?;
+        stmt.query_map(params![CHECKS_VERSION, limit as i64], |r| Ok((entry_from_row(r)?, r.get(5)?)))?.collect()
     }
 
     /// Models, images, PDFs, G-code and texts whose thumbnail facts are missing or out of date, for background processing.
@@ -340,10 +476,39 @@ impl Library {
                 args.len()
             );
         }
+        for name in &query.fits {
+            match self.printers.iter().position(|p| Some(p) == printer::find(name, &self.printers)) {
+                // G-code fits the printer it was sliced for; models and G-code of unknown origin go by size.
+                Some(i) => {
+                    sql += &format!(
+                        " AND CASE WHEN f.kind = 'gcode' AND f.gcode_printer IS NOT NULL
+                           THEN mg_sliced_for(f.gcode_printer, {i}) ELSE mg_fits(f.size_x, f.size_y, f.size_z, {i}) END"
+                    )
+                }
+                // An unknown printer matches nothing, like an unknown file type.
+                None => sql += " AND 0",
+            }
+        }
         for mark in &query.marks {
             let unprinted = format!(
                 " AND f.kind IN ({MODEL_KINDS}, 'gcode') AND (f.content_hash IS NULL
                    OR f.content_hash NOT IN (SELECT content_hash FROM prints WHERE result = 'printed'))"
+            );
+            let too_big = format!(
+                " AND f.kind IN ({MODEL_KINDS}) AND f.size_x IS NOT NULL AND NOT mg_fits_any(f.size_x, f.size_y, f.size_z)"
+            );
+            // What checks::problems reports: the mesh check, suspicious sizes, too big for every printer.
+            let tiny = if crate::config::model_units() == crate::config::ModelUnits::Millimetres {
+                "OR (f.kind IN ('stl', 'obj', 'ply') AND MAX(f.size_x, f.size_y, f.size_z) < 5.0)"
+            } else {
+                ""
+            };
+            let fits_none = if self.printers.is_empty() { "" } else { "OR NOT mg_fits_any(f.size_x, f.size_y, f.size_z)" };
+            let problem = format!(
+                " AND f.kind IN ({MODEL_KINDS}) AND (
+                     f.content_hash IN (SELECT content_hash FROM mesh_checks WHERE flags != 0 AND version = {CHECKS_VERSION})
+                     OR (f.size_x IS NOT NULL AND (MAX(f.size_x, f.size_y, f.size_z) > 2000.0 {fits_none}))
+                     {tiny})"
             );
             sql += match mark {
                 Mark::Favorite => {
@@ -357,6 +522,9 @@ impl Library {
                     " AND (SELECT p.result FROM prints p WHERE p.content_hash = f.content_hash
                        ORDER BY p.at_ns DESC, p.id DESC LIMIT 1) = 'failed'"
                 }
+                Mark::TooBig if self.printers.is_empty() => " AND 0",
+                Mark::TooBig => &too_big,
+                Mark::Problem => &problem,
             };
         }
         if !query.kinds.is_empty() {
@@ -690,6 +858,56 @@ pub fn nanos(t: Option<SystemTime>) -> i64 {
 /// Non-UTF-8 paths cannot be stored (and are vanishingly rare); they are skipped.
 /// Files indexed as unknown before Meshgrove learnt their format (OBJ, PLY and glTF in v4,
 /// G-code and texts in 0.4): unchanged folders are not rescanned, so classify them again by name.
+/// SQL functions for the printer filters: `mg_fits(x, y, z, printer)` and `mg_fits_any(x, y, z)`
+/// (by size, turning the model if needed), `mg_sliced_for(name, printer)` (G-code's printer).
+/// `printer` is an index into `printers`; registering again replaces the functions.
+fn printer_functions(conn: &Connection, printers: &Arc<Vec<Printer>>) -> Result<(), Error> {
+    use rusqlite::functions::{Context, FunctionFlags};
+    let flags = FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC;
+    fn size(ctx: &Context) -> Result<Option<[f32; 3]>, Error> {
+        let v = [ctx.get::<Option<f64>>(0)?, ctx.get::<Option<f64>>(1)?, ctx.get::<Option<f64>>(2)?];
+        Ok(match v {
+            [Some(x), Some(y), Some(z)] => Some([x as f32, y as f32, z as f32]),
+            _ => None,
+        })
+    }
+    let fits = |size: [f32; 3], p: &Printer| !matches!(printer::fit(size, &p.bed()), Fit::TooBig(_));
+    let list = printers.clone();
+    conn.create_scalar_function("mg_fits", 4, flags, move |ctx| {
+        let p = list.get(ctx.get::<i64>(3)? as usize);
+        Ok(size(ctx)?.zip(p).is_some_and(|(s, p)| fits(s, p)))
+    })?;
+    let list = printers.clone();
+    conn.create_scalar_function("mg_fits_any", 3, flags, move |ctx| {
+        Ok(size(ctx)?.is_some_and(|s| list.iter().any(|p| fits(s, p))))
+    })?;
+    let list = printers.clone();
+    conn.create_scalar_function("mg_sliced_for", 2, flags, move |ctx| {
+        let name = ctx.get::<Option<String>>(0)?;
+        let p = list.get(ctx.get::<i64>(1)? as usize);
+        Ok(name.zip(p).is_some_and(|(n, p)| p.matches_gcode(&n)))
+    })?;
+    Ok(())
+}
+
+/// Adds the v6 index columns to an index of an older version. G-code files are processed again:
+/// their facts come back from the thumbnail cache (no new rendering) and fill the new columns.
+fn upgrade_index(conn: &Connection) -> Result<(), Error> {
+    let mut added = false;
+    for (table, column, kind) in INDEX_COLUMNS_V6 {
+        let exists =
+            conn.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"))?.exists([column])?;
+        if !exists {
+            conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))?;
+            added = true;
+        }
+    }
+    if added {
+        conn.execute("UPDATE files SET meta_key = NULL WHERE kind = 'gcode'", [])?;
+    }
+    Ok(())
+}
+
 fn reclassify_unknown(conn: &Connection) -> Result<(), Error> {
     let known: Vec<(i64, Kind)> = conn
         .prepare("SELECT id, name FROM files WHERE kind = 'other'")?
@@ -720,6 +938,7 @@ fn escape_like(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::loaders::gcode::GcodeFacts;
     use crate::query;
 
     fn file(dir: &str, name: &str, size: u64, t: u64) -> Entry {
@@ -947,13 +1166,84 @@ mod tests {
         assert_eq!(listed, all.into_iter().filter(|k| k.is_model()).collect::<Vec<_>>());
     }
 
+    /// The index tables as v1 to v5 created them.
+    const INDEX_SCHEMA_V5: &str = "
+        CREATE TABLE dirs (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, parent TEXT, mtime_ns INTEGER NOT NULL);
+        CREATE INDEX dirs_parent ON dirs(parent);
+        CREATE TABLE files (
+            id INTEGER PRIMARY KEY, dir_id INTEGER NOT NULL REFERENCES dirs(id) ON DELETE CASCADE,
+            name TEXT NOT NULL, kind TEXT NOT NULL, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
+            search TEXT NOT NULL, meta_key TEXT, triangles INTEGER, size_x REAL, size_y REAL, size_z REAL,
+            content_hash TEXT, geo_sig TEXT, UNIQUE (dir_id, name));
+        CREATE INDEX files_content ON files(content_hash);
+        CREATE INDEX files_geo ON files(geo_sig);
+    ";
+
+    #[test]
+    fn v5_libraries_gain_the_v6_columns_and_keep_their_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(INDEX_SCHEMA_V5).unwrap();
+            conn.execute_batch(TAGS_SCHEMA).unwrap();
+            conn.execute_batch(crate::lists::LISTS_SCHEMA).unwrap();
+            conn.execute("INSERT INTO dirs (path, parent, mtime_ns) VALUES ('/r', NULL, 1)", []).unwrap();
+            for (name, kind) in [("a.stl", "stl"), ("a.gcode", "gcode")] {
+                conn.execute(
+                    "INSERT INTO files (dir_id, name, kind, size, mtime_ns, search, meta_key, content_hash)
+                     VALUES (1, ?1, ?2, 1, 1, ?1, 'key', ?1)",
+                    [name, kind],
+                )
+                .unwrap();
+            }
+            conn.execute("INSERT INTO tags (name) VALUES ('Garten')", []).unwrap();
+            conn.execute("INSERT INTO file_tags (content_hash, tag_id) VALUES ('a.stl', 1)", []).unwrap();
+            conn.pragma_update(None, "user_version", 5).unwrap();
+        }
+        let mut lib = Library::open(&path).unwrap();
+        assert_eq!(lib.all_tags().unwrap(), [("Garten".into(), 1)], "tags kept");
+        let keys: Vec<Option<String>> = lib
+            .conn
+            .prepare("SELECT meta_key FROM files ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(keys, [None, Some("key".into())], "only G-code is processed again");
+
+        let facts = GcodeFacts {
+            printer: Some("Anycubic Kobra S1".into()),
+            print_time: Some("1h 6m 46s".into()),
+            filament_g: Some(12.5),
+            ..Default::default()
+        };
+        let meta = ThumbMeta { gcode: Some(Box::new(facts)), ..Default::default() };
+        lib.store_meta(Path::new("/r/a.gcode"), "new", &meta).unwrap();
+        let row: (Option<i64>, Option<String>, Option<f64>) = lib
+            .conn
+            .query_row("SELECT print_s, gcode_printer, filament_g FROM files WHERE name = 'a.gcode'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(row, (Some(4006), Some("Anycubic Kobra S1".into()), Some(12.5)));
+
+        lib.meta_set("last_scan_ns", "42").unwrap();
+        lib.meta_set("last_scan_ns", "43").unwrap();
+        drop(lib);
+        let reader = Library::open_reader(&path).expect("upgraded index is ready");
+        assert_eq!(reader.meta_get("last_scan_ns").as_deref(), Some("43"));
+        assert_eq!(reader.meta_get("missing"), None);
+    }
+
     #[test]
     fn old_index_versions_are_upgraded_keeping_their_contents() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("library.db");
         {
             let conn = Connection::open(&path).unwrap();
-            conn.execute_batch(INDEX_SCHEMA).unwrap();
+            conn.execute_batch(INDEX_SCHEMA_V5).unwrap();
             conn.execute("INSERT INTO dirs (path, parent, mtime_ns) VALUES ('/r', NULL, 1)", []).unwrap();
             for name in ["Scan.PLY", "fig.glb", "notes.odt", "Deckel.gcode", "README"] {
                 conn.execute(
@@ -980,6 +1270,74 @@ mod tests {
             .unwrap();
         lib.tag(&[PathBuf::from("/r/a.stl")], "x").unwrap();
         assert_eq!(lib.all_tags().unwrap(), [("x".into(), 1)]);
+    }
+
+    #[test]
+    fn printers_filter_what_fits_on_them() {
+        let mut lib = Library::open_in_memory().unwrap();
+        let r = Path::new("/r");
+        let files = ["mittel.stl", "riesig.stl", "stab.stl", "s1.gcode", "mini.gcode", "neu.stl"].map(|n| file("/r", n, 1, 1));
+        lib.update_dir(r, r, 1, &files, &[]).unwrap();
+        for (name, size, sliced_for) in [
+            ("mittel.stl", [170.0, 170.0, 10.0], None),
+            ("riesig.stl", [300.0, 300.0, 10.0], None),
+            ("stab.stl", [320.0, 10.0, 10.0], None),
+            ("s1.gcode", [10.0, 10.0, 1.0], Some("Anycubic Kobra S1 0.4 nozzle")),
+            ("mini.gcode", [10.0, 10.0, 1.0], Some("Bambu Lab A1 mini 0.4 nozzle")),
+        ] {
+            let gcode = sliced_for.map(|p| Box::new(GcodeFacts { printer: Some(p.into()), ..Default::default() }));
+            let meta = ThumbMeta { size_mm: Some(size), gcode, ..Default::default() };
+            lib.store_meta(&r.join(name), "k", &meta).unwrap();
+        }
+        let search = |lib: &Library, q: &str| -> Vec<String> {
+            lib.search(&query::parse(q), 99).unwrap().into_iter().map(|e| e.name).collect()
+        };
+        assert!(search(&lib, "is:zugross").is_empty(), "no printers: nothing is too big");
+        assert!(search(&lib, "passt:a1").is_empty(), "unknown printer matches nothing");
+
+        let printer = |name: &str, side: f32| Printer::from(printer::Bed { name: name.into(), x: side, y: side, z: side });
+        lib.set_printers(&[printer("Anycubic Kobra S1", 250.0), printer("Bambu Lab A1 mini", 180.0)]).unwrap();
+        assert_eq!(search(&lib, r#"passt:"Kobra S1""#), ["mittel.stl", "s1.gcode", "stab.stl"], "diagonal rod fits");
+        assert_eq!(search(&lib, "passt:mini"), ["mini.gcode", "mittel.stl"]);
+        assert_eq!(search(&lib, "is:zugross"), ["riesig.stl"], "unprocessed neu.stl is not judged");
+        assert_eq!(search(&lib, "passt:mini passt:s1"), ["mittel.stl"]);
+    }
+
+    #[test]
+    fn printability_checks_are_kept_and_searched() {
+        let mut lib = Library::open_in_memory().unwrap();
+        let r = Path::new("/r");
+        let files = ["dicht.stl", "loch.stl", "winzig.stl", "neu.stl", "kopie.stl"].map(|n| file("/r", n, 1, 1));
+        lib.update_dir(r, r, 1, &files, &[]).unwrap();
+        let sound = crate::checks::check(&crate::Mesh::cube(20.0));
+        let holey = MeshChecks { open_edges: 3, ..sound.clone() };
+        for (name, hash, size, checks) in [
+            ("dicht.stl", "h1", 20.0, Some(sound.clone())),
+            ("loch.stl", "h2", 20.0, Some(holey)),
+            ("winzig.stl", "h3", 3.0, Some(sound.clone())),
+            ("kopie.stl", "h2", 20.0, None),
+        ] {
+            let meta = ThumbMeta {
+                size_mm: Some([size; 3]),
+                content_hash: Some(hash.into()),
+                checks: checks.map(Box::new),
+                ..Default::default()
+            };
+            lib.store_meta(&r.join(name), "k", &meta).unwrap();
+        }
+        lib.store_meta(&r.join("neu.stl"), "k", &ThumbMeta { content_hash: Some("h4".into()), ..Default::default() })
+            .unwrap();
+        assert_eq!(lib.checks_of(&r.join("kopie.stl")).unwrap().map(|c| c.open_edges), Some(3), "shared by content");
+        lib.store_meta(&r.join("loch.stl"), "k2", &ThumbMeta::default()).unwrap();
+        assert!(lib.checks_of(&r.join("loch.stl")).unwrap().is_some(), "a failure from the cache keeps the hash");
+        let waiting: Vec<String> = lib.needing_checks(9).unwrap().into_iter().map(|(_, h)| h).collect();
+        assert_eq!(waiting, ["h4"]);
+        let search = |q: &str| -> Vec<String> {
+            lib.search(&query::parse(q), 99).unwrap().into_iter().map(|e| e.name).collect()
+        };
+        assert_eq!(search("is:problem"), ["kopie.stl", "loch.stl", "winzig.stl"]);
+        let marks = lib.marks().unwrap();
+        assert!(marks[&r.join("loch.stl")].problem && !marks.contains_key(&r.join("dicht.stl")));
     }
 
     #[test]

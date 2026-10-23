@@ -10,10 +10,11 @@ use egui::text::{LayoutJob, TextWrapping};
 use egui::{Align, Color32, FontId, Key, Rect, ScrollArea, Sense, TextureOptions, Ui, pos2, vec2};
 use meshgrove_core::Kind;
 use meshgrove_core::cache::{ThumbCache, ThumbMeta};
-use meshgrove_core::config::{PrintFilter, SortKey};
+use meshgrove_core::checks::{self, Problem};
+use meshgrove_core::config::{self, PrintFilter, SortKey};
 use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::lists::{ListKind, Marks, PrintResult};
-use meshgrove_core::printer::{self, Bed, Fit};
+use meshgrove_core::printer::{self, Fit, Printer};
 
 use super::icons;
 use super::tags::{self, TagStyle};
@@ -145,8 +146,8 @@ pub struct Gallery {
     pub show_folders: bool,
     /// A tile was being dragged last frame: the wheel then zooms its preview, not the grid.
     tile_dragged: bool,
-    /// Printer bed that model tiles are checked against.
-    pub bed: Option<Bed>,
+    /// The printers model tiles are checked against, the main one first.
+    pub printers: Vec<Printer>,
     /// Favourite, print and tag marks of library files.
     marks: HashMap<PathBuf, Marks>,
     /// A print list is shown: its copies wanted and done per file.
@@ -165,8 +166,8 @@ pub struct Gallery {
 }
 
 impl Gallery {
-    pub fn with_bed(bed: Option<Bed>) -> Gallery {
-        Gallery { bed, ..Default::default() }
+    pub fn with_printers(printers: Vec<Printer>) -> Gallery {
+        Gallery { printers, ..Default::default() }
     }
 
     /// New contents. Thumbnails already loaded for files that are still shown are kept,
@@ -333,7 +334,7 @@ impl Gallery {
                 }
             }
             ThumbResult::Ready { image: None, .. } => {}
-            ThumbResult::Failed { job, error } => {
+            ThumbResult::Failed { job, error, .. } => {
                 if let Some(slot) = self.thumbs.get_mut(&job.key) {
                     *slot = Thumb::Failed(error.clone());
                 }
@@ -656,7 +657,14 @@ impl Gallery {
                 let warn = visuals.warn_fg_color.linear_multiply(0.9);
                 icons::bottom_right_badge(&painter, img, "⚠ 🖨", warn, Color32::BLACK)
             }),
-        };
+        }
+        .or_else(|| {
+            let (problems, flagged) = self.check_problems(entry, index);
+            (flagged || !problems.is_empty()).then(|| {
+                let warn = visuals.warn_fg_color.linear_multiply(0.9);
+                icons::bottom_right_badge(&painter, img, "⚠", warn, Color32::BLACK)
+            })
+        });
         // Right to left along the bottom: bed check, favourite star, print state.
         let mut corner = bed_badge.map_or(pos2(img.max.x - 4.0, img.max.y - 4.0), |r| pos2(r.min.x - 3.0, r.max.y));
         let dark = Color32::from_black_alpha(150);
@@ -718,11 +726,18 @@ impl Gallery {
         if let Some(marks) = self.marks.get(&entry.path).filter(|m| !m.tags.is_empty()) {
             tooltip += &format!("\n🏷 {}", marks.tags.join(", "));
         }
-        if let Some((fit @ (Fit::Rotated(_) | Fit::TooBig(_)), bed)) = self.bed_fit(entry, index) {
-            tooltip += &format!("\n{}", super::details::fit_text(fit, bed));
+        let (problems, flagged) = self.check_problems(entry, index);
+        for p in &problems {
+            tooltip += &format!("\n⚠ {}", super::details::problem_text(p));
         }
-        if let Some((printer, bed)) = self.other_printer(index) {
-            tooltip += &format!("\n⚠ {}", t!("gcode.other_printer", printer = printer, bed = bed.name));
+        if flagged && problems.is_empty() {
+            tooltip += &format!("\n⚠ {}", t!("checks.tile_hint"));
+        }
+        if let Some((fit @ (Fit::Rotated(_) | Fit::TooBig(_)), printer)) = self.bed_fit(entry, index) {
+            tooltip += &format!("\n{}", super::details::fit_text(fit, &printer.name));
+        }
+        if let Some(printer) = self.other_printer(index) {
+            tooltip += &format!("\n⚠ {}", t!("gcode.other_printer", printer = printer, bed = self.printer_names()));
         }
         if let Some(Thumb::Failed(error)) = self.thumb(index) {
             tooltip += &format!("\n⚠ {error}");
@@ -730,24 +745,41 @@ impl Gallery {
         tooltip
     }
 
-    /// How a model tile's size (known once its thumbnail facts are in) fits the printer bed.
-    fn bed_fit(&self, entry: &Entry, index: usize) -> Option<(Fit, &Bed)> {
-        let bed = self.bed.as_ref()?;
+    /// How a model tile's size (known once its thumbnail facts are in) fits the printers: the
+    /// best of them ([`printer::best_fit`]).
+    fn bed_fit(&self, entry: &Entry, index: usize) -> Option<(Fit, &Printer)> {
         if !entry.kind.is_model() {
             return None;
         }
         match self.thumb(index)? {
-            Thumb::Ready(_, meta) => Some((printer::fit(meta.size_mm?, bed), bed)),
+            Thumb::Ready(_, meta) => printer::best_fit(meta.size_mm?, &self.printers),
             _ => None,
         }
     }
 
-    /// G-code sliced for another printer than the one set up: (its printer, the bed).
-    fn other_printer(&self, index: usize) -> Option<(&str, &Bed)> {
-        let bed = self.bed.as_ref()?;
+    /// What the printability check says about a model tile: the problems known from its
+    /// thumbnail (the check made with it, its size), and whether the library flagged its content.
+    /// Fitting the printers is the bed badge's business.
+    fn check_problems(&self, entry: &Entry, index: usize) -> (Vec<Problem>, bool) {
+        let flagged = self.marks.get(&entry.path).is_some_and(|m| m.problem);
+        if !entry.kind.is_model() {
+            return (Vec::new(), false);
+        }
+        let Some(Thumb::Ready(_, meta)) = self.thumb(index) else { return (Vec::new(), flagged) };
+        let problems = checks::problems(entry.kind, meta.size_mm, meta.checks.as_deref(), &[], config::model_units());
+        (problems, flagged)
+    }
+
+    /// The printer a G-code file was sliced for, when it is none of the user's printers.
+    fn other_printer(&self, index: usize) -> Option<&str> {
         let Thumb::Ready(_, meta) = self.thumb(index)? else { return None };
         let printer = meta.gcode.as_ref()?.printer.as_deref()?;
-        (!printer::same_printer(printer, bed)).then_some((printer, bed))
+        (!self.printers.is_empty() && printer::printer_for_gcode(printer, &self.printers).is_none()).then_some(printer)
+    }
+
+    /// "Kobra S1, A1 mini"
+    fn printer_names(&self) -> String {
+        self.printers.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
     }
 }
 

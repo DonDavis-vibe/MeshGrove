@@ -5,10 +5,12 @@ use std::sync::Arc;
 
 use egui::{Grid, Key, RichText, Ui};
 use meshgrove_core::Kind;
+use meshgrove_core::checks::{self, MeshChecks, Problem};
+use meshgrove_core::config;
 use meshgrove_core::listing::Entry;
 use meshgrove_core::lists::{ListInfo, ListKind, PrintResult, PrintStatus};
 use meshgrove_core::loaders::gcode::GcodeFacts;
-use meshgrove_core::printer::{self, Bed, Fit};
+use meshgrove_core::printer::{self, Fit, Printer};
 use meshgrove_render::Renderer;
 
 use super::gallery::Thumb;
@@ -93,7 +95,8 @@ pub struct DetailsContext<'a> {
     pub selection: (usize, u64),
     pub tags: TagEditor<'a>,
     pub note: NoteEditor<'a>,
-    pub bed: Option<&'a Bed>,
+    /// The printers models are checked against, the main one first.
+    pub printers: &'a [Printer],
     /// The slicers models can be handed to.
     pub slicers: super::SlicerList<'a>,
     pub editors: super::EditorList<'a>,
@@ -102,6 +105,9 @@ pub struct DetailsContext<'a> {
     pub tag_style: &'a TagStyle,
     pub thumb: Option<&'a Thumb>,
     pub model: &'a ModelStatus,
+    /// The stored printability check of the selected file's content, and whether one is
+    /// coming (the file is in the library, so the background check gets to it).
+    pub checks: (Option<&'a MeshChecks>, bool),
     /// Plate previews of a 3MF project (plate number, texture).
     pub plates: &'a [(usize, egui::TextureHandle)],
     pub viewer: &'a mut ModelViewer,
@@ -208,7 +214,7 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
     let (count, _) = cx.selection;
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         ui.add_space(4.0);
-        facts(ui, entry, cx.thumb, cx.model, cx.bed);
+        facts(ui, entry, cx.thumb, cx.model, cx.printers, cx.checks);
         (out.open_in_slicer, out.open_in_editor) = open_buttons(ui, entry.kind, cx.slicers, cx.editors);
         if !cx.plates.is_empty() {
             let active = match cx.model {
@@ -519,10 +525,10 @@ pub fn angle(degrees: f32) -> String {
 }
 
 /// "passt auf Anycubic Kobra S1", "passt nur gedreht (45°) …", "zu groß für …: X +12,0 mm".
-pub fn fit_text(fit: Fit, bed: &Bed) -> String {
+pub fn fit_text(fit: Fit, bed: &str) -> String {
     match fit {
-        Fit::Fits => t!("bed.fits", bed = bed.name),
-        Fit::Rotated(a) => t!("bed.rotated", bed = bed.name, angle = angle(a)),
+        Fit::Fits => t!("bed.fits", bed = bed),
+        Fit::Rotated(a) => t!("bed.rotated", bed = bed, angle = angle(a)),
         Fit::TooBig(over) => {
             let parts: Vec<String> = ["X", "Y", "Z"]
                 .iter()
@@ -531,13 +537,20 @@ pub fn fit_text(fit: Fit, bed: &Bed) -> String {
                 .map(|(axis, mm)| format!("{axis} +{}", i18n::length(mm)))
                 .collect();
             let over = if parts.is_empty() { t!("bed.diagonal").into_owned() } else { parts.join(", ") };
-            t!("bed.too_big", bed = bed.name, over = over)
+            t!("bed.too_big", bed = bed, over = over)
         }
     }
     .into_owned()
 }
 
-pub fn facts(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, model: &ModelStatus, bed: Option<&Bed>) {
+pub fn facts(
+    ui: &mut Ui,
+    entry: &Entry,
+    thumb: Option<&Thumb>,
+    model: &ModelStatus,
+    printers: &[Printer],
+    (checks, coming): (Option<&MeshChecks>, bool),
+) {
     Grid::new("details_facts").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         fact(ui, &t!("details.type"), &kind_name(entry.kind));
         if !entry.is_dir() {
@@ -560,20 +573,35 @@ pub fn facts(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, model: &ModelSta
         if let Some(size) = size {
             fact(ui, &t!("details.dimensions"), &i18n::dimensions(size));
             // G-code is placed already; whether it suits the printer is told by its printer row.
-            if let Some(bed) = bed.filter(|_| gcode.is_none()) {
-                let fit = printer::fit(size.to_array(), bed);
-                ui.label(RichText::new(t!("bed.label")).weak());
-                let text = fit_text(fit, bed);
-                match fit {
-                    Fit::Fits => ui.add(egui::Label::new(format!("✔ {text}")).wrap()),
-                    Fit::Rotated(_) => ui.colored_label(ui.visuals().warn_fg_color, format!("↻ {text}")),
-                    Fit::TooBig(_) => ui.colored_label(ui.visuals().error_fg_color, format!("✕ {text}")),
-                };
-                ui.end_row();
+            match printers {
+                _ if gcode.is_some() => {}
+                [] => {}
+                [only] => {
+                    let fit = printer::fit(size.to_array(), &only.bed());
+                    ui.label(RichText::new(t!("bed.label")).weak());
+                    let text = fit_text(fit, &only.name);
+                    match fit {
+                        Fit::Fits => ui.add(egui::Label::new(format!("✔ {text}")).wrap()),
+                        Fit::Rotated(_) => ui.colored_label(ui.visuals().warn_fg_color, format!("↻ {text}")),
+                        Fit::TooBig(_) => ui.colored_label(ui.visuals().error_fg_color, format!("✕ {text}")),
+                    };
+                    ui.end_row();
+                }
+                many => {
+                    ui.label(RichText::new(t!("bed.label_many")).weak());
+                    printer_fits(ui, size.to_array(), many);
+                    ui.end_row();
+                }
             }
         }
         if let Some(triangles) = triangles {
             fact(ui, &t!("details.triangles"), &i18n::count(triangles));
+        }
+        // A thumbnail made just now carries its check before the library has stored it.
+        let checks = checks.or_else(|| meta.and_then(|m| m.checks.as_deref()));
+        // A file without a thumbnail says why in the problem row below.
+        if !matches!(thumb, Some(Thumb::Failed(_))) {
+            check_row(ui, entry.kind, size.map(|s| s.to_array()), checks, coming);
         }
         if let Some(info) = info
             && let Some(plate) = info.plate
@@ -593,7 +621,7 @@ pub fn facts(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, model: &ModelSta
             }
         }
         if let Some(gcode) = gcode {
-            gcode_facts(ui, gcode, meta.is_some_and(|m| m.filaments.is_empty()), bed);
+            gcode_facts(ui, gcode, meta.is_some_and(|m| m.filaments.is_empty()), printers);
         }
         // The viewer's plate knows the materials; the thumbnail only the colours of the first
         // plate, G-code the materials of its extruders as well.
@@ -622,23 +650,118 @@ pub fn facts(ui: &mut Ui, entry: &Entry, thumb: Option<&Thumb>, model: &ModelSta
     });
 }
 
+/// The printability check: "✔ geschlossen · 1 Teil · 41,2 cm³", or one warning per problem.
+/// Whether it fits a printer is the printer row's business.
+fn check_row(ui: &mut Ui, kind: Kind, size: Option<[f32; 3]>, c: Option<&MeshChecks>, coming: bool) {
+    let problems: Vec<Problem> = checks::problems(kind, size, c, &[], config::model_units());
+    let waiting = c.is_none() && coming && checks::checked(kind);
+    if problems.is_empty() && c.is_none() && !waiting {
+        return;
+    }
+    ui.label(RichText::new(t!("checks.label")).weak());
+    ui.vertical(|ui| {
+        if waiting {
+            ui.weak(t!("checks.pending"));
+        }
+        if problems.is_empty()
+            && let Some(c) = c
+        {
+            let mut parts = vec![t!("checks.sound").into_owned(), parts_text(c.shells)];
+            if let Some(v) = c.volume_mm3 {
+                parts.push(volume_text(v));
+            }
+            let mut text = format!("✔ {}", parts.join(" · "));
+            if c.skipped.is_some() {
+                text = format!("✔ {}", t!("checks.skipped"));
+            }
+            ui.add(egui::Label::new(text).wrap());
+        }
+        for p in &problems {
+            ui.colored_label(ui.visuals().warn_fg_color, format!("⚠ {}", problem_text(p)))
+                .on_hover_text(t!("checks.hint"));
+        }
+    });
+    ui.end_row();
+}
+
+/// "1 Teil", "3 Teile"
+fn parts_text(shells: u32) -> String {
+    if shells == 1 { t!("checks.one_part").into_owned() } else { t!("checks.parts", count = shells).into_owned() }
+}
+
+/// "41,2 cm³", or cubic inches with imperial units.
+fn volume_text(mm3: f64) -> String {
+    match config::display_units() {
+        config::DisplayUnits::Imperial => format!("{} in³", i18n::decimal((mm3 / 16_387.064) as f32)),
+        _ => format!("{} cm³", i18n::decimal((mm3 / 1000.0) as f32)),
+    }
+}
+
+/// One line about a [`Problem`], for the info pane, tooltips and the inbox.
+pub fn problem_text(p: &Problem) -> String {
+    match p {
+        Problem::Open(n) => t!("checks.open", count = i18n::count(*n as usize)),
+        Problem::NonManifold(n) => t!("checks.non_manifold", count = i18n::count(*n as usize)),
+        Problem::Degenerate(n) => t!("checks.degenerate", count = i18n::count(*n as usize)),
+        Problem::ManyTriangles(n) => t!("checks.many_triangles", count = i18n::count(*n as usize)),
+        Problem::Tiny { max_mm, as_inch_mm } => {
+            t!("checks.tiny", size = i18n::length(*max_mm), inch = i18n::length(*as_inch_mm))
+        }
+        Problem::Huge { max_mm } => t!("checks.huge", size = i18n::length(*max_mm)),
+        Problem::FitsNone => t!("checks.fits_none"),
+        Problem::Unreadable(e) => t!("checks.unreadable", error = e),
+    }
+    .into_owned()
+}
+
+/// "✔ passt auf Kobra S1, A1 ↻ · ✕ zu groß für A1 mini", each printer's details on hover.
+fn printer_fits(ui: &mut Ui, size: [f32; 3], printers: &[Printer]) {
+    let fits = printer::fits_all(size, printers);
+    let mut ok = Vec::new();
+    let mut too_big = Vec::new();
+    for (p, fit) in &fits {
+        match fit {
+            Fit::Fits => ok.push(p.name.clone()),
+            Fit::Rotated(_) => ok.push(format!("{} ↻", p.name)),
+            Fit::TooBig(_) => too_big.push(p.name.clone()),
+        }
+    }
+    let hover: Vec<String> = fits.iter().map(|(p, fit)| fit_text(*fit, &p.name)).collect();
+    ui.vertical(|ui| {
+        if !ok.is_empty() {
+            ui.add(egui::Label::new(format!("✔ {}", t!("bed.fits_on", printers = ok.join(", ")))).wrap());
+        }
+        if !too_big.is_empty() {
+            let color = if ok.is_empty() { ui.visuals().error_fg_color } else { ui.visuals().weak_text_color() };
+            ui.colored_label(color, format!("✕ {}", t!("bed.too_big_for", printers = too_big.join(", "))));
+        }
+    })
+    .response
+    .on_hover_text(hover.join("\n"));
+}
+
 /// What the slicer wrote into a G-code file; warns when it was sliced for another printer.
 /// `materials` adds the materials to the filament row (when no colour swatches show them).
-fn gcode_facts(ui: &mut Ui, g: &GcodeFacts, materials: bool, bed: Option<&Bed>) {
+fn gcode_facts(ui: &mut Ui, g: &GcodeFacts, materials: bool, printers: &[Printer]) {
     if let Some(slicer) = &g.slicer {
         fact(ui, &t!("gcode.slicer"), slicer);
     }
     if let Some(printer) = &g.printer {
         ui.label(RichText::new(t!("gcode.printer")).weak());
-        match bed.filter(|bed| !printer::same_printer(printer, bed)) {
-            Some(bed) => {
+        match printer::printer_for_gcode(printer, printers) {
+            None if !printers.is_empty() => {
+                let names: Vec<&str> = printers.iter().map(|p| p.name.as_str()).collect();
                 ui.colored_label(ui.visuals().warn_fg_color, format!("⚠ {printer}")).on_hover_text(t!(
                     "gcode.other_printer",
                     printer = printer,
-                    bed = bed.name
+                    bed = names.join(", ")
                 ));
             }
-            None => {
+            // Several printers: name the one it was matched to when the slicer's name differs.
+            Some(p) if printers.len() > 1 && !p.name.eq_ignore_ascii_case(printer) => {
+                ui.add(egui::Label::new(format!("{printer} → {}", p.name)).wrap());
+            }
+            _ => {
                 ui.add(egui::Label::new(printer).wrap());
             }
         }

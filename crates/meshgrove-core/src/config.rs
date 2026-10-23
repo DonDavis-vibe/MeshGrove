@@ -301,8 +301,13 @@ pub struct Config {
     /// The single slicer of earlier versions; moved into `slicers` when the file is read.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slicer: Option<Slicer>,
-    /// Printer for the bed check; `None`: take the one selected in the slicer.
+    /// The single printer of earlier versions; moved into `printers` when the file is read.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub printer: Option<crate::printer::Bed>,
+    /// The printers models are checked against; `None`: take the ones the slicers know, at startup.
+    pub printers: Option<Vec<crate::printer::Printer>>,
+    /// Name of the main printer (shown first, the bed of the 3D view); `None`: the first.
+    pub default_printer: Option<String>,
     /// What one coordinate unit of STL, OBJ and PLY files stands for.
     pub model_units: ModelUnits,
     /// Metric or imperial sizes in the interface.
@@ -509,6 +514,8 @@ impl Default for Config {
             default_slicer: None,
             slicer: None,
             printer: None,
+            printers: None,
+            default_printer: None,
             gltf_unit: GltfUnit::Metres,
             free_orbit: false,
             spacemouse: Default::default(),
@@ -563,10 +570,15 @@ impl Config {
 
     /// Missing file → defaults. A broken file is reported so the caller can warn instead of overwriting silently.
     pub fn load() -> Result<Config, String> {
-        let Some(path) = Self::path() else {
-            return Ok(Config::default());
-        };
-        match std::fs::read_to_string(&path) {
+        match Self::path() {
+            Some(path) => Self::load_from(&path),
+            None => Ok(Config::default()),
+        }
+    }
+
+    /// [`Config::load`] from another file (tests, `meshgrove-mcp --config`).
+    pub fn load_from(path: &Path) -> Result<Config, String> {
+        match std::fs::read_to_string(path) {
             Ok(text) => {
                 let mut config: Config = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
                 config.migrate_programs();
@@ -592,6 +604,17 @@ impl Config {
             self.default_editor = Some(old.name.clone());
             self.editors = Some(vec![old]);
         }
+        if let Some(old) = self.printer.take()
+            && self.printers.is_none()
+        {
+            self.default_printer = Some(old.name.clone());
+            self.printers = Some(vec![old.into()]);
+        }
+    }
+
+    /// The main printer's place among `printers`.
+    pub fn default_printer_index(printers: &[crate::printer::Printer], default: Option<&str>) -> usize {
+        default.and_then(|name| printers.iter().position(|p| p.name == name)).unwrap_or(0)
     }
 
     /// The slicer to use by default among `slicers`.
@@ -600,9 +623,12 @@ impl Config {
     }
 
     pub fn save(&self) -> io::Result<()> {
-        let path = Self::path().ok_or_else(|| io::Error::other("no config directory"))?;
-        std::fs::create_dir_all(path.parent().expect("config file has a parent"))?;
-        std::fs::write(path, toml::to_string_pretty(self).map_err(io::Error::other)?)
+        self.save_to(&Self::path().ok_or_else(|| io::Error::other("no config directory"))?)
+    }
+
+    /// Replaces the file in one step: `meshgrove-mcp` reads it at any time.
+    pub fn save_to(&self, path: &Path) -> io::Result<()> {
+        crate::cache::write_atomic(path, toml::to_string_pretty(self).map_err(io::Error::other)?.as_bytes())
     }
 }
 
@@ -619,6 +645,34 @@ mod tests {
         assert_eq!(back, config);
         let old: Config = toml::from_str("tile_size = 120.0\n").unwrap();
         assert_eq!((old.gallery_view, old.list_columns), (GalleryView::Grid, ListColumns::default()));
+    }
+
+    #[test]
+    fn the_single_printer_of_earlier_versions_becomes_the_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[printer]\nname = \"Kobra S1\"\nx = 250.0\ny = 250.0\nz = 250.0\n").unwrap();
+        let config = Config::load_from(&path).unwrap();
+        let printers = config.printers.as_deref().unwrap();
+        assert_eq!((printers.len(), printers[0].name.as_str(), printers[0].z), (1, "Kobra S1", 250.0));
+        assert_eq!(config.default_printer.as_deref(), Some("Kobra S1"));
+        config.save_to(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[[printers]]") && !text.contains("[printer]"), "{text}");
+        assert_eq!(Config::load_from(&path).unwrap(), config);
+    }
+
+    #[test]
+    fn saving_replaces_the_file_in_one_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("meshgrove").join("config.toml");
+        assert_eq!(Config::load_from(&path).unwrap(), Config::default(), "missing file → defaults");
+        let config = Config { tile_size: 200.0, ..Config::default() };
+        config.save_to(&path).unwrap();
+        Config { tile_size: 300.0, ..Config::default() }.save_to(&path).unwrap();
+        assert_eq!(Config::load_from(&path).unwrap().tile_size, 300.0);
+        let names: Vec<_> = std::fs::read_dir(path.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, ["config.toml"], "no temporary file left behind");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Library search syntax: `drache "castle tower" ext:3mf tag:pirat list:markt is:unprinted`.
+//! Library search syntax: `drache "castle tower" ext:3mf tag:pirat list:markt is:unprinted passt:"Kobra S1"`.
 //! Plain words must all appear (case-insensitive) in the file name, its folder path or its note.
 
 use crate::formats::Kind;
@@ -15,6 +15,8 @@ pub struct Query {
     pub lists: Vec<String>,
     /// From `is:`.
     pub marks: Vec<Mark>,
+    /// From `fits:`/`passt:`, lower-case printer names: fits on all of them.
+    pub fits: Vec<String>,
 }
 
 /// `is:` filters on the user's own marks.
@@ -27,6 +29,10 @@ pub enum Mark {
     Unprinted,
     /// The newest print failed.
     Failed,
+    /// Fits on none of the user's printers.
+    TooBig,
+    /// Something may make printing fail: mesh holes, suspicious size, too big for every printer.
+    Problem,
 }
 
 impl Mark {
@@ -36,6 +42,8 @@ impl Mark {
             "printed" | "gedruckt" => Mark::Printed,
             "unprinted" | "ungedruckt" => Mark::Unprinted,
             "failed" | "fehlgeschlagen" => Mark::Failed,
+            "toobig" | "too-big" | "zugross" | "zugroß" | "zu-gross" | "zu-groß" => Mark::TooBig,
+            "problem" | "problems" | "probleme" | "fehler" => Mark::Problem,
             _ => return None,
         })
     }
@@ -48,6 +56,7 @@ impl Query {
             && self.tags.is_empty()
             && self.lists.is_empty()
             && self.marks.is_empty()
+            && self.fits.is_empty()
     }
 }
 
@@ -75,6 +84,10 @@ pub fn parse(input: &str) -> Query {
                 }
                 "list" | "liste" => {
                     query.lists.push(value.to_owned());
+                    continue;
+                }
+                "fits" | "passt" => {
+                    query.fits.push(value.to_owned());
                     continue;
                 }
                 "is" => {
@@ -136,5 +149,13 @@ mod tests {
         assert_eq!(q.marks, [Mark::Favorite, Mark::Unprinted]);
         assert_eq!(q.terms, ["is:kaputt"], "unknown marks stay words");
         assert!(!parse("is:printed").is_empty());
+    }
+
+    #[test]
+    fn printer_filters() {
+        let q = parse(r#"passt:"Kobra S1" fits:a1 is:zugroß is:TooBig"#);
+        assert_eq!(q.fits, ["kobra s1", "a1"]);
+        assert_eq!(q.marks, [Mark::TooBig]);
+        assert!(!parse("is:zugross").is_empty());
     }
 }

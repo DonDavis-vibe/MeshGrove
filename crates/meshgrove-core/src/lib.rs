@@ -2,6 +2,7 @@
 
 pub mod archive;
 pub mod cache;
+pub mod checks;
 pub mod config;
 pub mod db;
 pub mod dedupe;

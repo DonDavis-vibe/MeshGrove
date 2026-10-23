@@ -6,6 +6,7 @@ use std::path::Path;
 use image::RgbaImage;
 
 use crate::cache::{ThumbMeta, Thumbnail};
+use crate::checks;
 use crate::dedupe;
 use crate::formats::Kind;
 use crate::loaders;
@@ -43,14 +44,14 @@ pub fn make(
     match kind {
         Kind::Stl => {
             let mesh = loaders::in_file_units(kind, loaders::stl::parse(bytes).map_err(bad)?);
-            let meta = mesh_meta(&mesh, bytes);
+            let meta = mesh_meta(kind, &mesh, bytes);
             rendered(mesh, meta)
         }
         Kind::Obj | Kind::Ply | Kind::Gltf => {
             // Materials, textures and buffers may sit next to the model.
             let sibling = |name: &str| crate::archive::read_sibling(path, name);
             let mesh = loaders::load_mesh_with(kind, bytes, &sibling).map_err(bad)?;
-            let meta = mesh_meta(&mesh, bytes);
+            let meta = mesh_meta(kind, &mesh, bytes);
             rendered(mesh, meta)
         }
         Kind::ThreeMf => {
@@ -60,7 +61,7 @@ pub fn make(
                 .as_ref()
                 .map(|m| ThumbMeta {
                     filaments: m.filaments.iter().map(|f| f.color).collect(),
-                    ..mesh_meta(&m.mesh, bytes)
+                    ..mesh_meta(kind, &m.mesh, bytes)
                 })
                 .unwrap_or_default();
             if let Some(image) = loaders::threemf::embedded_thumbnail(bytes, size) {
@@ -73,7 +74,7 @@ pub fn make(
         Kind::Step => {
             // Tessellated by the OpenCascade helper (cached); the bytes are only hashed.
             let mesh = loaders::step::load(path).map_err(bad)?;
-            let meta = mesh_meta(&mesh, bytes);
+            let meta = mesh_meta(kind, &mesh, bytes);
             rendered(mesh, meta)
         }
         Kind::Pdf => {
@@ -121,7 +122,10 @@ pub fn make(
     }
 }
 
-fn mesh_meta(mesh: &Mesh, bytes: &[u8]) -> ThumbMeta {
+fn mesh_meta(kind: Kind, mesh: &Mesh, bytes: &[u8]) -> ThumbMeta {
+    // Larger meshes are checked later, in the background, so the thumbnail is not held up.
+    let checks = (checks::checked(kind) && mesh.triangle_count() <= checks::INLINE_LIMIT)
+        .then(|| Box::new(checks::check(mesh)));
     ThumbMeta {
         triangles: Some(mesh.triangle_count()),
         size_mm: mesh.bounds().map(|b| b.size().to_array()),
@@ -130,6 +134,7 @@ fn mesh_meta(mesh: &Mesh, bytes: &[u8]) -> ThumbMeta {
         embedded: false,
         filaments: Vec::new(),
         gcode: None,
+        checks,
     }
 }
 

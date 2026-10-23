@@ -9,7 +9,7 @@ use meshgrove_core::config::{
     PreviewQuality, Program, Slicer, SuggestedTag, TILE_TAG_COUNT, TileTags, default_properties, default_states,
     default_themes,
 };
-use meshgrove_core::printer::Bed;
+use meshgrove_core::printer::{self, DetectedPrinter, Printer};
 use meshgrove_core::programs::{Detected, ProgramKind, detect_editors, detect_slicers};
 use meshgrove_core::spacemouse::SpaceMouseConfig;
 use meshgrove_core::userdata;
@@ -33,8 +33,11 @@ pub enum SettingsChange {
         list: Vec<Program>,
         default: Option<String>,
     },
-    /// `None`: take the printer selected in the slicer.
-    Printer(Option<Bed>),
+    /// The printer list and the name of the main printer.
+    Printers {
+        list: Vec<Printer>,
+        default: Option<String>,
+    },
     GltfUnit(GltfUnit),
     /// Free orbit in the 3D views.
     FreeOrbit(bool),
@@ -247,11 +250,15 @@ pub struct SettingsDialog {
     detect_rx: Option<Receiver<Vec<Detected>>>,
     /// Name, program and working folder of an editor being added by hand.
     editor_form: (String, String, String),
-    /// Name and X/Y/Z as typed.
-    printer_form: Option<[String; 4]>,
+    /// Name, X/Y/Z, nozzle and materials of a printer being added or edited, as typed.
+    printer_form: [String; 6],
     /// The display unit the X/Y/Z of `printer_form` are in.
     printer_form_units: DisplayUnits,
     printer_error: bool,
+    /// The printer the form edits (its name before the edit); `None`: the form adds one.
+    printer_editing: Option<String>,
+    /// The printers set up in the slicers on this computer.
+    found_printers: Vec<DetectedPrinter>,
     /// A new theme as typed.
     suggest_input: [String; 3],
     import_input: String,
@@ -364,6 +371,22 @@ impl Category {
         }
     }
 
+    /// The name test runs use (`MESHGROVE_VIEW=settings:<name>`).
+    fn from_name(name: &str) -> Option<Category> {
+        Some(match name {
+            "general" => Category::General,
+            "library" => Category::Library,
+            "tags" => Category::Tags,
+            "view" => Category::View,
+            "models" => Category::ModelsUnits,
+            "programs" => Category::Programs,
+            "printer" => Category::Printer,
+            "data" => Category::Data,
+            "about" => Category::About,
+            _ => return None,
+        })
+    }
+
     fn title(self) -> String {
         match self {
             Category::General => t!("settings.cat_general"),
@@ -401,11 +424,13 @@ fn dir_size(dir: &Path) -> u64 {
 }
 
 impl SettingsDialog {
-    pub fn open(&mut self, bed: Option<&Bed>) {
+    pub fn open(&mut self) {
         self.open = true;
-        self.printer_form = Some(printer_form(bed));
+        self.printer_form = printer_form(None);
         self.printer_form_units = config::display_units();
         self.printer_error = false;
+        self.printer_editing = None;
+        self.found_printers = printer::detect_all();
         if self.import_input.is_empty() {
             self.import_input = export_path().display().to_string();
         }
@@ -414,6 +439,14 @@ impl SettingsDialog {
         self.editor_form = Default::default();
         self.mouse.reset();
         self.refresh_cache_size();
+    }
+
+    /// Opens the window on the category named as in [`Category::from_name`] (unknown names keep the current one).
+    pub fn open_at(&mut self, category: &str) {
+        self.open();
+        if let Some(category) = Category::from_name(category) {
+            self.category = category;
+        }
     }
 
     /// Looks for installed slicers in the background.
@@ -442,7 +475,7 @@ impl SettingsDialog {
         config: &Config,
         (slicers, default_slicer): (&[Slicer], usize),
         (editors, default_editor): (&[Program], usize),
-        bed: Option<&Bed>,
+        (printers, default_printer): (&[Printer], usize),
         info: AppInfo,
     ) -> Vec<SettingsChange> {
         let mut changes = Vec::new();
@@ -536,7 +569,7 @@ impl SettingsDialog {
                                     Section::Editor => {
                                         self.program_list(ui, true, editors, default_editor, &mut changes)
                                     }
-                                    Section::Printer => self.printer(ui, config, bed, &mut changes),
+                                    Section::Printer => self.printers(ui, printers, default_printer, &mut changes),
                                     Section::UserData => self.user_data(ui, &mut changes),
                                     Section::Storage => self.storage(ui, &mut changes),
                                 }
@@ -823,72 +856,169 @@ impl SettingsDialog {
         ui.weak(t!(hint));
     }
 
-    fn printer(&mut self, ui: &mut Ui, config: &Config, active: Option<&Bed>, changes: &mut Vec<SettingsChange>) {
+    /// The printers models are checked against: the added ones (one is the main printer), the
+    /// ones the slicers know that can be added with a click, and a form to add or edit one.
+    fn printers(&mut self, ui: &mut Ui, printers: &[Printer], default: usize, changes: &mut Vec<SettingsChange>) {
         ui.label(RichText::new(t!("settings.printer")).strong());
-        let status = match (active, &config.printer) {
-            (Some(b), None) => t!("settings.printer_detected", name = b.name),
-            (Some(b), Some(_)) => t!("settings.printer_custom", name = b.name),
-            (None, _) => t!("settings.printer_none"),
+        let default_name = printers.get(default).map(|p| p.name.clone());
+        let send = |list: Vec<Printer>, default: Option<String>, changes: &mut Vec<SettingsChange>| {
+            changes.push(SettingsChange::Printers { list, default });
         };
-        ui.weak(status);
-        let mut detect = false;
+        if printers.is_empty() {
+            ui.weak(t!("settings.printer_none"));
+        }
+        let units = config::display_units();
+        for (i, p) in printers.iter().enumerate() {
+            ui.horizontal(|ui| {
+                if ui.radio(i == default, "").on_hover_text(t!("settings.printers_default")).clicked() && i != default {
+                    send(printers.to_vec(), Some(p.name.clone()), changes);
+                }
+                ui.label(RichText::new(&p.name).strong());
+                ui.weak(printer_summary(p));
+                if ui.small_button("✏").on_hover_text(t!("settings.printers_edit")).clicked() {
+                    self.printer_form = printer_form(Some(p));
+                    self.printer_form_units = units;
+                    self.printer_editing = Some(p.name.clone());
+                    self.printer_error = false;
+                }
+                if ui.small_button("✕").on_hover_text(t!("settings.printers_remove")).clicked() {
+                    let list: Vec<Printer> = printers.iter().filter(|q| q.name != p.name).cloned().collect();
+                    send(list, default_name.clone().filter(|n| *n != p.name), changes);
+                }
+            });
+        }
+        ui.add_space(6.0);
+        ui.label(RichText::new(t!("settings.printers_found")).small().weak());
+        let addable: Vec<DetectedPrinter> = self
+            .found_printers
+            .iter()
+            .filter(|d| !printers.iter().any(|p| p.name.eq_ignore_ascii_case(&d.printer.name)))
+            .cloned()
+            .collect();
+        for d in &addable {
+            ui.horizontal(|ui| {
+                if ui.button("＋").on_hover_text(t!("settings.printers_add")).clicked() {
+                    let mut list = printers.to_vec();
+                    list.push(d.printer.clone());
+                    send(list, default_name.clone().or_else(|| Some(d.printer.name.clone())), changes);
+                }
+                ui.label(&d.printer.name);
+                ui.weak(format!("{} · {}", printer_summary(&d.printer), d.slicer));
+            });
+        }
+        if addable.is_empty() {
+            ui.weak(t!("settings.printers_nothing_more"));
+        }
+        ui.horizontal(|ui| {
+            if addable.len() > 1 && ui.button(t!("settings.printers_add_all")).clicked() {
+                let mut list = printers.to_vec();
+                list.extend(addable.iter().map(|d| d.printer.clone()));
+                let first = addable.iter().find(|d| d.selected).unwrap_or(&addable[0]).printer.name.clone();
+                send(list, default_name.clone().or(Some(first)), changes);
+            }
+            if ui.button(t!("settings.slicers_rescan")).on_hover_text(t!("settings.printer_auto_hint")).clicked() {
+                self.found_printers = printer::detect_all();
+            }
+        });
+
         // The display unit changed since the form was filled: convert what is typed, so Apply
         // does not read millimetres as inches (or the other way round).
-        let units = config::display_units();
-        if let Some(form) = self.printer_form.as_mut().filter(|_| self.printer_form_units != units) {
+        let form = &mut self.printer_form;
+        if self.printer_form_units != units {
             let before = self.printer_form_units;
-            for value in &mut form[1..] {
+            for value in &mut form[1..4] {
                 if let Ok(v) = value.trim().replace(',', ".").parse::<f32>() {
                     *value = mm(units.from_mm(before.to_mm(v)));
                 }
             }
         }
         self.printer_form_units = units;
-        let form = self.printer_form.get_or_insert_with(|| printer_form(active));
-        egui::Grid::new("printer_form").num_columns(2).show(ui, |ui| {
-            ui.label(t!("settings.printer_name"));
-            ui.add(egui::TextEdit::singleline(&mut form[0]).desired_width(320.0));
-            ui.end_row();
-            ui.label(t!("settings.printer_volume"));
-            ui.horizontal(|ui| {
-                for (i, axis) in ["X", "Y", "Z"].iter().enumerate() {
-                    ui.label(*axis);
-                    ui.add(egui::TextEdit::singleline(&mut form[i + 1]).desired_width(56.0));
-                }
-                ui.label(config::display_units().label());
-            });
-            ui.end_row();
-        });
-        ui.horizontal(|ui| {
-            if ui.button(t!("settings.apply")).clicked() {
-                let units = config::display_units();
-                let mm = |s: &str| {
-                    s.trim().replace(',', ".").parse::<f32>().ok().filter(|v| *v > 0.0).map(|v| units.to_mm(v))
-                };
-                match (mm(&form[1]), mm(&form[2]), mm(&form[3])) {
-                    (Some(x), Some(y), Some(z)) => {
-                        let name = match form[0].trim() {
-                            "" => t!("settings.printer_default_name").into_owned(),
-                            name => name.to_owned(),
-                        };
-                        changes.push(SettingsChange::Printer(Some(Bed { name, x, y, z })));
-                        self.printer_error = false;
+        let heading = match &self.printer_editing {
+            Some(name) => t!("settings.printers_editing", name = name),
+            None => t!("settings.printers_by_hand"),
+        };
+        let editing = self.printer_editing.is_some();
+        egui::CollapsingHeader::new(heading).id_salt("printer_form").open(editing.then_some(true)).show(ui, |ui| {
+            egui::Grid::new("printer_form").num_columns(2).show(ui, |ui| {
+                ui.label(t!("settings.printer_name"));
+                ui.add(egui::TextEdit::singleline(&mut form[0]).desired_width(320.0));
+                ui.end_row();
+                ui.label(t!("settings.printer_volume"));
+                ui.horizontal(|ui| {
+                    for (i, axis) in ["X", "Y", "Z"].iter().enumerate() {
+                        ui.label(*axis);
+                        ui.add(egui::TextEdit::singleline(&mut form[i + 1]).desired_width(56.0));
                     }
-                    _ => self.printer_error = true,
+                    ui.label(units.label());
+                });
+                ui.end_row();
+                ui.label(t!("settings.printer_nozzle"));
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut form[4]).desired_width(56.0));
+                    ui.label("mm");
+                });
+                ui.end_row();
+                ui.label(t!("settings.printer_materials"));
+                ui.add(egui::TextEdit::singleline(&mut form[5]).hint_text("PLA, PETG").desired_width(320.0));
+                ui.end_row();
+            });
+            ui.horizontal(|ui| {
+                let label = if editing { t!("settings.apply") } else { t!("settings.printers_add") };
+                if ui.button(label).clicked() {
+                    let length = |s: &str| {
+                        s.trim().replace(',', ".").parse::<f32>().ok().filter(|v| *v > 0.0).map(|v| units.to_mm(v))
+                    };
+                    match (length(&form[1]), length(&form[2]), length(&form[3])) {
+                        (Some(x), Some(y), Some(z)) => {
+                            let name = match form[0].trim() {
+                                "" => t!("settings.printer_default_name").into_owned(),
+                                name => name.to_owned(),
+                            };
+                            let old = self.printer_editing.take();
+                            let kept = old.as_ref().and_then(|o| printers.iter().find(|p| p.name == *o));
+                            let new = Printer {
+                                name: name.clone(),
+                                x,
+                                y,
+                                z,
+                                nozzle: form[4].trim().replace(',', ".").parse().ok().filter(|v: &f32| *v > 0.0),
+                                materials: form[5]
+                                    .split(',')
+                                    .map(str::trim)
+                                    .filter(|m| !m.is_empty())
+                                    .map(str::to_owned)
+                                    .collect(),
+                                gcode_names: kept.map(|p| p.gcode_names.clone()).unwrap_or_default(),
+                            };
+                            let replaced = |p: &&Printer| p.name == name || Some(&p.name) == old.as_ref();
+                            let mut list: Vec<Printer> = printers.to_vec();
+                            match list.iter().position(|p| replaced(&p)) {
+                                Some(i) => list[i] = new,
+                                None => list.push(new),
+                            }
+                            let default = match &default_name {
+                                Some(d) if Some(d) == old.as_ref() => Some(name),
+                                Some(d) => Some(d.clone()),
+                                None => Some(name),
+                            };
+                            send(list, default, changes);
+                            *form = printer_form(None);
+                            self.printer_error = false;
+                        }
+                        _ => self.printer_error = true,
+                    }
                 }
-            }
-            if ui.button(t!("settings.printer_auto")).on_hover_text(t!("settings.printer_auto_hint")).clicked() {
-                changes.push(SettingsChange::Printer(None));
-                detect = true;
+                if editing && ui.button(t!("settings.cancel")).clicked() {
+                    self.printer_editing = None;
+                    *form = printer_form(None);
+                    self.printer_error = false;
+                }
+            });
+            if self.printer_error {
+                ui.colored_label(ui.visuals().error_fg_color, t!("settings.printer_invalid"));
             }
         });
-        if self.printer_error {
-            ui.colored_label(ui.visuals().error_fg_color, t!("settings.printer_invalid"));
-        }
-        if detect {
-            self.printer_form = Some(printer_form(Bed::detect().as_ref()));
-            self.printer_error = false;
-        }
+        ui.weak(t!("settings.printers_hint"));
     }
 
     fn user_data(&mut self, ui: &mut Ui, changes: &mut Vec<SettingsChange>) {
@@ -936,14 +1066,33 @@ impl SettingsDialog {
     }
 }
 
-fn printer_form(bed: Option<&Bed>) -> [String; 4] {
-    match bed {
-        Some(b) => {
+fn printer_form(printer: Option<&Printer>) -> [String; 6] {
+    match printer {
+        Some(p) => {
             let units = config::display_units();
-            [b.name.clone(), mm(units.from_mm(b.x)), mm(units.from_mm(b.y)), mm(units.from_mm(b.z))]
+            [
+                p.name.clone(),
+                mm(units.from_mm(p.x)),
+                mm(units.from_mm(p.y)),
+                mm(units.from_mm(p.z)),
+                p.nozzle.map(i18n::decimal).unwrap_or_default(),
+                p.materials.join(", "),
+            ]
         }
         None => Default::default(),
     }
+}
+
+/// "250 × 250 × 250 mm · Düse 0,4 mm · PLA, PETG"
+fn printer_summary(p: &Printer) -> String {
+    let mut parts = vec![i18n::dimensions(glam::Vec3::new(p.x, p.y, p.z))];
+    if let Some(n) = p.nozzle {
+        parts.push(t!("settings.printer_nozzle_short", size = i18n::decimal(n)).into_owned());
+    }
+    if !p.materials.is_empty() {
+        parts.push(p.materials.join(", "));
+    }
+    parts.join(" · ")
 }
 
 fn mm(value: f32) -> String {

@@ -6,11 +6,12 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
 use meshgrove_core::cache::ThumbMeta;
-use meshgrove_core::db::{Counts, Error, Library};
+use meshgrove_core::checks::MeshChecks;
+use meshgrove_core::db::{self, Counts, Error, Library};
 use meshgrove_core::lists::{ListKind, PrintResult};
 use meshgrove_core::scan::{self, Force};
 use meshgrove_core::userdata;
@@ -36,6 +37,8 @@ pub enum LibEvent {
     Pending(Vec<Job>),
     /// Tags, notes, lists or prints were changed (by the user or an import).
     UserDataChanged,
+    /// Printability checks were stored.
+    ChecksStored,
     /// Result of an export or import, for a message.
     Transfer(Result<Transfer, String>),
 }
@@ -60,6 +63,8 @@ enum Cmd {
     /// Lists this folder again, with `true` every folder below it as well (and reports the result).
     Rescan(PathBuf, bool),
     StoreMeta(PathBuf, String, ThumbMeta),
+    /// Printability checks by content hash.
+    StoreChecks(Vec<(String, MeshChecks)>),
     Tag(Vec<PathBuf>, String),
     Untag(Vec<PathBuf>, String),
     SetNote(Vec<PathBuf>, String),
@@ -144,6 +149,10 @@ impl LibraryService {
 
     pub fn store_meta(&self, path: PathBuf, key: String, meta: ThumbMeta) {
         let _ = self.tx.send(Cmd::StoreMeta(path, key, meta));
+    }
+
+    pub fn store_checks(&self, checks: Vec<(String, MeshChecks)>) {
+        let _ = self.tx.send(Cmd::StoreChecks(checks));
     }
 
     pub fn tag(&self, paths: Vec<PathBuf>, tag: String) {
@@ -318,6 +327,14 @@ impl Worker {
                     }
                     self.refresh_counts(&lib);
                 }
+                Ok(Cmd::StoreChecks(checks)) => {
+                    for (hash, c) in &checks {
+                        if let Err(e) = lib.store_checks(hash, c) {
+                            log::warn!("storing a printability check failed: {e}");
+                        }
+                    }
+                    self.send(LibEvent::ChecksStored);
+                }
                 Err(RecvTimeoutError::Timeout) if Instant::now() >= next_full => {
                     dirty.clear();
                     let starts: Vec<(PathBuf, PathBuf)> = self.roots.iter().map(|r| (r.clone(), r.clone())).collect();
@@ -368,6 +385,10 @@ impl Worker {
                 }
                 Err(e) => log::warn!("scan of {} failed: {e}", start.display()),
             }
+        }
+        // How old the index is, for readers in other processes (meshgrove-mcp).
+        if let Err(e) = lib.meta_set("last_scan_ns", &db::nanos(Some(SystemTime::now())).to_string()) {
+            log::warn!("could not note the scan time: {e}");
         }
         let pending = lib.needing_meta().unwrap_or_default();
         let jobs =

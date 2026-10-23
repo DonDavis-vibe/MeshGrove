@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -6,13 +6,14 @@ use anyhow::Context as _;
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use egui::{Button, Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use meshgrove_core::cache::{ThumbCache, ThumbMeta};
+use meshgrove_core::checks::MeshChecks;
 use meshgrove_core::config::{
     Config, DisplayUnits, DoubleClick, GalleryView, ModelUnits, PrintFilter, Program, Slicer, SortKey, TileTags,
 };
 use meshgrove_core::db::Library;
 use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::lists::{ListInfo, ListKind, PrintResult, PrintStatus};
-use meshgrove_core::printer::Bed;
+use meshgrove_core::printer::{self, Printer};
 use meshgrove_core::programs;
 use meshgrove_core::{Kind, query};
 use meshgrove_render::Renderer;
@@ -25,6 +26,7 @@ use crate::meshes::{self, MeshState, MeshStore};
 use crate::nav::{Listing, Navigator};
 use crate::print_export;
 use crate::text_preview::TextPreview;
+use crate::checker::Checker;
 use crate::thumbs::{ThumbResult, ThumbService};
 use crate::ui::details::{
     self, DetailsContext, DetailsOutput, ListsOfSelection, ModelStatus, NoteEditor, PrintInfo, TagEditor,
@@ -75,6 +77,8 @@ enum Scope {
     Folder,
     Library,
 }
+
+mod checks;
 
 /// Which switch to inches the question is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,8 +158,17 @@ pub struct App {
     selection_lists: Vec<(ListInfo, usize)>,
     /// The selection's print log, summed up.
     selection_print: PrintStatus,
+    /// The printability check of the one selected file.
+    selection_checks: Option<MeshChecks>,
     /// Lists, tile marks and tag colours must be read again (user data changed).
     marks_dirty: bool,
+    /// Background printability checks: the checker, results not stored yet and when they last
+    /// were, content already handed over this session, and when to look for more.
+    checker: Checker,
+    checks_done: Vec<(String, MeshChecks)>,
+    checks_flushed: Instant,
+    checks_queued: HashSet<String>,
+    checks_next: Instant,
     /// How tags are drawn (coloured or not, chosen colours).
     tag_style: TagStyle,
     /// Name typed for a new automatic collection (saving a search).
@@ -168,8 +181,8 @@ pub struct App {
     note_mixed: bool,
     note_edited: Option<Instant>,
     note_dirty: bool,
-    /// Printer bed for the size check (from the settings or the slicer).
-    bed: Option<Bed>,
+    /// The printers for the size check (from the settings or the slicers), the main one first.
+    printers: Vec<Printer>,
     /// Duplicate groups in the library (for the sidebar) and when to recount them.
     duplicate_groups: usize,
     duplicates_due: Option<Instant>,
@@ -227,9 +240,17 @@ impl App {
             log::info!("mesh editor: {} ({})", e.name, e.program.display());
         }
         let default_editor = Config::default_slicer_index(&editors, config.default_editor.as_deref());
-        let bed = config.printer.clone().or_else(Bed::detect);
-        if let Some(b) = &bed {
-            log::info!("printer bed: {} ({} × {} × {} mm)", b.name, b.x, b.y, b.z);
+        // Printers never chosen in the settings: take all the slicers know.
+        if config.printers.is_none() {
+            let found = printer::detect_all();
+            if !found.is_empty() {
+                config.default_printer = found.first().map(|d| d.printer.name.clone());
+                config.printers = Some(found.into_iter().map(|d| d.printer).collect());
+            }
+        }
+        let printers = main_printer_first(&config);
+        for p in &printers {
+            log::info!("printer: {} ({} × {} × {} mm)", p.name, p.x, p.y, p.z);
         }
         let cache = ThumbCache::new(ThumbCache::default_location().context("no cache directory")?);
         let db_path = Library::default_location().context("no data directory")?;
@@ -255,7 +276,7 @@ impl App {
             nav: Navigator::new(cc.egui_ctx.clone(), start_dir),
             view: View::Folder,
             sidebar: Sidebar::new(),
-            gallery: Gallery::with_bed(bed.clone()),
+            gallery: Gallery::with_printers(printers.clone()),
             thumbs: ThumbService::new(cc.egui_ctx.clone(), cache),
             library,
             db_path,
@@ -306,7 +327,13 @@ impl App {
             lists: Vec::new(),
             selection_lists: Vec::new(),
             selection_print: PrintStatus::default(),
+            selection_checks: None,
             marks_dirty: true,
+            checker: Checker::start(cc.egui_ctx.clone()),
+            checks_done: Vec::new(),
+            checks_flushed: Instant::now(),
+            checks_queued: HashSet::new(),
+            checks_next: Instant::now(),
             tag_style: TagStyle {
                 colored: config.colored_tags,
                 themes: config.themes(),
@@ -322,7 +349,7 @@ impl App {
             note_mixed: false,
             note_edited: None,
             note_dirty: true,
-            bed,
+            printers,
             duplicate_groups: 0,
             duplicates_due: Some(Instant::now()),
             last_processed: 0,
@@ -561,7 +588,7 @@ impl App {
             meshes: &mut self.meshes,
             render_state: rs,
             renderer: &self.renderer,
-            bed: self.bed.as_ref(),
+            printers: &self.printers,
             space: self.space.as_ref(),
             free_orbit: self.config.free_orbit,
             slicers: SlicerList { names: &self.slicer_names, default: self.default_slicer },
@@ -699,9 +726,14 @@ impl App {
                 ThumbResult::Ready { job, image, meta } => {
                     uploads += usize::from(image.is_some());
                     self.library.store_meta(job.path.clone(), job.key.clone(), meta.clone());
+                    self.note_selection_checks(&job.path, meta.checks.as_deref());
                 }
-                ThumbResult::Failed { job, .. } => {
-                    self.library.store_meta(job.path.clone(), job.key.clone(), ThumbMeta::default());
+                ThumbResult::Failed { job, error, content_hash } => {
+                    // A broken model is still noted (by content), as unreadable.
+                    let checks = content_hash.as_ref().map(|_| Box::new(MeshChecks::unreadable(error)));
+                    self.note_selection_checks(&job.path, checks.as_deref());
+                    let meta = ThumbMeta { content_hash: content_hash.clone(), checks, ..ThumbMeta::default() };
+                    self.library.store_meta(job.path.clone(), job.key.clone(), meta);
                 }
             }
             self.gallery.accept(ctx, &result);
@@ -716,6 +748,11 @@ impl App {
                     let first = self.index.is_none();
                     if first {
                         self.index = Library::open_reader(&self.db_path);
+                        if let Some(index) = &mut self.index
+                            && let Err(e) = index.set_printers(&self.printers)
+                        {
+                            log::warn!("printer search filters: {e}");
+                        }
                         self.menu_for.clear(); // re-evaluate what the selection allows (tags need the index)
                         self.duplicates_due = Some(Instant::now());
                         self.marks_dirty = true;
@@ -744,6 +781,10 @@ impl App {
                 LibEvent::UserDataChanged => {
                     self.tags_dirty = true;
                     self.marks_dirty = true;
+                }
+                LibEvent::ChecksStored => {
+                    self.marks_dirty = true;
+                    self.tags_dirty = true; // reloads the selection's check too
                 }
                 LibEvent::Rescanned { dir, folders, changed } => {
                     let folder = listing::file_name(&dir);
@@ -815,6 +856,10 @@ impl App {
             self.selection_tags = index.tags_of(&self.menu_for).unwrap_or_default();
             self.selection_lists = index.lists_of(&self.menu_for).unwrap_or_default();
             self.selection_print = index.print_status(&self.menu_for).unwrap_or_default();
+            self.selection_checks = match self.menu_for.as_slice() {
+                [one] => index.checks_of(one).unwrap_or_default(),
+                _ => None,
+            };
         }
         if self.note_edited.is_none()
             && std::mem::take(&mut self.note_dirty)
@@ -1179,12 +1224,18 @@ impl App {
                         .map_or_else(|| t!("settings.editor_none").into_owned(), |e| e.name.clone());
                     self.toast(t!("toast.editor_set", name = name).into_owned());
                 }
-                SettingsChange::Printer(bed) => {
-                    self.config.printer = bed.clone();
-                    self.bed = bed.or_else(Bed::detect);
-                    self.gallery.bed = self.bed.clone();
+                SettingsChange::Printers { list, default } => {
+                    self.config.printers = Some(list);
+                    self.config.default_printer = default;
+                    self.printers = main_printer_first(&self.config);
+                    self.gallery.printers = self.printers.clone();
+                    if let Some(index) = &mut self.index
+                        && let Err(e) = index.set_printers(&self.printers)
+                    {
+                        log::warn!("printer search filters: {e}");
+                    }
                     let name =
-                        self.bed.as_ref().map_or_else(|| t!("settings.printer_none").into_owned(), |b| b.name.clone());
+                        self.printers.first().map_or_else(|| t!("settings.printer_none").into_owned(), |p| p.name.clone());
                     self.toast(t!("toast.printer_set", name = name).into_owned());
                 }
                 SettingsChange::FolderPreviews(fp) => {
@@ -1522,7 +1573,7 @@ impl App {
             self.request_trash(paths);
         }
         if pressed(Modifiers::COMMAND, Key::Comma) {
-            self.settings.open(self.bed.as_ref());
+            self.settings.open();
         }
         if pressed(Modifiers::COMMAND, Key::Num1) {
             self.config.gallery_view = GalleryView::Grid;
@@ -1606,7 +1657,7 @@ impl App {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button(RichText::new("⚙").size(16.0)).on_hover_text(t!("settings.open")).clicked() {
-                    self.settings.open(self.bed.as_ref());
+                    self.settings.open();
                 }
                 self.view_menu(ui);
                 self.search_field(ui);
@@ -2005,6 +2056,7 @@ impl App {
                 .map(|(list, (wanted, done))| (list.name.as_str(), wanted, done)),
             _ => None,
         };
+        let checks_coming = self.index.is_some() && self.menu_for.first().is_some_and(|p| self.in_library(p));
         DetailsContext {
             entry,
             selection,
@@ -2017,7 +2069,7 @@ impl App {
                 idle_chips: self.config.tag_chips_idle,
             },
             note: NoteEditor { enabled: self.menu.can_tag, text: &mut self.note_input, mixed: self.note_mixed },
-            bed: self.bed.as_ref(),
+            printers: &self.printers,
             slicers: SlicerList { names: &self.slicer_names, default: self.default_slicer },
             editors: EditorList { programs: &self.editors, default: self.default_editor },
             lists: ListsOfSelection { lists: &self.selection_lists, favorite: self.menu.favorite },
@@ -2025,6 +2077,7 @@ impl App {
             tag_style: &self.tag_style,
             thumb,
             model: &self.model,
+            checks: (self.selection_checks.as_ref(), checks_coming),
             plates: self.plates.as_ref().map_or(&[][..], |(_, p)| p.as_slice()),
             viewer: &mut self.viewer,
             text: &mut self.text,
@@ -2286,6 +2339,7 @@ impl eframe::App for App {
         self.trash_dialog(&ctx);
         self.units_dialog(&ctx);
         self.receive_thumbnails(&ctx);
+        self.poll_checks();
         self.shortcuts(&ctx);
         if let Some(changed) = self.search_changed {
             if changed.elapsed() >= SEARCH_DEBOUNCE {
@@ -2322,13 +2376,17 @@ impl eframe::App for App {
         let selected = self.selected_entry().cloned();
         self.text.follow(selected.as_ref(), &ctx);
         if let Some(hook) = &mut self.screenshot {
-            if std::mem::take(&mut hook.settings) {
-                self.settings.open(self.bed.as_ref());
-            }
-            let hook = self.screenshot.as_mut().expect("checked above");
-            if hook.duplicates && self.index.is_some() && self.duplicate_groups > 0 {
-                hook.duplicates = false;
-                self.show_duplicates();
+            let view = hook.view.clone().unwrap_or_default();
+            match view.split_once(':').unwrap_or((&view, "")) {
+                ("settings", category) => {
+                    hook.view = None;
+                    self.settings.open_at(category);
+                }
+                ("duplicates", _) if self.index.is_some() && self.duplicate_groups > 0 => {
+                    hook.view = None;
+                    self.show_duplicates();
+                }
+                _ => {}
             }
             let hook = self.screenshot.as_mut().expect("checked above");
             if hook.flatten && !matches!(self.nav.listing, Listing::Loading) {
@@ -2381,7 +2439,7 @@ impl eframe::App for App {
             &self.config,
             (&self.slicers, self.default_slicer),
             (&self.editors, self.default_editor),
-            self.bed.as_ref(),
+            (&self.printers, 0),
             info,
         );
         self.apply_settings(changes);
@@ -2439,6 +2497,18 @@ fn list_title(list: &ListInfo) -> String {
         _ => list.name.clone(),
     }
 }
+
+/// The configured printers with the main one first (that order is what the views show).
+fn main_printer_first(config: &Config) -> Vec<Printer> {
+    let mut printers = config.printers.clone().unwrap_or_default();
+    let main = Config::default_printer_index(&printers, config.default_printer.as_deref());
+    if main < printers.len() {
+        let p = printers.remove(main);
+        printers.insert(0, p);
+    }
+    printers
+}
+
 
 /// Use the desktop's UI font (Noto Sans on KDE) so the app does not look foreign;
 /// glyphs it lacks still fall back to egui's bundled fonts and the system fallback.

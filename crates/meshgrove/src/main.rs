@@ -8,6 +8,7 @@ i18n!("locales", fallback = "en");
 
 mod actions;
 mod app;
+mod checker;
 mod folder_scan;
 mod i18n;
 mod library;

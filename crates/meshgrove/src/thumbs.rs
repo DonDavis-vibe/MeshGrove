@@ -43,6 +43,9 @@ pub enum ThumbResult {
     Failed {
         job: Job,
         error: String,
+        /// The file's content hash when it was read but cannot be shown (a broken model), so
+        /// the library can still note it.
+        content_hash: Option<String>,
     },
 }
 
@@ -157,7 +160,7 @@ impl ThumbService {
                         }
                         Some(Err(error)) => {
                             shared.finish(&item.job, generation);
-                            send(ThumbResult::Failed { job: item.job, error });
+                            send(ThumbResult::Failed { job: item.job, error, content_hash: None });
                         }
                         None => shared.requeue(item, generation, Stage::Generate),
                     }
@@ -191,9 +194,10 @@ impl ThumbService {
             let (work_rx, render_tx) = (work_rx.clone(), render_tx.clone());
             spawn(&format!("thumb-worker-{i}"), move || {
                 for (job, generation, bytes) in work_rx {
-                    let result = bytes
-                        .map_err(|e| ThumbError::Transient(e.to_string()))
-                        .and_then(|b| generate(&job, &b, &render_tx));
+                    let result = match &bytes {
+                        Ok(b) => generate(&job, b, &render_tx),
+                        Err(e) => Err(ThumbError::Transient(e.to_string())),
+                    };
                     match result {
                         Ok(thumb) => {
                             if let Err(e) = cache.store(&job.key, &thumb) {
@@ -203,16 +207,21 @@ impl ThumbService {
                             send(ready(job, thumb));
                         }
                         Err(failure) => {
-                            let error = match failure {
+                            let (error, content_hash) = match failure {
                                 ThumbError::Permanent(e) => {
                                     let _ = cache.store_failure(&job.key, &e);
-                                    e
+                                    let hash = bytes
+                                        .as_ref()
+                                        .ok()
+                                        .filter(|b| !b.is_empty() && meshgrove_core::checks::checked(job.kind))
+                                        .map(|b| meshgrove_core::dedupe::content_hash(b));
+                                    (e, hash)
                                 }
-                                ThumbError::Transient(e) => e,
+                                ThumbError::Transient(e) => (e, None),
                             };
                             log::info!("no thumbnail for {}: {error}", job.path.display());
                             shared.finish(&job, generation);
-                            send(ThumbResult::Failed { job, error });
+                            send(ThumbResult::Failed { job, error, content_hash });
                         }
                     }
                 }
@@ -259,6 +268,11 @@ impl ThumbService {
         for item in &mut q.items {
             item.visible = is_visible(&item.job.key);
         }
+    }
+
+    /// Nothing waits in the queue (the last jobs may still be running).
+    pub fn is_idle(&self) -> bool {
+        self.shared.queue.lock().unwrap().items.is_empty()
     }
 
     pub fn try_recv(&self) -> Option<ThumbResult> {

@@ -163,6 +163,8 @@ pub struct Marks {
     /// The newest print of it failed.
     pub last_failed: bool,
     pub tags: Vec<String>,
+    /// The mesh check found problems (holes, unreadable …).
+    pub problem: bool,
 }
 
 impl Library {
@@ -432,6 +434,10 @@ impl Library {
         for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
             let (hash, tag) = row?;
             by_hash.entry(hash).or_default().tags.push(tag);
+        }
+        let mut stmt = self.conn.prepare("SELECT content_hash FROM mesh_checks WHERE flags != 0 AND version = ?1")?;
+        for hash in stmt.query_map([crate::checks::CHECKS_VERSION], |r| r.get::<_, String>(0))? {
+            by_hash.entry(hash?).or_default().problem = true;
         }
         let mut stmt = self
             .conn

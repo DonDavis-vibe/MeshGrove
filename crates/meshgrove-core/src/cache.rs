@@ -30,6 +30,8 @@ pub struct ThumbMeta {
     pub filaments: Vec<[u8; 3]>,
     /// What a G-code file's comments say about the print.
     pub gcode: Option<Box<GcodeFacts>>,
+    /// Printability check of the mesh, when it was small enough to check with the thumbnail.
+    pub checks: Option<Box<crate::checks::MeshChecks>>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,8 +108,10 @@ impl ThumbCache {
     }
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let dir = path.parent().expect("cache files live in a subdirectory");
+/// Writes `bytes` to a temporary file next to `path` and renames it over `path`, so readers in
+/// other processes see the old or the new contents, never half a file.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let dir = path.parent().ok_or_else(|| io::Error::other("no parent folder"))?;
     std::fs::create_dir_all(dir)?;
     let tmp = path.with_extension(format!("tmp{}", std::process::id()));
     std::fs::File::create(&tmp)?.write_all(bytes)?;
@@ -123,6 +127,8 @@ const KEY_SOURCE: &str = "stlb:source";
 const KEY_FILAMENTS: &str = "stlb:filaments";
 /// JSON in base64, since text chunks only hold Latin-1 and printer names may not.
 const KEY_GCODE: &str = "stlb:gcode";
+/// [`crate::checks::MeshChecks`], JSON in base64 like the G-code facts.
+const KEY_CHECKS: &str = "stlb:checks";
 
 fn encode(thumb: &Thumbnail) -> io::Result<Vec<u8>> {
     let mut out = Vec::new();
@@ -148,6 +154,13 @@ fn encode(thumb: &Thumbnail) -> io::Result<Vec<u8>> {
             m.gcode
                 .as_ref()
                 .and_then(|g| serde_json::to_vec(g).ok())
+                .map(|json| base64::engine::general_purpose::STANDARD.encode(json)),
+        ),
+        (
+            KEY_CHECKS,
+            m.checks
+                .as_ref()
+                .and_then(|c| serde_json::to_vec(c).ok())
                 .map(|json| base64::engine::general_purpose::STANDARD.encode(json)),
         ),
     ];
@@ -200,6 +213,13 @@ fn decode(bytes: &[u8]) -> Result<Thumbnail, png::DecodingError> {
                     .and_then(|json| serde_json::from_slice(&json).ok())
                     .map(Box::new);
             }
+            KEY_CHECKS => {
+                meta.checks = base64::engine::general_purpose::STANDARD
+                    .decode(text)
+                    .ok()
+                    .and_then(|json| serde_json::from_slice(&json).ok())
+                    .map(Box::new);
+            }
             _ => {}
         }
     }
@@ -235,6 +255,7 @@ mod tests {
                 layers: Some(10),
                 ..Default::default()
             })),
+            checks: Some(Box::new(crate::checks::check(&crate::Mesh::cube(10.0)))),
         };
         cache.store(&key, &Thumbnail { image: image.clone(), meta: meta.clone() }).unwrap();
         let back = cache.load(&key).unwrap().unwrap();

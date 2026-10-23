@@ -30,10 +30,9 @@ pub struct ScreenshotHook {
     pub window_view: Option<String>,
     /// `MESHGROVE_FLATTEN=1`: start with "include subfolders" on.
     pub flatten: bool,
-    /// `MESHGROVE_VIEW=duplicates`: open the duplicates view once the index is ready.
-    pub duplicates: bool,
-    /// `MESHGROVE_VIEW=settings`: open the settings window.
-    pub settings: bool,
+    /// `MESHGROVE_VIEW`: what to open once it can be shown. `duplicates` (the duplicates view),
+    /// `settings` or `settings:<category>` (the settings window, e.g. `settings:printer`).
+    pub view: Option<String>,
     path: String,
     at: Instant,
     requested: bool,
@@ -60,8 +59,6 @@ impl ScreenshotHook {
             .unwrap_or_default();
         let hold = std::env::var_os("MESHGROVE_HOLD").is_some();
         let flatten = std::env::var_os("MESHGROVE_FLATTEN").is_some();
-        let duplicates = std::env::var("MESHGROVE_VIEW").is_ok_and(|v| v == "duplicates");
-        let settings = std::env::var("MESHGROVE_VIEW").is_ok_and(|v| v == "settings");
         let wheel = std::env::var("MESHGROVE_WHEEL").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0);
         Some(ScreenshotHook {
             pointer,
@@ -77,8 +74,7 @@ impl ScreenshotHook {
             measure,
             window_view: std::env::var("MESHGROVE_WINDOW_VIEW").ok(),
             flatten,
-            duplicates,
-            settings,
+            view: std::env::var("MESHGROVE_VIEW").ok(),
             path,
             at: Instant::now() + Duration::from_secs_f32(delay),
             requested: false,

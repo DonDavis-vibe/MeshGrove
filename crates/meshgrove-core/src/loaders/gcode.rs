@@ -205,6 +205,35 @@ fn duration(seconds: u64) -> String {
     if h > 0 { format!("{h}h {m}m {s}s") } else { format!("{m}m {s}s") }
 }
 
+/// Seconds in a print time as slicers write it: "1d 2h 3m 4s", "1h 6m 46s", "66m 46s" or "01:06:46".
+pub fn print_seconds(text: &str) -> Option<u32> {
+    let text = text.trim();
+    if text.contains(':') {
+        let parts: Vec<u32> = text.split(':').map(|p| p.trim().parse().ok()).collect::<Option<_>>()?;
+        return match parts[..] {
+            [h, m, s] => Some(h * 3600 + m * 60 + s),
+            [m, s] => Some(m * 60 + s),
+            _ => None,
+        };
+    }
+    let mut total = 0u32;
+    let mut any = false;
+    for part in text.split_whitespace() {
+        let split = part.find(|c: char| !c.is_ascii_digit())?;
+        let (number, unit) = part.split_at(split);
+        let n: u32 = number.parse().ok()?;
+        total += n * match unit {
+            "d" => 86_400,
+            "h" => 3600,
+            "m" | "min" => 60,
+            "s" => 1,
+            _ => return None,
+        };
+        any = true;
+    }
+    any.then_some(total)
+}
+
 /// Just enough of a printer to follow the nozzle: positions, absolute/relative modes, arcs.
 #[derive(Default)]
 struct Machine {
@@ -501,5 +530,24 @@ G1 X0 Y10 E2.0
         let g = parse(gcode.as_bytes());
         assert_eq!(g.preview.as_ref().map(|p| p.dimensions()), Some((48, 48)));
         assert_eq!(g.facts, GcodeFacts::default(), "picture data is not mistaken for facts");
+    }
+
+    #[test]
+    fn print_times_become_seconds() {
+        for (text, seconds) in [
+            ("1h 6m 46s", Some(4006)),
+            ("66m 46s", Some(4006)),
+            ("1d 2h 3m", Some(93_780)),
+            ("12m 5s", Some(725)),
+            ("1h 10m", Some(4200)),
+            ("01:06:46", Some(4006)),
+            ("6:46", Some(406)),
+            ("", None),
+            ("soon", None),
+            ("1h 6x", None),
+        ] {
+            assert_eq!(print_seconds(text), seconds, "{text:?}");
+        }
+        assert_eq!(print_seconds(&duration(4006)), Some(4006), "Cura times as this module writes them");
     }
 }
