@@ -494,6 +494,7 @@ impl App {
             renderer: &self.renderer,
             bed: self.bed.as_ref(),
             space: self.space.as_ref(),
+            free_orbit: self.config.free_orbit,
             slicer: self.slicer.as_ref().map(|s| s.name.as_str()),
             editor: self.editor.as_ref(),
             quality: self.config.preview_quality,
@@ -1109,6 +1110,7 @@ impl App {
                 }
                 SettingsChange::LockPanes(locked) => self.config.lock_panes = locked,
                 SettingsChange::SpaceMouse(config) => self.config.spacemouse = config,
+                SettingsChange::FreeOrbit(on) => self.config.free_orbit = on,
                 SettingsChange::TagDisplay { colored, on_tiles, count, style } => {
                     self.config.colored_tags = colored;
                     self.config.tags_on_tiles = on_tiles;
@@ -1210,6 +1212,8 @@ impl App {
     /// has the focus: the large preview if it is open, else the one in the details pane. The
     /// model windows follow it themselves (`space`).
     fn poll_spacemouse(&mut self, ctx: &egui::Context) {
+        self.viewer.set_free_orbit(self.config.free_orbit);
+        self.preview_viewer.set_free_orbit(self.config.free_orbit);
         self.space = None;
         self.mouse_state = self.spacemouse.snapshot();
         let presses = self.spacemouse.take_presses();
@@ -2201,7 +2205,12 @@ impl eframe::App for App {
 
         self.preview_overlay(&ctx, &rs);
 
-        let info = AppInfo { gpu: &self.gpu_name, db_path: &self.db_path, mouse: &self.mouse_state };
+        let info = AppInfo {
+            gpu: &self.gpu_name,
+            db_path: &self.db_path,
+            mouse: &self.mouse_state,
+            render: (&rs, &self.renderer),
+        };
         let changes =
             self.settings.show(&ctx, &self.config, self.slicer.as_ref(), self.editor.as_ref(), self.bed.as_ref(), info);
         self.apply_settings(changes);

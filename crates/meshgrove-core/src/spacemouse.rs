@@ -50,6 +50,8 @@ pub struct AxisMapping {
     pub pan_x: Option<Axis>,
     pub pan_y: Option<Axis>,
     pub zoom: Option<Axis>,
+    /// Turn the model about the view axis (free orbit only).
+    pub roll: Option<Axis>,
 }
 
 impl AxisMapping {
@@ -61,12 +63,14 @@ impl AxisMapping {
             pan_x: Some(Axis::PushLr),
             pan_y: Some(Axis::Lift),
             zoom: Some(Axis::PushFb),
+            roll: None,
         }
     }
 
-    /// Tilting the knob right and left turns the model (twisting does nothing).
+    /// Tilting the knob right and left turns the model; twisting rolls it about the view axis
+    /// (free orbit only: the upright orbit has no roll).
     pub fn tilt_orbits() -> AxisMapping {
-        AxisMapping { orbit_h: Some(Axis::TiltLr), ..AxisMapping::twist_orbits() }
+        AxisMapping { orbit_h: Some(Axis::TiltLr), roll: Some(Axis::Twist), ..AxisMapping::twist_orbits() }
     }
 }
 
@@ -84,6 +88,7 @@ pub struct CameraMotion {
     pub pan_x: f32,
     pub pan_y: f32,
     pub zoom: f32,
+    pub roll: f32,
 }
 
 impl CameraMotion {
@@ -182,6 +187,7 @@ impl SpaceMouseConfig {
             pan_x: pick(m.pan_x),
             pan_y: pick(m.pan_y),
             zoom: pick(m.zoom),
+            roll: pick(m.roll),
         }
     }
 }
@@ -467,7 +473,9 @@ mod tests {
         let mut v = [0.0; 6];
         v[Axis::Twist.index()] = 1.0;
         assert_eq!(twist.camera(v).orbit_h, 1.0);
-        assert_eq!(tilt.camera(v).orbit_h, 0.0, "twisting does nothing when tilting orbits");
+        assert_eq!(tilt.camera(v).orbit_h, 0.0, "twisting does not turn the model when tilting orbits");
+        assert_eq!(tilt.camera(v).roll, 1.0, "it rolls it (in free orbit)");
+        assert_eq!(twist.camera(v).roll, 0.0);
         let mut v = [0.0; 6];
         v[Axis::TiltLr.index()] = 0.5;
         assert_eq!(tilt.camera(v).orbit_h, 0.5);

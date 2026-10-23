@@ -1,4 +1,4 @@
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 use meshgrove_core::{Aabb, Mesh};
 use wgpu::util::DeviceExt;
 
@@ -38,6 +38,10 @@ pub struct ViewParams {
     pub framing: Framing,
     /// Studio lighting with glossy highlights instead of the plain thumbnail lighting.
     pub studio: bool,
+    /// Free orbit: the orientation of the camera (see [`orientation_of`]), which also allows
+    /// turning about the view axis and going over the poles. When set, it replaces the azimuth
+    /// and elevation, which keep the model upright.
+    pub orientation: Option<Quat>,
 }
 
 impl Default for ViewParams {
@@ -51,6 +55,7 @@ impl Default for ViewParams {
             background: [0.0, 0.0, 0.0, 0.0],
             framing: Framing::Tight,
             studio: false,
+            orientation: None,
         }
     }
 }
@@ -367,6 +372,58 @@ struct Camera {
     forward: Vec3,
 }
 
+/// The camera orientation (a rotation of the base camera: looking along +Y, up Z) of an azimuth
+/// and an elevation.
+pub fn orientation_of(azimuth_deg: f32, elevation_deg: f32) -> Quat {
+    let (_, right, up, forward) = basis(azimuth_deg, elevation_deg);
+    Quat::from_mat3(&glam::Mat3::from_cols(right, forward, up)).normalize()
+}
+
+/// Azimuth and elevation (degrees) that look the way an orientation does, without its roll.
+pub fn azimuth_elevation_of(orientation: Quat) -> (f32, f32) {
+    let to_eye = orientation * Vec3::NEG_Y;
+    (to_eye.x.atan2(-to_eye.y).to_degrees(), to_eye.z.clamp(-1.0, 1.0).asin().to_degrees())
+}
+
+impl ViewParams {
+    /// The camera's axes: (towards the eye, right, up, forward).
+    pub fn axes(&self) -> (Vec3, Vec3, Vec3, Vec3) {
+        match self.orientation {
+            Some(q) => {
+                let to_eye = q * Vec3::NEG_Y;
+                (to_eye, q * Vec3::X, q * Vec3::Z, -to_eye)
+            }
+            None => basis(self.azimuth_deg, self.elevation_deg),
+        }
+    }
+
+    /// Switches to free orbit (`true`) or back to the upright orbit, which keeps the direction
+    /// the camera looks from and drops the roll.
+    pub fn set_free(&mut self, free: bool) {
+        match (free, self.orientation) {
+            (true, None) => self.orientation = Some(orientation_of(self.azimuth_deg, self.elevation_deg)),
+            (false, Some(q)) => {
+                (self.azimuth_deg, self.elevation_deg) = azimuth_elevation_of(q);
+                self.orientation = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// Turns the free-orbit camera about its own axes, in radians: `yaw` moves the eye to the
+    /// right (like a larger azimuth), `pitch` up (like a larger elevation), and `roll` turns the
+    /// model clockwise on the screen. Starts a free orbit when there is none.
+    pub fn free_turn(&mut self, yaw: f32, pitch: f32, roll: f32) {
+        self.set_free(true);
+        let Some(q) = self.orientation else { return };
+        let (_, right, up, forward) = self.axes();
+        let turn = Quat::from_axis_angle(up, yaw)
+            * Quat::from_axis_angle(right, -pitch)
+            * Quat::from_axis_angle(forward, -roll);
+        self.orientation = Some((turn * q).normalize());
+    }
+}
+
 /// Camera axes for a viewing direction: (towards the eye, right, up, forward).
 fn basis(azimuth_deg: f32, elevation_deg: f32) -> (Vec3, Vec3, Vec3, Vec3) {
     let (az, el) = (azimuth_deg.to_radians(), elevation_deg.clamp(-89.5, 89.5).to_radians());
@@ -392,7 +449,7 @@ const FILL: f32 = 0.92;
 
 impl Camera {
     fn fit(bounds: &Aabb, view: &ViewParams, aspect: f32) -> Camera {
-        let (to_eye, right, up, forward) = basis(view.azimuth_deg, view.elevation_deg);
+        let (to_eye, right, up, forward) = view.axes();
         let tan_y = (FOV_Y_DEG.to_radians() * 0.5).tan();
         let tan_x = tan_y * aspect;
         let radius = bounds.radius().max(1e-4);
@@ -413,6 +470,8 @@ impl Camera {
                 }
                 (target, dist)
             }
+            // Free orbit can look from anywhere, with any roll: the bounding sphere always fits.
+            Framing::Orbit if view.orientation.is_some() => (bounds.center(), start / FILL),
             Framing::Orbit => {
                 // Pivot stays at the box centre; the distance is the largest any viewing angle needs.
                 let target = bounds.center();
@@ -501,6 +560,64 @@ mod tests {
             let (da, db) = ((a.eye - a.target).length(), (b.eye - b.target).length());
             assert!((db - da).abs() < da * 1e-5, "zoomed at az {az}: {da} vs {db}");
             assert!(da < rod().radius() * 6.0, "camera too far away: {da}");
+        }
+    }
+
+    #[test]
+    fn free_orbit_turns_like_the_upright_orbit_and_also_rolls() {
+        let upright = ViewParams { azimuth_deg: 30.0, elevation_deg: 20.0, ..Default::default() };
+        let near = |a: Vec3, b: Vec3| (a - b).length() < 1e-4;
+        // Free orbit starts out looking the same way.
+        let mut free = upright;
+        free.set_free(true);
+        assert!(near(free.axes().0, upright.axes().0) && near(free.axes().1, upright.axes().1));
+        assert!(near(free.axes().2, upright.axes().2));
+        // Pitch is the elevation of the upright orbit; yaw is its azimuth when looking level (it
+        // turns about the screen's vertical, which is the world's only then).
+        let mut turned = upright;
+        turned.free_turn(0.0, 5f32.to_radians(), 0.0);
+        let by_angles = ViewParams { elevation_deg: 25.0, ..upright };
+        assert!(near(turned.axes().0, by_angles.axes().0), "{:?} {:?}", turned.axes().0, by_angles.axes().0);
+        assert!(near(turned.axes().2, by_angles.axes().2));
+        let level = ViewParams { azimuth_deg: 30.0, elevation_deg: 0.0, ..Default::default() };
+        let mut yawed = level;
+        yawed.free_turn(10f32.to_radians(), 0.0, 0.0);
+        assert!(near(yawed.axes().0, ViewParams { azimuth_deg: 40.0, ..level }.axes().0));
+        // Roll turns the model clockwise on the screen: what was at three o'clock goes down.
+        let mut rolled = free;
+        let (_, right, up, _) = free.axes();
+        rolled.free_turn(0.0, 0.0, 20f32.to_radians());
+        let (to_eye_after, right_after, up_after, _) = rolled.axes();
+        assert!(near(to_eye_after, free.axes().0), "the view direction stays");
+        assert!(right.dot(up_after) < -0.3, "{}", right.dot(up_after));
+        assert!(up.dot(right_after) > 0.3, "twelve o'clock goes right");
+        // Over the pole: the upright orbit stops at 89.5 degrees, free orbit goes on.
+        let mut over = free;
+        over.free_turn(0.0, 120f32.to_radians(), 0.0);
+        assert!(over.axes().0.z < 0.8 && over.axes().2.z < 0.0, "upside down after 120 degrees up");
+        // Back to the upright orbit keeps the direction.
+        let mut back = turned;
+        back.set_free(false);
+        assert!(back.orientation.is_none());
+        assert!(near(back.axes().0, turned.axes().0));
+        // The round trip of azimuth and elevation.
+        let (az, el) = azimuth_elevation_of(orientation_of(-70.0, 33.0));
+        assert!((az + 70.0).abs() < 1e-3 && (el - 33.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn free_orbit_framing_keeps_the_model_in_view_from_any_side() {
+        let b = Aabb { min: Vec3::new(-40.0, -10.0, -5.0), max: Vec3::new(40.0, 10.0, 5.0) };
+        let mut view = ViewParams { framing: Framing::Orbit, ..Default::default() };
+        view.set_free(true);
+        for roll in [0.0f32, 0.7, 1.5] {
+            view.free_turn(0.5, 0.3, roll);
+            let cam = Camera::fit(&b, &view, 1.6);
+            for c in corners(&b) {
+                let clip = cam.view_proj * c.extend(1.0);
+                let (x, y) = (clip.x / clip.w, clip.y / clip.w);
+                assert!(x.abs() <= 1.0 && y.abs() <= 1.0, "corner outside the view: {x} {y}");
+            }
         }
     }
 

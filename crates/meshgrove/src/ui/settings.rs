@@ -27,6 +27,8 @@ pub enum SettingsChange {
     /// `None`: take the printer selected in the slicer.
     Printer(Option<Bed>),
     GltfUnit(GltfUnit),
+    /// Free orbit in the 3D views.
+    FreeOrbit(bool),
     /// The 3D mouse settings, as a whole.
     SpaceMouse(SpaceMouseConfig),
     PreviewQuality(PreviewQuality),
@@ -140,6 +142,12 @@ fn preview(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
         }
     });
     ui.weak(t!("settings.preview_hint"));
+    ui.add_space(4.0);
+    let mut free = config.free_orbit;
+    if ui.checkbox(&mut free, t!("settings.free_orbit")).changed() {
+        changes.push(SettingsChange::FreeOrbit(free));
+    }
+    ui.weak(t!("settings.free_orbit_hint"));
 }
 
 /// How model files without a fixed unit are read.
@@ -164,6 +172,8 @@ pub struct AppInfo<'a> {
     pub db_path: &'a Path,
     /// The 3D mouse as the reader sees it.
     pub mouse: &'a Snapshot,
+    /// What the 3D mouse's picture needs to draw a cube.
+    pub render: (&'a egui_wgpu::RenderState, &'a meshgrove_render::Renderer),
 }
 
 #[derive(Default)]
@@ -420,7 +430,9 @@ impl SettingsDialog {
                                     Section::FolderPreviews => folder_previews(ui, config, &mut changes),
                                     Section::Tags => tags(ui, config, &mut changes),
                                     Section::Preview => preview(ui, config, &mut changes),
-                                    Section::SpaceMouse => self.mouse.section(ui, config, info.mouse, &mut changes),
+                                    Section::SpaceMouse => {
+                                        self.mouse.section(ui, config, info.mouse, info.render, &mut changes)
+                                    }
                                     Section::Models => models(ui, config, &mut changes),
                                     Section::Slicer => self.slicer(ui, config, slicer, &mut changes),
                                     Section::Editor => self.editor(ui, config, editor, &mut changes),

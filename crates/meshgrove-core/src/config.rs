@@ -388,6 +388,8 @@ pub struct Config {
     pub printer: Option<crate::printer::Bed>,
     /// What one glTF unit stands for.
     pub gltf_unit: GltfUnit,
+    /// Free orbit in the 3D views: also turn about the view axis and over the poles.
+    pub free_orbit: bool,
     /// 3D mouse (SpaceMouse) navigation.
     pub spacemouse: crate::spacemouse::SpaceMouseConfig,
     /// Picture quality of the large preview (Space) and the model windows.
@@ -431,6 +433,7 @@ impl Default for Config {
             slicer: None,
             printer: None,
             gltf_unit: GltfUnit::Metres,
+            free_orbit: false,
             spacemouse: Default::default(),
             preview_quality: PreviewQuality::High,
             preview_controls: false,

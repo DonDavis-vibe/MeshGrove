@@ -35,6 +35,8 @@ pub struct WindowContext<'a> {
     pub bed: Option<&'a Bed>,
     /// What the 3D mouse did this frame; the window that has the focus follows it.
     pub space: Option<&'a SpaceInput>,
+    /// Free orbit in the viewer.
+    pub free_orbit: bool,
     pub slicer: Option<&'a str>,
     pub editor: Option<&'a Program>,
     pub quality: PreviewQuality,
@@ -90,6 +92,7 @@ impl ModelWindow {
     pub fn show(&mut self, ctx: &egui::Context, cx: &mut WindowContext, actions: &mut Vec<WindowAction>) -> bool {
         self.update_model(ctx, cx.meshes);
         self.viewer.set_quality(cx.quality);
+        self.viewer.set_free_orbit(cx.free_orbit);
         let name = listing::file_name(&self.entry.path);
         let builder = ViewportBuilder::default()
             .with_title(format!("{name} – Meshgrove"))

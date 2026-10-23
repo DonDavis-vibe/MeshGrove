@@ -56,6 +56,8 @@ pub struct ModelViewer {
     tools: bool,
     /// The standard view the 3D mouse's second button showed last.
     preset: usize,
+    /// Free orbit: also turn about the view axis and over the poles.
+    free_orbit: bool,
 }
 
 /// What the 3D mouse did since the last frame, for the viewer that has the focus.
@@ -82,6 +84,7 @@ impl ModelViewer {
             supersample: 1.0,
             studio: false,
             preset: 0,
+            free_orbit: false,
             tools: true,
         }
     }
@@ -150,7 +153,7 @@ impl ModelViewer {
                 1 => {
                     let &(_, azimuth_deg, elevation_deg) = &PRESETS[self.preset % PRESETS.len()];
                     self.preset += 1;
-                    self.view = ViewParams { azimuth_deg, elevation_deg, ..orbit_view() };
+                    self.view = self.looking_from(azimuth_deg, elevation_deg);
                     self.dirty = true;
                 }
                 _ => {}
@@ -162,8 +165,26 @@ impl ModelViewer {
         }
     }
 
+    /// Free orbit (also turning about the view axis and over the poles) or the upright orbit.
+    /// Changing it keeps the direction the camera looks from.
+    pub fn set_free_orbit(&mut self, free: bool) {
+        if self.free_orbit != free {
+            self.free_orbit = free;
+            self.view.set_free(free);
+            self.dirty = true;
+        }
+    }
+
+    /// The orbit view from a direction, free or upright as set.
+    fn looking_from(&self, azimuth_deg: f32, elevation_deg: f32) -> ViewParams {
+        let mut view = ViewParams { azimuth_deg, elevation_deg, ..orbit_view() };
+        view.set_free(self.free_orbit);
+        view
+    }
+
     pub fn reset_view(&mut self) {
-        self.view = orbit_view();
+        let start = orbit_view();
+        self.view = self.looking_from(start.azimuth_deg, start.elevation_deg);
         self.dirty = true;
     }
 
@@ -186,7 +207,7 @@ impl ModelViewer {
         if let Some(key) = self.scripted_view.take()
             && let Some(&(_, az, el)) = PRESETS.iter().find(|(k, ..)| *k == key)
         {
-            self.view = ViewParams { azimuth_deg: az, elevation_deg: el, ..orbit_view() };
+            self.view = self.looking_from(az, el);
             self.dirty = true;
         }
         let (w, h) = pixel_size(ui.ctx(), rect);
@@ -225,8 +246,20 @@ impl ModelViewer {
     fn handle_input(&mut self, ui: &Ui, rect: Rect, response: &egui::Response) {
         if response.dragged_by(PointerButton::Primary) {
             let d = response.drag_delta();
-            self.view.azimuth_deg -= d.x * 0.4;
-            self.view.elevation_deg = (self.view.elevation_deg + d.y * 0.4).clamp(-89.5, 89.5);
+            if self.free_orbit && ui.input(|i| i.modifiers.ctrl) {
+                // Ctrl+drag rolls: the model follows the pointer round the centre of the view.
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let (now, before) = (pos - rect.center(), pos - d - rect.center());
+                    let turned = (now.y.atan2(now.x) - before.y.atan2(before.x)).rem_euclid(std::f32::consts::TAU);
+                    let turned = if turned > std::f32::consts::PI { turned - std::f32::consts::TAU } else { turned };
+                    self.view.free_turn(0.0, 0.0, turned);
+                }
+            } else if self.free_orbit {
+                self.view.free_turn(-d.x * 0.4f32.to_radians(), -d.y * 0.4f32.to_radians(), 0.0);
+            } else {
+                self.view.azimuth_deg -= d.x * 0.4;
+                self.view.elevation_deg = (self.view.elevation_deg + d.y * 0.4).clamp(-89.5, 89.5);
+            }
             self.dirty = true;
         }
         if response.dragged_by(PointerButton::Secondary) || response.dragged_by(PointerButton::Middle) {
@@ -266,7 +299,7 @@ impl ModelViewer {
         ui.menu_button(RichText::new(format!("🎥 {} ▾", t!("viewer.views"))).small(), |ui| {
             for &(key, az, el) in PRESETS {
                 if ui.button(t!(key)).clicked() {
-                    self.view = ViewParams { azimuth_deg: az, elevation_deg: el, ..orbit_view() };
+                    self.view = self.looking_from(az, el);
                     self.dirty = true;
                     ui.close();
                 }
@@ -433,13 +466,20 @@ const ZOOM_PER_SECOND: f32 = 1.3;
 /// clockwise seen from above; pushing or lifting moves the model the same way.
 fn driven(view: &ViewParams, m: &CameraMotion, dt: f32) -> ViewParams {
     let zoom = view.zoom.max(0.01);
-    ViewParams {
-        azimuth_deg: view.azimuth_deg + m.orbit_h * ORBIT_DEGREES_PER_SECOND * dt,
-        elevation_deg: (view.elevation_deg + m.orbit_v * ORBIT_DEGREES_PER_SECOND * dt).clamp(-89.5, 89.5),
+    let mut out = ViewParams {
         pan: view.pan - glam::Vec2::new(m.pan_x, m.pan_y) * (PAN_RADII_PER_SECOND * dt / zoom),
         zoom: (zoom * (m.zoom * ZOOM_PER_SECOND * dt).exp()).clamp(0.2, 50.0),
         ..*view
+    };
+    let turn = |v: f32| (v * ORBIT_DEGREES_PER_SECOND * dt).to_radians();
+    if view.orientation.is_some() {
+        // Free orbit: about the camera's own axes, with roll.
+        out.free_turn(turn(m.orbit_h), turn(m.orbit_v), turn(m.roll));
+    } else {
+        out.azimuth_deg += m.orbit_h * ORBIT_DEGREES_PER_SECOND * dt;
+        out.elevation_deg = (out.elevation_deg + m.orbit_v * ORBIT_DEGREES_PER_SECOND * dt).clamp(-89.5, 89.5);
     }
+    out
 }
 
 fn orbit_view() -> ViewParams {
@@ -464,5 +504,13 @@ mod tests {
         let zoomed = driven(&view, &CameraMotion { zoom: 1.0, ..Default::default() }, 1.0);
         assert!(zoomed.zoom > view.zoom);
         assert_eq!(driven(&view, &CameraMotion { zoom: -1.0, ..Default::default() }, 100.0).zoom, 0.2);
+        // Free orbit rolls and goes over the pole.
+        let mut free = view;
+        free.set_free(true);
+        let rolled = driven(&free, &CameraMotion { roll: 1.0, ..Default::default() }, 0.5);
+        assert!(rolled.axes().2.dot(free.axes().2) < 0.9, "55 degrees of roll");
+        assert!((rolled.axes().0 - free.axes().0).length() < 1e-4, "the view direction stays");
+        let over = driven(&free, &CameraMotion { orbit_v: 1.0, ..Default::default() }, 1.5);
+        assert!(over.axes().2.z < 0.0, "upside down: no 89.5 degree limit");
     }
 }
