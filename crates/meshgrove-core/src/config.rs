@@ -58,6 +58,7 @@ pub(crate) fn app_folders() -> Vec<PathBuf> {
     folders
 }
 
+#[cfg(any(target_os = "linux", windows))]
 pub(crate) fn subdirs(dir: &Path) -> Vec<PathBuf> {
     let entries = std::fs::read_dir(dir).into_iter().flatten().flatten();
     entries.map(|e| e.path()).filter(|p| p.is_dir()).collect()

@@ -4,9 +4,11 @@
 //! Windows; application bundles on macOS). The settings list what was found and the user adds
 //! the ones they want. Mesh editors and CAD programs are found the same way.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::config::{Program, Slicer, plain, subdirs};
+#[cfg(any(target_os = "linux", windows))]
+use crate::config::subdirs;
+use crate::config::{Program, Slicer, plain};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgramKind {
@@ -378,6 +380,7 @@ fn detected(def: &Def, variant: Variant, program: Program) -> Detected {
 #[cfg(target_os = "linux")]
 mod linux {
     use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
 
     use super::*;
 
