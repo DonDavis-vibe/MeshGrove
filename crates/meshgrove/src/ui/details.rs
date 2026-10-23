@@ -448,7 +448,7 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
                 if !*existing {
                     response = response.on_hover_text(t!("tags.suggestion_unused"));
                 }
-                if picked == Some(i) {
+                if picked == Some(i) || response.has_focus() {
                     ui.painter().rect_stroke(
                         response.rect.expand(1.5),
                         9.0,
