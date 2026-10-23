@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use egui::{Grid, Key, RichText, Ui};
 use meshgrove_core::Kind;
-use meshgrove_core::config::Program;
 use meshgrove_core::listing::Entry;
 use meshgrove_core::lists::{ListInfo, ListKind, PrintResult, PrintStatus};
 use meshgrove_core::loaders::gcode::GcodeFacts;
@@ -34,6 +33,8 @@ pub struct TagEditor<'a> {
     pub all: &'a [(String, usize)],
     pub input: &'a mut String,
     pub focus: bool,
+    /// Existing tags stay listed below the field while nothing is typed.
+    pub idle_chips: bool,
 }
 
 /// The selection's note (shared by all selected files, or `mixed`).
@@ -53,9 +54,9 @@ pub struct DetailsOutput {
     /// Result of a viewer tool (picture saved, …) for the status bar.
     pub message: Option<String>,
     /// "Open in slicer" was clicked.
-    pub open_in_slicer: bool,
+    pub open_in_slicer: Option<usize>,
     /// "Open in" the mesh editor was clicked.
-    pub open_in_editor: bool,
+    pub open_in_editor: Option<usize>,
     /// The star was clicked.
     pub toggle_favorite: bool,
     /// A list chip was clicked.
@@ -93,9 +94,9 @@ pub struct DetailsContext<'a> {
     pub tags: TagEditor<'a>,
     pub note: NoteEditor<'a>,
     pub bed: Option<&'a Bed>,
-    /// Name of the slicer models can be handed to.
-    pub slicer: Option<&'a str>,
-    pub editor: Option<&'a Program>,
+    /// The slicers models can be handed to.
+    pub slicers: super::SlicerList<'a>,
+    pub editors: super::EditorList<'a>,
     pub lists: ListsOfSelection<'a>,
     pub print: PrintInfo<'a>,
     pub tag_style: &'a TagStyle,
@@ -208,7 +209,7 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         ui.add_space(4.0);
         facts(ui, entry, cx.thumb, cx.model, cx.bed);
-        (out.open_in_slicer, out.open_in_editor) = open_buttons(ui, entry.kind, cx.slicer, cx.editor);
+        (out.open_in_slicer, out.open_in_editor) = open_buttons(ui, entry.kind, cx.slicers, cx.editors);
         if !cx.plates.is_empty() {
             let active = match cx.model {
                 ModelStatus::Ready(info) => info.plate,
@@ -228,23 +229,57 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
     out
 }
 
-/// "Open in Anycubic Slicer Next" and "Open in FreeCAD" for a model, as far as the slicer and
-/// the mesh editor open its kind. Which of them was clicked: (slicer, editor).
-pub fn open_buttons(ui: &mut Ui, kind: Kind, slicer: Option<&str>, editor: Option<&Program>) -> (bool, bool) {
-    let slicer = slicer.filter(|_| kind.is_sliceable());
-    let editor = editor.filter(|e| e.opens(kind));
-    let mut clicked = (false, false);
-    if slicer.is_none() && editor.is_none() {
+/// "Open in Anycubic Slicer Next" and "Open in FreeCAD" for a model, as far as the slicers and
+/// the mesh editors open its kind; with several of either a ▾ lists the others. Which was
+/// clicked: (index of the slicer, index of the editor).
+pub fn open_buttons(
+    ui: &mut Ui,
+    kind: Kind,
+    slicers: super::SlicerList<'_>,
+    editors: super::EditorList<'_>,
+) -> (Option<usize>, Option<usize>) {
+    let slicers = if kind.is_sliceable() { slicers } else { super::SlicerList::default() };
+    let usable = editors.usable(kind);
+    let mut clicked = (None, None);
+    if slicers.is_empty() && usable.is_empty() {
         return clicked;
     }
     ui.add_space(8.0);
     ui.horizontal_wrapped(|ui| {
         let button = |text: std::borrow::Cow<str>| egui::Button::new(text).min_size(egui::vec2(0.0, 28.0));
-        if let Some(name) = slicer {
-            clicked.0 = ui.add(button(t!("menu.open_in_slicer", name = name))).clicked();
+        if let Some(name) = slicers.names.get(slicers.default) {
+            if ui.add(button(t!("menu.open_in_slicer", name = name))).clicked() {
+                clicked.0 = Some(slicers.default);
+            }
+            if slicers.names.len() > 1 {
+                ui.menu_button("▾", |ui| {
+                    for (i, other) in slicers.names.iter().enumerate().filter(|(i, _)| *i != slicers.default) {
+                        if ui.button(t!("menu.open_in_slicer", name = other)).clicked() {
+                            clicked.0 = Some(i);
+                            ui.close();
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(t!("menu.open_in_other_slicer"));
+            }
         }
-        if let Some(editor) = editor {
-            clicked.1 = ui.add(button(t!("menu.open_in_editor", name = editor.name))).clicked();
+        if let Some((index, name)) = usable.first() {
+            if ui.add(button(t!("menu.open_in_editor", name = name))).clicked() {
+                clicked.1 = Some(*index);
+            }
+            if usable.len() > 1 {
+                ui.menu_button("▾", |ui| {
+                    for (index, other) in &usable[1..] {
+                        if ui.button(t!("menu.open_in_editor", name = other)).clicked() {
+                            clicked.1 = Some(*index);
+                            ui.close();
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(t!("menu.open_in_other_editor"));
+            }
         }
     });
     clicked
@@ -350,37 +385,41 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
     ui.horizontal(|ui| {
         // Suggested tags by group, the most used own tags first.
         ui.menu_button("▾", |ui| {
-            let own: Vec<&String> = ed
-                .all
-                .iter()
-                .filter(|(t, _)| tags::group_of(t) == Group::Own && !on_all(t))
-                .take(10)
-                .map(|(t, _)| t)
-                .collect();
-            if !own.is_empty() {
-                ui.label(RichText::new(Group::Own.title()).weak());
-                for tag in own {
-                    if ui.button(tag).clicked() {
-                        out.add_tag = Some(tag.clone());
-                        ui.close();
-                    }
-                }
-                ui.separator();
-            }
-            for group in Group::SUGGESTED {
-                ui.menu_button(group.title(), |ui| {
-                    for tag in tags::suggested(group).into_iter().filter(|t| !on_all(t)) {
-                        let response = ui.horizontal(|ui| {
-                            tags::dot(ui, style, tag);
-                            ui.button(tag)
-                        });
-                        if response.inner.clicked() {
-                            out.add_tag = Some(tag.to_owned());
+            super::scroll_menu(ui, "tag-menu", |ui| {
+                let own: Vec<&String> = ed
+                    .all
+                    .iter()
+                    .filter(|(t, _)| style.group_of(t) == Group::Own && !on_all(t))
+                    .take(10)
+                    .map(|(t, _)| t)
+                    .collect();
+                if !own.is_empty() {
+                    ui.label(RichText::new(Group::Own.title()).weak());
+                    for tag in own {
+                        if ui.button(tag).clicked() {
+                            out.add_tag = Some(tag.clone());
                             ui.close();
                         }
                     }
-                });
-            }
+                    ui.separator();
+                }
+                for group in Group::SUGGESTED {
+                    ui.menu_button(group.title(), |ui| {
+                        super::scroll_menu(ui, "tag-group", |ui| {
+                            for tag in tags::suggested(group, style).into_iter().filter(|t| !on_all(t)) {
+                                let response = ui.horizontal(|ui| {
+                                    tags::dot(ui, style, &tag);
+                                    ui.button(&tag)
+                                });
+                                if response.inner.clicked() {
+                                    out.add_tag = Some(tag);
+                                    ui.close();
+                                }
+                            }
+                        });
+                    });
+                }
+            });
         })
         .response
         .on_hover_text(t!("tags.suggestions_hint"));
@@ -392,23 +431,69 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
     if ed.focus {
         field.request_focus();
     }
-    if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) && !ed.input.trim().is_empty() {
-        out.add_tag = Some(std::mem::take(ed.input).trim().to_owned());
-        field.request_focus();
-    }
-    // Existing tags not yet on every selected file, matching what is typed.
+    // Existing tags and suggestions that match what is typed (all existing ones while the field
+    // is empty): the ones that start with it first. Up/Down pick one, Enter takes it.
     let needle = ed.input.trim().to_lowercase();
-    let suggestions: Vec<&String> = ed
-        .all
-        .iter()
-        .filter(|(tag, _)| !on_all(tag) && (needle.is_empty() || tag.to_lowercase().contains(&needle)))
-        .map(|(tag, _)| tag)
-        .take(8)
-        .collect();
-    if !suggestions.is_empty() {
+    let mut candidates: Vec<(String, bool)> = if needle.is_empty() && !ed.idle_chips {
+        Vec::new()
+    } else {
+        ed.all.iter().filter(|(tag, _)| !on_all(tag)).map(|(tag, _)| (tag.clone(), true)).collect()
+    };
+    if !needle.is_empty() {
+        for group in Group::SUGGESTED {
+            for tag in tags::suggested(group, style) {
+                if !on_all(&tag) && !candidates.iter().any(|(t, _)| t.eq_ignore_ascii_case(&tag)) {
+                    candidates.push((tag, false));
+                }
+            }
+        }
+        candidates.retain(|(tag, _)| tag.to_lowercase().contains(&needle));
+        candidates.sort_by_key(|(tag, existing)| (!tag.to_lowercase().starts_with(&needle), !existing));
+    }
+    candidates.truncate(8);
+    let state_id = field.id.with("pick");
+    let (seen_needle, mut picked): (String, Option<usize>) = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
+    if seen_needle != needle {
+        picked = None;
+    }
+    if field.has_focus() && !candidates.is_empty() {
+        let down = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowDown));
+        let up = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowUp));
+        let last = candidates.len() - 1;
+        if down {
+            picked = Some(picked.map_or(0, |i| (i + 1).min(last)));
+        } else if up {
+            picked = picked.and_then(|i| i.checked_sub(1));
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(state_id, (needle.clone(), picked)));
+    if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+        if let Some((tag, _)) = picked.and_then(|i| candidates.get(i)) {
+            out.add_tag = Some(tag.clone());
+            ed.input.clear();
+            field.request_focus();
+        } else if !ed.input.trim().is_empty() {
+            out.add_tag = Some(std::mem::take(ed.input).trim().to_owned());
+            field.request_focus();
+        }
+    }
+    if !candidates.is_empty() {
         ui.horizontal_wrapped(|ui| {
-            for tag in suggestions {
-                if tags::chip(ui, style, tag, &format!("+ {tag}")).clicked() {
+            for (i, (tag, existing)) in candidates.iter().enumerate() {
+                let label = if *existing { format!("+ {tag}") } else { format!("+ {tag} ✦") };
+                let mut response = tags::chip(ui, style, tag, &label);
+                if !*existing {
+                    response = response.on_hover_text(t!("tags.suggestion_unused"));
+                }
+                if picked == Some(i) || response.has_focus() {
+                    ui.painter().rect_stroke(
+                        response.rect.expand(1.5),
+                        9.0,
+                        egui::Stroke::new(1.5, ui.visuals().strong_text_color()),
+                        egui::StrokeKind::Outside,
+                    );
+                }
+                if response.clicked() {
                     out.add_tag = Some(tag.clone());
                     ed.input.clear();
                 }

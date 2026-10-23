@@ -13,6 +13,7 @@ use meshgrove_core::db::Library;
 use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::lists::{ListInfo, ListKind, PrintResult, PrintStatus};
 use meshgrove_core::printer::Bed;
+use meshgrove_core::programs;
 use meshgrove_core::{Kind, query};
 use meshgrove_render::Renderer;
 
@@ -34,9 +35,10 @@ use crate::ui::layout::{Layout, Pane};
 use crate::ui::model_window::{self, ModelWindow, WindowAction, WindowContext};
 use crate::ui::settings::{AppInfo, SettingsChange, SettingsDialog};
 use crate::ui::sidebar::{LibraryInfo, ListExport, Sidebar, SidebarAction};
-use crate::ui::tags::TagStyle;
+use crate::ui::tags::{Group, TagStyle};
 use crate::ui::turntable::Turntable;
 use crate::ui::viewer::{MeshSource, ModelViewer};
+use crate::ui::{EditorList, SlicerList};
 use egui_tiles::Tree;
 
 /// Wait this long after the selection settles before loading a model into the viewer,
@@ -127,9 +129,13 @@ pub struct App {
     gpu_name: String,
     rate: RateMeter,
     screenshot: Option<crate::screenshot::ScreenshotHook>,
-    slicer: Option<Slicer>,
-    /// Mesh editor or CAD program for "open in …".
-    editor: Option<Program>,
+    /// The slicers models can be sent to, and which one is the default.
+    slicers: Vec<Slicer>,
+    slicer_names: Vec<String>,
+    default_slicer: usize,
+    /// Mesh editors and CAD programs for "open in …", and which one is the default.
+    editors: Vec<Program>,
+    default_editor: usize,
     /// Context-menu facts for `menu_for` (recomputed when the selection changes).
     menu: MenuContext,
     menu_for: Vec<PathBuf>,
@@ -185,15 +191,36 @@ impl App {
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         use_system_ui_font(&cc.egui_ctx);
 
-        let slicer = config.slicer.clone().or_else(Slicer::detect_slicer);
-        match &slicer {
-            Some(s) => log::info!("slicer: {} ({})", s.name, s.program.display()),
-            None => log::info!("no slicer found; models open with the default application"),
+        // Slicers never chosen in the settings: take all that are installed.
+        let mut config = config;
+        if config.slicers.is_none() {
+            let found: Vec<Slicer> = programs::detect_slicers().into_iter().map(|d| d.program).collect();
+            if !found.is_empty() {
+                config.default_slicer = found.first().map(|s| s.name.clone());
+                config.slicers = Some(found);
+            }
         }
-        let editor = config.editor.clone().or_else(Program::detect_editor);
-        if let Some(e) = &editor {
+        let slicers = config.slicers.clone().unwrap_or_default();
+        for s in &slicers {
+            log::info!("slicer: {} ({})", s.name, s.program.display());
+        }
+        if slicers.is_empty() {
+            log::info!("no slicer found; models open with the default application");
+        }
+        let default_slicer = Config::default_slicer_index(&slicers, config.default_slicer.as_deref());
+        let slicer_names = slicers.iter().map(|s| s.name.clone()).collect();
+        if config.editors.is_none() {
+            let found: Vec<Program> = programs::detect_editors().into_iter().map(|d| d.program).collect();
+            if !found.is_empty() {
+                config.default_editor = found.first().map(|e| e.name.clone());
+                config.editors = Some(found);
+            }
+        }
+        let editors = config.editors.clone().unwrap_or_default();
+        for e in &editors {
             log::info!("mesh editor: {} ({})", e.name, e.program.display());
         }
+        let default_editor = Config::default_slicer_index(&editors, config.default_editor.as_deref());
         let bed = config.printer.clone().or_else(Bed::detect);
         if let Some(b) = &bed {
             log::info!("printer bed: {} ({} × {} × {} mm)", b.name, b.x, b.y, b.z);
@@ -257,8 +284,11 @@ impl App {
             gpu_name: rs.adapter.get_info().name,
             rate: RateMeter::default(),
             screenshot: crate::screenshot::ScreenshotHook::from_env(),
-            slicer,
-            editor,
+            slicers,
+            slicer_names,
+            default_slicer,
+            editors,
+            default_editor,
             menu: MenuContext::default(),
             menu_for: Vec::new(),
             selection_tags: Vec::new(),
@@ -268,7 +298,13 @@ impl App {
             selection_lists: Vec::new(),
             selection_print: PrintStatus::default(),
             marks_dirty: true,
-            tag_style: TagStyle { colored: config.colored_tags, ..Default::default() },
+            tag_style: TagStyle {
+                colored: config.colored_tags,
+                themes: config.themes(),
+                properties: config.properties(),
+                states: config.states(),
+                ..Default::default()
+            },
             new_list_name: String::new(),
             tag_input: String::new(),
             focus_tags: false,
@@ -409,10 +445,10 @@ impl App {
                     }
                     self.open_preview();
                 }
-                DoubleClick::Slicer if self.slicer.is_some() && kind.is_sliceable() => {
+                DoubleClick::Slicer if !self.slicers.is_empty() && kind.is_sliceable() => {
                     self.open_in_slicer(vec![entry.path]);
                 }
-                DoubleClick::Editor if self.editor.as_ref().is_some_and(|e| e.opens(kind)) => {
+                DoubleClick::Editor if self.editor_for(kind).is_some() => {
                     self.open_in_editor(vec![entry.path]);
                 }
                 DoubleClick::DefaultApp => self.open_with_default_app(&entry),
@@ -454,11 +490,16 @@ impl App {
         }
     }
 
-    /// Hands the models among `files` to the slicer (several at once if it allows).
+    /// Hands the models among `files` to the default slicer (several at once if it allows).
     fn open_in_slicer(&mut self, files: Vec<PathBuf>) {
+        self.open_in_slicer_with(files, self.default_slicer);
+    }
+
+    /// Hands the models among `files` to the slicer number `index` of the list.
+    fn open_in_slicer_with(&mut self, files: Vec<PathBuf>, index: usize) {
         let models: Vec<PathBuf> =
             files.into_iter().filter(|p| Kind::from_file_name(&listing::file_name(p)).is_sliceable()).collect();
-        let Some(slicer) = &self.slicer else { return };
+        let Some(slicer) = self.slicers.get(index) else { return };
         if models.is_empty() {
             return;
         }
@@ -472,9 +513,23 @@ impl App {
         self.toast(message.into_owned());
     }
 
-    /// Opens the models among `files` that the mesh editor reads.
+    /// The editor to use for a file of this kind: the default one if it opens it, else the first
+    /// that does.
+    fn editor_for(&self, kind: Kind) -> Option<usize> {
+        EditorList { programs: &self.editors, default: self.default_editor }.usable(kind).first().map(|(i, _)| *i)
+    }
+
+    /// Opens the models among `files` in the editor that suits the first of them.
     fn open_in_editor(&mut self, files: Vec<PathBuf>) {
-        let Some(editor) = &self.editor else { return };
+        let kind = files.first().map(|p| Kind::from_file_name(&listing::file_name(p)));
+        if let Some(index) = kind.and_then(|k| self.editor_for(k)) {
+            self.open_in_editor_with(files, index);
+        }
+    }
+
+    /// Opens the models among `files` that the editor number `index` reads.
+    fn open_in_editor_with(&mut self, files: Vec<PathBuf>, index: usize) {
+        let Some(editor) = self.editors.get(index) else { return };
         let models: Vec<PathBuf> =
             files.into_iter().filter(|p| editor.opens(Kind::from_file_name(&listing::file_name(p)))).collect();
         if models.is_empty() {
@@ -498,8 +553,8 @@ impl App {
             render_state: rs,
             renderer: &self.renderer,
             bed: self.bed.as_ref(),
-            slicer: self.slicer.as_ref().map(|s| s.name.as_str()),
-            editor: self.editor.as_ref(),
+            slicers: SlicerList { names: &self.slicer_names, default: self.default_slicer },
+            editors: EditorList { programs: &self.editors, default: self.default_editor },
             quality: self.config.preview_quality,
             can_log_prints: self.index.is_some(),
             icon: model_window::icon(crate::app_icon),
@@ -507,8 +562,8 @@ impl App {
         self.model_windows.retain_mut(|window| window.show(ctx, &mut cx, &mut actions));
         for action in actions {
             match action {
-                WindowAction::OpenInSlicer(path) => self.open_in_slicer(vec![path]),
-                WindowAction::OpenInEditor(path) => self.open_in_editor(vec![path]),
+                WindowAction::OpenInSlicer(path, index) => self.open_in_slicer_with(vec![path], index),
+                WindowAction::OpenInEditor(path, index) => self.open_in_editor_with(vec![path], index),
                 WindowAction::Print(path, result) => self.record_print(vec![path], result),
                 WindowAction::Message(message) => self.toast(message),
             }
@@ -720,12 +775,16 @@ impl App {
             self.save_note(); // belongs to the previous selection
             self.note_dirty = true;
             self.menu = MenuContext {
-                slicer: self.slicer.as_ref().map(|s| s.name.clone()),
-                editor: self
-                    .editor
-                    .as_ref()
-                    .filter(|e| paths.iter().any(|p| e.opens(Kind::from_file_name(&listing::file_name(p)))))
-                    .map(|e| e.name.clone()),
+                slicers: self.slicer_names.clone(),
+                default_slicer: self.default_slicer,
+                editors: {
+                    let kinds: Vec<Kind> = paths.iter().map(|p| Kind::from_file_name(&listing::file_name(p))).collect();
+                    EditorList { programs: &self.editors, default: self.default_editor }
+                        .usable_for_any(&kinds)
+                        .into_iter()
+                        .map(|(i, name)| (i, name.to_owned()))
+                        .collect()
+                },
                 trash_blocked: actions::trash_blocked(&paths),
                 can_tag: self.index.is_some() && !paths.is_empty() && paths.iter().all(|p| self.in_library(p)),
                 lists: menu_lists(&self.lists),
@@ -1023,7 +1082,8 @@ impl App {
             }
             Action::ShowInFolder(index) => self.show_in_folder(index),
             Action::OpenInSlicer => self.open_in_slicer(self.selected_paths()),
-            Action::OpenInEditor => self.open_in_editor(self.selected_paths()),
+            Action::OpenInSlicerWith(index) => self.open_in_slicer_with(self.selected_paths(), index),
+            Action::OpenInEditor(index) => self.open_in_editor_with(self.selected_paths(), index),
             Action::ShowInFileManager => {
                 if let Err(e) = actions::show_in_file_manager(&self.selected_paths()) {
                     self.toast(t!("toast.file_manager_failed", error = e.to_string()).into_owned());
@@ -1083,23 +1143,28 @@ impl App {
                     self.config.library_roots.retain(|r| r != &path);
                     self.library.set_roots(self.config.library_roots.clone());
                 }
-                SettingsChange::Slicer(slicer) => {
-                    self.config.slicer = slicer.clone();
-                    self.slicer = slicer.or_else(Slicer::detect_slicer);
+                SettingsChange::Slicers { list, default } => {
+                    self.default_slicer = Config::default_slicer_index(&list, default.as_deref());
+                    self.slicer_names = list.iter().map(|s| s.name.clone()).collect();
+                    self.config.slicers = Some(list.clone());
+                    self.config.default_slicer = list.get(self.default_slicer).map(|s| s.name.clone());
+                    self.slicers = list;
                     self.menu_for.clear();
                     let name = self
-                        .slicer
-                        .as_ref()
+                        .slicers
+                        .get(self.default_slicer)
                         .map_or_else(|| t!("settings.slicer_none").into_owned(), |s| s.name.clone());
                     self.toast(t!("toast.slicer_set", name = name).into_owned());
                 }
-                SettingsChange::Editor(editor) => {
-                    self.config.editor = editor.clone();
-                    self.editor = editor.or_else(Program::detect_editor);
+                SettingsChange::Editors { list, default } => {
+                    self.default_editor = Config::default_slicer_index(&list, default.as_deref());
+                    self.config.editors = Some(list.clone());
+                    self.config.default_editor = list.get(self.default_editor).map(|e| e.name.clone());
+                    self.editors = list;
                     self.menu_for.clear();
                     let name = self
-                        .editor
-                        .as_ref()
+                        .editors
+                        .get(self.default_editor)
                         .map_or_else(|| t!("settings.editor_none").into_owned(), |e| e.name.clone());
                     self.toast(t!("toast.editor_set", name = name).into_owned());
                 }
@@ -1123,6 +1188,19 @@ impl App {
                     self.config.tile_tag_count = count;
                     self.config.tile_tags = style;
                     self.tag_style.colored = colored;
+                    self.gallery.tag_style = self.tag_style.clone();
+                }
+                SettingsChange::FlatTagList(flat) => self.config.flat_tag_list = flat,
+                SettingsChange::IdleTagChips(on) => self.config.tag_chips_idle = on,
+                SettingsChange::Suggestions(group, list) => {
+                    match group {
+                        Group::Themes => self.config.themes = list,
+                        Group::Properties => self.config.properties = list,
+                        _ => self.config.states = list,
+                    }
+                    self.tag_style.themes = self.config.themes();
+                    self.tag_style.properties = self.config.properties();
+                    self.tag_style.states = self.config.states();
                     self.gallery.tag_style = self.tag_style.clone();
                 }
                 SettingsChange::ResetLayout => self.layout.reset(),
@@ -1399,7 +1477,7 @@ impl App {
             self.request_trash(paths);
         }
         if pressed(Modifiers::COMMAND, Key::Comma) {
-            self.settings.open(self.slicer.as_ref(), self.editor.as_ref(), self.bed.as_ref());
+            self.settings.open(self.bed.as_ref());
         }
         if pressed(Modifiers::COMMAND, Key::Num1) {
             self.config.gallery_view = GalleryView::Grid;
@@ -1483,7 +1561,7 @@ impl App {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button(RichText::new("⚙").size(16.0)).on_hover_text(t!("settings.open")).clicked() {
-                    self.settings.open(self.slicer.as_ref(), self.editor.as_ref(), self.bed.as_ref());
+                    self.settings.open(self.bed.as_ref());
                 }
                 self.view_menu(ui);
                 self.search_field(ui);
@@ -1821,6 +1899,7 @@ impl App {
             active_tags: &active_tags,
             has_index: self.index.is_some(),
             tag_style: &self.tag_style,
+            flat_tags: self.config.flat_tag_list,
         };
         match self.sidebar.show(ui, &self.config, self.nav.current(), info) {
             Some(SidebarAction::Navigate(path)) => self.navigate(path),
@@ -1890,11 +1969,12 @@ impl App {
                 all: &self.all_tags,
                 input: &mut self.tag_input,
                 focus: focus_tags,
+                idle_chips: self.config.tag_chips_idle,
             },
             note: NoteEditor { enabled: self.menu.can_tag, text: &mut self.note_input, mixed: self.note_mixed },
             bed: self.bed.as_ref(),
-            slicer: self.slicer.as_ref().map(|s| s.name.as_str()),
-            editor: self.editor.as_ref(),
+            slicers: SlicerList { names: &self.slicer_names, default: self.default_slicer },
+            editors: EditorList { programs: &self.editors, default: self.default_editor },
             lists: ListsOfSelection { lists: &self.selection_lists, favorite: self.menu.favorite },
             print: PrintInfo { enabled: self.menu.can_tag, status: &self.selection_print, on_list },
             tag_style: &self.tag_style,
@@ -2018,11 +2098,11 @@ impl App {
         if let Some(message) = out.message {
             self.toast(message);
         }
-        if out.open_in_slicer {
-            self.open_in_slicer(self.selected_paths());
+        if let Some(index) = out.open_in_slicer {
+            self.open_in_slicer_with(self.selected_paths(), index);
         }
-        if out.open_in_editor {
-            self.open_in_editor(self.selected_paths());
+        if let Some(index) = out.open_in_editor {
+            self.open_in_editor_with(self.selected_paths(), index);
         }
         if let Some(path) = out.open_file
             && let Err(e) = actions::open_with_default_app(&path)
@@ -2197,7 +2277,7 @@ impl eframe::App for App {
         self.text.follow(selected.as_ref(), &ctx);
         if let Some(hook) = &mut self.screenshot {
             if std::mem::take(&mut hook.settings) {
-                self.settings.open(self.slicer.as_ref(), self.editor.as_ref(), self.bed.as_ref());
+                self.settings.open(self.bed.as_ref());
             }
             let hook = self.screenshot.as_mut().expect("checked above");
             if hook.duplicates && self.index.is_some() && self.duplicate_groups > 0 {
@@ -2245,8 +2325,14 @@ impl eframe::App for App {
         self.preview_overlay(&ctx, &rs);
 
         let info = AppInfo { gpu: &self.gpu_name, db_path: &self.db_path };
-        let changes =
-            self.settings.show(&ctx, &self.config, self.slicer.as_ref(), self.editor.as_ref(), self.bed.as_ref(), info);
+        let changes = self.settings.show(
+            &ctx,
+            &self.config,
+            (&self.slicers, self.default_slicer),
+            (&self.editors, self.default_editor),
+            self.bed.as_ref(),
+            info,
+        );
         self.apply_settings(changes);
         self.show_model_windows(&ctx, &rs);
     }
