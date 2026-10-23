@@ -6,7 +6,7 @@ use anyhow::Context as _;
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use egui::{Button, Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use meshgrove_core::cache::{ThumbCache, ThumbMeta};
-use meshgrove_core::config::{Config, DoubleClick, PrintFilter, Program, Slicer, SortKey, TileTags};
+use meshgrove_core::config::{Config, DoubleClick, GalleryView, PrintFilter, Program, Slicer, SortKey, TileTags};
 use meshgrove_core::db::Library;
 use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::lists::{ListInfo, ListKind, PrintResult, PrintStatus};
@@ -27,7 +27,7 @@ use crate::ui::details::{
     self, DetailsContext, DetailsOutput, ListsOfSelection, ModelStatus, NoteEditor, PrintInfo, TagEditor,
 };
 use crate::ui::duplicates::{self, DupAction, GroupInfo};
-use crate::ui::gallery::{Action, Arrange, Gallery, MenuContext};
+use crate::ui::gallery::{Action, Arrange, Gallery, ListSettings, MenuContext};
 use crate::ui::layout::{Layout, Pane};
 use crate::ui::model_window::{self, ModelWindow, WindowAction, WindowContext};
 use crate::ui::settings::{AppInfo, SettingsChange, SettingsDialog};
@@ -961,6 +961,15 @@ impl App {
                 }
             }
             Action::Preview => self.open_preview(),
+            Action::SortBy(key) => {
+                if self.config.sort_by == key {
+                    self.config.sort_descending = !self.config.sort_descending;
+                } else {
+                    self.config.sort_by = key;
+                    self.config.sort_descending = false;
+                }
+                self.reapply_filter();
+            }
             Action::Rescan => {
                 if let [dir] = self.selected_paths().as_slice() {
                     self.library.rescan(dir.clone(), true);
@@ -1279,6 +1288,12 @@ impl App {
         if pressed(Modifiers::COMMAND, Key::Comma) {
             self.settings.open(self.slicer.as_ref(), self.editor.as_ref(), self.bed.as_ref());
         }
+        if pressed(Modifiers::COMMAND, Key::Num1) {
+            self.config.gallery_view = GalleryView::Grid;
+        }
+        if pressed(Modifiers::COMMAND, Key::Num2) {
+            self.config.gallery_view = GalleryView::List;
+        }
         if pressed(Modifiers::NONE, Key::F5) {
             self.reload();
             self.sidebar.refresh();
@@ -1367,6 +1382,9 @@ impl App {
         let models_only = self.config.only_models;
         let mut flatten = self.flatten;
         ui.menu_button(format!("{} ▾", t!("view.menu")), |ui| {
+            ui.radio_value(&mut self.config.gallery_view, GalleryView::Grid, t!("view.grid"));
+            ui.radio_value(&mut self.config.gallery_view, GalleryView::List, t!("view.list"));
+            ui.separator();
             ui.label(RichText::new(t!("gallery.sort")).weak());
             let names = [
                 (SortKey::Name, t!("sort.name")),
@@ -1562,6 +1580,16 @@ impl App {
                     .on_hover_text(t!("gallery.tile_size"));
                 ui.weak("🔍");
                 ui.separator();
+                // Right to left: list, then grid.
+                for (view, icon, hint) in
+                    [(GalleryView::List, "☰", t!("view.list_hint")), (GalleryView::Grid, "⊞", t!("view.grid_hint"))]
+                {
+                    let on = self.config.gallery_view == view;
+                    if ui.add(Button::new(icon).selected(on).frame_when_inactive(false)).on_hover_text(hint).clicked() {
+                        self.config.gallery_view = view;
+                    }
+                }
+                ui.separator();
                 ui.weak(t!("status.gpu", name = self.gpu_name));
                 ui.separator();
                 self.library_status(ui);
@@ -1632,7 +1660,21 @@ impl App {
             return;
         }
         let entries = view_entries(&self.view, &self.nav);
-        let output = self.gallery.show(ui, entries, self.config.tile_size, &self.thumbs, &self.menu);
+        let output = match self.config.gallery_view {
+            GalleryView::Grid => self.gallery.show(ui, entries, self.config.tile_size, &self.thumbs, &self.menu),
+            GalleryView::List => self.gallery.show_list(
+                ui,
+                entries,
+                self.config.tile_size,
+                &self.thumbs,
+                &self.menu,
+                ListSettings {
+                    columns: &mut self.config.list_columns,
+                    sort: self.config.sort_by,
+                    descending: self.config.sort_descending,
+                },
+            ),
+        };
         if let Some(action) = output.action {
             self.handle_action(ui.ctx(), action);
         }

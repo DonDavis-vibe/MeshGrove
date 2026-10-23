@@ -17,8 +17,11 @@ use meshgrove_core::printer::{self, Bed, Fit};
 
 use super::icons;
 use super::tags::{self, TagStyle};
+
+mod list;
 use super::turntable::HoveredTile;
 use crate::thumbs::{self, Job, ThumbResult, ThumbService};
+pub use list::ListSettings;
 
 const SPACING: f32 = 8.0;
 const PAD: f32 = 6.0;
@@ -48,6 +51,8 @@ pub enum Action {
     /// The following act on the selection.
     /// Large preview of the selected model.
     Preview,
+    /// A column title of the list view was clicked: sort by it (the same again: the other way round).
+    SortBy(SortKey),
     /// Index the selected library folder (or archive) and everything below it again.
     Rescan,
     OpenInSlicer,
@@ -400,89 +405,7 @@ impl Gallery {
                         if response.double_clicked() {
                             action = Some(Action::Open(entry));
                         }
-                        let show_folders = self.show_folders;
-                        let sliceable = entries[entry].kind.is_sliceable();
-                        let model = entries[entry].kind.is_model();
-                        let printable = entries[entry].kind.is_printable();
-                        let viewable = crate::meshes::viewable(entries[entry].kind);
-                        // Stays open on clicks inside: "Add to list" has a name field.
-                        super::context_menu_with_field(&response, |ui| {
-                            let mut item = |ui: &mut Ui, text: std::borrow::Cow<str>, act: Action| {
-                                if ui.button(text).clicked() {
-                                    action = Some(act);
-                                    ui.close();
-                                }
-                            };
-                            item(ui, t!("menu.open"), Action::Open(entry));
-                            if viewable {
-                                item(ui, t!("menu.preview"), Action::Preview);
-                                item(ui, t!("menu.open_with_default_app"), Action::OpenWithDefaultApp(entry));
-                            }
-                            if sliceable && let Some(slicer) = &menu.slicer {
-                                item(ui, t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);
-                            }
-                            if model && let Some(editor) = &menu.editor {
-                                item(ui, t!("menu.open_in_editor", name = editor), Action::OpenInEditor);
-                            }
-                            if show_folders {
-                                item(ui, t!("menu.show_in_folder"), Action::ShowInFolder(entry));
-                            }
-                            item(ui, t!("menu.show_in_file_manager"), Action::ShowInFileManager);
-                            if menu.rescan {
-                                item(ui, t!("menu.rescan"), Action::Rescan);
-                            }
-                            item(ui, t!("menu.copy_files"), Action::CopyFiles);
-                            item(ui, t!("menu.copy_path"), Action::CopyPaths);
-                            if menu.can_tag {
-                                item(ui, t!("menu.edit_tags"), Action::EditTags);
-                                let star = if menu.favorite { t!("menu.unfavorite") } else { t!("menu.favorite") };
-                                item(ui, star, Action::ToggleFavorite);
-                                if printable {
-                                    item(ui, t!("menu.printed"), Action::Print(PrintResult::Printed));
-                                    item(ui, t!("menu.failed"), Action::Print(PrintResult::Failed));
-                                }
-                                ui.menu_button(t!("menu.add_to_list"), |ui| {
-                                    for (id, kind, name) in &menu.lists {
-                                        let icon = if *kind == ListKind::Print { "🖨" } else { "📁" };
-                                        item(ui, format!("{icon}  {name}").into(), Action::AddToList(*id));
-                                    }
-                                    if !menu.lists.is_empty() {
-                                        ui.separator();
-                                    }
-                                    let mut name =
-                                        ui.data_mut(|d| d.get_temp::<String>(new_list_id())).unwrap_or_default();
-                                    ui.add(egui::TextEdit::singleline(&mut name).hint_text(t!("lists.name_hint")));
-                                    let typed = name.trim().to_owned();
-                                    ui.data_mut(|d| d.insert_temp(new_list_id(), name));
-                                    if !typed.is_empty() {
-                                        item(
-                                            ui,
-                                            t!("lists.new_print_with"),
-                                            Action::NewList(ListKind::Print, typed.clone()),
-                                        );
-                                        item(
-                                            ui,
-                                            t!("lists.new_collection_with"),
-                                            Action::NewList(ListKind::Collection, typed),
-                                        );
-                                    }
-                                });
-                                if let Some((id, name)) = &menu.current_list {
-                                    item(ui, t!("menu.remove_from_list", list = name), Action::RemoveFromList(*id));
-                                }
-                            }
-                            ui.separator();
-                            let trash = ui
-                                .add_enabled(menu.trash_blocked.is_none(), egui::Button::new(t!("menu.trash")))
-                                .on_disabled_hover_text(menu.trash_blocked.clone().unwrap_or_default());
-                            if trash.clicked() {
-                                action = Some(Action::Trash);
-                                ui.close();
-                            }
-                        });
-                        if matches!(action, Some(Action::NewList(..))) {
-                            ui.data_mut(|d| d.remove::<String>(new_list_id()));
-                        }
+                        entry_menu(&response, entry, &entries[entry], self.show_folders, menu, &mut action);
                         let e = &entries[entry];
                         // Held button counts too: press-and-scroll without moving should zoom as well.
                         let held = response.dragged() || response.is_pointer_button_down_on();
@@ -758,7 +681,7 @@ impl Gallery {
         };
         // Archive members carry their inner path in `name`; show just the file name.
         let shown_name = listing::file_name(&entry.path);
-        let mut job = LayoutJob::simple(shown_name.clone(), FontId::proportional(LABEL_FONT), ink, w - 4.0);
+        let mut job = LayoutJob::simple(shown_name, FontId::proportional(LABEL_FONT), ink, w - 4.0);
         job.wrap = wrap(2);
         job.halign = Align::Center;
         let galley = painter.layout_job(job);
@@ -774,7 +697,12 @@ impl Gallery {
             painter.galley(pos2(rect.center().x, name_bottom + 1.0), painter.layout_job(job), weak);
         }
 
-        let mut tooltip = shown_name;
+        response.on_hover_text_at_pointer(self.tooltip(entry, index))
+    }
+
+    /// Name, folder and whatever the badges of a tile (or the cells of a row) stand for.
+    fn tooltip(&self, entry: &Entry, index: usize) -> String {
+        let mut tooltip = listing::file_name(&entry.path);
         if let Some(parent) = entry.path.parent() {
             tooltip += &format!("\n{}", parent.display());
         }
@@ -784,8 +712,8 @@ impl Gallery {
         if let Some(marks) = self.marks.get(&entry.path).filter(|m| !m.tags.is_empty()) {
             tooltip += &format!("\n🏷 {}", marks.tags.join(", "));
         }
-        if let Some((fit @ (Fit::Rotated(_) | Fit::TooBig(_)), bed)) = &fit {
-            tooltip += &format!("\n{}", super::details::fit_text(*fit, bed));
+        if let Some((fit @ (Fit::Rotated(_) | Fit::TooBig(_)), bed)) = self.bed_fit(entry, index) {
+            tooltip += &format!("\n{}", super::details::fit_text(fit, bed));
         }
         if let Some((printer, bed)) = self.other_printer(index) {
             tooltip += &format!("\n⚠ {}", t!("gcode.other_printer", printer = printer, bed = bed.name));
@@ -793,7 +721,7 @@ impl Gallery {
         if let Some(Thumb::Failed(error)) = self.thumb(index) {
             tooltip += &format!("\n⚠ {error}");
         }
-        response.on_hover_text_at_pointer(tooltip)
+        tooltip
     }
 
     /// How a model tile's size (known once its thumbnail facts are in) fits the printer bed.
@@ -814,6 +742,91 @@ impl Gallery {
         let Thumb::Ready(_, meta) = self.thumb(index)? else { return None };
         let printer = meta.gcode.as_ref()?.printer.as_deref()?;
         (!printer::same_printer(printer, bed)).then_some((printer, bed))
+    }
+}
+
+/// The context menu of a tile or list row (`entry`, which is `e`); what it offers depends on the
+/// selection (`menu`). Clicked items end up in `action`.
+fn entry_menu(
+    response: &egui::Response,
+    entry: usize,
+    e: &Entry,
+    show_folders: bool,
+    menu: &MenuContext,
+    action: &mut Option<Action>,
+) {
+    let sliceable = e.kind.is_sliceable();
+    let model = e.kind.is_model();
+    let printable = e.kind.is_printable();
+    let viewable = crate::meshes::viewable(e.kind);
+    // Stays open on clicks inside: "Add to list" has a name field.
+    super::context_menu_with_field(response, |ui| {
+        let mut item = |ui: &mut Ui, text: std::borrow::Cow<str>, act: Action| {
+            if ui.button(text).clicked() {
+                *action = Some(act);
+                ui.close();
+            }
+        };
+        item(ui, t!("menu.open"), Action::Open(entry));
+        if viewable {
+            item(ui, t!("menu.preview"), Action::Preview);
+            item(ui, t!("menu.open_with_default_app"), Action::OpenWithDefaultApp(entry));
+        }
+        if sliceable && let Some(slicer) = &menu.slicer {
+            item(ui, t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);
+        }
+        if model && let Some(editor) = &menu.editor {
+            item(ui, t!("menu.open_in_editor", name = editor), Action::OpenInEditor);
+        }
+        if show_folders {
+            item(ui, t!("menu.show_in_folder"), Action::ShowInFolder(entry));
+        }
+        item(ui, t!("menu.show_in_file_manager"), Action::ShowInFileManager);
+        if menu.rescan {
+            item(ui, t!("menu.rescan"), Action::Rescan);
+        }
+        item(ui, t!("menu.copy_files"), Action::CopyFiles);
+        item(ui, t!("menu.copy_path"), Action::CopyPaths);
+        if menu.can_tag {
+            item(ui, t!("menu.edit_tags"), Action::EditTags);
+            let star = if menu.favorite { t!("menu.unfavorite") } else { t!("menu.favorite") };
+            item(ui, star, Action::ToggleFavorite);
+            if printable {
+                item(ui, t!("menu.printed"), Action::Print(PrintResult::Printed));
+                item(ui, t!("menu.failed"), Action::Print(PrintResult::Failed));
+            }
+            ui.menu_button(t!("menu.add_to_list"), |ui| {
+                for (id, kind, name) in &menu.lists {
+                    let icon = if *kind == ListKind::Print { "🖨" } else { "📁" };
+                    item(ui, format!("{icon}  {name}").into(), Action::AddToList(*id));
+                }
+                if !menu.lists.is_empty() {
+                    ui.separator();
+                }
+                let mut name = ui.data_mut(|d| d.get_temp::<String>(new_list_id())).unwrap_or_default();
+                ui.add(egui::TextEdit::singleline(&mut name).hint_text(t!("lists.name_hint")));
+                let typed = name.trim().to_owned();
+                ui.data_mut(|d| d.insert_temp(new_list_id(), name));
+                if !typed.is_empty() {
+                    item(ui, t!("lists.new_print_with"), Action::NewList(ListKind::Print, typed.clone()));
+                    item(ui, t!("lists.new_collection_with"), Action::NewList(ListKind::Collection, typed));
+                }
+            });
+            if let Some((id, name)) = &menu.current_list {
+                item(ui, t!("menu.remove_from_list", list = name), Action::RemoveFromList(*id));
+            }
+        }
+        ui.separator();
+        let trash = ui
+            .add_enabled(menu.trash_blocked.is_none(), egui::Button::new(t!("menu.trash")))
+            .on_disabled_hover_text(menu.trash_blocked.clone().unwrap_or_default());
+        if trash.clicked() {
+            *action = Some(Action::Trash);
+            ui.close();
+        }
+    });
+    if matches!(action, Some(Action::NewList(..))) {
+        response.ctx.data_mut(|d| d.remove::<String>(new_list_id()));
     }
 }
 

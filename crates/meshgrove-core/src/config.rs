@@ -349,6 +349,23 @@ pub enum PrintFilter {
     Failed,
 }
 
+/// Files as tiles or as a table.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GalleryView {
+    #[default]
+    Grid,
+    List,
+}
+
+/// The list view's columns, by name: which are hidden and how wide the others were made.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ListColumns {
+    pub hidden: Vec<String>,
+    pub widths: std::collections::BTreeMap<String, f32>,
+}
+
 /// How many tags a tile can show.
 pub const TILE_TAG_COUNT: std::ops::RangeInclusive<u8> = 1..=8;
 
@@ -394,6 +411,9 @@ pub struct Config {
     pub tile_tag_count: u8,
     /// Files shown by their print log (View menu).
     pub print_filter: PrintFilter,
+    /// Tiles or a table.
+    pub gallery_view: GalleryView,
+    pub list_columns: ListColumns,
 }
 
 impl Default for Config {
@@ -420,6 +440,8 @@ impl Default for Config {
             tile_tags: TileTags::Names,
             tile_tag_count: 3,
             print_filter: PrintFilter::All,
+            gallery_view: GalleryView::Grid,
+            list_columns: ListColumns::default(),
         }
     }
 }
@@ -469,6 +491,17 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_view_settings_survive_a_save() {
+        let mut config = Config { gallery_view: GalleryView::List, ..Config::default() };
+        config.list_columns.hidden.push("type".into());
+        config.list_columns.widths.insert("name".into(), 312.5);
+        let back: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(back, config);
+        let old: Config = toml::from_str("tile_size = 120.0\n").unwrap();
+        assert_eq!((old.gallery_view, old.list_columns), (GalleryView::Grid, ListColumns::default()));
+    }
 
     #[test]
     fn finds_windows_programs_and_mac_bundles() {

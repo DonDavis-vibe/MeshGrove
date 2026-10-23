@@ -174,6 +174,21 @@ pub fn paint_dot(p: &Painter, right_top: Pos2, color: Color32) {
 /// Paints a pill whose right edge sits at `right_top`; long names are cut with "…" to fit
 /// `max_width`. Returns its rectangle.
 pub fn paint_pill(p: &Painter, right_top: Pos2, label: &str, colors: (Color32, Color32), max_width: f32) -> Rect {
+    pill(p, right_top, true, label, colors, max_width)
+}
+
+/// Like [`paint_pill`], but its left edge sits at `left_top` (pills in a row, left to right).
+pub fn paint_pill_from_left(
+    p: &Painter,
+    left_top: Pos2,
+    label: &str,
+    colors: (Color32, Color32),
+    max_width: f32,
+) -> Rect {
+    pill(p, left_top, false, label, colors, max_width)
+}
+
+fn pill(p: &Painter, anchor: Pos2, from_right: bool, label: &str, colors: (Color32, Color32), max_width: f32) -> Rect {
     let font = FontId::proportional(10.5);
     let pad = vec2(6.0, 1.5);
     let mut text = label.to_owned();
@@ -184,7 +199,8 @@ pub fn paint_pill(p: &Painter, right_top: Pos2, label: &str, colors: (Color32, C
         galley = p.layout_no_wrap(cut, font.clone(), colors.1);
     }
     let size = galley.size() + 2.0 * pad;
-    let rect = Rect::from_min_size(pos2(right_top.x - size.x, right_top.y), size);
+    let left = if from_right { anchor.x - size.x } else { anchor.x };
+    let rect = Rect::from_min_size(pos2(left, anchor.y), size);
     p.rect(rect, size.y / 2.0, colors.0, Stroke::NONE, StrokeKind::Inside);
     p.galley(rect.min + pad, galley, colors.1);
     rect
