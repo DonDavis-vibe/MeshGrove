@@ -74,4 +74,7 @@ Installed. Start "Meshgrove" from the application menu.
 Dolphin previews: Settings → Configure Dolphin → Interface → Previews: enable the STL/3MF/STEP
 entries (if listed) and raise "Skip previews for remote files above"/"local files above" for big
 models, then reopen the folder.
+3D mouse (SpaceMouse): if Settings → 3D view says you may not read the device, install the udev
+rule once (needs root), then replug the mouse:
+  sudo install -m644 packaging/linux/70-meshgrove-3dmouse.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger
 MSG

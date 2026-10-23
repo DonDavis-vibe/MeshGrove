@@ -16,6 +16,7 @@ pub mod process;
 pub mod programs;
 pub mod query;
 pub mod scan;
+pub mod spacemouse;
 pub mod thumbnail;
 pub mod userdata;
 

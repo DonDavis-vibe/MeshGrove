@@ -5,6 +5,8 @@
 #       vcpkg. DIR is vcpkg's installed/<triplet> folder.
 #   packaging/licenses/native-licenses.sh system >> THIRD-PARTY-LICENSES.md
 #       .deb and .rpm: these libraries come from the distribution instead.
+#   packaging/licenses/native-licenses.sh hidapi >> THIRD-PARTY-LICENSES.md
+#       macOS: the hidapi crate compiles the HIDAPI C library (3D mouse) into the program.
 set -euo pipefail
 
 section() { # name, license file
@@ -33,11 +35,21 @@ case "${1:-}" in
             fi
         done
         ;;
+    hidapi)
+        # HIDAPI may be used under the GPL-3.0, a BSD-style or its original license; we take the
+        # BSD-style one. The crate brings the C sources and their license files along.
+        file=$(find "${CARGO_HOME:-$HOME/.cargo}/registry/src" -path '*/hidapi-*/etc/hidapi/LICENSE-bsd.txt' -print -quit)
+        if [[ -z "$file" ]]; then
+            echo "HIDAPI license not found: build the program first" >&2
+            exit 1
+        fi
+        section "HIDAPI (C library in the macOS build)" "$file"
+        ;;
     system)
         printf '\n# Native libraries\n\nlibarchive and OpenCascade come from the distribution'"'"'s own packages, under their\nlicenses as stated there.\n'
         ;;
     *)
-        echo "usage: $0 vcpkg DIR | system" >&2
+        echo "usage: $0 vcpkg DIR | system | hidapi" >&2
         exit 1
         ;;
 esac

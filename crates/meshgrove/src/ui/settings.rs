@@ -11,10 +11,13 @@ use meshgrove_core::config::{
 };
 use meshgrove_core::printer::Bed;
 use meshgrove_core::programs::{Detected, ProgramKind, detect_editors, detect_slicers};
+use meshgrove_core::spacemouse::SpaceMouseConfig;
 use meshgrove_core::userdata;
 
+use super::spacemouse::MouseSettings;
 use super::tags::{self, Group, PALETTE};
 use crate::i18n;
+use crate::spacemouse::Snapshot;
 
 pub enum SettingsChange {
     Language(Option<String>),
@@ -33,6 +36,10 @@ pub enum SettingsChange {
     /// `None`: take the printer selected in the slicer.
     Printer(Option<Bed>),
     GltfUnit(GltfUnit),
+    /// Free orbit in the 3D views.
+    FreeOrbit(bool),
+    /// The 3D mouse settings, as a whole.
+    SpaceMouse(SpaceMouseConfig),
     /// How STL, OBJ and PLY coordinates are read; inches need a confirmation first.
     ModelUnits(ModelUnits),
     /// Metric or imperial sizes in the interface; imperial needs a confirmation first.
@@ -164,6 +171,12 @@ fn preview(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
         }
     });
     ui.weak(t!("settings.preview_hint"));
+    ui.add_space(4.0);
+    let mut free = config.free_orbit;
+    if ui.checkbox(&mut free, t!("settings.free_orbit")).changed() {
+        changes.push(SettingsChange::FreeOrbit(free));
+    }
+    ui.weak(t!("settings.free_orbit_hint"));
 }
 
 /// How model files without a fixed unit are read.
@@ -216,6 +229,10 @@ fn units(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
 pub struct AppInfo<'a> {
     pub gpu: &'a str,
     pub db_path: &'a Path,
+    /// The 3D mouse as the reader sees it.
+    pub mouse: &'a Snapshot,
+    /// What the 3D mouse's picture needs to draw a cube.
+    pub render: (&'a egui_wgpu::RenderState, &'a meshgrove_render::Renderer),
 }
 
 #[derive(Default)]
@@ -240,6 +257,8 @@ pub struct SettingsDialog {
     import_input: String,
     cache_size: Option<u64>,
     cache_rx: Option<Receiver<u64>>,
+    /// The 3D mouse's part: the calibration in progress.
+    mouse: MouseSettings,
     /// The category shown on the right.
     category: Category,
 }
@@ -293,6 +312,7 @@ enum Section {
     Properties,
     States,
     Preview,
+    SpaceMouse,
     Models,
     Units,
     Slicer,
@@ -392,6 +412,7 @@ impl SettingsDialog {
         self.slicer_form = Default::default();
         self.rescan_slicers();
         self.editor_form = Default::default();
+        self.mouse.reset();
         self.refresh_cache_size();
     }
 
@@ -475,7 +496,7 @@ impl SettingsDialog {
                                 Category::Tags => {
                                     &[Section::Tags, Section::Themes, Section::Properties, Section::States]
                                 }
-                                Category::View => &[Section::Preview],
+                                Category::View => &[Section::Preview, Section::SpaceMouse],
                                 Category::ModelsUnits => &[Section::Models, Section::Units],
                                 Category::Programs => &[Section::Slicer, Section::Editor],
                                 Category::Printer => &[Section::Printer],
@@ -504,6 +525,9 @@ impl SettingsDialog {
                                     }
                                     Section::States => self.suggestions(ui, config, Group::State, &mut changes),
                                     Section::Preview => preview(ui, config, &mut changes),
+                                    Section::SpaceMouse => {
+                                        self.mouse.section(ui, config, info.mouse, info.render, &mut changes)
+                                    }
                                     Section::Models => models(ui, config, &mut changes),
                                     Section::Units => units(ui, config, &mut changes),
                                     Section::Slicer => {
@@ -521,6 +545,7 @@ impl SettingsDialog {
                     });
                 });
             });
+        self.mouse.calibration_modal(ctx, config, info.mouse, info.render, &mut changes);
         self.open = open;
         changes
     }

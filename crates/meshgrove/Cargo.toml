@@ -48,3 +48,11 @@ wl-clipboard-rs.workspace = true
 
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 clipboard-rs = { version = "0.3", default-features = false }
+
+# 3D mouse (SpaceMouse): the HID devices of Windows and macOS (Linux reads /dev/hidraw itself).
+[target.'cfg(windows)'.dependencies]
+hidapi = { version = "2.6", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Shared, so a running 3Dconnexion driver does not lock the device.
+hidapi = { version = "2.6", default-features = false, features = ["macos-shared-device"] }

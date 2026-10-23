@@ -7,6 +7,7 @@ pub mod model_window;
 pub mod offscreen;
 pub mod settings;
 pub mod sidebar;
+pub mod spacemouse;
 pub mod tags;
 pub mod turntable;
 pub mod viewer;

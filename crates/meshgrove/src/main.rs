@@ -15,6 +15,7 @@ mod meshes;
 mod nav;
 mod print_export;
 mod screenshot;
+mod spacemouse;
 mod text_preview;
 mod thumbs;
 mod ui;

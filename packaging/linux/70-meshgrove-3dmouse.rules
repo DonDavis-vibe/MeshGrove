@@ -1,0 +1,12 @@
+# 3D mice (3Dconnexion SpaceMouse and DIY builds that copy them): let the logged-in user read
+# them, so Meshgrove can navigate with them. Only 3D mice and their receivers are listed, not
+# 3Dconnexion's keyboards and 2D mice, whose raw input any program of the user could read
+# otherwise. DIY builds usually report as a SpaceMouse Compact (c635) or Pro Wireless (c631);
+# add yours here if `lsusb` shows another product id.
+# 3Dconnexion: SpaceMouse Wireless (cable, receiver), Pro Wireless (cable, receiver), Enterprise,
+# Compact, Module, Universal Receiver.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="256f", ATTRS{idProduct}=="c62e|c62f|c631|c632|c633|c635|c636|c652", TAG+="uaccess"
+# Older models under Logitech's vendor id: SpaceMouse Plus XT, CadMan, SpaceMouse Classic,
+# SpaceBall 5000, SpaceTraveler, SpacePilot, SpaceNavigator, SpaceExplorer, SpaceNavigator for
+# Notebooks, SpacePilot Pro, SpaceMouse Pro.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c603|c605|c606|c621|c623|c625|c626|c627|c628|c629|c62b", TAG+="uaccess"

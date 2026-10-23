@@ -37,6 +37,7 @@ use crate::ui::settings::{AppInfo, SettingsChange, SettingsDialog};
 use crate::ui::sidebar::{LibraryInfo, ListExport, Sidebar, SidebarAction};
 use crate::ui::tags::{Group, TagStyle};
 use crate::ui::turntable::Turntable;
+use crate::ui::viewer::SpaceInput;
 use crate::ui::viewer::{MeshSource, ModelViewer};
 use crate::ui::{EditorList, SlicerList};
 use egui_tiles::Tree;
@@ -105,6 +106,11 @@ pub struct App {
     model_windows: Vec<ModelWindow>,
     /// The large preview over the window (Space).
     preview_open: bool,
+    /// The 3D mouse reader, and what it reported at the start of this frame.
+    spacemouse: crate::spacemouse::SpaceMouse,
+    mouse_state: crate::spacemouse::Snapshot,
+    /// What the 3D mouse did this frame, for the windows that follow it.
+    space: Option<SpaceInput>,
     preview_viewer: ModelViewer,
     /// Models found inside folders on disk, for the folder tiles (when enabled in the settings).
     folder_scan: FolderScanner,
@@ -259,6 +265,9 @@ impl App {
             text: TextPreview::default(),
             model_windows: Vec::new(),
             preview_open: false,
+            spacemouse: crate::spacemouse::SpaceMouse::start(cc.egui_ctx.clone()),
+            mouse_state: Default::default(),
+            space: None,
             preview_viewer: {
                 let mut v = ModelViewer::new();
                 v.set_quality(config.preview_quality);
@@ -553,6 +562,8 @@ impl App {
             render_state: rs,
             renderer: &self.renderer,
             bed: self.bed.as_ref(),
+            space: self.space.as_ref(),
+            free_orbit: self.config.free_orbit,
             slicers: SlicerList { names: &self.slicer_names, default: self.default_slicer },
             editors: EditorList { programs: &self.editors, default: self.default_editor },
             quality: self.config.preview_quality,
@@ -1182,6 +1193,8 @@ impl App {
                     self.refresh_gallery(false);
                 }
                 SettingsChange::LockPanes(locked) => self.config.lock_panes = locked,
+                SettingsChange::SpaceMouse(config) => self.config.spacemouse = config,
+                SettingsChange::FreeOrbit(on) => self.config.free_orbit = on,
                 SettingsChange::TagDisplay { colored, on_tiles, count, style } => {
                     self.config.colored_tags = colored;
                     self.config.tags_on_tiles = on_tiles;
@@ -1298,6 +1311,38 @@ impl App {
             Some(false) => self.trash_confirm = None,
             None => {}
         }
+    }
+
+    /// Takes what the 3D mouse did since the last frame and moves the camera of the viewer that
+    /// has the focus: the large preview if it is open, else the one in the details pane. The
+    /// model windows follow it themselves (`space`).
+    fn poll_spacemouse(&mut self, ctx: &egui::Context) {
+        self.viewer.set_free_orbit(self.config.free_orbit);
+        self.preview_viewer.set_free_orbit(self.config.free_orbit);
+        self.space = None;
+        self.mouse_state = self.spacemouse.snapshot();
+        let presses = self.spacemouse.take_presses();
+        let config = &self.config.spacemouse;
+        // The settings (calibration) read the knob without steering the views behind them.
+        if !config.enabled || self.settings.open {
+            return;
+        }
+        let motion = config.camera(config.process(self.mouse_state.raw));
+        if motion.is_still() && presses.is_empty() {
+            return;
+        }
+        let input = SpaceInput { motion, dt: ctx.input(|i| i.unstable_dt).min(0.1), presses };
+        if ctx.input(|i| i.viewport().focused == Some(true)) {
+            if self.preview_open {
+                self.preview_viewer.apply_space(&input);
+            } else {
+                self.viewer.apply_space(&input);
+            }
+        }
+        if !input.motion.is_still() {
+            ctx.request_repaint(); // the knob is held: keep moving
+        }
+        self.space = Some(input);
     }
 
     /// STL, OBJ and PLY are read in this unit from now on: shown models are reloaded, their facts
@@ -2230,6 +2275,7 @@ impl eframe::App for App {
             self.toast(message);
         }
         self.library_events();
+        self.poll_spacemouse(&ctx);
         self.update_selection_facts();
         self.refresh_marks();
         self.gallery.tags_on_tiles = self.config.tags_on_tiles;
@@ -2324,7 +2370,12 @@ impl eframe::App for App {
 
         self.preview_overlay(&ctx, &rs);
 
-        let info = AppInfo { gpu: &self.gpu_name, db_path: &self.db_path };
+        let info = AppInfo {
+            gpu: &self.gpu_name,
+            db_path: &self.db_path,
+            mouse: &self.mouse_state,
+            render: (&rs, &self.renderer),
+        };
         let changes = self.settings.show(
             &ctx,
             &self.config,
