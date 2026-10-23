@@ -204,6 +204,15 @@ const SLICERS: &[Def] = &[
         &["photonworkshop"],
     ),
     def(
+        "Voxeldance Additive",
+        Sla,
+        &[],
+        &[],
+        &[],
+        &["voxeldance additive.exe", "voxeldanceadditive.exe"],
+        &["voxeldanceadditive"],
+    ),
+    def(
         "Voxeldance Tango",
         Sla,
         &["VoxelDance", "voxeldance"],
@@ -217,6 +226,57 @@ const SLICERS: &[Def] = &[
     def("Halot Box", Sla, &["HALOT-BOX", "halotbox"], &[], &[], &["halotbox.exe", "halot-box.exe"], &["halotbox"]),
     def("NovaMaker", Sla, &["NovaMaker"], &[], &[], &["novamaker.exe"], &["novamaker"]),
     def("Asiga Composer", Sla, &[], &[], &[], &["asigacomposer.exe"], &["asigacomposer"]),
+    def(
+        "QIDI Studio",
+        Fdm,
+        &["qidi-studio", "QIDIStudio"],
+        &[],
+        &["qidistudio"],
+        &["qidi-studio.exe", "qidistudio.exe"],
+        &["qidistudio"],
+    ),
+    def("FlashPrint", Fdm, &["flashprint", "FlashPrint"], &[], &["flashprint"], &["flashprint.exe"], &["flashprint"]),
+    def(
+        "Snapmaker Luban",
+        Fdm,
+        &["snapmaker-luban", "luban"],
+        &[],
+        &["snapmakerluban"],
+        &["snapmaker luban.exe", "snapmakerluban.exe"],
+        &["snapmakerluban"],
+    ),
+    def(
+        "AnkerMake Studio",
+        Fdm,
+        &["ankermake-studio"],
+        &[],
+        &["ankermake"],
+        &["ankermake studio.exe", "ankermakestudio.exe"],
+        &["ankermake"],
+    ),
+    def("Slic3r", Fdm, &["slic3r"], &["org.slic3r.Slic3r"], &["slic3r"], &["slic3r.exe"], &["slic3r"]),
+    def(
+        "Repetier-Host",
+        Fdm,
+        &["repetier-host", "RepetierHost"],
+        &[],
+        &["repetierhost"],
+        &["repetier-host.exe", "repetierhost.exe"],
+        &["repetierhost"],
+    ),
+    def("MakerBot Print", Fdm, &[], &[], &[], &["makerbot print.exe", "makerbotprint.exe"], &["makerbotprint"]),
+    def("Z-Suite", Fdm, &[], &[], &[], &["z-suite.exe", "zsuite.exe"], &["zsuite"]),
+    def("KISSlicer", Fdm, &["kisslicer"], &[], &[], &["kisslicer.exe"], &["kisslicer"]),
+    def(
+        "MatterControl",
+        Fdm,
+        &["MatterControl", "mattercontrol"],
+        &[],
+        &[],
+        &["mattercontrol.exe"],
+        &["mattercontrol"],
+    ),
+    def("GKone", Sla, &[], &[], &[], &["gkone.exe"], &["gkone"]),
 ];
 
 /// Mesh editors and CAD programs. The first ones are what earlier versions looked for.
@@ -265,6 +325,27 @@ const EDITORS: &[Def] = &[
     ),
     def("Rhino", Editor, &[], &[], &[], &["rhino.exe"], &["rhino"]),
     def("SketchUp", Editor, &[], &[], &[], &["sketchup.exe"], &["sketchup"]),
+    def("Autodesk Netfabb", Editor, &[], &[], &[], &["netfabb.exe"], &["netfabb"]),
+    def("ZBrush", Editor, &[], &[], &[], &["zbrush.exe"], &["zbrush"]),
+    def("SolidWorks", Editor, &[], &[], &[], &["sldworks.exe"], &[]),
+    def("Autodesk Inventor", Editor, &[], &[], &[], &["inventor.exe"], &[]),
+    def("Shapr3D", Editor, &[], &[], &[], &["shapr3d.exe"], &["shapr3d"]),
+    def(
+        "Plasticity",
+        Editor,
+        &["plasticity", "Plasticity"],
+        &[],
+        &["plasticity"],
+        &["plasticity.exe"],
+        &["plasticity"],
+    ),
+    def("Wings 3D", Editor, &["wings3d"], &[], &["wings3d"], &["wings3d.exe"], &["wings3d"]),
+    def("Dust3D", Editor, &["dust3d"], &[], &["dust3d"], &["dust3d.exe"], &["dust3d"]),
+    def("Dune 3D", Editor, &["dune3d"], &["org.dune3d.dune3d"], &["dune3d"], &["dune3d.exe"], &["dune3d"]),
+    def("fstl", Editor, &["fstl"], &["io.github.wdaniau.fstl"], &["fstl"], &["fstl.exe"], &["fstl"]),
+    def("f3d", Editor, &["f3d"], &["io.github.f3d_app.f3d"], &["f3d"], &["f3d.exe"], &["f3d"]),
+    def("Autodesk Maya", Editor, &[], &[], &[], &["maya.exe"], &["autodeskmaya"]),
+    def("Autodesk 3ds Max", Editor, &[], &[], &[], &["3dsmax.exe"], &[]),
 ];
 
 /// Every catalogue slicer installed here, each in every way it is installed.
@@ -621,15 +702,17 @@ mod tests {
 
     #[test]
     fn the_catalogues_have_the_common_programs_and_unique_names() {
-        assert_eq!(EDITORS.len(), 11, "ten common editors and SolidCraft");
         assert!(EDITORS.iter().all(|d| d.kind == ProgramKind::Editor));
         assert!(EDITORS.iter().any(|d| d.name == "SolidCraft"));
-        assert_eq!(SLICERS.iter().filter(|d| d.kind == ProgramKind::Fdm).count(), 11);
-        assert_eq!(SLICERS.iter().filter(|d| d.kind == ProgramKind::Sla).count(), 10);
-        let mut names: Vec<&str> = SLICERS.iter().map(|d| d.name).collect();
+        for kind in [ProgramKind::Fdm, ProgramKind::Sla] {
+            assert!(SLICERS.iter().filter(|d| d.kind == kind).count() >= 10, "{kind:?}");
+        }
+        assert!(EDITORS.len() >= 11);
+        let mut names: Vec<&str> = SLICERS.iter().chain(EDITORS).map(|d| d.name).collect();
+        let total = names.len();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 21);
+        assert_eq!(names.len(), total, "every name once");
         for d in SLICERS.iter().chain(EDITORS) {
             assert!(d.win.iter().all(|e| e.to_lowercase() == *e), "{}: Windows names are lower-case", d.name);
             assert!(d.appimage.iter().chain(d.mac).all(|k| !k.contains([' ', '-', '_']) && k.to_lowercase() == *k));
