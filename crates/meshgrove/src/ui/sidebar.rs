@@ -50,6 +50,8 @@ pub struct LibraryInfo<'a> {
     /// Lists and tags need the library index.
     pub has_index: bool,
     pub tag_style: &'a TagStyle,
+    /// One alphabetical list of tags instead of groups.
+    pub flat_tags: bool,
 }
 
 pub struct Sidebar {
@@ -328,68 +330,107 @@ impl Sidebar {
 }
 
 /// Tags grouped like the suggestions (themes, print properties, state, own), each with its
-/// colour dot. A click searches for the tag; Ctrl+click adds it to (or takes it out of) the
-/// current tag search; right-click chooses its colour.
+/// colour dot, or as one alphabetical list. A click searches for the tag; Ctrl+click adds it to
+/// (or takes it out of) the current tag search; right-click chooses its colour.
 fn tag_groups(ui: &mut Ui, library: &LibraryInfo, action: &mut Option<SidebarAction>) {
+    if library.flat_tags {
+        for (tag, count) in alphabetical(library.tags) {
+            tag_row(ui, library, tag, *count, action);
+        }
+        return;
+    }
     for group in [Group::Themes, Group::Properties, Group::State, Group::Own] {
-        let in_group: Vec<&(String, usize)> = library.tags.iter().filter(|(t, _)| tags::group_of(t) == group).collect();
+        let in_group: Vec<&(String, usize)> =
+            library.tags.iter().filter(|(t, _)| library.tag_style.group_of(t) == group).collect();
         if in_group.is_empty() {
             continue;
         }
         ui.label(RichText::new(group.title()).small().weak());
         for (tag, count) in in_group {
-            let active = library.active_tags.contains(&tag.to_lowercase());
-            let response = ui
-                .horizontal(|ui| {
-                    tags::dot(ui, library.tag_style, tag);
-                    ui.selectable_label(active, format!("{tag}  ({count})"))
-                })
-                .inner
-                .on_hover_text(t!("tags.sidebar_hint"));
-            if response.clicked() {
-                let mut wanted: Vec<String> = Vec::new();
-                if ui.input(|i| i.modifiers.command) {
-                    wanted = library
-                        .tags
-                        .iter()
-                        .map(|(t, _)| t)
-                        .filter(|t| library.active_tags.contains(&t.to_lowercase()))
-                        .cloned()
-                        .collect();
-                    match wanted.iter().position(|t| t == tag) {
-                        Some(i) => {
-                            wanted.remove(i);
-                        }
-                        None => wanted.push(tag.clone()),
-                    }
-                } else {
-                    wanted.push(tag.clone());
-                }
-                if !wanted.is_empty() {
-                    *action = Some(SidebarAction::SearchTags(wanted));
-                }
-            }
-            response.context_menu(|ui| {
-                ui.label(RichText::new(t!("tags.color")).weak());
-                ui.horizontal_wrapped(|ui| {
-                    ui.set_max_width(6.0 * 26.0);
-                    for (slot, (bg, _)) in PALETTE.iter().enumerate() {
-                        let fill = Color32::from_rgb(bg[0], bg[1], bg[2]);
-                        let swatch =
-                            egui::Button::new("").fill(fill).min_size(egui::vec2(20.0, 20.0)).corner_radius(10.0);
-                        if ui.add(swatch).clicked() {
-                            *action = Some(SidebarAction::TagColor(tag.clone(), Some(slot as u8)));
-                            ui.close();
-                        }
-                    }
-                });
-                if ui.button(t!("tags.color_auto")).clicked() {
-                    *action = Some(SidebarAction::TagColor(tag.clone(), None));
-                    ui.close();
-                }
-            });
+            tag_row(ui, library, tag, *count, action);
         }
     }
+}
+
+/// The tags sorted by name, ignoring case and accents (Ä sorts with A, ß with ss), unlike the
+/// index's ordering, which puts every non-ASCII letter after "z".
+fn alphabetical(tags: &[(String, usize)]) -> Vec<&(String, usize)> {
+    let mut sorted: Vec<&(String, usize)> = tags.iter().collect();
+    sorted.sort_by_cached_key(|(t, _)| sort_key(t));
+    sorted
+}
+
+fn sort_key(name: &str) -> String {
+    name.to_lowercase()
+        .chars()
+        .flat_map(|c| {
+            match c {
+                'ä' | 'à' | 'á' | 'â' | 'ã' | 'å' => "a",
+                'ö' | 'ò' | 'ó' | 'ô' | 'õ' | 'ø' => "o",
+                'ü' | 'ù' | 'ú' | 'û' => "u",
+                'é' | 'è' | 'ê' | 'ë' => "e",
+                'í' | 'ì' | 'î' | 'ï' => "i",
+                'ç' => "c",
+                'ñ' => "n",
+                'ß' => "ss",
+                _ => "",
+            }
+            .chars()
+            .chain((!"äàáâãåöòóôõøüùúûéèêëíìîïçñß".contains(c)).then_some(c))
+        })
+        .collect()
+}
+
+fn tag_row(ui: &mut Ui, library: &LibraryInfo, tag: &String, count: usize, action: &mut Option<SidebarAction>) {
+    let active = library.active_tags.contains(&tag.to_lowercase());
+    let response = ui
+        .horizontal(|ui| {
+            tags::dot(ui, library.tag_style, tag);
+            ui.selectable_label(active, format!("{tag}  ({count})"))
+        })
+        .inner
+        .on_hover_text(t!("tags.sidebar_hint"));
+    if response.clicked() {
+        let mut wanted: Vec<String> = Vec::new();
+        if ui.input(|i| i.modifiers.command) {
+            wanted = library
+                .tags
+                .iter()
+                .map(|(t, _)| t)
+                .filter(|t| library.active_tags.contains(&t.to_lowercase()))
+                .cloned()
+                .collect();
+            match wanted.iter().position(|t| t == tag) {
+                Some(i) => {
+                    wanted.remove(i);
+                }
+                None => wanted.push(tag.clone()),
+            }
+        } else {
+            wanted.push(tag.clone());
+        }
+        if !wanted.is_empty() {
+            *action = Some(SidebarAction::SearchTags(wanted));
+        }
+    }
+    response.context_menu(|ui| {
+        ui.label(RichText::new(t!("tags.color")).weak());
+        ui.horizontal_wrapped(|ui| {
+            ui.set_max_width(6.0 * 26.0);
+            for (slot, (bg, _)) in PALETTE.iter().enumerate() {
+                let fill = Color32::from_rgb(bg[0], bg[1], bg[2]);
+                let swatch = egui::Button::new("").fill(fill).min_size(egui::vec2(20.0, 20.0)).corner_radius(10.0);
+                if ui.add(swatch).clicked() {
+                    *action = Some(SidebarAction::TagColor(tag.clone(), Some(slot as u8)));
+                    ui.close();
+                }
+            }
+        });
+        if ui.button(t!("tags.color_auto")).clicked() {
+            *action = Some(SidebarAction::TagColor(tag.clone(), None));
+            ui.close();
+        }
+    });
 }
 
 fn section(ui: &mut Ui, title: &str) {
@@ -449,4 +490,17 @@ fn mounted_drives() -> Vec<PathBuf> {
 #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 fn mounted_drives() -> Vec<PathBuf> {
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::alphabetical;
+
+    #[test]
+    fn the_flat_tag_list_is_one_alphabetical_list() {
+        let tags: Vec<(String, usize)> =
+            ["Zange", "garten", "Drache", "Küche", "Ärmel", "Bad"].iter().map(|t| (t.to_string(), 1)).collect();
+        let names: Vec<&str> = alphabetical(&tags).iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(names, ["Ärmel", "Bad", "Drache", "garten", "Küche", "Zange"]);
+    }
 }

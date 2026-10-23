@@ -255,7 +255,7 @@ impl App {
             selection_lists: Vec::new(),
             selection_print: PrintStatus::default(),
             marks_dirty: true,
-            tag_style: TagStyle { colored: config.colored_tags, ..Default::default() },
+            tag_style: TagStyle { colored: config.colored_tags, themes: config.themes(), ..Default::default() },
             new_list_name: String::new(),
             tag_input: String::new(),
             focus_tags: false,
@@ -1106,6 +1106,12 @@ impl App {
                     self.tag_style.colored = colored;
                     self.gallery.tag_style = self.tag_style.clone();
                 }
+                SettingsChange::FlatTagList(flat) => self.config.flat_tag_list = flat,
+                SettingsChange::Themes(themes) => {
+                    self.config.themes = themes;
+                    self.tag_style.themes = self.config.themes();
+                    self.gallery.tag_style = self.tag_style.clone();
+                }
                 SettingsChange::ResetLayout => self.layout.reset(),
                 SettingsChange::DoubleClick(action) => self.config.double_click = action,
                 SettingsChange::PreviewQuality(quality) => {
@@ -1737,6 +1743,7 @@ impl App {
             active_tags: &active_tags,
             has_index: self.index.is_some(),
             tag_style: &self.tag_style,
+            flat_tags: self.config.flat_tag_list,
         };
         match self.sidebar.show(ui, &self.config, self.nav.current(), info) {
             Some(SidebarAction::Navigate(path)) => self.navigate(path),

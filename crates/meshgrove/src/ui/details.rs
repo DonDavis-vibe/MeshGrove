@@ -353,7 +353,7 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
             let own: Vec<&String> = ed
                 .all
                 .iter()
-                .filter(|(t, _)| tags::group_of(t) == Group::Own && !on_all(t))
+                .filter(|(t, _)| style.group_of(t) == Group::Own && !on_all(t))
                 .take(10)
                 .map(|(t, _)| t)
                 .collect();
@@ -369,13 +369,13 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
             }
             for group in Group::SUGGESTED {
                 ui.menu_button(group.title(), |ui| {
-                    for tag in tags::suggested(group).into_iter().filter(|t| !on_all(t)) {
+                    for tag in tags::suggested(group, style).into_iter().filter(|t| !on_all(t)) {
                         let response = ui.horizontal(|ui| {
-                            tags::dot(ui, style, tag);
-                            ui.button(tag)
+                            tags::dot(ui, style, &tag);
+                            ui.button(&tag)
                         });
                         if response.inner.clicked() {
-                            out.add_tag = Some(tag.to_owned());
+                            out.add_tag = Some(tag);
                             ui.close();
                         }
                     }

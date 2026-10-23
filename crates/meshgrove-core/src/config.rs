@@ -405,6 +405,10 @@ pub struct Config {
     pub colored_tags: bool,
     /// Tag pills on the gallery tiles.
     pub tags_on_tiles: bool,
+    /// The theme tags offered in the tag menu; `None`: the built-in set ([`default_themes`]).
+    pub themes: Option<Vec<ThemeTag>>,
+    /// The sidebar lists all tags alphabetically instead of grouped (themes, properties, state, own).
+    pub flat_tag_list: bool,
     /// Names or colour dots on the tiles.
     pub tile_tags: TileTags,
     /// Tags a tile shows at most (the last row says "+N" when there are more).
@@ -414,6 +418,90 @@ pub struct Config {
     /// Tiles or a table.
     pub gallery_view: GalleryView,
     pub list_columns: ListColumns,
+}
+
+/// A theme tag the user can pick from the tag menu: its name in both languages and its palette
+/// slot (`None`: a colour from the name).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeTag {
+    pub de: String,
+    pub en: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<u8>,
+}
+
+impl ThemeTag {
+    /// A theme with one name for both languages.
+    pub fn named(name: &str) -> ThemeTag {
+        ThemeTag { de: name.to_owned(), en: name.to_owned(), color: None }
+    }
+
+    /// Whether `tag` is this theme's German or English name.
+    pub fn matches(&self, tag: &str) -> bool {
+        self.de.to_lowercase() == tag.to_lowercase() || self.en.to_lowercase() == tag.to_lowercase()
+    }
+}
+
+/// The built-in themes: (German, English, palette slot).
+const DEFAULT_THEMES: &[(&str, &str, u8)] = &[
+    ("Haushalt", "Household", 1),
+    ("Küche", "Kitchen", 2),
+    ("Bad", "Bathroom", 5),
+    ("Wohnzimmer", "Living room", 2),
+    ("Schlafzimmer", "Bedroom", 9),
+    ("Garten", "Garden", 4),
+    ("Balkon", "Balcony", 3),
+    ("Werkstatt", "Workshop", 1),
+    ("Werkzeug", "Tools", 8),
+    ("Keller", "Basement", 7),
+    ("Aufbewahrung", "Storage", 6),
+    ("Büro", "Office", 8),
+    ("Elektronik", "Electronics", 7),
+    ("Smart Home", "Smart home", 5),
+    ("Raspberry Pi", "Raspberry Pi", 0),
+    ("Beleuchtung", "Lighting", 3),
+    ("Kabelmanagement", "Cable management", 7),
+    ("Drucker-Zubehör", "Printer upgrade", 8),
+    ("Filament", "Filament", 6),
+    ("Kinderzimmer", "Kids' room", 11),
+    ("Spielzeug", "Toys", 10),
+    ("Hobby", "Hobby", 9),
+    ("Modellbau", "Model building", 9),
+    ("Tabletop", "Tabletop", 9),
+    ("Rollenspiel", "RPG", 10),
+    ("Miniatur", "Miniature", 10),
+    ("Cosplay", "Cosplay", 11),
+    ("Airsoft", "Airsoft", 3),
+    ("Musik", "Music", 10),
+    ("Sport", "Sport", 4),
+    ("Outdoor", "Outdoor", 4),
+    ("Camping", "Camping", 3),
+    ("Angeln", "Fishing", 6),
+    ("Drohne", "Drone", 7),
+    ("Haustier", "Pets", 1),
+    ("Auto", "Car", 8),
+    ("Fahrrad", "Bike", 6),
+    ("Deko", "Decor", 10),
+    ("Schmuck", "Jewelry", 11),
+    ("Geschenk", "Gift", 11),
+    ("Weihnachten", "Christmas", 0),
+    ("Ostern", "Easter", 3),
+    ("Halloween", "Halloween", 1),
+    ("Lernen", "Education", 3),
+    ("Ersatzteil", "Spare part", 7),
+    ("Kalibrierung", "Calibration", 5),
+];
+
+/// The built-in set of themes.
+pub fn default_themes() -> Vec<ThemeTag> {
+    DEFAULT_THEMES.iter().map(|&(de, en, slot)| ThemeTag { de: de.into(), en: en.into(), color: Some(slot) }).collect()
+}
+
+impl Config {
+    /// The themes in use: the user's own list, or the built-in set.
+    pub fn themes(&self) -> Vec<ThemeTag> {
+        self.themes.clone().unwrap_or_else(default_themes)
+    }
 }
 
 impl Default for Config {
@@ -437,6 +525,8 @@ impl Default for Config {
             editor: None,
             colored_tags: true,
             tags_on_tiles: true,
+            themes: None,
+            flat_tag_list: false,
             tile_tags: TileTags::Names,
             tile_tag_count: 3,
             print_filter: PrintFilter::All,
@@ -569,6 +659,28 @@ mod tests {
         std::fs::create_dir_all(&old).unwrap();
         migrate_dir(&old, &new);
         assert!(old.exists() && new.join("library.db").exists());
+    }
+
+    #[test]
+    fn themes_default_to_the_built_in_set_and_survive_a_save() {
+        let mut config = Config::default();
+        assert_eq!(config.themes(), default_themes());
+        let mut seen = std::collections::HashSet::new();
+        for t in default_themes() {
+            assert!(t.color.is_some_and(|c| c < 12));
+            assert!(seen.insert(t.de.to_lowercase()), "{} twice", t.de);
+        }
+        config.themes =
+            Some(vec![ThemeTag::named("Drachen"), ThemeTag { de: "Burg".into(), en: "Castle".into(), color: Some(3) }]);
+        config.flat_tag_list = true;
+        let back: Config = toml::from_str(&toml::to_string_pretty(&config).unwrap()).unwrap();
+        assert_eq!(back, config);
+        assert!(back.themes()[1].matches("castle"));
+        config.themes = Some(Vec::new());
+        let back: Config = toml::from_str(&toml::to_string_pretty(&config).unwrap()).unwrap();
+        assert!(back.themes().is_empty(), "an emptied list stays empty");
+        let old: Config = toml::from_str("tile_size = 200.0\n").unwrap();
+        assert!(old.themes.is_none() && !old.flat_tag_list);
     }
 
     #[test]

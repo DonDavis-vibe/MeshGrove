@@ -6,11 +6,12 @@ use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
 use meshgrove_core::config::{
     Config, DoubleClick, FOLDER_PREVIEW_DEPTH, FolderPreviews, GltfUnit, PreviewQuality, Program, Slicer,
-    TILE_TAG_COUNT, TileTags,
+    TILE_TAG_COUNT, ThemeTag, TileTags, default_themes,
 };
 use meshgrove_core::printer::Bed;
 use meshgrove_core::userdata;
 
+use super::tags::{self, PALETTE};
 use crate::i18n;
 
 pub enum SettingsChange {
@@ -35,6 +36,10 @@ pub enum SettingsChange {
         count: u8,
         style: TileTags,
     },
+    /// The sidebar lists tags alphabetically, not grouped.
+    FlatTagList(bool),
+    /// The theme tags; `None`: the built-in set.
+    Themes(Option<Vec<ThemeTag>>),
     ResetLayout,
     Export(PathBuf),
     Import(PathBuf),
@@ -78,6 +83,11 @@ fn tags(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
         });
     });
     ui.weak(t!("settings.tags_hint"));
+    let mut flat = config.flat_tag_list;
+    if ui.checkbox(&mut flat, t!("settings.tags_flat")).changed() {
+        changes.push(SettingsChange::FlatTagList(flat));
+    }
+    ui.weak(t!("settings.tags_flat_hint"));
     let now = (colored, on_tiles, count, style);
     if now != (config.colored_tags, config.tags_on_tiles, config.tile_tag_count, config.tile_tags) {
         changes.push(SettingsChange::TagDisplay { colored, on_tiles, count, style });
@@ -170,6 +180,8 @@ pub struct SettingsDialog {
     /// Name and X/Y/Z as typed.
     printer_form: Option<[String; 4]>,
     printer_error: bool,
+    /// A new theme as typed.
+    theme_input: String,
     import_input: String,
     cache_size: Option<u64>,
     cache_rx: Option<Receiver<u64>>,
@@ -222,6 +234,7 @@ enum Section {
     Library,
     FolderPreviews,
     Tags,
+    Themes,
     Preview,
     Models,
     Slicer,
@@ -385,7 +398,7 @@ impl SettingsDialog {
                             let sections: &[Section] = match self.category {
                                 Category::General => &[Section::Language, Section::DoubleClick, Section::Panes],
                                 Category::Library => &[Section::Library, Section::FolderPreviews],
-                                Category::Tags => &[Section::Tags],
+                                Category::Tags => &[Section::Tags, Section::Themes],
                                 Category::View => &[Section::Preview, Section::Models],
                                 Category::Programs => &[Section::Slicer, Section::Editor],
                                 Category::Printer => &[Section::Printer],
@@ -408,6 +421,7 @@ impl SettingsDialog {
                                     Section::Library => self.library(ui, config, &mut changes),
                                     Section::FolderPreviews => folder_previews(ui, config, &mut changes),
                                     Section::Tags => tags(ui, config, &mut changes),
+                                    Section::Themes => self.themes(ui, config, &mut changes),
                                     Section::Preview => preview(ui, config, &mut changes),
                                     Section::Models => models(ui, config, &mut changes),
                                     Section::Slicer => self.slicer(ui, config, slicer, &mut changes),
@@ -423,6 +437,92 @@ impl SettingsDialog {
             });
         self.open = open;
         changes
+    }
+
+    /// The theme tags offered in the tag menu: rename, recolour, remove, add.
+    fn themes(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+        ui.label(RichText::new(t!("settings.themes")).strong());
+        ui.weak(t!("settings.themes_hint"));
+        let german = rust_i18n::locale().starts_with("de");
+        let original = config.themes();
+        let mut themes = original.clone();
+        let mut remove = None;
+        egui::ScrollArea::vertical().id_salt("themes").max_height(260.0).show(ui, |ui| {
+            for (i, theme) in themes.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    let (bg, _) = PALETTE[usize::from(tags::theme_slot(theme))];
+                    let swatch = egui::Button::new("")
+                        .fill(egui::Color32::from_rgb(bg[0], bg[1], bg[2]))
+                        .min_size(egui::vec2(20.0, 20.0))
+                        .corner_radius(10.0);
+                    egui::containers::menu::MenuButton::from_button(swatch).ui(ui, |ui| {
+                        ui.set_max_width(6.0 * 26.0);
+                        ui.horizontal_wrapped(|ui| {
+                            for (slot, (bg, _)) in PALETTE.iter().enumerate() {
+                                let fill = egui::Color32::from_rgb(bg[0], bg[1], bg[2]);
+                                let pick = egui::Button::new("")
+                                    .fill(fill)
+                                    .min_size(egui::vec2(20.0, 20.0))
+                                    .corner_radius(10.0);
+                                if ui.add(pick).clicked() {
+                                    theme.color = Some(slot as u8);
+                                    ui.close();
+                                }
+                            }
+                        });
+                    });
+                    let linked = theme.de == theme.en;
+                    let name = if german { &mut theme.de } else { &mut theme.en };
+                    ui.add(egui::TextEdit::singleline(name).desired_width(220.0));
+                    if linked {
+                        let name = if german { theme.de.clone() } else { theme.en.clone() };
+                        theme.de = name.clone();
+                        theme.en = name;
+                    }
+                    if ui.small_button("✕").on_hover_text(t!("settings.themes_remove")).clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+        });
+        if let Some(i) = remove {
+            themes.remove(i);
+        }
+        ui.horizontal(|ui| {
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut self.theme_input)
+                    .hint_text(t!("settings.themes_new"))
+                    .desired_width(220.0),
+            );
+            let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let name = self.theme_input.trim().to_owned();
+            let can_add = !name.is_empty() && !themes.iter().any(|t| t.matches(&name));
+            if (ui.add_enabled(can_add, egui::Button::new("＋")).clicked() || enter) && can_add {
+                themes.push(ThemeTag::named(&name));
+                self.theme_input.clear();
+                field.request_focus();
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui.button(t!("settings.themes_missing")).clicked() {
+                for theme in default_themes() {
+                    if !themes.iter().any(|t| t.matches(&theme.de) || t.matches(&theme.en)) {
+                        themes.push(theme);
+                    }
+                }
+            }
+            if ui.button(t!("settings.themes_reset")).clicked() {
+                themes = default_themes();
+                if themes == original {
+                    return;
+                }
+                changes.push(SettingsChange::Themes(None));
+                themes = original.clone();
+            }
+        });
+        if themes != original {
+            changes.push(SettingsChange::Themes(Some(themes)));
+        }
     }
 
     fn language(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
