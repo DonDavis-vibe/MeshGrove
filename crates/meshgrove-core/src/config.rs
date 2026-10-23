@@ -96,6 +96,87 @@ pub fn gltf_unit() -> GltfUnit {
     if GLTF_MILLIMETRES.load(Ordering::Relaxed) { GltfUnit::Millimetres } else { GltfUnit::Metres }
 }
 
+/// What one coordinate unit of STL, OBJ and PLY files stands for. These formats carry no unit;
+/// 3D-printing files mean millimetres, but some (mostly American) models were drawn in inches.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelUnits {
+    #[default]
+    Millimetres,
+    Inches,
+}
+
+impl ModelUnits {
+    /// Millimetres per unit.
+    pub fn scale(self) -> f32 {
+        match self {
+            ModelUnits::Millimetres => 1.0,
+            ModelUnits::Inches => MM_PER_INCH,
+        }
+    }
+}
+
+/// Millimetres in an inch.
+pub const MM_PER_INCH: f32 = 25.4;
+
+/// The unit of the STL, OBJ and PLY coordinates of this process. The loaders and the thumbnail
+/// cache key read it; the app and the thumbnailer set it from [`Config::model_units`].
+static MODEL_INCHES: AtomicBool = AtomicBool::new(false);
+
+pub fn set_model_units(units: ModelUnits) {
+    MODEL_INCHES.store(units == ModelUnits::Inches, Ordering::Relaxed);
+}
+
+pub fn model_units() -> ModelUnits {
+    if MODEL_INCHES.load(Ordering::Relaxed) { ModelUnits::Inches } else { ModelUnits::Millimetres }
+}
+
+/// The unit sizes and distances are shown in. Models and the library stay in millimetres.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DisplayUnits {
+    #[default]
+    Metric,
+    Imperial,
+}
+
+static DISPLAY_IMPERIAL: AtomicBool = AtomicBool::new(false);
+
+/// Sets the display unit of this process (read by [`display_units`] where sizes are formatted).
+pub fn set_display_units(units: DisplayUnits) {
+    DISPLAY_IMPERIAL.store(units == DisplayUnits::Imperial, Ordering::Relaxed);
+}
+
+pub fn display_units() -> DisplayUnits {
+    if DISPLAY_IMPERIAL.load(Ordering::Relaxed) { DisplayUnits::Imperial } else { DisplayUnits::Metric }
+}
+
+impl DisplayUnits {
+    /// A length in millimetres as a number of this unit.
+    pub fn from_mm(self, mm: f32) -> f32 {
+        match self {
+            DisplayUnits::Metric => mm,
+            DisplayUnits::Imperial => mm / MM_PER_INCH,
+        }
+    }
+
+    /// A length in this unit as millimetres.
+    pub fn to_mm(self, value: f32) -> f32 {
+        match self {
+            DisplayUnits::Metric => value,
+            DisplayUnits::Imperial => value * MM_PER_INCH,
+        }
+    }
+
+    /// "mm" or "in".
+    pub fn label(self) -> &'static str {
+        match self {
+            DisplayUnits::Metric => "mm",
+            DisplayUnits::Imperial => "in",
+        }
+    }
+}
+
 /// Gallery sort order (folders always come first).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -222,6 +303,10 @@ pub struct Config {
     pub slicer: Option<Slicer>,
     /// Printer for the bed check; `None`: take the one selected in the slicer.
     pub printer: Option<crate::printer::Bed>,
+    /// What one coordinate unit of STL, OBJ and PLY files stands for.
+    pub model_units: ModelUnits,
+    /// Metric or imperial sizes in the interface.
+    pub display_units: DisplayUnits,
     /// What one glTF unit stands for.
     pub gltf_unit: GltfUnit,
     /// Picture quality of the large preview (Space) and the model windows.
@@ -421,6 +506,8 @@ impl Default for Config {
             slicer: None,
             printer: None,
             gltf_unit: GltfUnit::Metres,
+            model_units: ModelUnits::Millimetres,
+            display_units: DisplayUnits::Metric,
             preview_quality: PreviewQuality::High,
             preview_controls: false,
             double_click: DoubleClick::Window,
@@ -551,6 +638,21 @@ mod tests {
         std::fs::create_dir_all(&old).unwrap();
         migrate_dir(&old, &new);
         assert!(old.exists() && new.join("library.db").exists());
+    }
+
+    #[test]
+    fn units_default_to_metric_and_convert() {
+        let config = Config::default();
+        assert_eq!((config.model_units, config.display_units), (ModelUnits::Millimetres, DisplayUnits::Metric));
+        assert_eq!(ModelUnits::Inches.scale(), 25.4);
+        assert_eq!(DisplayUnits::Imperial.from_mm(25.4), 1.0);
+        assert_eq!(DisplayUnits::Imperial.to_mm(2.0), 50.8);
+        assert_eq!(DisplayUnits::Metric.from_mm(12.5), 12.5);
+        let config = Config { model_units: ModelUnits::Inches, display_units: DisplayUnits::Imperial, ..config };
+        let back: Config = toml::from_str(&toml::to_string_pretty(&config).unwrap()).unwrap();
+        assert_eq!(back, config);
+        let old: Config = toml::from_str("tile_size = 120.0\n").unwrap();
+        assert_eq!((old.model_units, old.display_units), (ModelUnits::Millimetres, DisplayUnits::Metric));
     }
 
     #[test]

@@ -37,6 +37,13 @@ impl Aabb {
 }
 
 impl Mesh {
+    /// Multiplies every coordinate by `factor` (a change of unit).
+    pub fn scale(&mut self, factor: f32) {
+        for p in &mut self.positions {
+            *p = p.map(|v| v * factor);
+        }
+    }
+
     pub fn triangle_count(&self) -> usize {
         match &self.indices {
             Some(indices) => indices.len() / 3,
@@ -195,5 +202,18 @@ mod tests {
         let b = mesh.bounds().unwrap();
         assert_eq!(b.max, Vec3::new(2.0, 3.0, 4.0));
         assert!(Mesh::default().bounds().is_none());
+    }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    #[test]
+    fn scaling_changes_the_size() {
+        let mut m = Mesh::cube(2.0);
+        let before = m.bounds().unwrap().size();
+        m.scale(25.4);
+        assert!((m.bounds().unwrap().size() - before * 25.4).length() < 1e-3);
     }
 }

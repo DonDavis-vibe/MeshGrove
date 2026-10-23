@@ -6,7 +6,9 @@ use anyhow::Context as _;
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use egui::{Button, Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use meshgrove_core::cache::{ThumbCache, ThumbMeta};
-use meshgrove_core::config::{Config, DoubleClick, GalleryView, PrintFilter, Program, Slicer, SortKey, TileTags};
+use meshgrove_core::config::{
+    Config, DisplayUnits, DoubleClick, GalleryView, ModelUnits, PrintFilter, Program, Slicer, SortKey, TileTags,
+};
 use meshgrove_core::db::Library;
 use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::lists::{ListInfo, ListKind, PrintResult, PrintStatus};
@@ -71,6 +73,15 @@ enum View {
 enum Scope {
     Folder,
     Library,
+}
+
+/// Which switch to inches the question is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingUnits {
+    /// How STL, OBJ and PLY coordinates are read.
+    Files,
+    /// The unit sizes are shown in.
+    Display,
 }
 
 pub struct App {
@@ -158,6 +169,8 @@ pub struct App {
     duplicates_due: Option<Instant>,
     last_processed: usize,
     trash_confirm: Option<Vec<PathBuf>>,
+    /// A switch to inches waiting for the answer to the question about imperial units.
+    units_confirm: Option<PendingUnits>,
     trash_rx: Option<Receiver<TrashResult>>,
     /// Short message in the status bar (result of an action) and when it was set.
     toast: Option<(String, Instant)>,
@@ -305,6 +318,7 @@ impl App {
             duplicates_due: Some(Instant::now()),
             last_processed: 0,
             trash_confirm: None,
+            units_confirm: None,
             trash_rx: None,
             toast: None,
             messages: unbounded(),
@@ -871,7 +885,12 @@ impl App {
                     folder: &t!("print.col_folder"),
                     quantity: &t!("print.col_quantity"),
                     done: &t!("print.col_done"),
-                    size: &t!("print.col_size"),
+                    size: &if meshgrove_core::config::display_units() == meshgrove_core::config::DisplayUnits::Imperial
+                    {
+                        t!("print.col_size_in")
+                    } else {
+                        t!("print.col_size")
+                    },
                     filaments: &t!("print.col_filaments"),
                 };
                 let separator = if rust_i18n::locale().starts_with("de") { ';' } else { ',' };
@@ -1200,6 +1219,14 @@ impl App {
                     self.refresh_gallery(false);
                     self.menu_for.clear();
                 }
+                SettingsChange::ModelUnits(units) => match units {
+                    ModelUnits::Inches => self.units_confirm = Some(PendingUnits::Files),
+                    ModelUnits::Millimetres => self.apply_model_units(units),
+                },
+                SettingsChange::DisplayUnits(units) => match units {
+                    DisplayUnits::Imperial => self.units_confirm = Some(PendingUnits::Display),
+                    DisplayUnits::Metric => self.apply_display_units(units),
+                },
                 SettingsChange::Export(path) => {
                     self.save_note();
                     self.library.export(path);
@@ -1269,6 +1296,63 @@ impl App {
                 self.trash_rx = Some(rx);
             }
             Some(false) => self.trash_confirm = None,
+            None => {}
+        }
+    }
+
+    /// STL, OBJ and PLY are read in this unit from now on: shown models are reloaded, their facts
+    /// and previews renewed.
+    fn apply_model_units(&mut self, units: ModelUnits) {
+        self.config.model_units = units;
+        meshgrove_core::config::set_model_units(units);
+        let is_raw =
+            |p: &Path| matches!(Kind::from_file_name(&listing::file_name(p)), Kind::Stl | Kind::Obj | Kind::Ply);
+        self.meshes.forget_where(is_raw);
+        self.library.set_roots(self.config.library_roots.clone());
+        self.refresh_gallery(false);
+        self.menu_for.clear();
+    }
+
+    fn apply_display_units(&mut self, units: DisplayUnits) {
+        self.config.display_units = units;
+        meshgrove_core::config::set_display_units(units);
+        self.menu_for.clear();
+    }
+
+    /// The question before inches: why metric is easier, and Yes / No.
+    fn units_dialog(&mut self, ctx: &egui::Context) {
+        let Some(pending) = self.units_confirm else { return };
+        let mut decision = None;
+        egui::Modal::new(egui::Id::unique("units-confirm")).show(ctx, |ui| {
+            ui.set_max_width(520.0);
+            ui.heading(t!("units.title"));
+            ui.add_space(6.0);
+            ui.label(t!("units.quote"));
+            ui.add_space(10.0);
+            ui.label(RichText::new(t!("units.question")).strong());
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(t!("units.yes")).clicked() {
+                    decision = Some(true);
+                }
+                // Enter and Escape answer No: metric is the safe side.
+                if ui.button(RichText::new(t!("units.no")).strong()).clicked()
+                    || ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Escape))
+                {
+                    decision = Some(false);
+                }
+            });
+        });
+        match decision {
+            Some(true) => {
+                self.units_confirm = None;
+                match pending {
+                    PendingUnits::Files => self.apply_model_units(ModelUnits::Inches),
+                    PendingUnits::Display => self.apply_display_units(DisplayUnits::Imperial),
+                }
+                self.save_config();
+            }
+            Some(false) => self.units_confirm = None,
             None => {}
         }
     }
@@ -2154,6 +2238,7 @@ impl eframe::App for App {
         self.gallery.tag_dots = self.config.tile_tags == TileTags::Dots && self.config.colored_tags;
         self.update_duplicates();
         self.trash_dialog(&ctx);
+        self.units_dialog(&ctx);
         self.receive_thumbnails(&ctx);
         self.shortcuts(&ctx);
         if let Some(changed) = self.search_changed {

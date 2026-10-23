@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
 use meshgrove_core::config::{
-    Config, DoubleClick, FOLDER_PREVIEW_DEPTH, FolderPreviews, GltfUnit, PreviewQuality, Program, Slicer, SuggestedTag,
-    TILE_TAG_COUNT, TileTags, default_properties, default_states, default_themes,
+    self, Config, DisplayUnits, DoubleClick, FOLDER_PREVIEW_DEPTH, FolderPreviews, GltfUnit, ModelUnits,
+    PreviewQuality, Program, Slicer, SuggestedTag, TILE_TAG_COUNT, TileTags, default_properties, default_states,
+    default_themes,
 };
 use meshgrove_core::printer::Bed;
 use meshgrove_core::programs::{Detected, ProgramKind, detect_editors, detect_slicers};
@@ -32,6 +33,10 @@ pub enum SettingsChange {
     /// `None`: take the printer selected in the slicer.
     Printer(Option<Bed>),
     GltfUnit(GltfUnit),
+    /// How STL, OBJ and PLY coordinates are read; inches need a confirmation first.
+    ModelUnits(ModelUnits),
+    /// Metric or imperial sizes in the interface; imperial needs a confirmation first.
+    DisplayUnits(DisplayUnits),
     PreviewQuality(PreviewQuality),
     DoubleClick(DoubleClick),
     FolderPreviews(FolderPreviews),
@@ -177,6 +182,36 @@ fn models(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
     ui.weak(t!("settings.gltf_unit_hint"));
 }
 
+/// Units of the model files and of the sizes shown. Inches (imperial) are asked about first.
+fn units(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+    ui.label(RichText::new(t!("settings.units")).strong());
+    ui.horizontal(|ui| {
+        ui.label(t!("settings.display_units"));
+        for (units, label) in [
+            (DisplayUnits::Metric, t!("settings.units_metric")),
+            (DisplayUnits::Imperial, t!("settings.units_imperial")),
+        ] {
+            if ui.radio(config.display_units == units, label).clicked() && config.display_units != units {
+                changes.push(SettingsChange::DisplayUnits(units));
+            }
+        }
+    });
+    ui.weak(t!("settings.display_units_hint"));
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label(t!("settings.model_units"));
+        for (units, label) in [
+            (ModelUnits::Millimetres, t!("settings.model_units_mm")),
+            (ModelUnits::Inches, t!("settings.model_units_inches")),
+        ] {
+            if ui.radio(config.model_units == units, label).clicked() && config.model_units != units {
+                changes.push(SettingsChange::ModelUnits(units));
+            }
+        }
+    });
+    ui.weak(t!("settings.model_units_hint"));
+}
+
 /// Facts shown in the "about" part.
 pub struct AppInfo<'a> {
     pub gpu: &'a str,
@@ -197,6 +232,8 @@ pub struct SettingsDialog {
     editor_form: (String, String, String),
     /// Name and X/Y/Z as typed.
     printer_form: Option<[String; 4]>,
+    /// The display unit the X/Y/Z of `printer_form` are in.
+    printer_form_units: DisplayUnits,
     printer_error: bool,
     /// A new theme as typed.
     suggest_input: [String; 3],
@@ -257,6 +294,7 @@ enum Section {
     States,
     Preview,
     Models,
+    Units,
     Slicer,
     Editor,
     Printer,
@@ -272,6 +310,7 @@ enum Category {
     Library,
     Tags,
     View,
+    ModelsUnits,
     Programs,
     Printer,
     Data,
@@ -279,11 +318,12 @@ enum Category {
 }
 
 impl Category {
-    const ALL: [Category; 8] = [
+    const ALL: [Category; 9] = [
         Category::General,
         Category::Library,
         Category::Tags,
         Category::View,
+        Category::ModelsUnits,
         Category::Programs,
         Category::Printer,
         Category::Data,
@@ -296,6 +336,7 @@ impl Category {
             Category::Library => "📚",
             Category::Tags => "🏷",
             Category::View => "🎥",
+            Category::ModelsUnits => "📏",
             Category::Programs => "🔧",
             Category::Printer => "🖨",
             Category::Data => "💾",
@@ -309,6 +350,7 @@ impl Category {
             Category::Library => t!("settings.cat_library"),
             Category::Tags => t!("settings.cat_tags"),
             Category::View => t!("settings.cat_view"),
+            Category::ModelsUnits => t!("settings.cat_models_units"),
             Category::Programs => t!("settings.cat_programs"),
             Category::Printer => t!("settings.cat_printer"),
             Category::Data => t!("settings.cat_data"),
@@ -342,6 +384,7 @@ impl SettingsDialog {
     pub fn open(&mut self, bed: Option<&Bed>) {
         self.open = true;
         self.printer_form = Some(printer_form(bed));
+        self.printer_form_units = config::display_units();
         self.printer_error = false;
         if self.import_input.is_empty() {
             self.import_input = export_path().display().to_string();
@@ -432,7 +475,8 @@ impl SettingsDialog {
                                 Category::Tags => {
                                     &[Section::Tags, Section::Themes, Section::Properties, Section::States]
                                 }
-                                Category::View => &[Section::Preview, Section::Models],
+                                Category::View => &[Section::Preview],
+                                Category::ModelsUnits => &[Section::Models, Section::Units],
                                 Category::Programs => &[Section::Slicer, Section::Editor],
                                 Category::Printer => &[Section::Printer],
                                 Category::Data => &[Section::UserData, Section::Storage],
@@ -461,6 +505,7 @@ impl SettingsDialog {
                                     Section::States => self.suggestions(ui, config, Group::State, &mut changes),
                                     Section::Preview => preview(ui, config, &mut changes),
                                     Section::Models => models(ui, config, &mut changes),
+                                    Section::Units => units(ui, config, &mut changes),
                                     Section::Slicer => {
                                         self.program_list(ui, false, slicers, default_slicer, &mut changes)
                                     }
@@ -762,6 +807,18 @@ impl SettingsDialog {
         };
         ui.weak(status);
         let mut detect = false;
+        // The display unit changed since the form was filled: convert what is typed, so Apply
+        // does not read millimetres as inches (or the other way round).
+        let units = config::display_units();
+        if let Some(form) = self.printer_form.as_mut().filter(|_| self.printer_form_units != units) {
+            let before = self.printer_form_units;
+            for value in &mut form[1..] {
+                if let Ok(v) = value.trim().replace(',', ".").parse::<f32>() {
+                    *value = mm(units.from_mm(before.to_mm(v)));
+                }
+            }
+        }
+        self.printer_form_units = units;
         let form = self.printer_form.get_or_insert_with(|| printer_form(active));
         egui::Grid::new("printer_form").num_columns(2).show(ui, |ui| {
             ui.label(t!("settings.printer_name"));
@@ -773,13 +830,16 @@ impl SettingsDialog {
                     ui.label(*axis);
                     ui.add(egui::TextEdit::singleline(&mut form[i + 1]).desired_width(56.0));
                 }
-                ui.label("mm");
+                ui.label(config::display_units().label());
             });
             ui.end_row();
         });
         ui.horizontal(|ui| {
             if ui.button(t!("settings.apply")).clicked() {
-                let mm = |s: &str| s.trim().replace(',', ".").parse::<f32>().ok().filter(|v| *v > 0.0);
+                let units = config::display_units();
+                let mm = |s: &str| {
+                    s.trim().replace(',', ".").parse::<f32>().ok().filter(|v| *v > 0.0).map(|v| units.to_mm(v))
+                };
                 match (mm(&form[1]), mm(&form[2]), mm(&form[3])) {
                     (Some(x), Some(y), Some(z)) => {
                         let name = match form[0].trim() {
@@ -853,13 +913,22 @@ impl SettingsDialog {
 
 fn printer_form(bed: Option<&Bed>) -> [String; 4] {
     match bed {
-        Some(b) => [b.name.clone(), mm(b.x), mm(b.y), mm(b.z)],
+        Some(b) => {
+            let units = config::display_units();
+            [b.name.clone(), mm(units.from_mm(b.x)), mm(units.from_mm(b.y)), mm(units.from_mm(b.z))]
+        }
         None => Default::default(),
     }
 }
 
 fn mm(value: f32) -> String {
-    if value.fract() == 0.0 { format!("{value:.0}") } else { i18n::decimal(value) }
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else if config::display_units() == config::DisplayUnits::Imperial {
+        i18n::fixed(value, 2)
+    } else {
+        i18n::decimal(value)
+    }
 }
 
 /// `~/Dokumente/meshgrove-tags-notizen-2026-10-21.json` (the XDG documents folder).
