@@ -33,7 +33,7 @@ use crate::ui::layout::{Layout, Pane};
 use crate::ui::model_window::{self, ModelWindow, WindowAction, WindowContext};
 use crate::ui::settings::{AppInfo, SettingsChange, SettingsDialog};
 use crate::ui::sidebar::{LibraryInfo, ListExport, Sidebar, SidebarAction};
-use crate::ui::tags::TagStyle;
+use crate::ui::tags::{Group, TagStyle};
 use crate::ui::turntable::Turntable;
 use crate::ui::viewer::{MeshSource, ModelViewer};
 use crate::ui::{EditorList, SlicerList};
@@ -285,7 +285,13 @@ impl App {
             selection_lists: Vec::new(),
             selection_print: PrintStatus::default(),
             marks_dirty: true,
-            tag_style: TagStyle { colored: config.colored_tags, ..Default::default() },
+            tag_style: TagStyle {
+                colored: config.colored_tags,
+                themes: config.themes(),
+                properties: config.properties(),
+                states: config.states(),
+                ..Default::default()
+            },
             new_list_name: String::new(),
             tag_input: String::new(),
             focus_tags: false,
@@ -1165,6 +1171,19 @@ impl App {
                     self.tag_style.colored = colored;
                     self.gallery.tag_style = self.tag_style.clone();
                 }
+                SettingsChange::FlatTagList(flat) => self.config.flat_tag_list = flat,
+                SettingsChange::IdleTagChips(on) => self.config.tag_chips_idle = on,
+                SettingsChange::Suggestions(group, list) => {
+                    match group {
+                        Group::Themes => self.config.themes = list,
+                        Group::Properties => self.config.properties = list,
+                        _ => self.config.states = list,
+                    }
+                    self.tag_style.themes = self.config.themes();
+                    self.tag_style.properties = self.config.properties();
+                    self.tag_style.states = self.config.states();
+                    self.gallery.tag_style = self.tag_style.clone();
+                }
                 SettingsChange::ResetLayout => self.layout.reset(),
                 SettingsChange::DoubleClick(action) => self.config.double_click = action,
                 SettingsChange::PreviewQuality(quality) => {
@@ -1796,6 +1815,7 @@ impl App {
             active_tags: &active_tags,
             has_index: self.index.is_some(),
             tag_style: &self.tag_style,
+            flat_tags: self.config.flat_tag_list,
         };
         match self.sidebar.show(ui, &self.config, self.nav.current(), info) {
             Some(SidebarAction::Navigate(path)) => self.navigate(path),
@@ -1865,6 +1885,7 @@ impl App {
                 all: &self.all_tags,
                 input: &mut self.tag_input,
                 focus: focus_tags,
+                idle_chips: self.config.tag_chips_idle,
             },
             note: NoteEditor { enabled: self.menu.can_tag, text: &mut self.note_input, mixed: self.note_mixed },
             bed: self.bed.as_ref(),
