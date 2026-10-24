@@ -209,7 +209,7 @@ fn each_access_class_sees_what_it_was_given() {
     assert_eq!(images.len(), 1);
     assert_eq!(images[0]["mimeType"], "image/png");
     let model = local.call("get_model", json!({"id": "eigene/rose.stl", "include_thumbnail": true}));
-    assert_eq!(model["structuredContent"]["path"], f.root.join("eigene/rose.stl").display().to_string());
+    assert_eq!(model["structuredContent"]["path"], f.root.join("eigene").join("rose.stl").display().to_string());
     assert_eq!(model["structuredContent"]["checks"]["shells"], 1);
 }
 
