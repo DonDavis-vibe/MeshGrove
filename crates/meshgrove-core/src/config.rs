@@ -293,11 +293,71 @@ pub struct AiConfig {
     pub log_days: u16,
     /// Days an undecided suggestion waits before it expires.
     pub expire_days: u16,
+    /// The user's own endpoint for the chat and the one-click actions; `None`: none set up.
+    pub endpoint: Option<EndpointConfig>,
+    /// Whether the chat's changes wait for review or apply at once (and can be undone).
+    pub chat_mode: ChatMode,
 }
 
 impl Default for AiConfig {
     fn default() -> AiConfig {
-        AiConfig { enabled: false, libraries: Vec::new(), log_days: 90, expire_days: 30 }
+        AiConfig {
+            enabled: false,
+            libraries: Vec::new(),
+            log_days: 90,
+            expire_days: 30,
+            endpoint: None,
+            chat_mode: ChatMode::Review,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatMode {
+    /// Suggestions wait in the review.
+    #[default]
+    Review,
+    /// Changes apply at once; the arrow at the user's message takes them back.
+    Auto,
+}
+
+/// An OpenAI-compatible endpoint the user runs or subscribes to (Ollama, LM Studio, OpenAI,
+/// OpenRouter …). Its key is not kept here but in the system keyring or an environment variable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EndpointConfig {
+    /// "ollama", "lmstudio", "openai", "openrouter" or "custom": where the URL came from.
+    pub preset: String,
+    /// Up to and including `/v1`.
+    pub base_url: String,
+    pub model: String,
+    /// It runs on this computer or network (the user says so; guessed from the URL first).
+    pub local: bool,
+    /// The model understands pictures.
+    pub vision: bool,
+    /// The model can call tools (search the library itself).
+    pub tools: bool,
+    /// The key is in the system keyring.
+    pub key_in_keyring: bool,
+    /// Or in this environment variable.
+    pub key_env: String,
+    pub timeout_s: u32,
+}
+
+impl Default for EndpointConfig {
+    fn default() -> EndpointConfig {
+        EndpointConfig {
+            preset: "ollama".into(),
+            base_url: "http://localhost:11434/v1".into(),
+            model: String::new(),
+            local: true,
+            vision: false,
+            tools: true,
+            key_in_keyring: false,
+            key_env: String::new(),
+            timeout_s: 120,
+        }
     }
 }
 

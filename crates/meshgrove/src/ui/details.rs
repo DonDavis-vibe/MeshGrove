@@ -14,6 +14,7 @@ use meshgrove_core::printer::{self, Fit, Printer};
 use meshgrove_render::Renderer;
 
 use super::gallery::Thumb;
+use super::suggest::{self, Candidate};
 use super::tags::{self, Group, TagStyle};
 use super::viewer::ModelViewer;
 use crate::i18n;
@@ -440,39 +441,24 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
     // Existing tags and suggestions that match what is typed (all existing ones while the field
     // is empty): the ones that start with it first. Up/Down pick one, Enter takes it.
     let needle = ed.input.trim().to_lowercase();
-    let mut candidates: Vec<(String, bool)> = if needle.is_empty() && !ed.idle_chips {
+    let candidate = |tag: String, existing: bool| Candidate { label: tag, detail: String::new(), existing, value: () };
+    let mut all: Vec<Candidate<()>> = if needle.is_empty() && !ed.idle_chips {
         Vec::new()
     } else {
-        ed.all.iter().filter(|(tag, _)| !on_all(tag)).map(|(tag, _)| (tag.clone(), true)).collect()
+        ed.all.iter().filter(|(tag, _)| !on_all(tag)).map(|(tag, _)| candidate(tag.clone(), true)).collect()
     };
     if !needle.is_empty() {
         for group in Group::SUGGESTED {
             for tag in tags::suggested(group, style) {
-                if !on_all(&tag) && !candidates.iter().any(|(t, _)| t.eq_ignore_ascii_case(&tag)) {
-                    candidates.push((tag, false));
+                if !on_all(&tag) && !all.iter().any(|c| c.label.eq_ignore_ascii_case(&tag)) {
+                    all.push(candidate(tag, false));
                 }
             }
         }
-        candidates.retain(|(tag, _)| tag.to_lowercase().contains(&needle));
-        candidates.sort_by_key(|(tag, existing)| (!tag.to_lowercase().starts_with(&needle), !existing));
     }
-    candidates.truncate(8);
-    let state_id = field.id.with("pick");
-    let (seen_needle, mut picked): (String, Option<usize>) = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
-    if seen_needle != needle {
-        picked = None;
-    }
-    if field.has_focus() && !candidates.is_empty() {
-        let down = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowDown));
-        let up = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowUp));
-        let last = candidates.len() - 1;
-        if down {
-            picked = Some(picked.map_or(0, |i| (i + 1).min(last)));
-        } else if up {
-            picked = picked.and_then(|i| i.checked_sub(1));
-        }
-    }
-    ui.data_mut(|d| d.insert_temp(state_id, (needle.clone(), picked)));
+    let candidates: Vec<(String, bool)> =
+        suggest::rank(&needle, all, 8).into_iter().map(|c| (c.label, c.existing)).collect();
+    let picked = suggest::highlight(ui, field.id.with("pick"), &needle, candidates.len(), field.has_focus());
     if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
         if let Some((tag, _)) = picked.and_then(|i| candidates.get(i)) {
             out.add_tag = Some(tag.clone());

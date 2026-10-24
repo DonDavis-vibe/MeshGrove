@@ -7,7 +7,9 @@ use std::time::{Duration, SystemTime};
 use egui::{RichText, Ui};
 use meshgrove_core::ai::proposals::{AccessEntry, ProposalStore};
 use meshgrove_core::ai::snippets::{self, Client};
-use meshgrove_core::config::{AccessClass, AiAccess, Config};
+use crossbeam_channel::{Receiver, bounded};
+use meshgrove_core::ai::guess_local;
+use meshgrove_core::config::{AccessClass, AiAccess, Config, EndpointConfig};
 use meshgrove_core::listing;
 
 use super::settings::SettingsChange;
@@ -23,11 +25,29 @@ pub struct AiSettings {
     loaded: bool,
     /// "Delete AI data" was clicked once.
     confirm_clear: bool,
+    /// The endpoint as being edited, the key typed, and the connection test.
+    form: Option<EndpointConfig>,
+    key: String,
+    test: Option<Receiver<Result<Vec<String>, String>>>,
+    models: Vec<String>,
+    tested: Option<Result<String, String>>,
 }
 
 impl Default for AiSettings {
     fn default() -> AiSettings {
-        AiSettings { client: Client::ClaudeDesktop, local: false, log: Vec::new(), pending: 0, loaded: false, confirm_clear: false }
+        AiSettings {
+            client: Client::ClaudeDesktop,
+            local: false,
+            log: Vec::new(),
+            pending: 0,
+            loaded: false,
+            confirm_clear: false,
+            form: None,
+            key: String::new(),
+            test: None,
+            models: Vec::new(),
+            tested: None,
+        }
     }
 }
 
@@ -36,6 +56,9 @@ impl AiSettings {
     pub fn reset(&mut self) {
         self.loaded = false;
         self.confirm_clear = false;
+        self.form = None;
+        self.key.clear();
+        self.tested = None;
     }
 
     fn load(&mut self) {
@@ -144,6 +167,138 @@ impl AiSettings {
         ui.weak(t!("settings.mcp_never_written"));
     }
 
+    /// The user's own OpenAI-compatible endpoint for the chat and the one-click actions.
+    pub fn endpoint(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+        ui.label(RichText::new(t!("endpoint.title")).strong());
+        ui.weak(t!("endpoint.hint"));
+        if !config.ai.enabled {
+            ui.weak(t!("settings.ai_off"));
+            return;
+        }
+        if let Some(rx) = &self.test
+            && let Ok(result) = rx.try_recv()
+        {
+            self.test = None;
+            self.tested = Some(match result {
+                Ok(models) => {
+                    let text = t!("endpoint.test_ok", count = models.len()).into_owned();
+                    self.models = models;
+                    Ok(text)
+                }
+                Err(e) => Err(e),
+            });
+        }
+        if self.form.is_none() {
+            match &config.ai.endpoint {
+                Some(e) => self.form = Some(e.clone()),
+                None => {
+                    if ui.button(t!("endpoint.set_up")).clicked() {
+                        self.form = Some(EndpointConfig::default());
+                    }
+                    return;
+                }
+            }
+        }
+        let Some(form) = self.form.as_mut() else { return };
+        egui::Grid::new("endpoint").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            ui.label(t!("endpoint.preset"));
+            let name = PRESETS.iter().find(|p| p.0 == form.preset).map_or(form.preset.clone(), |p| preset_name(p.0));
+            egui::ComboBox::from_id_salt("endpoint_preset").selected_text(name).show_ui(ui, |ui| {
+                for (id, url) in PRESETS {
+                    if ui.selectable_label(form.preset == *id, preset_name(id)).clicked() {
+                        form.preset = (*id).to_owned();
+                        if !url.is_empty() {
+                            form.base_url = (*url).to_owned();
+                            form.local = guess_local(url);
+                        }
+                    }
+                }
+            });
+            ui.end_row();
+            ui.label(t!("endpoint.url"));
+            if ui.add(egui::TextEdit::singleline(&mut form.base_url).desired_width(340.0)).changed() {
+                form.local = guess_local(&form.base_url);
+            }
+            ui.end_row();
+            ui.label(t!("endpoint.model"));
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut form.model).hint_text("qwen3:8b").desired_width(220.0));
+                if !self.models.is_empty() {
+                    egui::ComboBox::from_id_salt("endpoint_models").selected_text("▾").width(40.0).show_ui(ui, |ui| {
+                        for m in &self.models {
+                            if ui.selectable_label(form.model == *m, m).clicked() {
+                                form.model = m.clone();
+                            }
+                        }
+                    });
+                }
+            });
+            ui.end_row();
+            ui.label(t!("endpoint.key"));
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut self.key).password(true).hint_text(t!("endpoint.key_hint")).desired_width(220.0));
+                if ui.add_enabled(!self.key.trim().is_empty(), egui::Button::new(t!("endpoint.key_save"))).clicked() {
+                    changes.push(SettingsChange::EndpointKey { url: form.base_url.clone(), key: self.key.trim().to_owned() });
+                    form.key_in_keyring = true;
+                    self.key.clear();
+                }
+                if form.key_in_keyring {
+                    ui.weak(t!("endpoint.key_stored"));
+                }
+            });
+            ui.end_row();
+            ui.label(t!("endpoint.key_env"));
+            ui.add(egui::TextEdit::singleline(&mut form.key_env).hint_text("OPENAI_API_KEY").desired_width(220.0));
+            ui.end_row();
+        });
+        ui.checkbox(&mut form.local, t!("endpoint.local")).on_hover_text(t!("endpoint.local_hint"));
+        ui.checkbox(&mut form.vision, t!("endpoint.vision")).on_hover_text(t!("endpoint.vision_hint"));
+        ui.checkbox(&mut form.tools, t!("endpoint.tools")).on_hover_text(t!("endpoint.tools_hint"));
+        if !form.local {
+            ui.colored_label(ui.visuals().warn_fg_color, t!("endpoint.cloud_note"));
+        }
+        let mut remove = false;
+        ui.horizontal(|ui| {
+            if ui.add_enabled(self.test.is_none(), egui::Button::new(t!("endpoint.test"))).clicked() {
+                let (tx, rx) = bounded(1);
+                let key = Some(self.key.trim().to_owned())
+                    .filter(|k| !k.is_empty())
+                    .or_else(|| crate::assist::secret::load(&form.base_url, form.key_in_keyring, &form.key_env));
+                let endpoint = crate::assist::client::Endpoint::new(&form.base_url, &form.model, key, Duration::from_secs(15));
+                let ctx = ui.ctx().clone();
+                std::thread::spawn(move || {
+                    let _ = tx.send(endpoint.models().map_err(|e| e.to_string()));
+                    ctx.request_repaint();
+                });
+                self.test = Some(rx);
+                self.tested = None;
+            }
+            if self.test.is_some() {
+                ui.spinner();
+            }
+            let ready = !form.base_url.trim().is_empty() && !form.model.trim().is_empty();
+            if ui.add_enabled(ready, egui::Button::new(t!("settings.apply"))).clicked() {
+                changes.push(SettingsChange::Endpoint(Some(form.clone())));
+            }
+            if config.ai.endpoint.is_some() && ui.button(t!("endpoint.remove")).clicked() {
+                changes.push(SettingsChange::Endpoint(None));
+                remove = true;
+            }
+        });
+        if remove {
+            self.form = None;
+        }
+        match &self.tested {
+            Some(Ok(text)) => {
+                ui.label(format!("✔ {text}"));
+            }
+            Some(Err(e)) => {
+                ui.colored_label(ui.visuals().error_fg_color, format!("✕ {e}"));
+            }
+            None => {}
+        }
+    }
+
     pub fn log(&mut self, ui: &mut Ui, changes: &mut Vec<SettingsChange>) {
         self.load();
         ui.label(RichText::new(t!("settings.ai_log")).strong());
@@ -203,4 +358,23 @@ pub fn mcp_binary() -> (PathBuf, Option<PathBuf>) {
     let name = if cfg!(windows) { "meshgrove-mcp.exe" } else { "meshgrove-mcp" };
     let exe = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(name))).unwrap_or_else(|| name.into());
     (exe, std::env::var_os("APPIMAGE").map(PathBuf::from))
+}
+
+/// Endpoints people run or subscribe to, with their usual address.
+const PRESETS: &[(&str, &str)] = &[
+    ("ollama", "http://localhost:11434/v1"),
+    ("lmstudio", "http://localhost:1234/v1"),
+    ("openai", "https://api.openai.com/v1"),
+    ("openrouter", "https://openrouter.ai/api/v1"),
+    ("custom", ""),
+];
+
+fn preset_name(id: &str) -> String {
+    match id {
+        "ollama" => "Ollama".into(),
+        "lmstudio" => "LM Studio".into(),
+        "openai" => "OpenAI".into(),
+        "openrouter" => "OpenRouter".into(),
+        _ => t!("endpoint.custom").into_owned(),
+    }
 }

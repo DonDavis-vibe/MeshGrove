@@ -4,6 +4,7 @@
 //!
 //! Meshgrove brings no AI of its own; this is only what the user's AI may look at and ask for.
 
+pub mod dispatch;
 pub mod proposals;
 pub mod read;
 pub mod scope;

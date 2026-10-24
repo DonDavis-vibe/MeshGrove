@@ -12,6 +12,8 @@ pub enum Pane {
     Files,
     Preview,
     Info,
+    /// The chat with the user's own model: only while AI is on and an endpoint is set up.
+    Chat,
 }
 
 impl Pane {
@@ -21,6 +23,7 @@ impl Pane {
             Pane::Files => t!("pane.files"),
             Pane::Preview => t!("pane.preview"),
             Pane::Info => t!("pane.info"),
+            Pane::Chat => t!("pane.chat"),
         }
         .into_owned()
     }
@@ -84,6 +87,43 @@ impl Layout {
         self.fresh = true;
         if let Some(path) = path() {
             let _ = std::fs::remove_file(path);
+        }
+    }
+
+    /// Puts the chat pane next to the info pane (as a tab), or takes it out again.
+    pub fn show_chat(&mut self, on: bool) {
+        let tiles = &mut self.tree.tiles;
+        match (on, tiles.find_pane(&Pane::Chat)) {
+            (true, None) => {
+                let chat = tiles.insert_pane(Pane::Chat);
+                let anchor = tiles.find_pane(&Pane::Info).or_else(|| tiles.find_pane(&Pane::Preview));
+                let parent = anchor.and_then(|a| tiles.parent_of(a));
+                match (anchor, parent.and_then(|p| tiles.get_mut(p))) {
+                    (_, Some(Tile::Container(Container::Tabs(tabs)))) => tabs.add_child(chat),
+                    (Some(anchor), Some(Tile::Container(container))) => {
+                        // Info stands alone: it and the chat become tabs in its place.
+                        let slot = container.remove_child(anchor);
+                        let tabs = tiles.insert_tab_tile(vec![anchor, chat]);
+                        if let Some(Tile::Container(container)) = parent.and_then(|p| tiles.get_mut(p)) {
+                            match container {
+                                Container::Linear(l) => l.children.insert(slot.unwrap_or(l.children.len()), tabs),
+                                other => other.add_child(tabs),
+                            }
+                        }
+                    }
+                    _ => {
+                        if let Some(root) = self.tree.root
+                            && let Some(Tile::Container(c)) = self.tree.tiles.get_mut(root)
+                        {
+                            c.add_child(chat);
+                        }
+                    }
+                }
+            }
+            (false, Some(chat)) => {
+                self.tree.remove_recursively(chat);
+            }
+            _ => {}
         }
     }
 

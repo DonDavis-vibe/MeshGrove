@@ -90,6 +90,7 @@ enum Scope {
     Library,
 }
 
+mod chat;
 mod checks;
 mod inbox;
 mod review;
@@ -183,6 +184,9 @@ pub struct App {
     checks_flushed: Instant,
     checks_queued: HashSet<String>,
     checks_next: Instant,
+    /// The chat with the user's own model.
+    chat: chat::ChatState,
+    egui_ctx: egui::Context,
     /// Watches the suggestion store while AI is on, and its change count last seen.
     proposals: Option<ProposalWatcher>,
     proposals_seen: u64,
@@ -356,6 +360,8 @@ impl App {
             checks_next: Instant::now(),
             proposals: None,
             proposals_seen: 0,
+            chat: chat::ChatState::default(),
+            egui_ctx: cc.egui_ctx.clone(),
             inbox_count: 0,
             inbox_due: None,
             tag_style: TagStyle {
@@ -809,8 +815,12 @@ impl App {
                 LibEvent::UserDataChanged => {
                     self.tags_dirty = true;
                     self.marks_dirty = true;
+                    self.chat_changed();
                 }
-                LibEvent::Applied(applied) => self.applied(applied),
+                LibEvent::Applied(applied) => {
+                    self.chat_changed();
+                    self.applied(applied);
+                }
                 LibEvent::ChecksStored => {
                     self.marks_dirty = true;
                     self.tags_dirty = true; // reloads the selection's check too
@@ -1292,6 +1302,28 @@ impl App {
                     }
                 }
                 SettingsChange::ClearAiData => self.clear_ai_data(),
+                SettingsChange::Endpoint(endpoint) => {
+                    if endpoint.is_none()
+                        && let Some(old) = &self.config.ai.endpoint
+                    {
+                        crate::assist::secret::forget(&old.base_url);
+                    }
+                    self.toast(match &endpoint {
+                        Some(e) => t!("endpoint.applied", model = e.model.clone()).into_owned(),
+                        None => t!("endpoint.removed").into_owned(),
+                    });
+                    self.config.ai.endpoint = endpoint;
+                }
+                SettingsChange::EndpointKey { url, key } => {
+                    let kept = crate::assist::secret::store(&url, &key);
+                    if let Some(e) = self.config.ai.endpoint.as_mut().filter(|e| e.base_url == url) {
+                        e.key_in_keyring = matches!(kept, Ok(true));
+                    }
+                    self.toast(match kept {
+                        Ok(true) => t!("endpoint.key_kept").into_owned(),
+                        _ => t!("endpoint.key_session").into_owned(),
+                    });
+                }
                 SettingsChange::ShowAiReview => self.show_review(),
                 SettingsChange::ShowAiHistory => self.show_history(),
                 SettingsChange::Inbox(on) => {
@@ -2374,6 +2406,7 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
                 let out = details::info(ui, cx);
                 self.app.apply_details_output(out);
             }
+            Pane::Chat => self.app.chat_pane(ui),
         });
         if grip { egui_tiles::UiResponse::DragStarted } else { egui_tiles::UiResponse::None }
     }
@@ -2450,6 +2483,10 @@ impl eframe::App for App {
         self.poll_checks();
         self.recount_inbox();
         self.watch_proposals(&ctx);
+        self.poll_chat();
+        self.chat_confirm_modal(&ctx);
+        let chat = self.chat_available();
+        self.layout.show_chat(chat);
         self.shortcuts(&ctx);
         if let Some(changed) = self.search_changed {
             if changed.elapsed() >= SEARCH_DEBOUNCE {

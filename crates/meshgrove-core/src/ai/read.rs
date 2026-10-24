@@ -294,6 +294,18 @@ fn filter_sql(cx: &Context, f: &ModelFilter, args: &mut Vec<String>) -> ToolResu
     Ok(sql)
 }
 
+/// Summaries of these files (those this scope may see and the index knows).
+pub fn summaries(cx: &Context, paths: &[PathBuf]) -> ToolResult<Vec<ModelSummary>> {
+    let facts = Facts::load(cx.lib)?;
+    let mut out = Vec::new();
+    for path in paths.iter().filter(|p| cx.scope.allows(p)) {
+        if let Some(row) = cx.lib.ai_row_of(path)? {
+            out.push(summary(cx, &row, &facts));
+        }
+    }
+    Ok(out)
+}
+
 pub fn search_models(cx: &Context, f: &ModelFilter) -> ToolResult<Page<ModelSummary>> {
     let mut args = Vec::new();
     let conditions = filter_sql(cx, f, &mut args)?;
@@ -629,6 +641,26 @@ pub fn find_duplicates(cx: &Context, library: Option<&str>, limit: usize) -> Too
         }
     }
     Ok(out)
+}
+
+/// Folders whose name contains `needle`, for references in the chat (within the scope).
+pub fn find_folders(cx: &Context, needle: &str, limit: usize) -> ToolResult<Vec<std::path::PathBuf>> {
+    let mut args = vec![format!("%{}%", needle.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"))];
+    let scope = cx.scope.sql("d.path", &mut args);
+    let sql = format!(
+        "SELECT d.path FROM dirs d WHERE d.path LIKE ?1 ESCAPE '\\' AND {scope} ORDER BY length(d.path) LIMIT {}",
+        limit * 4
+    );
+    let mut stmt = cx.lib.conn.prepare(&sql)?;
+    let paths: Vec<std::path::PathBuf> =
+        stmt.query_map(params_from_iter(&args), |r| r.get::<_, String>(0))?.filter_map(Result::ok).map(Into::into).collect();
+    let needle = needle.to_lowercase();
+    // Only where the name itself matches, not a folder above it.
+    Ok(paths
+        .into_iter()
+        .filter(|p| listing::file_name(p).to_lowercase().contains(&needle) && cx.scope.allows(p))
+        .take(limit)
+        .collect())
 }
 
 pub fn list_printers(cx: &Context) -> Vec<PrinterOut> {

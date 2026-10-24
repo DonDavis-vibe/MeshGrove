@@ -85,6 +85,8 @@ enum Cmd {
     Decide { batch: i64, decisions: Vec<(i64, Decision)> },
     Undo(i64),
     Redo(i64),
+    /// Applies changes at once (the chat in automatic mode) and answers how it went.
+    ApplyNow { origin: String, title: String, ops: Vec<ApplyOp>, reply: Sender<Result<ChangeReport, String>> },
     Tag(Vec<PathBuf>, String),
     Untag(Vec<PathBuf>, String),
     SetNote(Vec<PathBuf>, String),
@@ -138,6 +140,20 @@ impl ListOp {
     }
 }
 
+/// Applies changes through the library's one writer from another thread, and waits for it.
+#[derive(Clone)]
+pub struct Applier(Sender<Cmd>);
+
+impl Applier {
+    pub fn apply(&self, origin: &str, title: &str, ops: Vec<ApplyOp>) -> Result<ChangeReport, String> {
+        let (reply, answer) = crossbeam_channel::bounded(1);
+        self.0
+            .send(Cmd::ApplyNow { origin: origin.to_owned(), title: title.to_owned(), ops, reply })
+            .map_err(|_| "the library is closed".to_owned())?;
+        answer.recv_timeout(Duration::from_secs(60)).map_err(|_| "the library did not answer".to_owned())?
+    }
+}
+
 pub struct LibraryService {
     tx: Sender<Cmd>,
     events: Receiver<LibEvent>,
@@ -169,6 +185,10 @@ impl LibraryService {
 
     pub fn store_meta(&self, path: PathBuf, key: String, meta: ThumbMeta) {
         let _ = self.tx.send(Cmd::StoreMeta(path, key, meta));
+    }
+
+    pub fn applier(&self) -> Applier {
+        Applier(self.tx.clone())
     }
 
     pub fn accept(&self, batch: i64, uid: String, title: String, ops: Vec<ApplyOp>, decisions: Vec<(i64, Decision)>) {
@@ -395,6 +415,10 @@ impl Worker {
                         Err(e) => Applied::Failed(e.to_string()),
                     };
                     self.send(LibEvent::Applied(applied));
+                    self.send(LibEvent::UserDataChanged);
+                }
+                Ok(Cmd::ApplyNow { origin, title, ops, reply }) => {
+                    let _ = reply.send(lib.apply_change(&origin, &title, &ops).map_err(|e| e.to_string()));
                     self.send(LibEvent::UserDataChanged);
                 }
                 Ok(Cmd::Decide { batch, decisions }) => {

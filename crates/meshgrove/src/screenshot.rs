@@ -5,7 +5,8 @@
 //! `MESHGROVE_SEARCH=query` starts with a library search, `MESHGROVE_HOLD=1` holds the left button down
 //! at the pointer from 0.7 s on and `MESHGROVE_WHEEL=dy` turns the mouse wheel there for half a second after 1 s.
 //! `MESHGROVE_CLICKS=x,y;x,y;…` clicks those points one after the other, from 3 s on, every 0.8 s
-//! (`x,y*2` double-clicks), and `MESHGROVE_TYPE=text` types the text after the last click.
+//! (`x,y*2` double-clicks), and `MESHGROVE_TYPE=text` types the text after the last click; steps
+//! separated by `|` follow half a second apart, `{enter}`, `{down}` and `{esc}` press those keys.
 //! `MESHGROVE_MEASURE=fx,fy;fx,fy` measures between those points (fractions of the view) in the
 //! first model window that opens, which the hook's input cannot reach; `MESHGROVE_WINDOW_VIEW=top`
 //! (or `front`, `left` …) starts that window in a standard view.
@@ -19,7 +20,9 @@ pub struct ScreenshotHook {
     /// Point and whether it is a double click.
     clicks: Vec<(egui::Pos2, bool)>,
     next_click: usize,
-    typing: Option<String>,
+    /// Steps to type after the clicks, half a second apart: text, `{enter}`, `{down}`, `{esc}`.
+    typing: std::collections::VecDeque<String>,
+    typed_at: f32,
     release: Option<egui::Pos2>,
     started: Instant,
     pressed: bool,
@@ -68,7 +71,8 @@ impl ScreenshotHook {
             clicks,
             next_click: 0,
             release: None,
-            typing: std::env::var("MESHGROVE_TYPE").ok(),
+            typing: std::env::var("MESHGROVE_TYPE").map(|s| s.split('|').map(str::to_owned).collect()).unwrap_or_default(),
+            typed_at: 0.0,
             started: Instant::now(),
             pressed: false,
             search,
@@ -151,9 +155,30 @@ impl ScreenshotHook {
         }
         if self.next_click == self.clicks.len()
             && t >= 3.0 + 0.8 * self.clicks.len() as f32
-            && let Some(text) = self.typing.take()
+            && t >= self.typed_at + 0.5
+            && let Some(step) = self.typing.pop_front()
         {
-            raw.events.push(egui::Event::Text(text));
+            self.typed_at = t;
+            let key = match step.as_str() {
+                "{enter}" => Some(egui::Key::Enter),
+                "{down}" => Some(egui::Key::ArrowDown),
+                "{esc}" => Some(egui::Key::Escape),
+                _ => None,
+            };
+            match key {
+                Some(key) => {
+                    for pressed in [true, false] {
+                        raw.events.push(egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        });
+                    }
+                }
+                None => raw.events.push(egui::Event::Text(step)),
+            }
         }
         let Some(pos) = self.pointer else { return };
         raw.events.push(egui::Event::PointerMoved(pos));

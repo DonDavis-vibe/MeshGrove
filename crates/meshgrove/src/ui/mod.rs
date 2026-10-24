@@ -1,3 +1,5 @@
+pub mod chat;
+pub mod chat_input;
 pub mod details;
 pub mod duplicates;
 pub mod gallery;
@@ -11,6 +13,7 @@ pub mod settings;
 pub mod settings_ai;
 pub mod sidebar;
 pub mod spacemouse;
+pub mod suggest;
 pub mod tags;
 pub mod turntable;
 pub mod viewer;

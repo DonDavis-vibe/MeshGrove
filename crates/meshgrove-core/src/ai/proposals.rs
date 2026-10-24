@@ -56,6 +56,22 @@ CREATE TABLE IF NOT EXISTS proposals (
     decided_ns INTEGER
 );
 CREATE INDEX IF NOT EXISTS proposals_batch ON proposals(batch_id);
+CREATE TABLE IF NOT EXISTS chats (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    created_ns INTEGER NOT NULL,
+    updated_ns INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY,
+    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    -- 'user' or 'assistant'
+    role TEXT NOT NULL,
+    -- JSON: text, references, tool calls, cards (what the chat view shows)
+    content TEXT NOT NULL,
+    created_ns INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chat_messages_chat ON chat_messages(chat_id);
 CREATE TABLE IF NOT EXISTS access_log (
     id INTEGER PRIMARY KEY,
     at_ns INTEGER NOT NULL,
@@ -491,6 +507,87 @@ impl ProposalStore {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatInfo {
+    pub id: i64,
+    pub title: String,
+    pub updated_ns: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredMessage {
+    pub id: i64,
+    pub role: String,
+    pub content: serde_json::Value,
+    pub created_ns: i64,
+}
+
+impl ProposalStore {
+    pub fn create_chat(&mut self, title: &str) -> ToolResult<i64> {
+        let now = nanos(Some(SystemTime::now()));
+        self.conn.execute(
+            "INSERT INTO chats (title, created_ns, updated_ns) VALUES (?1, ?2, ?2)",
+            params![title, now],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn rename_chat(&mut self, id: i64, title: &str) -> ToolResult<()> {
+        self.conn.execute("UPDATE chats SET title = ?2 WHERE id = ?1", params![id, title])?;
+        Ok(())
+    }
+
+    pub fn delete_chat(&mut self, id: i64) -> ToolResult<()> {
+        self.conn.execute("DELETE FROM chats WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// The newest conversations first.
+    pub fn chats(&self, limit: usize) -> ToolResult<Vec<ChatInfo>> {
+        let mut stmt = self.conn.prepare("SELECT id, title, updated_ns FROM chats ORDER BY updated_ns DESC, id DESC LIMIT ?1")?;
+        let rows = stmt.query_map([limit as i64], |r| Ok(ChatInfo { id: r.get(0)?, title: r.get(1)?, updated_ns: r.get(2)? }))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    pub fn messages(&self, chat: i64) -> ToolResult<Vec<StoredMessage>> {
+        let mut stmt =
+            self.conn.prepare("SELECT id, role, content, created_ns FROM chat_messages WHERE chat_id = ?1 ORDER BY id")?;
+        let rows = stmt.query_map([chat], |r| {
+            let content: String = r.get(2)?;
+            Ok(StoredMessage {
+                id: r.get(0)?,
+                role: r.get(1)?,
+                content: serde_json::from_str(&content).unwrap_or(serde_json::Value::Null),
+                created_ns: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    pub fn add_message(&mut self, chat: i64, role: &str, content: &serde_json::Value) -> ToolResult<i64> {
+        let now = nanos(Some(SystemTime::now()));
+        self.conn.execute(
+            "INSERT INTO chat_messages (chat_id, role, content, created_ns) VALUES (?1, ?2, ?3, ?4)",
+            params![chat, role, content.to_string(), now],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        self.conn.execute("UPDATE chats SET updated_ns = ?2 WHERE id = ?1", params![chat, now])?;
+        Ok(id)
+    }
+
+    pub fn update_message(&mut self, id: i64, content: &serde_json::Value) -> ToolResult<()> {
+        self.conn.execute("UPDATE chat_messages SET content = ?2 WHERE id = ?1", params![id, content.to_string()])?;
+        Ok(())
+    }
+
+    /// Forgets conversations not touched for `days`.
+    pub fn prune_chats(&mut self, now: SystemTime, days: u16) -> ToolResult<()> {
+        let before = nanos(now.checked_sub(Duration::from_secs(86_400) * u32::from(days)));
+        self.conn.execute("DELETE FROM chats WHERE updated_ns < ?1", [before])?;
+        Ok(())
+    }
+}
+
 /// A short id nobody else uses: blake3 of the time, the process and a counter.
 fn new_uid() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -920,6 +1017,22 @@ mod tests {
         let path = dir.path().join("proposals.db");
         Connection::open(&path).unwrap().pragma_update(None, "user_version", 99).unwrap();
         assert!(matches!(ProposalStore::open(&path), Err(ToolError::StoreNewer(99))));
+    }
+
+    #[test]
+    fn conversations_are_kept() {
+        let mut store = ProposalStore::open_in_memory().unwrap();
+        let chat = store.create_chat("Gartenmarkt").unwrap();
+        let first = store.add_message(chat, "user", &serde_json::json!({"text": "Hallo"})).unwrap();
+        store.add_message(chat, "assistant", &serde_json::json!({"text": "Hi"})).unwrap();
+        store.update_message(first, &serde_json::json!({"text": "Hallo!", "changes": [3]})).unwrap();
+        let messages = store.messages(chat).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].content["changes"][0], 3);
+        assert_eq!(store.chats(9).unwrap()[0].title, "Gartenmarkt");
+        store.prune_chats(SystemTime::now() + Duration::from_secs(86_400 * 100), 90).unwrap();
+        assert!(store.chats(9).unwrap().is_empty());
+        assert!(store.messages(chat).unwrap().is_empty(), "messages go with their chat");
     }
 
     #[test]

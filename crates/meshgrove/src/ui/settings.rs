@@ -58,6 +58,10 @@ pub enum SettingsChange {
     AiLibrary(meshgrove_core::config::LibraryAi),
     /// Deletes the suggestion store and the access log.
     ClearAiData,
+    /// The user's own endpoint (`None`: none).
+    Endpoint(Option<meshgrove_core::config::EndpointConfig>),
+    /// Keeps the endpoint's key in the keyring.
+    EndpointKey { url: String, key: String },
     ShowAiReview,
     ShowAiHistory,
     /// Tags in colour; tags on the tiles, how many and how.
@@ -351,6 +355,7 @@ enum Section {
     Ai,
     AiLibraries,
     Mcp,
+    Endpoint,
     AiLog,
 }
 
@@ -564,7 +569,7 @@ impl SettingsDialog {
                                 Category::ModelsUnits => &[Section::Models, Section::Units],
                                 Category::Programs => &[Section::Slicer, Section::Editor],
                                 Category::Printer => &[Section::Printer],
-                                Category::Ai => &[Section::Ai, Section::AiLibraries, Section::Mcp, Section::AiLog],
+                                Category::Ai => &[Section::Ai, Section::AiLibraries, Section::Mcp, Section::Endpoint, Section::AiLog],
                                 Category::Data => &[Section::UserData, Section::Storage],
                                 Category::About => {
                                     about(ui, &info);
@@ -606,6 +611,7 @@ impl SettingsDialog {
                                     Section::Ai => self.ai.main(ui, config, &mut changes),
                                     Section::AiLibraries => self.ai.libraries(ui, config, &mut changes),
                                     Section::Mcp => self.ai.mcp(ui, config),
+                                    Section::Endpoint => self.ai.endpoint(ui, config, &mut changes),
                                     Section::AiLog => self.ai.log(ui, &mut changes),
                                     Section::UserData => self.user_data(ui, &mut changes),
                                     Section::Storage => self.storage(ui, &mut changes),
