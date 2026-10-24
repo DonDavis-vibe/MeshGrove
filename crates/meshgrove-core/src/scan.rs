@@ -154,6 +154,12 @@ mod tests {
         let hits = lib.search(&query::parse("orc"), 9).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path, zip.join("minis/orc.stl"));
+        // What its thumbnail found out is kept, though the member sits in a folder of the archive.
+        let (member, key) = lib.needing_meta().unwrap().into_iter().find(|(e, _)| e.path == hits[0].path).unwrap();
+        let meta = crate::cache::ThumbMeta { content_hash: Some("h-orc".into()), ..Default::default() };
+        lib.store_meta(&member.path, &key, &meta).unwrap();
+        assert!(lib.needing_meta().unwrap().iter().all(|(e, _)| e.path != member.path), "done with it");
+        assert_eq!(lib.content_hash_of(&member.path).unwrap().as_deref(), Some("h-orc"));
         assert_eq!(lib.folder_preview(&zip, 4).unwrap().len(), 1);
         assert!(
             scan(&mut lib, &root, &root, Force::Nothing, &no).unwrap().changed_dirs.is_empty(),

@@ -409,26 +409,35 @@ impl Library {
         };
         let size = meta.size_mm.unwrap_or([f32::NAN; 3]).map(|v| if v.is_finite() { Some(v as f64) } else { None });
         let gcode = meta.gcode.as_deref();
-        self.conn.execute(
-            "UPDATE files SET meta_key = ?3, triangles = ?4, size_x = ?5, size_y = ?6, size_z = ?7,
-                 content_hash = COALESCE(?8, content_hash), geo_sig = ?9, print_s = ?10, gcode_printer = ?11,
-                 filament_g = ?12
-             WHERE name = ?2 AND dir_id = (SELECT id FROM dirs WHERE path = ?1)",
-            params![
-                dir,
-                name,
-                key,
-                meta.triangles.map(|t| t as i64),
-                size[0],
-                size[1],
-                size[2],
-                meta.content_hash,
-                meta.geo_sig,
-                gcode.and_then(|g| g.print_time.as_deref()).and_then(crate::loaders::gcode::print_seconds),
-                gcode.and_then(|g| g.printer.as_deref()),
-                gcode.and_then(|g| g.filament_g).map(f64::from),
-            ],
-        )?;
+        let update = |dir: &str, name: &str| {
+            self.conn.execute(
+                "UPDATE files SET meta_key = ?3, triangles = ?4, size_x = ?5, size_y = ?6, size_z = ?7,
+                     content_hash = COALESCE(?8, content_hash), geo_sig = ?9, print_s = ?10, gcode_printer = ?11,
+                     filament_g = ?12
+                 WHERE name = ?2 AND dir_id = (SELECT id FROM dirs WHERE path = ?1)",
+                params![
+                    dir,
+                    name,
+                    key,
+                    meta.triangles.map(|t| t as i64),
+                    size[0],
+                    size[1],
+                    size[2],
+                    meta.content_hash,
+                    meta.geo_sig,
+                    gcode.and_then(|g| g.print_time.as_deref()).and_then(crate::loaders::gcode::print_seconds),
+                    gcode.and_then(|g| g.printer.as_deref()),
+                    gcode.and_then(|g| g.filament_g).map(f64::from),
+                ],
+            )
+        };
+        // A member in a folder of an archive is stored under the archive, its inner path as name.
+        if update(dir, name)? == 0
+            && let Some((archive, member)) = crate::archive::split(path)
+            && let Some(archive) = path_str(&archive)
+        {
+            update(archive, &member)?;
+        }
         if let (Some(checks), Some(hash)) = (&meta.checks, &meta.content_hash) {
             self.store_checks(hash, checks)?;
         }
