@@ -3,7 +3,8 @@
 
 use std::time::{Duration, SystemTime};
 
-use meshgrove_core::ai::proposals::{self, BatchInfo, Decision, Picked, ProposalStore};
+use meshgrove_core::ai::proposals::{self, BatchInfo, Decision, MovePayload, Picked, ProposalKind, ProposalStore};
+use meshgrove_core::moves::MoveProblem;
 use meshgrove_core::ai::snippets::Client;
 use meshgrove_core::changes::TargetState;
 
@@ -72,6 +73,26 @@ impl App {
                 let mut items = Vec::new();
                 for proposal in store.proposals(b.id).unwrap_or_default().into_iter().filter(|p| p.state == "pending") {
                     let (mut entry, mut moved_to, mut stale, mut copies, mut note_before) = (None, None, false, 0, None);
+                    let mut taken = false;
+                    if proposal.kind == ProposalKind::Move {
+                        // A move works on the place it names, not on the content.
+                        let payload: Option<MovePayload> = serde_json::from_value(proposal.payload.clone()).ok();
+                        if let (Some(t), Some(m)) = (&proposal.target, payload) {
+                            match meshgrove_core::moves::check_move(t, &m.to, m.folder) {
+                                Ok(()) => {}
+                                Err(MoveProblem::Taken) => taken = true,
+                                Err(MoveProblem::Gone) => stale = true,
+                            }
+                            if let Some(e) = index.entry_of(&t.path).ok().flatten().filter(|_| !m.folder) {
+                                entry = Some(entries.len());
+                                entries.push(e);
+                            }
+                        }
+                        let picked = Picked::all(&proposal);
+                        let stale = stale || taken;
+                        items.push(ReviewItem { proposal, entry, moved_to, stale, copies, picked, note_before, taken });
+                        continue;
+                    }
                     if let Some(t) = &proposal.target {
                         let state = index.resolve_target(t).unwrap_or(TargetState::Stale);
                         let path = match &state {
@@ -91,7 +112,7 @@ impl App {
                         copies = t.hash.as_deref().and_then(|h| index.copies_of(h).ok()).unwrap_or(0);
                     }
                     let picked = Picked::all(&proposal);
-                    items.push(ReviewItem { proposal, entry, moved_to, stale, copies, picked, note_before });
+                    items.push(ReviewItem { proposal, entry, moved_to, stale, copies, picked, note_before, taken });
                 }
                 if !items.is_empty() {
                     batches.push(review_batch(&b, items));
@@ -170,6 +191,12 @@ impl App {
             Applied::Failed(e) => t!("review.failed", error = e),
         };
         self.toast(message.into_owned());
+        // A move may have taken the open folder away: show the folder it was in.
+        if self.nav.current().symlink_metadata().is_err()
+            && let Some(up) = self.nav.current().ancestors().find(|a| a.is_dir()).map(std::path::Path::to_path_buf)
+        {
+            self.nav.open(up);
+        }
         match self.view {
             View::Review { .. } => self.show_review(),
             View::History { .. } => self.show_history(),

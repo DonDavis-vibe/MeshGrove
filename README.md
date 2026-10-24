@@ -111,7 +111,7 @@ What makes it different from other model managers:
 | **Printers** | All your printers with their build volumes, found in Anycubic Slicer Next, OrcaSlicer, Bambu Studio and PrusaSlicer or entered by hand; each model says which printers it fits on, tiles mark models that fit only when turned (↻ 41°) or on no printer (✕); G-code is matched to its printer; search with `passt:"Kobra S1"` and `is:zugross` |
 | **Printability check** | Every model is checked for holes (open edges), edges shared by more than two faces, faces without area, separate parts and volume, and for suspicious sizes (drawn in inches?); ⚠ on the tile, details in the info pane, `is:problem` in the search |
 | **Inbox** | New files are collected in an inbox, grouped by the folder or archive they came in (a customer's ZIP, a new download), with copies of known models counted apart; tick them off when sorted |
-| **AI (optional)** | Meshgrove brings no AI, but your own assistant (Claude, LM Studio, Cursor …) can search the libraries you open to it over MCP and suggest tags, notes and lists; nothing changes until you accept it in the review, and everything can be undone |
+| **AI (optional)** | Meshgrove brings no AI, but your own assistant (Claude, LM Studio, Cursor …) can search the libraries you open to it over MCP and suggest tags, notes, lists and moves; with an endpoint of your own (Ollama, LM Studio, OpenAI-compatible) there is an AI chat with `@` references and one-click actions too. Nothing changes until you accept it, and everything can be undone |
 | **Duplicates** | Finds exact copies and the same model saved differently (ASCII vs binary STL, STL vs 3MF, rotated or moved copies), suggests which copy to keep and can move the others to the trash |
 | **Slicer and apps** | "Open in slicer" for one or many models (finds over 30 common filament and resin slicers, among them Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer, Cura, Creality Print, QIDI Studio, FlashPrint, Lychee, ChiTuBox and UVtools, whether installed as a package, Flatpak, Snap or AppImage; add the ones you use with a ＋ in the settings, pick a default, the others sit in a submenu), into the slicer window that is already open where the slicer allows it; "open in" your **mesh editors or CAD programs** (finds over 20 programs, among them Blender, FreeCAD, Autodesk Fusion, MeshLab, SolidCraft, OpenSCAD, SolveSpace, Rhino, SketchUp, SolidWorks and fstl, again in every install variant; add and choose a default in the settings); **Ctrl+C copies the files** for pasting into the file manager or slicer; "show in file manager"; open with the default app |
 | **Desktop integration** | Menu entry, icon, file associations; on Linux the same renderer also provides **thumbnails in Dolphin and file dialogs** |
@@ -619,7 +619,7 @@ libraries you opened to it, gets ids like `Garten/Rankhilfe/rose.stl` instead of
 paths (the full path only when it asks about one file, to hand it to a slicer or a printer
 server), and never the model files themselves. Ready-made tasks come with it: *eingang-
 einordnen* (sort the inbox), *druckliste-zusammenstellen* (put together a print list) and
-*tags-aufraeumen* (clean up tags).
+*tags-aufraeumen* (clean up tags) and *ordner-aufraeumen* (tidy up a folder).
 
 **Review:** suggestions wait in Meshgrove. The ✧ button in the toolbar shows how many; it
 opens the review, where each batch shows what was suggested for which file: tags to add (✓ to
@@ -631,7 +631,33 @@ reach identical copies; the review says when.
 **History:** *Review → History* lists what was accepted. *↶ Undo* takes back exactly those
 changes, leaving what you changed by hand since; *↷ Redo* applies them again. *Settings → AI &
 MCP* also shows the **access log** – which assistant looked at what, and when – and *Delete AI
-data* removes all open suggestions and the log.
+data* removes all open suggestions, the log and the chat conversations.
+
+**AI chat (your own endpoint):** in *Settings → AI & MCP → Your own endpoint* enter an
+OpenAI-compatible service you run or use – Ollama, LM Studio, llama.cpp, OpenAI, OpenRouter –
+with a model and, if needed, a key (kept in the system keyring). *Test connection* lists the
+models. The **AI chat** pane then appears next to *Info*: ask about your library, and type `@` to
+add files, folders, tags, lists, printers, the inbox or a search (`@tag:garden fits:mini`) as
+references. Answers name files as clickable references; what the AI looked up is folded below.
+The **Review | Automatic** switch decides whether its tags, notes and lists go to the review
+first or are applied right away; the ↶ arrow on your message takes back everything changed in
+answer to it. A cloud service sees only the libraries opened to cloud AI, and before the first
+message Meshgrove shows what goes out. Conversations stay on your computer.
+
+**One-click actions** work with small local models too, as they need no tool calling: *✧ Sort
+in* in the inbox (per group or all) suggests tags, *✧ Suggest tags* in the context menu does it
+for the selection, ✧ next to the tag field offers tags to click, and *+ New list … → ✧ Or
+describe* turns "gifts under 2 h for the A1 mini" into a print list (print times come from
+G-code, also from one of the same name next to the model). The results wait in the review and
+appear as a card in a new conversation to ask about. *✧ Mention in chat* puts the selection into
+the message field; *Copy as AI reference* gives `meshgrove:` references for an assistant over MCP.
+
+**Moving and renaming:** the assistant and the chat can suggest moving or renaming files,
+archives or folders within their library. That always stays a suggestion, also in automatic
+mode: the review shows old → new and which folders would be made. Accepting moves them on disk
+without ever overwriting anything – a place taken by then is skipped. Tags, notes, lists and
+thumbnails go along, nothing is computed again. The history takes it back as long as the files
+are unchanged; folders made for it go again when empty. Files inside archives stay where they are.
 
 `meshgrove-mcp --print-config claude-desktop` (or `claude-code`, `lm-studio`, `cursor`, `vscode`,
 with `--local` if needed) prints the entry on the command line too. With the AppImage the
@@ -842,10 +868,19 @@ materials = ["PLA", "PETG"]
 [ai]                       # optional assistant over MCP
 enabled = false
 
+chat_mode = "review"       # review | auto: changes from the chat reviewed first, or applied at once
+
 [[ai.libraries]]
 root = "/home/me/3D-Models"
 access = "cloud"           # none | local_only | cloud
 images = true              # thumbnails may be sent
+
+[ai.endpoint]              # your own endpoint for the AI chat and one-click actions
+base_url = "http://localhost:11434/v1"
+model = "qwen3:8b"
+local = true               # runs here or on your own network
+vision = false             # the model understands pictures
+tools = true               # the model can use tools
 ```
 
 Environment variables for special cases:

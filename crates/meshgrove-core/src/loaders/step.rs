@@ -34,14 +34,27 @@ pub fn load(path: &Path) -> Result<Mesh, LoadError> {
     load_with(path, &base.join("meshgrove").join("step"), &mesher_path())
 }
 
+fn cache_file(cache: &Path, path: &Path, len: u64, mtime_ns: u128) -> PathBuf {
+    let key = blake3::hash(format!("{MESHER_VERSION}\0{}\0{len}\0{mtime_ns}", path.display()).as_bytes()).to_hex();
+    cache.join(format!("{}.stl", &key[..32]))
+}
+
+/// The tessellation of a STEP file moved from `old` to `new` (same size and time) stays usable.
+pub fn rekey(old: &Path, new: &Path, len: u64, mtime_ns: u128) {
+    let Some(base) = dirs::cache_dir() else { return };
+    let cache = base.join("meshgrove").join("step");
+    let from = cache_file(&cache, old, len, mtime_ns);
+    if from.exists() {
+        let _ = std::fs::rename(&from, cache_file(&cache, new, len, mtime_ns));
+    }
+}
+
 fn load_with(path: &Path, cache: &Path, mesher: &Path) -> Result<Mesh, LoadError> {
     let source = crate::archive::materialize(path)?;
     let meta = std::fs::metadata(&source)?;
     let mtime =
         meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
-    let key =
-        blake3::hash(format!("{MESHER_VERSION}\0{}\0{}\0{mtime}", path.display(), meta.len()).as_bytes()).to_hex();
-    let cached = cache.join(format!("{}.stl", &key[..32]));
+    let cached = cache_file(cache, path, meta.len(), mtime);
     if let Ok(bytes) = std::fs::read(&cached) {
         return stl::parse(&bytes);
     }

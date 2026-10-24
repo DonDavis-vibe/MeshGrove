@@ -61,6 +61,7 @@ const TOOLS: &[(&str, &str, bool)] = &[
     ("propose_note", "A note per file (replacing or appended).", true),
     ("propose_list", "A new print list (with copies) or collection, or an automatic collection from a saved search.", true),
     ("propose_tag_merge", "Replace tags by one (spelling variants, synonyms, the other language) on every file carrying them.", true),
+    ("propose_moves", "Move or rename files, archives or folders within their library; always waits for the user's review, never replaces anything.", true),
 ];
 
 /// Whether the tool changes something (or suggests a change).
@@ -96,6 +97,7 @@ pub fn definitions() -> Vec<Value> {
                 "propose_note" => schema::<proposals::ProposeNote>(),
                 "propose_list" => schema::<proposals::ProposeList>(),
                 "propose_tag_merge" => schema::<proposals::ProposeTagMerge>(),
+                "propose_moves" => schema::<proposals::ProposeMoves>(),
                 _ => none(),
             };
             json!({"type": "function", "function": {"name": name, "description": description, "parameters": parameters}})
@@ -135,6 +137,7 @@ pub fn call(cx: &Context, store: &mut ProposalStore, origin: &Origin, name: &str
         "propose_note" => to_value(proposals::propose_note(cx, store, origin, &args(arguments)?)?),
         "propose_list" => to_value(proposals::propose_list(cx, store, origin, &args(arguments)?)?),
         "propose_tag_merge" => to_value(proposals::propose_tag_merge(cx, store, origin, &args(arguments)?)?),
+        "propose_moves" => to_value(proposals::propose_moves(cx, store, origin, &args(arguments)?)?),
         other => Err(ToolError::Invalid(format!("no tool called {other}"))),
     }
 }

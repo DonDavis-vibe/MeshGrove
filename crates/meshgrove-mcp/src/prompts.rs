@@ -31,6 +31,12 @@ pub struct TagCleanupArgs {
     pub bibliothek: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct FolderCleanupArgs {
+    /// The folder id to tidy up (a customer's delivery, say).
+    pub ordner: String,
+}
+
 impl Meshgrove {
     fn english(&self) -> bool {
         self.load_config().ok().and_then(|c| c.language).is_some_and(|l| l.starts_with("en"))
@@ -112,6 +118,31 @@ impl Meshgrove {
                  propose_tag_merge Zusammenlegungen vor (hin zum meistgenutzten oder zum vorgeschlagenen Tag). Nenne \
                  selten genutzte Tags, die du streichen würdest, aber schlag ihr Entfernen nicht ungefragt vor. Alles \
                  wartet in Meshgrove auf meine Prüfung."
+            )
+        })
+    }
+
+    /// Tidy up a folder: sensible subfolders and file names, suggested as moves to review.
+    #[prompt(name = "ordner-aufraeumen")]
+    async fn clean_up_folder(&self, Parameters(args): Parameters<FolderCleanupArgs>) -> Vec<PromptMessage> {
+        user(if self.english() {
+            format!(
+                "Tidy up the folder {} of my Meshgrove library. Look at it with folder_summary (and search_models \
+                 with folder for all its files). Suggest a clear layout: subfolders by part or project, readable \
+                 file names (no \"final_v2_neu\"), keeping what belongs together. Use propose_moves, one call for \
+                 the folder, and keep the number of moves small; never move files out of their library. Explain the \
+                 new layout briefly. Nothing moves until I accept it in Meshgrove, and I can undo it.",
+                args.ordner
+            )
+        } else {
+            format!(
+                "Räume den Ordner {} meiner Meshgrove-Bibliothek auf. Sieh ihn dir mit folder_summary an (und mit \
+                 search_models samt folder für alle Dateien). Schlag eine klare Ordnung vor: Unterordner nach Teil \
+                 oder Projekt, lesbare Dateinamen (kein „final_v2_neu“), Zusammengehöriges bleibt zusammen. Nutze \
+                 propose_moves, ein Aufruf für den Ordner, mit möglichst wenigen Verschiebungen; nie aus der \
+                 Bibliothek heraus. Erklär die neue Ordnung kurz. Nichts wird verschoben, bevor ich es in Meshgrove \
+                 annehme, und ich kann es rückgängig machen.",
+                args.ordner
             )
         })
     }

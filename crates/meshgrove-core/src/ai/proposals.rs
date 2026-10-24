@@ -171,6 +171,14 @@ pub struct ListPayload {
     pub description: Option<String>,
 }
 
+/// Where a file, archive or folder goes, in the library it is in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MovePayload {
+    pub root: PathBuf,
+    pub to: PathBuf,
+    pub folder: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ListItemPayload {
     pub target: Target,
@@ -650,6 +658,11 @@ pub fn to_ops(p: &Proposal, picked: &Picked, inbox_done: bool) -> Vec<crate::cha
                 ops.push(ApplyOp::SetNote { target: t.clone(), text: note.text, append: note.append });
             }
         }
+        (ProposalKind::Move, Some(t)) if picked.whole => {
+            if let Ok(m) = serde_json::from_value::<MovePayload>(p.payload.clone()) {
+                ops.push(ApplyOp::Move { root: m.root, target: t.clone(), to: m.to, folder: m.folder });
+            }
+        }
         (ProposalKind::List, _) if picked.whole => {
             if let Ok(list) = serde_json::from_value::<ListPayload>(p.payload.clone()) {
                 let kind = if list.kind == "print" { ListKind::Print } else { ListKind::Collection };
@@ -736,6 +749,28 @@ pub struct ProposeList {
     pub query: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct MoveItem {
+    /// A file, archive or folder (an id from search_models, folder_summary …).
+    pub id: String,
+    /// Its new id in the same library, e.g. "Garten/Rankhilfen/rose.stl" (only the name changes
+    /// for a rename); ending in "/" the folder it goes into, keeping its name. Missing folders
+    /// are made.
+    pub to: String,
+    /// Why, in a few words (shown in the review).
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ProposeMoves {
+    /// Shown above the suggestions, e.g. "Kunde Müller aufräumen".
+    pub title: String,
+    pub items: Vec<MoveItem>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -938,6 +973,95 @@ pub fn propose_list(cx: &Context, store: &mut ProposalStore, origin: &Origin, re
 
 /// Replaces tags by one: per visible file carrying one of `from`, a suggestion to remove it
 /// and add `to`.
+/// Moves and renames, checked now and again when accepted: within one library, never onto
+/// anything, nothing inside an archive, names that work on every system.
+pub fn propose_moves(cx: &Context, store: &mut ProposalStore, origin: &Origin, req: &ProposeMoves) -> ToolResult<Receipt> {
+    check_room(store, origin, req.items.len())?;
+    let mut proposals = Vec::new();
+    let mut rejected = Vec::new();
+    let (mut targets, mut sources): (Vec<PathBuf>, Vec<PathBuf>) = (Vec::new(), Vec::new());
+    for item in &req.items {
+        match move_of(cx, item, &targets, &sources) {
+            Ok((target, payload)) => {
+                targets.push(payload.to.clone());
+                sources.push(target.path.clone());
+                proposals.push(NewProposal {
+                    kind: ProposalKind::Move,
+                    target: Some(target),
+                    payload: serde_json::to_value(payload).unwrap_or_default(),
+                    reason: summary_line(item.reason.as_deref()),
+                    confidence: None,
+                });
+            }
+            Err(why) => rejected.push(RejectedItem { id: item.id.clone(), why }),
+        }
+    }
+    if proposals.is_empty() {
+        let why = rejected.first().map_or("no items", |r| r.why.as_str());
+        return Err(ToolError::Invalid(format!("no usable move ({why})")));
+    }
+    let title = summary_line(Some(&req.title)).unwrap_or_else(|| "Verschieben".into());
+    let batch = NewBatch { origin, kind: "move", title: &title, summary: None, inbox_done: false };
+    let (_, uid) = store.insert_batch(&batch, &proposals)?;
+    Ok(Receipt { batch: uid, items: proposals.len(), rejected, tags: Vec::new(), message: WAITING.into() })
+}
+
+/// One move, checked; `targets` and `sources` are those of the batch so far.
+fn move_of(cx: &Context, item: &MoveItem, targets: &[PathBuf], sources: &[PathBuf]) -> Result<(Target, MovePayload), String> {
+    let from = cx.resolve(&item.id).map_err(|e| e.to_string())?;
+    let root = cx.scope.root_of(&from).map(|r| r.path.clone()).ok_or_else(|| format!("unknown id: {}", item.id))?;
+    if from == root {
+        return Err("a library itself cannot be moved".into());
+    }
+    if crate::archive::split(&from).is_some() {
+        return Err("files inside an archive cannot be moved; move the whole archive".into());
+    }
+    let meta = from.symlink_metadata().map_err(|_| format!("unknown id: {}", item.id))?;
+    let folder = meta.is_dir();
+    let to = match item.to.trim().strip_suffix('/') {
+        Some(dir) => cx.resolve(dir).map(|d| d.join(from.file_name().unwrap_or_default())),
+        None => cx.resolve(item.to.trim()),
+    }
+    .map_err(|_| format!("the new place {:?} is no id in a library you may see", item.to))?;
+    if cx.scope.root_of(&to).map(|r| r.path.as_path()) != Some(root.as_path()) {
+        return Err("moves stay within one library".into());
+    }
+    if to == from {
+        return Err("that is where it is already".into());
+    }
+    if to.starts_with(&from) {
+        return Err("a folder cannot go into itself".into());
+    }
+    let name = to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    crate::fsops::check_name(&name)?;
+    for dir in crate::moves::missing_folders(&root, to.parent().unwrap_or(&root)) {
+        crate::fsops::check_name(&dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())?;
+    }
+    if to.ancestors().skip(1).take_while(|a| *a != root).any(Path::is_file) {
+        return Err("the new place is inside a file or an archive".into());
+    }
+    if to.symlink_metadata().is_ok() && !crate::fsops::case_only(&from, &to) {
+        return Err("something of that name is there already; nothing is ever replaced".into());
+    }
+    let lower = |p: &Path| p.to_string_lossy().to_lowercase();
+    if targets.iter().any(|t| lower(t) == lower(&to)) {
+        return Err("another move of this batch goes there".into());
+    }
+    if sources.iter().any(|s| from.starts_with(s) || s.starts_with(&from)) {
+        return Err("it moves with a folder of this batch already".into());
+    }
+    let (size, mtime_ns) = if folder { (0, nanos(meta.modified().ok())) } else { (meta.len(), nanos(meta.modified().ok())) };
+    // The content, when the index knows the file as it is.
+    let hash = cx
+        .lib
+        .ai_row_of(&from)
+        .ok()
+        .flatten()
+        .filter(|r| !folder && r.entry.size == size && nanos(r.entry.modified) == mtime_ns)
+        .and_then(|r| r.hash);
+    Ok((Target { path: from, hash, size, mtime_ns }, MovePayload { root, to, folder }))
+}
+
 pub fn propose_tag_merge(
     cx: &Context,
     store: &mut ProposalStore,

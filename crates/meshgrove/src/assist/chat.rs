@@ -184,7 +184,8 @@ fn tool(
             let mut scratch = ProposalStore::open_in_memory().map_err(|e| e.to_string())?;
             return dispatch::call(&cx, &mut scratch, &origin, name, args).map_err(|e| e.to_string());
         }
-        match turn.mode {
+        // Moves always wait for the review, also in automatic mode.
+        match if name == "propose_moves" { ChatMode::Review } else { turn.mode } {
             ChatMode::Review => {
                 let path = ProposalStore::default_location().ok_or("no data folder")?;
                 let mut store = ProposalStore::open(&path).map_err(|e| e.to_string())?;
@@ -258,7 +259,7 @@ pub fn system_prompt(mode: ChatMode) -> String {
             "Changes you make with the propose_* tools wait for the user's review in Meshgrove; say what you suggested and that it waits there."
         }
         ChatMode::Auto => {
-            "The propose_* tools change the library at once; the user can undo the changes of each of their messages. Change only what was asked for."
+            "The propose_* tools change the library at once; the user can undo the changes of each of their messages. Change only what was asked for. Moves (propose_moves) are the exception: they always wait for the user's review."
         }
     };
     format!(

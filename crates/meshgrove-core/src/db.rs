@@ -164,6 +164,8 @@ pub struct Library {
     printers: Arc<Vec<Printer>>,
     /// Libraries in their first (baseline) scan: what it finds is not new ([`crate::inbox`]).
     baseline_roots: HashSet<PathBuf>,
+    /// The thumbnail cache whose entries follow moved files ([`Library::set_thumb_cache`]).
+    pub(crate) thumbs: Option<ThumbCache>,
 }
 
 impl Library {
@@ -193,7 +195,7 @@ impl Library {
         }
         let printers = Arc::new(Vec::new());
         printer_functions(&conn, &printers).ok()?;
-        Some(Library { conn, printers, baseline_roots: HashSet::new() })
+        Some(Library { conn, printers, baseline_roots: HashSet::new(), thumbs: None })
     }
 
     /// The layout version of the index at `path`, without opening it for use; `None` when
@@ -237,7 +239,7 @@ impl Library {
         crate::inbox::start(&conn)?;
         let printers = Arc::new(Vec::new());
         printer_functions(&conn, &printers)?;
-        Ok(Library { conn, printers, baseline_roots: HashSet::new() })
+        Ok(Library { conn, printers, baseline_roots: HashSet::new(), thumbs: None })
     }
 
     /// While on, folders and files indexed below `root` count as there before (not new).
@@ -247,6 +249,11 @@ impl Library {
         } else {
             self.baseline_roots.remove(root);
         }
+    }
+
+    /// Moved files take their thumbnails along in this cache (instead of being rendered again).
+    pub fn set_thumb_cache(&mut self, cache: ThumbCache) {
+        self.thumbs = Some(cache);
     }
 
     /// The printers `passt:`/`fits:` and `is:zugross` check against.

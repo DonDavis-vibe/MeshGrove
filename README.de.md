@@ -113,7 +113,7 @@ Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 | **Drucker** | Alle deine Drucker mit Bauraum, gefunden in Anycubic Slicer Next, OrcaSlicer, Bambu Studio und PrusaSlicer oder von Hand eingetragen; jedes Modell sagt, auf welche Drucker es passt, Kacheln markieren Modelle, die nur gedreht (↻ 41°) oder auf keinen Drucker passen (✕); G-code wird seinem Drucker zugeordnet; Suche mit `passt:"Kobra S1"` und `is:zugross` |
 | **Druckbarkeits-Check** | Jedes Modell wird auf Löcher (offene Kanten), Kanten an mehr als zwei Flächen, Dreiecke ohne Fläche, getrennte Teile und Volumen geprüft, dazu auf verdächtige Größen (in Zoll gezeichnet?); ⚠ auf der Kachel, Einzelheiten im Bereich *Info*, `is:problem` in der Suche |
 | **Eingang** | Neue Dateien landen im Eingang, gruppiert nach dem Ordner oder Archiv, mit dem sie kamen (das ZIP eines Kunden, ein neuer Download); Kopien bekannter Modelle werden getrennt gezählt; abhaken, wenn eingeordnet |
-| **KI (freiwillig)** | Meshgrove bringt keine KI mit, aber dein eigener Assistent (Claude, LM Studio, Cursor …) kann über MCP in den freigegebenen Bibliotheken suchen und Tags, Notizen und Listen vorschlagen; nichts ändert sich, bevor du es in der Prüfliste annimmst, und alles lässt sich rückgängig machen |
+| **KI (freiwillig)** | Meshgrove bringt keine KI mit, aber dein eigener Assistent (Claude, LM Studio, Cursor …) kann über MCP in den freigegebenen Bibliotheken suchen und Tags, Notizen, Listen und Verschiebungen vorschlagen; mit einem eigenen Endpunkt (Ollama, LM Studio, OpenAI-kompatibel) gibt es dazu einen KI-Chat mit `@`-Verweisen und Ein-Klick-Aktionen. Nichts ändert sich, bevor du es annimmst, und alles lässt sich rückgängig machen |
 | **Duplikate** | Findet exakte Kopien und dasselbe Modell in anderer Form (ASCII- statt Binär-STL, STL statt 3MF, gedrehte oder verschobene Kopien), schlägt vor, welche Kopie bleiben soll, und kann die anderen in den Papierkorb legen |
 | **Slicer und Programme** | „In Slicer öffnen“ für ein oder viele Modelle (erkennt Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer), ins schon offene Slicer-Fenster, wo der Slicer das erlaubt; „In … öffnen“ für deinen **Mesh-Editor oder dein CAD-Programm** (erkennt Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer); **Strg+C kopiert die Dateien** zum Einfügen im Dateimanager oder Slicer; „Im Dateimanager zeigen“; Öffnen mit dem Standardprogramm |
 | **Desktop-Einbindung** | Menüeintrag, Symbol, Dateizuordnungen; unter Linux liefert derselbe Renderer auch **Vorschauen in Dolphin und Dateidialogen** |
@@ -651,7 +651,7 @@ Der Assistent startet `meshgrove-mcp` selbst; Meshgrove muss dafür nicht laufen
 Bibliotheken, die du ihm freigibst, bekommt Kennungen wie `Garten/Rankhilfe/rose.stl` statt deiner
 Ordnerpfade (den vollen Pfad nur, wenn er nach einer Datei fragt, um sie an einen Slicer oder
 Druckserver zu geben) und nie die Modelldateien selbst. Fertige Aufgaben sind dabei:
-*eingang-einordnen*, *druckliste-zusammenstellen* und *tags-aufraeumen*.
+*eingang-einordnen*, *druckliste-zusammenstellen*, *tags-aufraeumen* und *ordner-aufraeumen*.
 
 **Prüfen:** Vorschläge warten in Meshgrove. Der ✧-Knopf in der Werkzeugleiste zeigt, wie viele;
 er öffnet die Prüfliste. Jeder Block zeigt, was für welche Datei vorgeschlagen wurde: neue Tags (☑
@@ -664,7 +664,38 @@ Kopien; die Prüfliste sagt es dann.
 **Verlauf:** *Prüfliste → Verlauf* listet, was angenommen wurde. *↶ Rückgängig* nimmt genau diese
 Änderungen zurück und lässt, was du seither von Hand geändert hast; *↷ Wiederherstellen* wendet sie
 wieder an. *Einstellungen → KI & MCP* zeigt außerdem das **Zugriffsprotokoll** – welcher Assistent
-wann was angesehen hat –, und *KI-Daten löschen* entfernt alle offenen Vorschläge und das Protokoll.
+wann was angesehen hat –, und *KI-Daten löschen* entfernt alle offenen Vorschläge, das Protokoll
+und die Chat-Gespräche.
+
+**KI-Chat (eigener Endpunkt):** Unter *Einstellungen → KI & MCP → Eigener Endpunkt* trägst du einen
+OpenAI-kompatiblen Dienst ein, den du selbst betreibst oder nutzt – Ollama, LM Studio, llama.cpp,
+OpenAI, OpenRouter –, mit Modell und, wenn nötig, Schlüssel (er liegt im Schlüsselbund).
+*Verbindung testen* listet die Modelle. Dann erscheint neben *Info* der Bereich **KI-Chat**: Frag
+nach deiner Bibliothek, und mit `@` fügst du Dateien, Ordner, Tags, Listen, Drucker, den Eingang
+oder eine Suche (`@tag:garten passt:mini`) als Verweis ein. Antworten nennen Dateien als
+anklickbare Verweise; was die KI nachgeschlagen hat, steht eingeklappt darunter. Der Schalter
+**Prüfen | Automatisch** entscheidet, ob ihre Tags, Notizen und Listen erst in die Prüfliste gehen
+oder gleich angewendet werden; der Pfeil ↶ an deiner Nachricht nimmt alles zurück, was darauf hin
+geändert wurde. Ein Cloud-Dienst sieht nur Bibliotheken, die für Cloud-KI freigegeben sind, und
+vor dem ersten Senden zeigt Meshgrove, was rausgeht. Die Gespräche bleiben auf deinem Rechner.
+
+**Ein-Klick-Aktionen** gehen auch mit kleinen lokalen Modellen, weil sie ohne Werkzeug-Aufrufe
+auskommen: *✧ Einordnen* im Eingang (je Gruppe oder alles) schlägt Tags vor, *✧ Tags vorschlagen*
+im Kontextmenü tut es für die Auswahl, ✧ neben dem Tag-Feld bietet Tags zum Anklicken an, und
+*+ Neue Liste … → ✧ Oder beschreiben* macht aus „Geschenke unter 2 h für den A1 mini“ eine
+Druckliste (die Druckzeit kommt aus dem G-Code, auch aus einem gleichnamigen neben dem Modell). Die
+Ergebnisse warten in der Prüfliste und stehen als Karte in einem neuen Gespräch, in dem du
+nachfragen kannst. *✧ Im Chat erwähnen* legt die Auswahl ins Nachrichtenfeld, *Als KI-Verweis
+kopieren* gibt `meshgrove:`-Verweise für einen Assistenten über MCP.
+
+**Verschieben und Umbenennen:** Assistent und Chat können vorschlagen, Dateien, Archive oder Ordner
+innerhalb ihrer Bibliothek zu verschieben oder umzubenennen. Das bleibt immer ein Vorschlag, auch im
+automatischen Modus: Die Prüfliste zeigt alt → neu und welche Ordner dafür angelegt würden. Beim
+Annehmen wird auf der Festplatte verschoben, ohne je etwas zu überschreiben – ist das Ziel
+inzwischen belegt, wird es übersprungen. Tags, Notizen, Listen und Vorschaubilder ziehen mit,
+nichts wird neu berechnet. Im Verlauf lässt es sich zurücknehmen, solange die Dateien unverändert
+sind; eigens angelegte Ordner verschwinden dann wieder, wenn sie leer sind. Dateien in Archiven
+bleiben, wo sie sind.
 
 `meshgrove-mcp --print-config claude-desktop` (oder `claude-code`, `lm-studio`, `cursor`, `vscode`,
 bei Bedarf mit `--local`) gibt den Eintrag auch auf der Kommandozeile aus. Beim AppImage lautet der
@@ -882,10 +913,19 @@ materials = ["PLA", "PETG"]
 [ai]                       # freiwilliger Assistent über MCP
 enabled = false
 
+chat_mode = "review"       # review | auto: Änderungen aus dem Chat erst prüfen oder gleich anwenden
+
 [[ai.libraries]]
 root = "/home/ich/3D-Modelle"
 access = "cloud"           # none | local_only | cloud
 images = true              # Vorschaubilder dürfen mit
+
+[ai.endpoint]              # eigener Endpunkt für KI-Chat und Ein-Klick-Aktionen
+base_url = "http://localhost:11434/v1"
+model = "qwen3:8b"
+local = true               # läuft hier oder im eigenen Netz
+vision = false             # Modell versteht Bilder
+tools = true               # Modell kann Werkzeuge benutzen
 ```
 
 Umgebungsvariablen für Sonderfälle:

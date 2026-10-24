@@ -2988,6 +2988,7 @@ dependencies = [
  "glam",
  "gltf",
  "image",
+ "libc",
  "percent-encoding",
  "png",
  "quick-xml 0.42.0",

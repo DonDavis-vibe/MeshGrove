@@ -3,7 +3,9 @@
 //! exactly those, written in the same savepoint as the change itself.
 //!
 //! Steps work on content (hashes), like tags and notes do, so a file moved since the suggestion
-//! is still found; a file whose content is gone or changed makes its step stale.
+//! is still found; a file whose content is gone or changed makes its step stale. Moves are the
+//! exception: they act on the disk, at the place suggested, and are done again backwards if the
+//! journal cannot be written.
 
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -25,6 +27,9 @@ pub enum ApplyOp {
     /// A list (or the existing one of that kind and name) with these files and copies.
     List { kind: ListKind, name: String, query: Option<String>, items: Vec<(Target, u32)> },
     InboxDone { target: Target },
+    /// A file, archive or folder to another place in its library `root`; folders that do not
+    /// exist yet are made. Never onto anything that is there.
+    Move { root: PathBuf, target: Target, to: PathBuf, folder: bool },
 }
 
 /// What takes a step back.
@@ -37,6 +42,35 @@ enum UndoOp {
     DeleteList { list: i64 },
     RemoveItem { list: i64, hash: String },
     Reopen { hash: String },
+    /// From `at` back to `to`, if it is still as the move left it; `made` are the folders the
+    /// move created, removed again when empty.
+    MoveBack { root: PathBuf, at: PathBuf, to: PathBuf, size: u64, mtime_ns: i64, folder: bool, made: Vec<PathBuf> },
+}
+
+/// Moves done on disk during a change: (from, to, folders made), to do backwards on failure.
+type Moved = Vec<(PathBuf, PathBuf, Vec<PathBuf>)>;
+
+fn move_back(moved: &Moved) {
+    for (from, to, made) in moved.iter().rev() {
+        let _ = crate::fsops::rename_no_replace(to, from);
+        remove_empty(made);
+    }
+}
+
+/// Removes these folders (innermost last in the list) where they are empty; those removed.
+fn remove_empty(folders: &[PathBuf]) -> Vec<PathBuf> {
+    folders.iter().rev().filter(|d| std::fs::remove_dir(d).is_ok()).cloned().collect()
+}
+
+/// Makes `folders` (outermost first); on failure removes those made and says so.
+fn make_folders(folders: &[PathBuf]) -> bool {
+    for (i, d) in folders.iter().enumerate() {
+        if std::fs::create_dir(d).is_err() {
+            remove_empty(&folders[..i]);
+            return false;
+        }
+    }
+    true
 }
 
 /// Where a suggestion's file is now.
@@ -131,7 +165,16 @@ impl Library {
     /// (`proposal:<uid>`, `chat:<message>`).
     pub fn apply_change(&mut self, origin: &str, title: &str, ops: &[ApplyOp]) -> Result<ChangeReport, Error> {
         self.conn.execute_batch("SAVEPOINT apply_change")?;
-        match self.apply_ops(ops) {
+        let mut moved = Moved::new();
+        let result = self.apply_journalled(origin, title, ops, &mut moved);
+        if result.is_err() {
+            move_back(&moved);
+        }
+        result
+    }
+
+    fn apply_journalled(&mut self, origin: &str, title: &str, ops: &[ApplyOp], moved: &mut Moved) -> Result<ChangeReport, Error> {
+        match self.apply_ops(ops, moved) {
             Ok((undo, report)) => {
                 let result = (|| {
                     if undo.is_empty() {
@@ -161,7 +204,7 @@ impl Library {
         }
     }
 
-    fn apply_ops(&mut self, ops: &[ApplyOp]) -> Result<(Vec<UndoOp>, ChangeReport), Error> {
+    fn apply_ops(&mut self, ops: &[ApplyOp], moved: &mut Moved) -> Result<(Vec<UndoOp>, ChangeReport), Error> {
         let mut undo = Vec::new();
         let mut report = ChangeReport::default();
         let now = nanos(Some(SystemTime::now()));
@@ -277,6 +320,28 @@ impl Library {
                     }
                     None => false,
                 },
+                ApplyOp::Move { root, target, to, folder } => {
+                    let made = crate::moves::missing_folders(root, to.parent().unwrap_or(root));
+                    if crate::moves::check_move(target, to, *folder).is_err() || !make_folders(&made) {
+                        false
+                    } else if crate::fsops::rename_no_replace(&target.path, to).is_err() {
+                        remove_empty(&made);
+                        false
+                    } else {
+                        moved.push((target.path.clone(), to.clone(), made.clone()));
+                        self.move_index(root, &target.path, to)?;
+                        undo.push(UndoOp::MoveBack {
+                            root: root.clone(),
+                            at: to.clone(),
+                            to: target.path.clone(),
+                            size: target.size,
+                            mtime_ns: target.mtime_ns,
+                            folder: *folder,
+                            made,
+                        });
+                        true
+                    }
+                }
             };
             if done {
                 report.applied += 1;
@@ -326,10 +391,11 @@ impl Library {
         let Some((undo, None)) = row else { return Ok(UndoReport::default()) };
         let steps: Vec<UndoOp> = serde_json::from_str(&undo).unwrap_or_default();
         let mut report = UndoReport::default();
+        let mut moved = Moved::new();
         self.conn.execute_batch("SAVEPOINT undo_change")?;
         let result = (|| {
             for step in steps.iter().rev() {
-                if self.undo_step(step)? {
+                if self.undo_step(step, &mut moved)? {
                     report.undone += 1;
                 } else {
                     report.kept += 1;
@@ -348,12 +414,13 @@ impl Library {
             }
             Err(e) => {
                 self.conn.execute_batch("ROLLBACK TO undo_change; RELEASE undo_change")?;
+                move_back(&moved);
                 Err(e)
             }
         }
     }
 
-    fn undo_step(&mut self, step: &UndoOp) -> Result<bool, Error> {
+    fn undo_step(&mut self, step: &UndoOp, moved: &mut Moved) -> Result<bool, Error> {
         Ok(match step {
             UndoOp::Untag { hash, tag } => {
                 let had = self.conn.query_row(
@@ -392,6 +459,24 @@ impl Library {
                     "UPDATE inbox SET done_ns = NULL, done_by = NULL WHERE content_hash = ?1 AND done_by = 'proposal'",
                     [hash],
                 )? > 0
+            }
+            UndoOp::MoveBack { root, at, to, size, mtime_ns, folder, made } => {
+                // Only as the move left it: not changed, and its old place still free.
+                let now = Target { path: at.clone(), hash: None, size: *size, mtime_ns: *mtime_ns };
+                let missing = crate::moves::missing_folders(root, to.parent().unwrap_or(root));
+                if crate::moves::check_move(&now, to, *folder).is_err() || !make_folders(&missing) {
+                    false
+                } else if crate::fsops::rename_no_replace(at, to).is_err() {
+                    remove_empty(&missing);
+                    false
+                } else {
+                    moved.push((at.clone(), to.clone(), missing));
+                    self.move_index(root, at, to)?;
+                    for dir in remove_empty(made) {
+                        self.conn.execute("DELETE FROM dirs WHERE path = ?1", [dir.to_string_lossy()])?;
+                    }
+                    true
+                }
             }
         })
     }

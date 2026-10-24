@@ -34,6 +34,10 @@ epaint_default_fonts.workspace = true
 # JSON schemas of the AI tool parameters, for meshgrove-mcp (feature "schema").
 schemars = { version = "1", optional = true }
 
+# Renaming without replacing (renameat2 / renamex_np) for moves the user accepted.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 schema = ["dep:schemars"]
 

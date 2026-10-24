@@ -287,6 +287,10 @@ impl Worker {
                 return;
             }
         };
+        // Accepted moves take the thumbnails along.
+        if let Some(dir) = meshgrove_core::cache::ThumbCache::default_location() {
+            lib.set_thumb_cache(meshgrove_core::cache::ThumbCache::new(dir));
+        }
         let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             if let Ok(event) = res
                 && is_change(&event.kind)

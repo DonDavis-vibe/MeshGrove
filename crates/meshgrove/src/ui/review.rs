@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use egui::{Color32, RichText, Ui};
-use meshgrove_core::ai::proposals::{ListPayload, NotePayload, Picked, Proposal, ProposalKind, TagsPayload};
+use meshgrove_core::ai::proposals::{ListPayload, MovePayload, NotePayload, Picked, Proposal, ProposalKind, TagsPayload};
 use meshgrove_core::ai::vocab::TagStatus;
 use meshgrove_core::changes::ChangeInfo;
 use meshgrove_core::listing::{self, Entry};
@@ -29,6 +29,12 @@ pub struct ReviewBatch {
     pub items: Vec<ReviewItem>,
 }
 
+impl ReviewBatch {
+    fn moves(&self) -> bool {
+        self.items.iter().any(|i| i.proposal.kind == ProposalKind::Move)
+    }
+}
+
 pub struct ReviewItem {
     pub proposal: Proposal,
     /// The file in the view's entries, while it is still in the library.
@@ -41,6 +47,8 @@ pub struct ReviewItem {
     pub picked: Picked,
     /// The note the file has now (note suggestions).
     pub note_before: Option<String>,
+    /// A move whose new place is taken by now.
+    pub taken: bool,
 }
 
 pub enum ReviewAction {
@@ -107,6 +115,9 @@ pub fn show(
                 if batch.inbox_done {
                     ui.weak(t!("review.inbox_done"));
                 }
+                if batch.moves() {
+                    ui.weak(t!("review.moves_hint"));
+                }
                 for item in &mut batch.items {
                     ui.separator();
                     if let Some(a) = item_row(ui, entries, item, gallery, style) {
@@ -137,20 +148,20 @@ fn item_row(ui: &mut Ui, entries: &[Entry], item: &mut ReviewItem, gallery: &Gal
                 ProposalKind::Tags => tags_row(ui, item, style),
                 ProposalKind::Note => note_row(ui, item),
                 ProposalKind::List => list_row(ui, item),
-                ProposalKind::Move => {
-                    ui.weak(t!("review.not_yet"));
-                }
+                ProposalKind::Move => move_row(ui, item),
             }
             let p = &item.proposal;
             if let Some(reason) = &p.reason {
                 ui.label(RichText::new(reason).italics().weak());
             }
-            if item.stale {
+            if item.taken {
+                ui.colored_label(ui.visuals().warn_fg_color, t!("review.move_taken"));
+            } else if item.stale {
                 ui.colored_label(ui.visuals().warn_fg_color, t!("review.stale"));
             } else if let Some(to) = &item.moved_to {
                 ui.weak(t!("review.moved", path = to.display().to_string()));
             }
-            if item.copies > 1 && p.kind != ProposalKind::List {
+            if item.copies > 1 && !matches!(p.kind, ProposalKind::List | ProposalKind::Move) {
                 ui.weak(t!("review.copies", count = item.copies - 1));
             }
         });
@@ -207,6 +218,31 @@ fn note_row(ui: &mut Ui, item: &mut ReviewItem) {
     }
     let label = if note.append { t!("review.note_append") } else { t!("review.note_new") };
     ui.label(format!("{label} {}", note.text));
+}
+
+/// Old and new place, relative to the library; folders the move makes.
+fn move_row(ui: &mut Ui, item: &mut ReviewItem) {
+    let Ok(m) = serde_json::from_value::<MovePayload>(item.proposal.payload.clone()) else { return };
+    let Some(from) = item.proposal.target.as_ref().map(|t| t.path.clone()) else { return };
+    let rel = |p: &std::path::Path| p.strip_prefix(&m.root).unwrap_or(p).display().to_string();
+    let rename = from.parent() == m.to.parent();
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut item.picked.whole, "");
+        let icon = if m.folder { "📁" } else { "📄" };
+        let what = if rename { t!("review.rename") } else { t!("review.move") };
+        ui.label(RichText::new(format!("{icon} {what}")).strong());
+    });
+    let (old, new) = if rename {
+        (listing::file_name(&from), listing::file_name(&m.to))
+    } else {
+        (rel(&from), rel(&m.to))
+    };
+    ui.label(RichText::new(old).weak().strikethrough());
+    ui.label(RichText::new(format!("→ {new}")).strong());
+    let made = meshgrove_core::moves::missing_folders(&m.root, m.to.parent().unwrap_or(&m.root));
+    if let Some(last) = made.last() {
+        ui.weak(t!("review.new_folder", path = rel(last)));
+    }
 }
 
 fn list_row(ui: &mut Ui, item: &mut ReviewItem) {
