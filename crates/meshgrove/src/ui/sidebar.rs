@@ -23,6 +23,8 @@ pub enum SidebarAction {
     ShowInbox,
     OpenList(i64),
     CreateList(ListKind, String),
+    /// Ask the user's AI for a list (a print list with `true`) from this description.
+    ListFromDescription(String, bool),
     RenameList(i64, String),
     DeleteList(i64),
     /// A palette slot for a tag, or `None` for its automatic colour.
@@ -56,6 +58,8 @@ pub struct LibraryInfo<'a> {
     pub tag_style: &'a TagStyle,
     /// One alphabetical list of tags instead of groups.
     pub flat_tags: bool,
+    /// The user's AI can make a list from a description.
+    pub ai_lists: bool,
 }
 
 pub struct Sidebar {
@@ -66,6 +70,8 @@ pub struct Sidebar {
     revealed: Option<PathBuf>,
     /// Name typed for a new list, or for renaming one.
     list_name: String,
+    /// What the AI should put on a new list.
+    list_description: String,
     /// A list's "delete" was clicked once; the second click deletes.
     confirm_delete: Option<i64>,
 }
@@ -78,6 +84,7 @@ impl Sidebar {
             children: HashMap::new(),
             revealed: None,
             list_name: String::new(),
+            list_description: String::new(),
             confirm_delete: None,
         }
     }
@@ -233,6 +240,27 @@ impl Sidebar {
                         }
                     }
                 });
+                if library.ai_lists {
+                    ui.separator();
+                    ui.label(RichText::new(t!("actions.list_title")).strong());
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.list_description)
+                            .hint_text(t!("actions.list_hint"))
+                            .desired_rows(2)
+                            .desired_width(260.0),
+                    );
+                    let description = self.list_description.trim().to_owned();
+                    ui.horizontal(|ui| {
+                        for (print, label) in [(true, t!("actions.list_print")), (false, t!("actions.list_collection"))] {
+                            if ui.add_enabled(!description.is_empty(), egui::Button::new(label)).clicked() {
+                                *action = Some(SidebarAction::ListFromDescription(description.clone(), print));
+                                self.list_description.clear();
+                                ui.close();
+                            }
+                        }
+                    });
+                    ui.weak(t!("actions.list_explain"));
+                }
             },
         );
     }

@@ -2,6 +2,7 @@
 //! (a new folder, a customer's ZIP), until they are marked as done.
 
 use std::ops::Range;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use egui::{RichText, Ui};
@@ -16,6 +17,7 @@ pub struct InboxGroupInfo {
     pub range: Range<usize>,
     /// The folder (or archive) as the library shows it: relative to the library, or its name.
     pub title: String,
+    pub folder: PathBuf,
     pub archive: bool,
     /// When its newest file was seen.
     pub newest: Option<SystemTime>,
@@ -29,9 +31,18 @@ pub enum InboxAction {
     /// These entries are done.
     Done(Vec<usize>),
     AllDone,
+    /// Ask the AI for tags: for this group, or for all.
+    Classify(Option<usize>),
 }
 
-pub fn show(ui: &mut Ui, entries: &[Entry], groups: &[InboxGroupInfo], gallery: &Gallery) -> Option<InboxAction> {
+/// `ai`: the user's AI can be asked for tags.
+pub fn show(
+    ui: &mut Ui,
+    entries: &[Entry],
+    groups: &[InboxGroupInfo],
+    gallery: &Gallery,
+    ai: bool,
+) -> Option<InboxAction> {
     let mut action = None;
     if groups.is_empty() {
         ui.centered_and_justified(|ui| ui.weak(t!("inbox.empty")));
@@ -49,11 +60,14 @@ pub fn show(ui: &mut Ui, entries: &[Entry], groups: &[InboxGroupInfo], gallery: 
                 if ui.button(t!("inbox.all_done")).clicked() {
                     action = Some(InboxAction::AllDone);
                 }
+                if ai && ui.button(t!("actions.classify_all")).on_hover_text(t!("actions.classify_hint")).clicked() {
+                    action = Some(InboxAction::Classify(None));
+                }
             });
         });
         ui.weak(t!("inbox.explain"));
         ui.add_space(8.0);
-        for group in groups {
+        for (n, group) in groups.iter().enumerate() {
             let warned: Vec<bool> =
                 group.range.clone().map(|i| check_flag(gallery, &entries[i], i)).collect();
             let problems = warned.iter().filter(|w| **w).count();
@@ -63,6 +77,9 @@ pub fn show(ui: &mut Ui, entries: &[Entry], groups: &[InboxGroupInfo], gallery: 
                 ui.horizontal(|ui| ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button(t!("inbox.done")).on_hover_text(t!("inbox.done_hint")).clicked() {
                         action = Some(InboxAction::Done(group.range.clone().collect()));
+                    }
+                    if ai && ui.button(t!("actions.classify")).on_hover_text(t!("actions.classify_hint")).clicked() {
+                        action = Some(InboxAction::Classify(Some(n)));
                     }
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         let icon = if group.archive { "📦" } else { "📁" };

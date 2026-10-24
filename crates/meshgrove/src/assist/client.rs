@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use meshgrove_core::config::EndpointConfig;
 use serde_json::{Value, json};
 use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
 
@@ -82,6 +83,10 @@ impl Endpoint {
             .build()
             .new_agent();
         Endpoint { base: base_url.trim_end_matches('/').to_owned(), model: model.to_owned(), key, agent }
+    }
+
+    pub fn from_config(cfg: &EndpointConfig, key: Option<String>) -> Endpoint {
+        Endpoint::new(&cfg.base_url, &cfg.model, key, Duration::from_secs(cfg.timeout_s.max(10) as u64))
     }
 
     fn post(&self, path: &str) -> ureq::RequestBuilder<ureq::typestate::WithBody> {

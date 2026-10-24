@@ -282,7 +282,12 @@ fn filter_sql(cx: &Context, f: &ModelFilter, args: &mut Vec<String>) -> ToolResu
         sql += &format!(" AND MAX(f.size_x, f.size_y, f.size_z) <= {}", max.max(0.0));
     }
     if let Some(minutes) = f.max_print_minutes {
-        sql += &format!(" AND f.print_s IS NOT NULL AND f.print_s <= {}", minutes as u64 * 60);
+        // A model's print time is that of a G-code sliced from it, next to it.
+        sql += &format!(
+            " AND COALESCE(f.print_s, (SELECT MIN(g.print_s) FROM files g WHERE g.dir_id = f.dir_id \
+               AND g.kind = 'gcode' AND g.print_s IS NOT NULL AND mg_sliced_from(g.name, f.name))) <= {}",
+            minutes as u64 * 60
+        );
     }
     if fits_any {
         sql += if cx.printers.is_empty() {

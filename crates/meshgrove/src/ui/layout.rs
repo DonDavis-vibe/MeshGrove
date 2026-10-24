@@ -71,13 +71,16 @@ pub struct Layout {
     /// Not drawn yet: egui_tiles tidies a new tree up on its first frame, which is no change
     /// of the user's and must not be saved (or later default layouts would never show).
     fresh: bool,
+    /// The chat's tab comes to the front before the next drawing (the tree is taken out of
+    /// the layout while it is drawn, so not during).
+    focus_chat: bool,
 }
 
 impl Layout {
     /// The saved layout, or the default one.
     pub fn load() -> Layout {
         let tree = load().unwrap_or_else(default_tree);
-        Layout { stored: tree.clone(), tree, fresh: true }
+        Layout { stored: tree.clone(), tree, fresh: true, focus_chat: false }
     }
 
     /// Back to the default layout, which is no longer kept in the file.
@@ -88,6 +91,11 @@ impl Layout {
         if let Some(path) = path() {
             let _ = std::fs::remove_file(path);
         }
+    }
+
+    /// Brings the chat pane's tab to the front (with the next [`Layout::show_chat`]).
+    pub fn focus_chat(&mut self) {
+        self.focus_chat = true;
     }
 
     /// Puts the chat pane next to the info pane (as a tab), or takes it out again.
@@ -124,6 +132,9 @@ impl Layout {
                 self.tree.remove_recursively(chat);
             }
             _ => {}
+        }
+        if std::mem::take(&mut self.focus_chat) && on {
+            self.tree.make_active(|_, tile| matches!(tile, Tile::Pane(Pane::Chat)));
         }
     }
 

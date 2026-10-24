@@ -90,6 +90,7 @@ enum Scope {
     Library,
 }
 
+mod ai_actions;
 mod chat;
 mod checks;
 mod inbox;
@@ -186,6 +187,8 @@ pub struct App {
     checks_next: Instant,
     /// The chat with the user's own model.
     chat: chat::ChatState,
+    /// The AI's tags for the tag editor (✧).
+    ai_tags: ai_actions::AiTags,
     egui_ctx: egui::Context,
     /// Watches the suggestion store while AI is on, and its change count last seen.
     proposals: Option<ProposalWatcher>,
@@ -361,6 +364,7 @@ impl App {
             proposals: None,
             proposals_seen: 0,
             chat: chat::ChatState::default(),
+            ai_tags: ai_actions::AiTags::default(),
             egui_ctx: cc.egui_ctx.clone(),
             inbox_count: 0,
             inbox_due: None,
@@ -884,6 +888,8 @@ impl App {
                 rescan: self.index.is_some()
                     && matches!(paths.as_slice(), [p] if self.in_library(p)
                         && (p.is_dir() || Kind::from_file_name(&listing::file_name(p)) == Kind::Archive)),
+                ai_chat: self.chat_available() && self.chat_sees(&paths),
+                ai_refs: self.config.ai.enabled && self.ai_sees_any(&paths),
             };
             self.menu_for = paths;
             self.tags_dirty = true;
@@ -1214,6 +1220,9 @@ impl App {
             }
             Action::EditTags => self.focus_tags = true,
             Action::Trash => self.request_trash(self.selected_paths()),
+            Action::SuggestTags => self.suggest_tags(self.selected_paths()),
+            Action::MentionInChat => self.mention_in_chat(self.selected_paths()),
+            Action::CopyReference => self.copy_references(&self.selected_paths(), ctx),
         }
     }
 
@@ -2056,7 +2065,8 @@ impl App {
             self.config.tile_size = (self.config.tile_size * zoom).clamp(*TILE_RANGE.start(), *TILE_RANGE.end());
         }
         if let View::Inbox { entries, groups } = &self.view {
-            let action = inbox_view::show(ui, entries, groups, &self.gallery);
+            let ai = self.chat_available();
+            let action = inbox_view::show(ui, entries, groups, &self.gallery, ai);
             self.inbox_action(action);
             return;
         }
@@ -2134,6 +2144,7 @@ impl App {
             has_index: self.index.is_some(),
             tag_style: &self.tag_style,
             flat_tags: self.config.flat_tag_list,
+            ai_lists: self.chat_available() && self.index.is_some(),
         };
         match self.sidebar.show(ui, &self.config, self.nav.current(), info) {
             Some(SidebarAction::Navigate(path)) => self.navigate(path),
@@ -2167,6 +2178,9 @@ impl App {
                 self.toast(t!("toast.list_created", list = name).into_owned());
                 self.library.list(ListOp::Create(kind, name, Vec::new()));
             }
+            Some(SidebarAction::ListFromDescription(description, print)) => {
+                self.list_from_description(description, print);
+            }
             Some(SidebarAction::RenameList(id, name)) => self.library.list(ListOp::Rename(id, name)),
             Some(SidebarAction::DeleteList(id)) => self.library.list(ListOp::Delete(id)),
             Some(SidebarAction::TagColor(tag, color)) => self.library.list(ListOp::TagColor(tag, color)),
@@ -2197,10 +2211,12 @@ impl App {
             _ => None,
         };
         let checks_coming = self.index.is_some() && self.menu_for.first().is_some_and(|p| self.in_library(p));
+        let ai_tags = self.chat_available() && self.chat_sees(&self.menu_for);
         DetailsContext {
             entry,
             selection,
             tags: TagEditor {
+                ai: ai_tags.then(|| self.ai_tags.for_paths(&self.menu_for)),
                 enabled: self.menu.can_tag,
                 on_selection: &self.selection_tags,
                 all: &self.all_tags,
@@ -2326,6 +2342,9 @@ impl App {
         }
         if let Some(tag) = out.add_tag {
             self.library.tag(self.menu_for.clone(), tag);
+        }
+        if out.ai_tags {
+            self.ask_tag_candidates(false);
         }
         if let Some(tag) = out.remove_tag {
             self.library.untag(self.menu_for.clone(), tag);
@@ -2484,6 +2503,7 @@ impl eframe::App for App {
         self.recount_inbox();
         self.watch_proposals(&ctx);
         self.poll_chat();
+        self.poll_tag_candidates();
         self.chat_confirm_modal(&ctx);
         let chat = self.chat_available();
         self.layout.show_chat(chat);

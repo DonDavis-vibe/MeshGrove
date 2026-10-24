@@ -53,6 +53,8 @@ pub struct ChatView<'a> {
     pub mode: ChatMode,
     /// Per user message: changes still in effect, and taken back.
     pub changes: &'a HashMap<i64, (usize, usize)>,
+    /// What became of the cards' suggestions: batch uid → state.
+    pub card_states: &'a HashMap<String, String>,
     /// A file id's name for the answer's references.
     pub names: &'a dyn Fn(&str) -> String,
     /// The model, for the header.
@@ -86,8 +88,8 @@ pub fn show(
         let title = view
             .current
             .and_then(|c| view.chats.iter().find(|i| i.id == c))
-            .map_or_else(|| t!("chat.new_title").into_owned(), |c| c.title.clone());
-        egui::ComboBox::from_id_salt("chats").selected_text(title).width(160.0).show_ui(ui, |ui| {
+            .map_or_else(|| t!("chat.new_title").into_owned(), |c| short(&c.title, 26));
+        egui::ComboBox::from_id_salt("chats").selected_text(title).width(160.0).truncate().show_ui(ui, |ui| {
             for c in view.chats {
                 if ui.selectable_label(view.current == Some(c.id), &c.title).clicked() {
                     action = Some(ChatAction::Open(c.id));
@@ -210,11 +212,21 @@ fn message(ui: &mut Ui, m: &ChatMsg, view: &ChatView, md: &mut CommonMarkCache) 
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_width(ui.available_width());
             match card {
-                Card::Proposed { title, items, .. } => {
+                Card::Proposed { batch, title, items } => {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(format!("✧ {title}")).strong());
-                        ui.weak(t!("chat.card_proposed", count = items));
-                        if ui.button(t!("chat.card_review")).clicked() {
+                        let state = view.card_states.get(batch).map_or("pending", String::as_str);
+                        let open = matches!(state, "pending" | "partly");
+                        ui.weak(match state {
+                            "pending" if *items == 1 => t!("chat.card_proposed_one"),
+                            "pending" => t!("chat.card_proposed", count = items),
+                            "partly" => t!("chat.card_partly"),
+                            "accepted" => t!("chat.card_accepted"),
+                            "rejected" => t!("chat.card_rejected"),
+                            "undone" => t!("chat.card_undone"),
+                            _ => t!("chat.card_expired"),
+                        });
+                        if open && ui.button(t!("chat.card_review")).clicked() {
                             action = Some(ChatAction::Review);
                         }
                     });
@@ -232,6 +244,16 @@ fn message(ui: &mut Ui, m: &ChatMsg, view: &ChatView, md: &mut CommonMarkCache) 
         ui.colored_label(ui.visuals().error_fg_color, t!("chat.failed"));
     }
     action
+}
+
+/// `text` cut to `max` characters, with "…" when cut.
+fn short(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let mut out: String = text.chars().take(max - 1).collect();
+    out.push('…');
+    out
 }
 
 /// The user's words with their references as small chips.

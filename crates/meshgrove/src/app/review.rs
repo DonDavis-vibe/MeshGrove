@@ -29,6 +29,7 @@ impl App {
             && w.generation() != self.proposals_seen
         {
             self.proposals_seen = w.generation();
+            self.chat_changed(); // the chat's cards show what became of their suggestions
             if matches!(self.view, View::Review { .. }) {
                 self.show_review();
             }

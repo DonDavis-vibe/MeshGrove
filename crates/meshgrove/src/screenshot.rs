@@ -5,8 +5,9 @@
 //! `MESHGROVE_SEARCH=query` starts with a library search, `MESHGROVE_HOLD=1` holds the left button down
 //! at the pointer from 0.7 s on and `MESHGROVE_WHEEL=dy` turns the mouse wheel there for half a second after 1 s.
 //! `MESHGROVE_CLICKS=x,y;x,y;…` clicks those points one after the other, from 3 s on, every 0.8 s
-//! (`x,y*2` double-clicks), and `MESHGROVE_TYPE=text` types the text after the last click; steps
-//! separated by `|` follow half a second apart, `{enter}`, `{down}` and `{esc}` press those keys.
+//! (`x,y*2` double-clicks, `x,y*r` right-clicks), and `MESHGROVE_TYPE=text` types the text after the last click; steps
+//! separated by `|` follow half a second apart, `{enter}`, `{down}` and `{esc}` press those keys,
+//! `{click x,y}` clicks there (to click after typing).
 //! `MESHGROVE_MEASURE=fx,fy;fx,fy` measures between those points (fractions of the view) in the
 //! first model window that opens, which the hook's input cannot reach; `MESHGROVE_WINDOW_VIEW=top`
 //! (or `front`, `left` …) starts that window in a standard view.
@@ -17,13 +18,13 @@ pub struct ScreenshotHook {
     pub pointer: Option<egui::Pos2>,
     hold: bool,
     wheel: f32,
-    /// Point and whether it is a double click.
-    clicks: Vec<(egui::Pos2, bool)>,
+    /// Point and how: `1` click, `2` double click, `0` right click.
+    clicks: Vec<(egui::Pos2, u8)>,
     next_click: usize,
     /// Steps to type after the clicks, half a second apart: text, `{enter}`, `{down}`, `{esc}`.
     typing: std::collections::VecDeque<String>,
     typed_at: f32,
-    release: Option<egui::Pos2>,
+    release: Option<(egui::Pos2, egui::PointerButton)>,
     started: Instant,
     pressed: bool,
     pub search: Option<String>,
@@ -51,9 +52,10 @@ impl ScreenshotHook {
             Some(egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?))
         };
         let pointer = std::env::var("MESHGROVE_POINTER").ok().and_then(|s| point(&s));
-        let click = |s: &str| match s.strip_suffix("*2") {
-            Some(s) => point(s).map(|p| (p, true)),
-            None => point(s).map(|p| (p, false)),
+        let click = |s: &str| match (s.strip_suffix("*2"), s.strip_suffix("*r")) {
+            (Some(s), _) => point(s).map(|p| (p, 2)),
+            (_, Some(s)) => point(s).map(|p| (p, 0)),
+            _ => point(s).map(|p| (p, 1)),
         };
         let clicks =
             std::env::var("MESHGROVE_CLICKS").map(|s| s.split(';').filter_map(click).collect()).unwrap_or_default();
@@ -131,27 +133,24 @@ impl ScreenshotHook {
             )
         });
         let t = self.started.elapsed().as_secs_f32();
-        let button = |pos, pressed| egui::Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::NONE,
-        };
-        if let Some(pos) = self.release.take() {
-            raw.events.push(button(pos, false));
-        } else if let Some(&(pos, double)) = self.clicks.get(self.next_click)
+        let press = |pos, button, pressed| egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::NONE };
+        let button = |pos, pressed| press(pos, egui::PointerButton::Primary, pressed);
+        if let Some((pos, which)) = self.release.take() {
+            raw.events.push(press(pos, which, false));
+        } else if let Some(&(pos, how)) = self.clicks.get(self.next_click)
             && t >= 3.0 + 0.8 * self.next_click as f32
         {
             self.next_click += 1;
             self.pointer = Some(pos);
             raw.events.push(egui::Event::PointerMoved(pos));
-            if double {
+            if how == 2 {
                 // The first click completes now, the second one with the release next frame.
                 raw.events.push(button(pos, true));
                 raw.events.push(button(pos, false));
             }
-            raw.events.push(button(pos, true));
-            self.release = Some(pos);
+            let which = if how == 0 { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
+            raw.events.push(press(pos, which, true));
+            self.release = Some((pos, which));
         }
         if self.next_click == self.clicks.len()
             && t >= 3.0 + 0.8 * self.clicks.len() as f32
@@ -165,7 +164,18 @@ impl ScreenshotHook {
                 "{esc}" => Some(egui::Key::Escape),
                 _ => None,
             };
+            let click = step.strip_prefix("{click ").and_then(|s| s.strip_suffix('}')).and_then(|s| {
+                let (x, y) = s.split_once(',')?;
+                Some(egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?))
+            });
             match key {
+                _ if click.is_some() => {
+                    let pos = click.unwrap_or_default();
+                    self.pointer = Some(pos);
+                    raw.events.push(egui::Event::PointerMoved(pos));
+                    raw.events.push(button(pos, true));
+                    self.release = Some((pos, egui::PointerButton::Primary));
+                }
                 Some(key) => {
                     for pressed in [true, false] {
                         raw.events.push(egui::Event::Key {

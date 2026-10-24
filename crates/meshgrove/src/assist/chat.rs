@@ -5,7 +5,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use meshgrove_core::ai::proposals::{self, Origin, Picked, ProposalStore};
@@ -14,6 +13,7 @@ use meshgrove_core::config::{AccessClass, ChatMode, Config, EndpointConfig};
 use meshgrove_core::db::Library;
 use serde_json::{Value, json};
 
+use super::actions::{self, ActionJob};
 use super::client::{ClientError, Endpoint};
 use crate::library::Applier;
 
@@ -48,36 +48,49 @@ pub enum ChatEvent {
     Failed(String),
 }
 
+/// What the chat thread does next: answer a message, or run a one-click action.
+enum Work {
+    Turn(Turn),
+    Action(ActionJob),
+}
+
 pub struct ChatService {
-    turns: Sender<Turn>,
+    work: Sender<Work>,
     events: Receiver<ChatEvent>,
     cancel: Arc<AtomicBool>,
 }
 
 impl ChatService {
     pub fn start(db: PathBuf, applier: Applier, ctx: egui::Context) -> ChatService {
-        let (turns, turn_rx) = unbounded::<Turn>();
+        let (work, work_rx) = unbounded::<Work>();
         let (event_tx, events) = unbounded();
         let cancel = Arc::new(AtomicBool::new(false));
         let stop = cancel.clone();
         std::thread::Builder::new()
             .name("chat".into())
             .spawn(move || {
-                for turn in turn_rx {
+                for next in work_rx {
                     stop.store(false, Ordering::Relaxed);
                     let send = |e: ChatEvent| {
                         let _ = event_tx.send(e);
                         ctx.request_repaint();
                     };
-                    run(&db, &applier, turn, &stop, &send);
+                    match next {
+                        Work::Turn(turn) => run(&db, &applier, turn, &stop, &send),
+                        Work::Action(job) => actions::run(&db, job, &stop, &send),
+                    }
                 }
             })
             .expect("spawning the chat thread");
-        ChatService { turns, events, cancel }
+        ChatService { work, events, cancel }
     }
 
     pub fn send(&self, turn: Turn) {
-        let _ = self.turns.send(turn);
+        let _ = self.work.send(Work::Turn(turn));
+    }
+
+    pub fn act(&self, job: ActionJob) {
+        let _ = self.work.send(Work::Action(job));
     }
 
     /// Stops the answer being written.
@@ -95,8 +108,7 @@ fn run(db: &Path, applier: &Applier, turn: Turn, cancel: &AtomicBool, send: &dyn
         send(ChatEvent::Failed(t!("chat.no_endpoint").into_owned()));
         return;
     };
-    let endpoint =
-        Endpoint::new(&endpoint_cfg.base_url, &endpoint_cfg.model, turn.key.clone(), Duration::from_secs(endpoint_cfg.timeout_s.max(10) as u64));
+    let endpoint = Endpoint::from_config(&endpoint_cfg, turn.key.clone());
     let mut tools = endpoint_cfg.tools.then(dispatch::definitions);
     let mut messages = turn.messages.clone();
     let mut round = 0;

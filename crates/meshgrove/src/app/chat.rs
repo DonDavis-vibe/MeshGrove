@@ -16,6 +16,7 @@ use meshgrove_core::listing;
 use serde_json::{Value, json};
 
 use super::{App, View};
+use crate::assist::actions::{Action, ActionJob};
 use crate::assist::chat::{ChatEvent, ChatService, Turn, system_prompt};
 use crate::assist::secret;
 use crate::ui::chat::{self as chat_view, Card, ChatAction, ChatMsg, ChatView};
@@ -41,13 +42,29 @@ pub struct ChatState {
     loaded: bool,
     /// Per user message: changes in effect and taken back; read again when marked stale.
     changes: HashMap<i64, (usize, usize)>,
+    /// What became of the suggestions on the cards: batch uid → state.
+    card_states: HashMap<String, String>,
     changes_stale: bool,
     /// The references for the query last typed after `@`.
     offered: Option<(String, Vec<Candidate<Pill>>)>,
     /// The cloud endpoint may be sent to without asking again (this session).
-    cloud_ok: bool,
-    /// A message waiting for the OK to go to a cloud endpoint: what goes out.
-    pub confirm: Option<(String, usize, usize)>,
+    pub(super) cloud_ok: bool,
+    /// Waiting for the OK to go to a cloud endpoint: what goes out, and what does.
+    pub confirm: Option<(String, Pending)>,
+}
+
+/// What goes to a cloud endpoint once the user said yes.
+pub enum Pending {
+    /// The message in the field.
+    Message,
+    Action { title: String, user_text: String, llm: String, files: usize, action: Action },
+    /// The tag editor's ✧ for the selection.
+    TagCandidates,
+}
+
+/// The host of an endpoint's address, for saying where things go.
+pub(super) fn host_of(url: &str) -> String {
+    url.split("://").nth(1).unwrap_or(url).split('/').next().unwrap_or_default().to_owned()
 }
 
 fn store() -> Option<ProposalStore> {
@@ -60,7 +77,7 @@ impl App {
         self.config.ai.enabled && self.config.ai.endpoint.as_ref().is_some_and(|e| !e.base_url.trim().is_empty())
     }
 
-    fn class(&self) -> AccessClass {
+    pub(super) fn chat_class(&self) -> AccessClass {
         match &self.config.ai.endpoint {
             Some(e) if e.local => AccessClass::Local,
             _ => AccessClass::Cloud,
@@ -77,7 +94,7 @@ impl App {
         }
         let index = self.index.as_ref();
         let config = &self.config;
-        let class = self.class();
+        let class = self.chat_class();
         let scope = meshgrove_core::ai::Scope::new(config, class);
         let names = |id: &str| scope.resolve(id).map_or_else(|| id.rsplit('/').next().unwrap_or(id).to_owned(), |p| listing::file_name(&p));
         let model = config.ai.endpoint.as_ref().map(|e| e.model.clone()).unwrap_or_default();
@@ -88,6 +105,7 @@ impl App {
             streaming: self.chat.streaming.as_ref(),
             mode: config.ai.chat_mode,
             changes: &self.chat.changes,
+            card_states: &self.chat.card_states,
             names: &names,
             model: &model,
         };
@@ -138,7 +156,7 @@ impl App {
             Some(ChatAction::Redo(message)) => self.chat_changes(message, false),
             Some(ChatAction::Review) => self.show_review(),
             Some(ChatAction::Reveal(id)) => {
-                if let Some(path) = meshgrove_core::ai::Scope::new(&self.config, self.class()).resolve(&id) {
+                if let Some(path) = meshgrove_core::ai::Scope::new(&self.config, self.chat_class()).resolve(&id) {
                     self.reveal(&path);
                 }
             }
@@ -165,12 +183,45 @@ impl App {
         self.chat.changes_stale = true;
     }
 
+    /// The journal origins of a user message's changes: made at once (`chat:<id>`), or
+    /// suggested in an answer to it and accepted in the review (`proposal:<uid>`).
+    fn origins_by_message(&self) -> HashMap<String, i64> {
+        let mut out = HashMap::new();
+        let mut asked = None;
+        for m in &self.chat.messages {
+            if m.user {
+                asked = Some(m.id);
+                out.insert(format!("chat:{}", m.id), m.id);
+            } else if let Some(user) = asked {
+                for card in &m.cards {
+                    if let Card::Proposed { batch, .. } = card {
+                        out.insert(format!("proposal:{batch}"), user);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Which user messages have changes, in effect or taken back.
     fn refresh_chat_changes(&mut self) {
         self.chat.changes.clear();
+        self.chat.card_states.clear();
+        if let Some(s) = store() {
+            for m in &self.chat.messages {
+                for card in &m.cards {
+                    if let Card::Proposed { batch, .. } = card
+                        && let Ok(Some(state)) = s.batch_state(batch)
+                    {
+                        self.chat.card_states.insert(batch.clone(), state);
+                    }
+                }
+            }
+        }
         let Some(index) = &self.index else { return };
+        let origins = self.origins_by_message();
         for c in index.changes(1000).unwrap_or_default() {
-            if let Some(id) = c.origin.strip_prefix("chat:").and_then(|i| i.parse::<i64>().ok()) {
+            if let Some(&id) = origins.get(&c.origin) {
                 let e = self.chat.changes.entry(id).or_default();
                 if c.undone_ns.is_some() {
                     e.1 += 1;
@@ -187,9 +238,9 @@ impl App {
 
     fn chat_changes(&mut self, message: i64, undo: bool) {
         let Some(index) = &self.index else { return };
-        let origin = format!("chat:{message}");
+        let origins = self.origins_by_message();
         let changes = index.changes(1000).unwrap_or_default();
-        for c in changes.iter().filter(|c| c.origin == origin) {
+        for c in changes.iter().filter(|c| origins.get(&c.origin) == Some(&message)) {
             match (undo, c.undone_ns.is_some()) {
                 (true, false) => self.library.undo(c.id),
                 (false, true) => self.library.redo(c.id),
@@ -221,8 +272,9 @@ impl App {
         let (text, pills) = self.chat.input.take_message();
         let pictures = if endpoint.vision { self.pictures_for(&pills).len() } else { 0 };
         if !endpoint.local && !self.chat.cloud_ok && !confirmed {
-            let host = endpoint.base_url.split("://").nth(1).unwrap_or(&endpoint.base_url).split('/').next().unwrap_or_default().to_owned();
-            self.chat.confirm = Some((host, pills.len(), pictures));
+            let host = host_of(&endpoint.base_url);
+            let text = t!("chat.confirm_text", host = host, refs = pills.len(), pictures = pictures).into_owned();
+            self.chat.confirm = Some((text, Pending::Message));
             return;
         }
         if confirmed {
@@ -326,7 +378,7 @@ impl App {
         let Some(index) = &self.index else { return Vec::new() };
         let Some(dir) = ThumbCache::default_location() else { return Vec::new() };
         let thumbs = ThumbCache::new(dir);
-        let Ok(cx) = Context::new(index, &self.config, self.class(), Some(&thumbs)) else { return Vec::new() };
+        let Ok(cx) = Context::new(index, &self.config, self.chat_class(), Some(&thumbs)) else { return Vec::new() };
         let ids: Vec<String> = pills
             .iter()
             .flat_map(|p| match &p.reference {
@@ -350,7 +402,7 @@ impl App {
         }
         out.push_str("\n\nReferences:");
         if let Some(index) = &self.index
-            && let Ok(cx) = Context::new(index, &self.config, self.class(), None)
+            && let Ok(cx) = Context::new(index, &self.config, self.chat_class(), None)
         {
             for (n, p) in pills.iter().enumerate() {
                 out.push_str(&format!("\n⟦{n}⟧ {}: {}", p.label, reference_data(&cx, &p.reference)));
@@ -360,15 +412,21 @@ impl App {
         (out, images)
     }
 
-    /// Asks before a message goes to a cloud endpoint for the first time this session.
+    /// Asks before a message goes to a cloud endpoint for the first time this session, and
+    /// before every one-click action does.
     pub(super) fn chat_confirm_modal(&mut self, ctx: &egui::Context) {
-        let Some((host, refs, pictures)) = self.chat.confirm.clone() else { return };
+        let Some((text, pending)) = &self.chat.confirm else { return };
+        let text = text.clone();
+        let hint = match pending {
+            Pending::Action { .. } => t!("actions.confirm_hint"),
+            _ => t!("chat.confirm_hint"),
+        };
         let mut decision = None;
         egui::Modal::new(egui::Id::unique("chat_confirm")).show(ctx, |ui| {
             ui.set_max_width(460.0);
             ui.heading(t!("chat.confirm_title"));
-            ui.label(t!("chat.confirm_text", host = host, refs = refs, pictures = pictures));
-            ui.weak(t!("chat.confirm_hint"));
+            ui.label(text);
+            ui.weak(hint);
             ui.horizontal(|ui| {
                 if ui.button(t!("chat.confirm_send")).clicked() {
                     decision = Some(true);
@@ -378,14 +436,79 @@ impl App {
                 }
             });
         });
-        match decision {
-            Some(true) => {
-                self.chat.confirm = None;
-                self.send_chat(true);
+        match decision.and_then(|yes| Some((yes, self.chat.confirm.take()?.1))) {
+            Some((true, Pending::Message)) => self.send_chat(true),
+            Some((true, Pending::Action { title, user_text, llm, files, action })) => {
+                self.start_action(title, user_text, llm, files, action, true);
             }
-            Some(false) => self.chat.confirm = None,
-            None => {}
+            Some((true, Pending::TagCandidates)) => self.ask_tag_candidates(true),
+            // Declined: nothing is sent.
+            _ => {}
         }
+    }
+
+    /// Starts a one-click action in a new conversation: `user_text` stands as the user's
+    /// message (`llm` is what the model reads of it later), the result comes as the answer.
+    /// Actions only suggest, whatever the chat's mode.
+    pub(super) fn start_action(
+        &mut self,
+        title: String,
+        user_text: String,
+        llm: String,
+        files: usize,
+        action: Action,
+        confirmed: bool,
+    ) {
+        if !self.chat_available() {
+            return;
+        }
+        if self.chat.streaming.is_some() {
+            self.toast(t!("actions.busy").into_owned());
+            return;
+        }
+        let Some(endpoint) = self.config.ai.endpoint.clone() else { return };
+        if !endpoint.local && !confirmed {
+            let pictures = if endpoint.vision { files } else { 0 };
+            let text = t!("actions.confirm_text", host = host_of(&endpoint.base_url), files = files, pictures = pictures);
+            self.chat.confirm = Some((text.into_owned(), Pending::Action { title, user_text, llm, files, action }));
+            return;
+        }
+        let Some(mut s) = store() else { return };
+        let chat = match s.create_chat(&title) {
+            Ok(id) => id,
+            Err(e) => {
+                self.toast(e.to_string());
+                return;
+            }
+        };
+        let mut msg = ChatMsg { user: true, text: user_text, llm, ..Default::default() };
+        msg.id = s.add_message(chat, "user", &serde_json::to_value(&msg).unwrap_or_default()).unwrap_or(0);
+        let key = secret::load(&endpoint.base_url, endpoint.key_in_keyring, &endpoint.key_env);
+        let service = self.chat.service.get_or_insert_with(|| {
+            ChatService::start(self.db_path.clone(), self.library.applier(), self.egui_ctx.clone())
+        });
+        service.act(ActionJob { action, config: self.config.clone(), key });
+        self.chat.current = Some(chat);
+        self.chat.answering = msg.id;
+        self.chat.messages = vec![msg];
+        self.chat.streaming = Some(ChatMsg::default());
+        self.chat.chats = s.chats(50).unwrap_or_default();
+        self.chat.changes_stale = true;
+        self.layout.focus_chat();
+    }
+
+    /// Puts files into the message field as a reference, and shows the chat.
+    pub(super) fn mention_in_chat(&mut self, paths: Vec<PathBuf>) {
+        let scope = meshgrove_core::ai::Scope::new(&self.config, self.chat_class());
+        let paths: Vec<PathBuf> = paths.into_iter().filter(|p| scope.allows(p)).collect();
+        if paths.is_empty() {
+            self.toast(t!("actions.nothing_visible").into_owned());
+            return;
+        }
+        let label = if paths.len() == 1 { listing::file_name(&paths[0]) } else { t!("chat.ref_files", count = paths.len()).into_owned() };
+        self.chat.input.append_pill(Pill { label, reference: Reference::Files { paths } });
+        self.layout.focus_chat();
+        self.egui_ctx.request_repaint();
     }
 }
 

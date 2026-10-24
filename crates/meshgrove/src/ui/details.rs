@@ -38,6 +38,9 @@ pub struct TagEditor<'a> {
     pub focus: bool,
     /// Existing tags stay listed below the field while nothing is typed.
     pub idle_chips: bool,
+    /// Tags the user's AI suggested for the selection (✧ asks for them), and whether it is being
+    /// asked; `None` without an AI endpoint for the selection.
+    pub ai: Option<(&'a [String], bool)>,
 }
 
 /// The selection's note (shared by all selected files, or `mixed`).
@@ -71,6 +74,8 @@ pub struct DetailsOutput {
     pub quantity: Option<u32>,
     /// A file to open in its default app (a folder's readme).
     pub open_file: Option<PathBuf>,
+    /// ✧ in the tag editor: ask the AI for tags.
+    pub ai_tags: bool,
 }
 
 /// The selection's print log and, on a shown print list, its copies.
@@ -430,6 +435,13 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
         })
         .response
         .on_hover_text(t!("tags.suggestions_hint"));
+        match ed.ai {
+            Some((_, true)) => {
+                ui.spinner().on_hover_text(t!("actions.tags_asking"));
+            }
+            Some((_, false)) if ui.button("✧").on_hover_text(t!("actions.tags_hint")).clicked() => out.ai_tags = true,
+            _ => {}
+        }
         field = Some(
             ui.add(egui::TextEdit::singleline(ed.input).hint_text(t!("tags.add_hint")).desired_width(f32::INFINITY)),
         );
@@ -440,27 +452,37 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
     }
     // Existing tags and suggestions that match what is typed (all existing ones while the field
     // is empty): the ones that start with it first. Up/Down pick one, Enter takes it.
+    // The AI's tags (asked for with ✧) come first, also while nothing is typed.
     let needle = ed.input.trim().to_lowercase();
-    let candidate = |tag: String, existing: bool| Candidate { label: tag, detail: String::new(), existing, value: () };
-    let mut all: Vec<Candidate<()>> = if needle.is_empty() && !ed.idle_chips {
-        Vec::new()
-    } else {
-        ed.all.iter().filter(|(tag, _)| !on_all(tag)).map(|(tag, _)| candidate(tag.clone(), true)).collect()
-    };
+    let candidate =
+        |tag: String, existing: bool, ai: bool| Candidate { label: tag, detail: String::new(), existing, value: ai };
+    let in_library = |tag: &str| ed.all.iter().any(|(t, _)| t.eq_ignore_ascii_case(tag));
+    let mut all: Vec<Candidate<bool>> = ed
+        .ai
+        .map(|(tags, _)| tags.iter().filter(|t| !on_all(t)).map(|t| candidate(t.clone(), in_library(t), true)).collect())
+        .unwrap_or_default();
+    let from_ai = all.len();
+    if !needle.is_empty() || ed.idle_chips {
+        for (tag, _) in ed.all.iter().filter(|(tag, _)| !on_all(tag)) {
+            if !all.iter().any(|c| c.label.eq_ignore_ascii_case(tag)) {
+                all.push(candidate(tag.clone(), true, false));
+            }
+        }
+    }
     if !needle.is_empty() {
         for group in Group::SUGGESTED {
             for tag in tags::suggested(group, style) {
                 if !on_all(&tag) && !all.iter().any(|c| c.label.eq_ignore_ascii_case(&tag)) {
-                    all.push(candidate(tag, false));
+                    all.push(candidate(tag, false, false));
                 }
             }
         }
     }
-    let candidates: Vec<(String, bool)> =
-        suggest::rank(&needle, all, 8).into_iter().map(|c| (c.label, c.existing)).collect();
+    let candidates: Vec<(String, bool, bool)> =
+        suggest::rank(&needle, all, 8 + from_ai).into_iter().map(|c| (c.label, c.existing, c.value)).collect();
     let picked = suggest::highlight(ui, field.id.with("pick"), &needle, candidates.len(), field.has_focus());
     if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-        if let Some((tag, _)) = picked.and_then(|i| candidates.get(i)) {
+        if let Some((tag, ..)) = picked.and_then(|i| candidates.get(i)) {
             out.add_tag = Some(tag.clone());
             ed.input.clear();
             field.request_focus();
@@ -471,10 +493,16 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
     }
     if !candidates.is_empty() {
         ui.horizontal_wrapped(|ui| {
-            for (i, (tag, existing)) in candidates.iter().enumerate() {
-                let label = if *existing { format!("+ {tag}") } else { format!("+ {tag} ✦") };
+            for (i, (tag, existing, ai)) in candidates.iter().enumerate() {
+                let label = match (*ai, *existing) {
+                    (true, _) => format!("+ {tag} ✧"),
+                    (false, true) => format!("+ {tag}"),
+                    (false, false) => format!("+ {tag} ✦"),
+                };
                 let mut response = tags::chip(ui, style, tag, &label);
-                if !*existing {
+                if *ai {
+                    response = response.on_hover_text(t!("actions.tag_from_ai"));
+                } else if !*existing {
                     response = response.on_hover_text(t!("tags.suggestion_unused"));
                 }
                 if picked == Some(i) || response.has_focus() {

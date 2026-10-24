@@ -205,6 +205,16 @@ fn duration(seconds: u64) -> String {
     if h > 0 { format!("{h}h {m}m {s}s") } else { format!("{m}m {s}s") }
 }
 
+/// Whether a G-code file was sliced from this model, by name: slicers name it after the model
+/// ("rose.stl" → "rose.gcode", "rose_PLA_1h6m.gcode", "rose (2).gcode").
+pub fn sliced_from(gcode: &str, model: &str) -> bool {
+    let model = model.to_lowercase();
+    let stem = model.rsplit_once('.').map_or(model.as_str(), |(stem, _)| stem);
+    let gcode = gcode.to_lowercase();
+    !stem.is_empty()
+        && gcode.strip_prefix(stem).is_some_and(|rest| rest.starts_with(['.', '_', ' ', '-']))
+}
+
 /// Seconds in a print time as slicers write it: "1d 2h 3m 4s", "1h 6m 46s", "66m 46s" or "01:06:46".
 pub fn print_seconds(text: &str) -> Option<u32> {
     let text = text.trim();
@@ -421,6 +431,15 @@ fn trim_ascii(line: &[u8]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gcode_names_follow_the_model() {
+        assert!(sliced_from("Rose.gcode", "rose.stl"));
+        assert!(sliced_from("rose_PLA_1h6m.gcode", "Rose.STL"));
+        assert!(sliced_from("rose (2).gcode", "rose.3mf"));
+        assert!(!sliced_from("rosen.gcode", "rose.stl"), "another model");
+        assert!(!sliced_from("rose.gcode", ".stl"));
+    }
 
     /// A tiny print in the style of Orca/Anycubic Slicer Next: header facts, a 2-layer square
     /// with relative extrusion, travel moves, and the config block at the end.

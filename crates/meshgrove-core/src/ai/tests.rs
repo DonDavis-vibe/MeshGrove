@@ -247,3 +247,21 @@ fn suggestions_wait_and_leave_the_library_alone() {
     assert_eq!(file_tags(&lib), before);
     assert!(lib.lists().unwrap().iter().all(|l| l.name != "Wochenende"));
 }
+
+#[test]
+fn print_time_comes_from_the_gcode_sliced_from_a_model() {
+    let mut lib = Library::open_in_memory().unwrap();
+    lib.finish_baseline(Path::new(EIGENE)).unwrap();
+    let names = ["rose.stl", "rose_PLA_1h.gcode", "rosen.stl", "lang.stl", "lang.gcode"];
+    let entries: Vec<Entry> = names.iter().map(|n| entry(EIGENE, n)).collect();
+    lib.update_dir(Path::new(EIGENE), Path::new(EIGENE), 1, &entries, &[]).unwrap();
+    for (name, time) in [("rose_PLA_1h.gcode", "1h 0m 0s"), ("lang.gcode", "3h 10m")] {
+        let gcode = crate::loaders::gcode::GcodeFacts { print_time: Some(time.into()), ..Default::default() };
+        let meta = ThumbMeta { gcode: Some(Box::new(gcode)), content_hash: Some(format!("h-{name}")), ..Default::default() };
+        lib.store_meta(&Path::new(EIGENE).join(name), "k", &meta).unwrap();
+    }
+    let config = config();
+    let cx = Context::new(&lib, &config, AccessClass::Cloud, None).unwrap();
+    let quick = search_models(&cx, &ModelFilter { max_print_minutes: Some(120), ..Default::default() }).unwrap();
+    assert_eq!(ids(&quick), ["eigene/rose.stl", "eigene/rose_PLA_1h.gcode"], "not rosen.stl, not the long one");
+}

@@ -935,6 +935,10 @@ fn printer_functions(conn: &Connection, printers: &Arc<Vec<Printer>>) -> Result<
         let p = list.get(ctx.get::<i64>(1)? as usize);
         Ok(name.zip(p).is_some_and(|(n, p)| p.matches_gcode(&n)))
     })?;
+    // Not about printers, but registered with them: a G-code file sliced from a model, by name.
+    conn.create_scalar_function("mg_sliced_from", 2, flags, |ctx| {
+        Ok(crate::loaders::gcode::sliced_from(&ctx.get::<String>(0)?, &ctx.get::<String>(1)?))
+    })?;
     Ok(())
 }
 

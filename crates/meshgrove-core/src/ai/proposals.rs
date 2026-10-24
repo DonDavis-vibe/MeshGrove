@@ -385,6 +385,11 @@ impl ProposalStore {
         Ok(out)
     }
 
+    /// A batch's state ('pending', 'partly', 'accepted' …), by its uid.
+    pub fn batch_state(&self, uid: &str) -> ToolResult<Option<String>> {
+        Ok(self.conn.query_row("SELECT state FROM batches WHERE uid = ?1", [uid], |r| r.get(0)).optional()?)
+    }
+
     pub fn batch_by_uid(&self, uid: &str) -> ToolResult<Option<i64>> {
         Ok(self.conn.query_row("SELECT id FROM batches WHERE uid = ?1", [uid], |r| r.get(0)).optional()?)
     }

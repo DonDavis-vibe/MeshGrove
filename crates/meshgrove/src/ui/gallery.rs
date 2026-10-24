@@ -75,6 +75,12 @@ pub enum Action {
     NewList(ListKind, String),
     RemoveFromList(i64),
     Trash,
+    /// Ask the user's AI for tags for the selection (suggested in the review).
+    SuggestTags,
+    /// Put the selection into the chat's message field.
+    MentionInChat,
+    /// `meshgrove:<id>` of the selection, for an assistant using the MCP server.
+    CopyReference,
 }
 
 /// What the context menu can offer for the current selection.
@@ -97,6 +103,10 @@ pub struct MenuContext {
     pub current_list: Option<(i64, String)>,
     /// The selection is one folder or archive of the library, which can be indexed again.
     pub rescan: bool,
+    /// The chat's AI may see the selection: it can suggest tags and be told about it.
+    pub ai_chat: bool,
+    /// AI may see some of the selection: references to it can be copied.
+    pub ai_refs: bool,
 }
 
 pub struct GalleryOutput {
@@ -867,6 +877,16 @@ fn entry_menu(
             if let Some((id, name)) = &menu.current_list {
                 item(ui, t!("menu.remove_from_list", list = name), Action::RemoveFromList(*id));
             }
+        }
+        if menu.ai_chat || menu.ai_refs {
+            ui.separator();
+        }
+        if menu.ai_chat {
+            item(ui, t!("actions.menu_tags"), Action::SuggestTags);
+            item(ui, t!("actions.menu_mention"), Action::MentionInChat);
+        }
+        if menu.ai_refs {
+            item(ui, t!("actions.menu_reference"), Action::CopyReference);
         }
         ui.separator();
         let trash = ui

@@ -73,6 +73,12 @@ pub fn datetime(time: std::time::SystemTime) -> String {
     local.format(pattern).to_string()
 }
 
+/// "24.10." (de) / "Oct 24" (en), local time: a day of this year.
+pub fn date(time: std::time::SystemTime) -> String {
+    let local: chrono::DateTime<chrono::Local> = time.into();
+    local.format(if Lang::current() == Lang::De { "%d.%m." } else { "%b %-d" }).to_string()
+}
+
 /// "20,0 × 10,0 × 5,0 mm" (metric) or "0,79 × 0,39 × 0,20 in" (imperial).
 pub fn dimensions(size: glam::Vec3) -> String {
     let units = config::display_units();

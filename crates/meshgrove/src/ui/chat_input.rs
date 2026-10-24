@@ -79,6 +79,17 @@ impl ChatInput {
         range.end + 1
     }
 
+    /// Puts `pill` at the end of the text (after a space), as "Mention in chat" does.
+    pub fn append_pill(&mut self, pill: Pill) {
+        self.sync();
+        if !self.text.is_empty() && !self.text.ends_with([' ', '\n']) {
+            self.text.push(' ');
+            self.seen = self.text.clone();
+        }
+        let end = self.text.len();
+        self.insert_pill(end..end, pill);
+    }
+
     /// Takes a pill out (its ✕); returns where its text was.
     pub fn remove_pill(&mut self, index: usize) -> usize {
         self.sync();
