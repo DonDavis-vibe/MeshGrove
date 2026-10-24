@@ -87,7 +87,12 @@ impl Scope {
         if rel.components().any(|c| !matches!(c, Component::Normal(_))) {
             return None;
         }
-        let path = if rest.is_empty() { root.path.clone() } else { root.path.join(rel) };
+        // Part by part: on Windows `join("Garten/rose.stl")` would keep the `/`, and the index,
+        // which compares paths as text, would not know the file.
+        let mut path = root.path.clone();
+        for part in rel.components() {
+            path.push(part);
+        }
         self.allows(&path).then_some(path)
     }
 
@@ -227,6 +232,8 @@ mod tests {
         let id = s.id_of(file).unwrap();
         assert_eq!(id, "3D-2/Garten/rose.stl", "repeated names get a number");
         assert_eq!(s.resolve(&id).as_deref(), Some(file));
+        let native = Path::new("/mnt/ntfs/3D").join("Garten").join("rose.stl");
+        assert_eq!(s.resolve(&id).unwrap().as_os_str(), native.as_os_str(), "the system's own separators");
         assert_eq!(s.resolve("meshgrove:3D-2/Garten/rose.stl").as_deref(), Some(file), "copied references work");
         let member = Path::new("/home/davis/3D/auftrag.zip/teile/deckel.stl");
         assert_eq!(s.resolve(&s.id_of(member).unwrap()).as_deref(), Some(member), "archive members too");

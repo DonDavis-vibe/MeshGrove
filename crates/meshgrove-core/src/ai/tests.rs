@@ -151,7 +151,11 @@ fn local_ai_sees_the_local_library_but_no_pictures_of_it() {
     assert!(pictures.is_empty() && denied == ["kunden/halter.stl"]);
     let (detail, _) = get_model(&cx, "kunden/halter.stl", true).unwrap();
     assert!(!detail.thumbnail_allowed);
-    assert_eq!(detail.path, "/lib/kunden/halter.stl", "the full path, for slicers and printer servers");
+    assert_eq!(
+        Path::new(&detail.path),
+        Path::new("/lib/kunden/halter.stl"),
+        "the full path, for slicers and printer servers"
+    );
     let off = Config { ai: crate::config::AiConfig { enabled: false, ..config.ai.clone() }, ..config.clone() };
     assert!(matches!(Context::new(&lib, &off, AccessClass::Local, None), Err(ToolError::Disabled)));
 }
