@@ -58,6 +58,9 @@ struct Queued {
     stage: Stage,
     order: usize,
     visible: bool,
+    /// A folder job the library waits on too: should the folder change first, it carries on as
+    /// background work.
+    library: bool,
 }
 
 #[derive(Default)]
@@ -104,6 +107,10 @@ impl Shared {
 
     fn requeue(&self, mut item: Queued, generation: u64, stage: Stage) {
         let mut q = self.queue.lock().unwrap();
+        if item.library && !self.current(&item.job, generation) {
+            item.job.background = true;
+            item.library = false;
+        }
         if self.current(&item.job, generation) {
             item.stage = stage;
             q.items.push(item);
@@ -235,11 +242,25 @@ impl ThumbService {
         self.shared.total.store(jobs.len(), Ordering::SeqCst);
         *self.shared.started.lock().unwrap() = std::time::Instant::now();
         let keys: std::collections::HashSet<&str> = jobs.iter().map(|j| j.key.as_str()).collect();
-        // The foreground job will produce the same result (and its facts) sooner.
-        q.items.retain(|it| it.job.background && !keys.contains(it.job.key.as_str()));
+        // The foreground job will produce the same result (and its facts) sooner; what the
+        // library still needs from the folder left behind goes on in the background.
+        let wanted: std::collections::HashSet<String> = q
+            .items
+            .iter()
+            .filter(|it| (it.job.background || it.library) && keys.contains(it.job.key.as_str()))
+            .map(|it| it.job.key.clone())
+            .collect();
+        q.items.retain_mut(|it| {
+            if it.library {
+                it.job.background = true;
+                it.library = false;
+            }
+            it.job.background && !keys.contains(it.job.key.as_str())
+        });
         q.items.extend(jobs.into_iter().enumerate().map(|(order, mut job)| {
             job.background = false;
-            Queued { job, stage: Stage::Lookup, order, visible: false }
+            let library = wanted.contains(&job.key);
+            Queued { job, stage: Stage::Lookup, order, visible: false, library }
         }));
         self.shared.wake.notify_all();
     }
@@ -248,13 +269,15 @@ impl ThumbService {
     pub fn set_background(&self, jobs: Vec<Job>) {
         let mut q = self.shared.queue.lock().unwrap();
         q.items.retain(|it| !it.job.background);
-        let foreground: std::collections::HashSet<String> = q.items.iter().map(|it| it.job.key.clone()).collect();
-        q.items.extend(jobs.into_iter().filter(|j| !foreground.contains(&j.key)).enumerate().map(
-            |(order, mut job)| {
-                job.background = true;
-                Queued { job, stage: Stage::Lookup, order, visible: false }
-            },
-        ));
+        let mut wanted: std::collections::HashSet<String> = jobs.iter().map(|j| j.key.clone()).collect();
+        // What the folder is about to make anyway is left to it.
+        for it in &mut q.items {
+            it.library = wanted.remove(&it.job.key);
+        }
+        q.items.extend(jobs.into_iter().filter(|j| wanted.contains(&j.key)).enumerate().map(|(order, mut job)| {
+            job.background = true;
+            Queued { job, stage: Stage::Lookup, order, visible: false, library: false }
+        }));
         self.shared.wake.notify_all();
     }
 
@@ -341,6 +364,7 @@ mod tests {
                 stage,
                 order,
                 visible,
+                library: false,
             })
             .collect();
         Shared {
@@ -386,7 +410,27 @@ mod tests {
         service.set_background(vec![job("lib3")]);
         service.set_jobs(vec![job("c")]);
         assert_eq!(pop_keys(&shared, Stage::Lookup, 2), ["c", "lib3"]);
+
+        // The library waits on a file of the open folder, and the folder changes first.
+        service.set_jobs(vec![job("d")]);
+        service.set_background(vec![job("d"), job("lib4")]);
+        service.set_jobs(vec![job("e")]);
+        let mut queued: Vec<String> = shared.queue.lock().unwrap().items.iter().map(|it| it.job.key.clone()).collect();
+        queued.sort();
+        assert_eq!(queued, ["d", "e", "lib4"], "'d' is not lost");
+        assert_eq!(pop_keys(&shared, Stage::Lookup, 1), ["e"]);
         std::mem::forget(service); // Drop would shut the shared queue down
+    }
+
+    #[test]
+    fn library_work_survives_a_stale_requeue() {
+        let shared = shared_with(&[("a", Stage::Lookup, false)]);
+        let (mut item, generation) = shared.pop(Stage::Lookup).unwrap();
+        item.library = true;
+        shared.generation.fetch_add(1, Ordering::SeqCst); // another folder, while it was looked up
+        shared.requeue(item, generation, Stage::Generate);
+        let q = shared.queue.lock().unwrap();
+        assert!(q.items.len() == 1 && q.items[0].job.background && q.items[0].stage == Stage::Generate);
     }
 
     #[test]
