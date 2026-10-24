@@ -163,6 +163,28 @@ Kopie bleiben soll, und einem Klick, um die anderen in den Papierkorb zu legen.
 
 ![Duplikat-Gruppen mit Behalten-Vorschlag](docs/images/screenshot-duplicates.png)
 
+**Deine eigene KI, wenn du willst.** Frag den Chat mit `@`-Verweisen (Dateien, Ordner, Tags,
+eine Suche); er antwortet mit Links auf die Modelle, und was er ändern würde, wartet als Karte.
+
+![Der KI-Chat beantwortet, welche Spielsachen auf den A1 mini passen, mit Modell-Links und einer Druckliste in der Prüfliste](docs/images/screenshot-chat.png)
+
+**Nichts ändert sich, bevor du es sagst.** Vorschläge aus dem Chat, den Ein-Klick-Aktionen oder
+von einem MCP-Assistenten warten in der Prüfliste, alt → neu; Angenommenes lässt sich im Verlauf
+zurücknehmen.
+
+![Die Prüfliste mit zwei Umbenennungen, einer Verschiebung in einen neuen Ordner und Tag-Vorschlägen mit einem neuen Tag](docs/images/screenshot-review.png)
+
+**Ein Eingang für neue Lieferungen.** Neue Dateien nach Ordner oder ZIP gruppiert, Kopien
+bekannter Dateien mitgezählt, mögliche Druckprobleme markiert; *✧ Einordnen* schlägt Tags vor.
+
+![Der Eingang mit einem Kundenordner und einem ZIP, daneben die Tags, die die KI im Chat vorschlägt](docs/images/screenshot-inbox.png)
+
+**Mehrere Drucker und eine Druckbarkeits-Prüfung.** Auf welche Drucker ein Modell passt und was
+die Prüfung gefunden hat: offene oder nicht-mannigfaltige Kanten, mehrere Teile, verdächtige
+Größen.
+
+![Ein Reduzierstück, das auf Kobra S1 und MK4 passt, aber nicht auf den A1 mini, mit 118 Kanten an mehr als zwei Flächen](docs/images/screenshot-checks.png)
+
 ## Installation
 
 > **Stand:** Meshgrove ist jung. Hauptplattform ist Linux: Es wird auf Fedora/Nobara mit KDE

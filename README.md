@@ -158,6 +158,26 @@ copy to keep and one click to move the others to the trash.
 
 ![Duplicate groups with a keep suggestion](docs/images/screenshot-duplicates.png)
 
+**Your own AI, if you want it.** Ask the chat about `@` references (files, folders, tags, a
+search); it answers with links to the models, and what it would change waits as a card.
+
+![The AI chat answering which toys fit the A1 mini, with model links and a print list waiting for review](docs/images/screenshot-chat.png)
+
+**Nothing changes before you say so.** Suggestions from the chat, the one-click actions or an
+MCP assistant wait in the review, old → new; anything accepted can be undone in the history.
+
+![The review with two renames and a move into a new folder, and tag suggestions with a new tag](docs/images/screenshot-review.png)
+
+**An inbox for new deliveries.** New files grouped by the folder or ZIP they came in, copies of
+known files counted, possible printing problems marked; *✧ Sort in* suggests tags.
+
+![The inbox with a customer folder and a ZIP, and the tags the AI suggested in the chat](docs/images/screenshot-inbox.png)
+
+**Several printers and a printability check.** Which printers a model fits on, and what the
+check found: open or non-manifold edges, several parts, suspicious sizes.
+
+![A tapered adapter that fits the Kobra S1 and MK4 but not the A1 mini, with 118 non-manifold edges](docs/images/screenshot-checks.png)
+
 ## Installation
 
 > **Status:** Meshgrove is young. Linux (developed and used daily on Fedora/Nobara with KDE
