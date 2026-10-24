@@ -6,6 +6,17 @@
 
 ## Highlights
 
+**Tiles your way** (new in 0.5.2)
+
+- *Settings → Tiles* shows a sample tile with every badge on it. Drag the file type, filament colours, duplicates, tags, print bed check, favourite and print state into any corner of the picture, reorder them within a corner, or drop them into a tray to hide them; a right-click does the same.
+- Tags as names or colour dots, filament colours as dots or a stripe along the picture's edge, the bed check with text or as a symbol only, and file names on two, one or no lines, with or without the extension. The tile size and the folder previews have moved there too.
+- Nothing changes until you change it: the standard layout looks exactly as before.
+
+<p>
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-tiles.png" alt="Settings → Tiles: a sample tile with the badges moved around, a hidden one in the tray, and how tags, filaments and the check look" width="60%">
+</p>
+
+
 **Your own AI, if you want it** – new, optional and off until you switch it on. Meshgrove brings no AI of its own.
 
 - **MCP server** `meshgrove-mcp`: Claude Desktop, Claude Code, LM Studio, Cursor, VS Code and other MCP assistants can search the libraries you open to them and suggest tags, notes, lists, moves and renames. Ready-made tasks: sort the inbox, put together a print list, clean up tags, tidy up a folder.
@@ -44,6 +55,9 @@
 - The sidebar folds: lists, tags (each tag group too) and devices fold away with a click on their title, and stay folded.
 - Fixed: models in a folder inside a ZIP or another archive get their sizes, check and duplicate matches; until now the library never finished "Indexing" for them.
 - Fixed: copy and paste in text fields and the copy buttons (such as the MCP entry in Settings → AI & MCP), which did nothing before.
+- Windows: Meshgrove now also writes its log to `meshgrove.log` (*Settings → About Meshgrove* shows where), so problems can be reported without a console.
+- Fixed (Windows): the Claude Code command for the MCP server works in the command prompt (cmd) as well as in PowerShell.
+- Fixed: the hints about the trash and copied files no longer name Dolphin on Windows and macOS.
 
 ## Downloads
 
@@ -81,6 +95,8 @@ If Meshgrove saves you time, you can leave a tip on [Ko-fi](https://ko-fi.com/do
 **Meshgrove @VERSION@**: eine schnelle, native Galerie für 3D-Druck-Dateien unter Linux, Windows und macOS, mit echten Vorschauen für STL, 3MF, STEP, OBJ, PLY, glTF, G-code, Modelle in ZIP/7z/RAR, PDFs und Readmes, dazu Favoriten, Drucklisten und einem Druckprotokoll.
 
 **Neu:** mehrere Drucker, ein Druckbarkeits-Check und ein Eingang für neue Dateien und Kundenlieferungen. Dazu, freiwillig und ab Werk aus, deine eigene KI: ein MCP-Server für Claude, LM Studio, Cursor & Co. und mit eigenem Endpunkt (Ollama, LM Studio, OpenAI-kompatibel) ein KI-Chat mit `@`-Verweisen und Ein-Klick-Aktionen. Die KI schlägt vor, du nimmst an, und alles lässt sich rückgängig machen. Außerdem lassen sich Listen, Tags und Tag-Gruppen in der Seitenleiste einklappen, und Kopieren und Einfügen in Textfeldern funktioniert.
+
+**Neu in 0.5.2:** Unter *Einstellungen → Kacheln* stellst du an einer Beispielkachel selbst zusammen, welche Markierungen wo auf den Kacheln stehen: einfach in eine Ecke ziehen oder ausblenden, dazu Tags als Namen oder Punkte, Filamente als Punkte oder Streifen und den Dateinamen ein- oder zweizeilig, mit oder ohne Endung. Unter Windows schreibt Meshgrove jetzt eine Log-Datei (`meshgrove.log`, Pfad unter *Über Meshgrove*), der MCP-Befehl für Claude Code funktioniert auch in der Eingabeaufforderung, und die Hinweise zu Papierkorb und kopierten Dateien nennen nicht mehr Dolphin.
 
 **Installation** (alle Pakete können STEP, nichts muss gebaut werden):
 - **Windows:** `…-windows-x64-setup.exe` ausführen. Installiert ohne Adminrechte für dich (oder für alle Benutzer), mit Startmenü-Eintrag und „Öffnen mit“ für STL, 3MF, STEP, OBJ, PLY und glTF. Bei der SmartScreen-Warnung *Weitere Informationen → Trotzdem ausführen* wählen. Ohne Installation: die `…-portable.zip` entpacken und `meshgrove.exe` starten.
