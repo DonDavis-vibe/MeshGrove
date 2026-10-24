@@ -2184,6 +2184,14 @@ impl App {
                 }
             }
             Some(SidebarAction::Rescan(path)) => self.library.rescan(path, true),
+            Some(SidebarAction::Fold(key)) => {
+                let folded = &mut self.config.sidebar_collapsed;
+                match folded.iter().position(|f| *f == key) {
+                    Some(i) => _ = folded.remove(i),
+                    None => folded.push(key),
+                }
+                self.save_config();
+            }
             Some(SidebarAction::RemoveRoot(path)) => {
                 self.config.library_roots.retain(|r| r != &path);
                 self.config.ai.libraries.retain(|l| l.root != path);

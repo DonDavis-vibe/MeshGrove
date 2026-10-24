@@ -492,6 +492,9 @@ pub struct Config {
     pub states: Option<Vec<SuggestedTag>>,
     /// The sidebar lists all tags alphabetically instead of grouped (themes, properties, state, own).
     pub flat_tag_list: bool,
+    /// Sidebar sections and tag groups folded away: "lists", "tags", "devices", "tags:themes" …
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sidebar_collapsed: Vec<String>,
     /// Existing tags stay listed below the tag field while nothing is typed.
     pub tag_chips_idle: bool,
     /// Names or colour dots on the tiles.
@@ -681,6 +684,7 @@ impl Default for Config {
             properties: None,
             states: None,
             flat_tag_list: false,
+            sidebar_collapsed: Vec::new(),
             tag_chips_idle: true,
             tile_tags: TileTags::Names,
             tile_tag_count: 3,
@@ -911,6 +915,7 @@ mod tests {
             SuggestedTag { de: "Burg".into(), en: "Castle".into(), color: Some(3) },
         ]);
         config.flat_tag_list = true;
+        config.sidebar_collapsed = vec!["tags:themes".into(), "devices".into()];
         let back: Config = toml::from_str(&toml::to_string_pretty(&config).unwrap()).unwrap();
         assert_eq!(back, config);
         assert!(back.themes()[1].matches("castle"));
@@ -923,6 +928,7 @@ mod tests {
                 && old.properties.is_none()
                 && old.states.is_none()
                 && !old.flat_tag_list
+                && old.sidebar_collapsed.is_empty()
                 && old.tag_chips_idle
         );
         assert_eq!(old.properties().len(), 16);

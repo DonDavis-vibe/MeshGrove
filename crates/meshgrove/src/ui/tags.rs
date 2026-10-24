@@ -40,6 +40,16 @@ pub enum Group {
 impl Group {
     pub const SUGGESTED: [Group; 3] = [Group::Themes, Group::Properties, Group::State];
 
+    /// Its name in the config (folded sidebar groups).
+    pub fn key(self) -> &'static str {
+        match self {
+            Group::Themes => "themes",
+            Group::Properties => "properties",
+            Group::State => "state",
+            Group::Own => "own",
+        }
+    }
+
     pub fn title(self) -> String {
         match self {
             Group::Themes => t!("tags.group_themes"),

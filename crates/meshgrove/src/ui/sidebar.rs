@@ -31,6 +31,8 @@ pub enum SidebarAction {
     TagColor(String, Option<u8>),
     /// Finish a print list (or open it again).
     ArchiveList(i64, bool),
+    /// Fold a sidebar section or tag group away, or open it again ("tags", "tags:themes" …).
+    Fold(String),
     ExportList(i64, ListExport),
 }
 
@@ -144,18 +146,31 @@ impl Sidebar {
                 }
             }
 
+            let folded = &config.sidebar_collapsed;
             if library.has_index {
-                self.lists(ui, &library, &mut action);
+                let count = library.lists.len();
+                if folding_section(ui, &t!("sidebar.lists"), "lists", count, folded, |ui| {
+                    self.lists(ui, &library, &mut action)
+                }) {
+                    action = Some(SidebarAction::Fold("lists".into()));
+                }
             }
-            if !library.tags.is_empty() {
-                section(ui, &t!("sidebar.tags"));
-                tag_groups(ui, &library, &mut action);
+            if !library.tags.is_empty()
+                && folding_section(ui, &t!("sidebar.tags"), "tags", library.tags.len(), folded, |ui| {
+                    tag_groups(ui, &library, folded, &mut action)
+                })
+            {
+                action = Some(SidebarAction::Fold("tags".into()));
             }
 
             if !self.devices.is_empty() {
-                section(ui, &t!("sidebar.devices"));
-                for dev in self.devices.clone() {
-                    place(ui, "🖴", &listing::file_name(&dev), &dev, current, &mut action);
+                let devices = self.devices.clone();
+                if folding_section(ui, &t!("sidebar.devices"), "devices", devices.len(), folded, |ui| {
+                    for dev in &devices {
+                        place(ui, "🖴", &listing::file_name(dev), dev, current, &mut action);
+                    }
+                }) {
+                    action = Some(SidebarAction::Fold("devices".into()));
                 }
             }
 
@@ -170,7 +185,6 @@ impl Sidebar {
 
     /// Favourites, print lists and collections, and "new list".
     fn lists(&mut self, ui: &mut Ui, library: &LibraryInfo, action: &mut Option<SidebarAction>) {
-        section(ui, &t!("sidebar.lists"));
         let favorites = library.lists.iter().find(|l| l.kind == ListKind::Favorites);
         let label = format!("★  {}  ({})", t!("lists.favorites"), favorites.map_or(0, |l| l.count));
         match favorites {
@@ -372,7 +386,7 @@ impl Sidebar {
 /// Tags grouped like the suggestions (themes, print properties, state, own), each with its
 /// colour dot, or as one alphabetical list. A click searches for the tag; Ctrl+click adds it to
 /// (or takes it out of) the current tag search; right-click chooses its colour.
-fn tag_groups(ui: &mut Ui, library: &LibraryInfo, action: &mut Option<SidebarAction>) {
+fn tag_groups(ui: &mut Ui, library: &LibraryInfo, folded: &[String], action: &mut Option<SidebarAction>) {
     if library.flat_tags {
         for (tag, count) in alphabetical(library.tags) {
             tag_row(ui, library, tag, *count, action);
@@ -385,9 +399,19 @@ fn tag_groups(ui: &mut Ui, library: &LibraryInfo, action: &mut Option<SidebarAct
         if in_group.is_empty() {
             continue;
         }
-        ui.label(RichText::new(group.title()).small().weak());
-        for (tag, count) in in_group {
-            tag_row(ui, library, tag, *count, action);
+        let key = format!("tags:{}", group.key());
+        let open = !folded.contains(&key);
+        let title = if open { group.title() } else { format!("{}  ({})", group.title(), in_group.len()) };
+        let response = egui::CollapsingHeader::new(RichText::new(title).small().weak())
+            .id_salt(("sidebar", key.as_str()))
+            .open(Some(open))
+            .show_unindented(ui, |ui| {
+                for (tag, count) in in_group {
+                    tag_row(ui, library, tag, *count, action);
+                }
+            });
+        if response.header_response.clicked() {
+            *action = Some(SidebarAction::Fold(key));
         }
     }
 }
@@ -476,6 +500,27 @@ fn tag_row(ui: &mut Ui, library: &LibraryInfo, tag: &String, count: usize, actio
 fn section(ui: &mut Ui, title: &str) {
     ui.add_space(6.0);
     ui.label(RichText::new(title).small().strong().weak());
+}
+
+/// A section that folds away with a click on its title, showing how many entries it hides;
+/// whether it is folded lives in the config (`key` in `folded`). True when the title was clicked.
+fn folding_section(
+    ui: &mut Ui,
+    title: &str,
+    key: &str,
+    count: usize,
+    folded: &[String],
+    body: impl FnOnce(&mut Ui),
+) -> bool {
+    ui.add_space(6.0);
+    let open = !folded.iter().any(|f| f == key);
+    let title = if open { title.to_owned() } else { format!("{title}  ({count})") };
+    egui::CollapsingHeader::new(RichText::new(title).small().strong().weak())
+        .id_salt(("sidebar", key))
+        .open(Some(open))
+        .show_unindented(ui, body)
+        .header_response
+        .clicked()
 }
 
 fn place(
