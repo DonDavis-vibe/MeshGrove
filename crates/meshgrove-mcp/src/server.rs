@@ -121,13 +121,19 @@ impl Meshgrove {
     }
 
     pub(crate) fn load_config(&self) -> ToolResult<Config> {
-        let config = match &self.paths.config {
+        let mut config = match &self.paths.config {
             Some(path) => Config::load_from(path),
             None => Config::load(),
         }
         .map_err(|e| ToolError::Invalid(format!("Meshgrove's settings cannot be read: {e}")))?;
         if !config.ai.enabled {
             return Err(ToolError::Disabled);
+        }
+        // Printers never chosen in the settings: those the slicers know, as Meshgrove takes them.
+        if config.printers.is_none() {
+            let found = meshgrove_core::printer::detect_all();
+            config.default_printer = found.first().map(|d| d.printer.name.clone());
+            config.printers = Some(found.into_iter().map(|d| d.printer).collect());
         }
         Ok(config)
     }

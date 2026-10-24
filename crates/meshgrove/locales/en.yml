@@ -545,7 +545,7 @@ settings.inbox_hint: "The sidebar then shows “Inbox” as soon as new models o
 settings.cat_ai: "AI & MCP"
 settings.ai: "AI assistant (optional)"
 settings.ai_enable: "Switch AI features on"
-settings.ai_hint: "Meshgrove brings no AI of its own. Switched on, your own assistant (Claude, LM Studio, Cursor …) can search the libraries you open below over MCP and suggest tags, notes or lists. Only what you accept in the review goes into the library – and all of it can be undone."
+settings.ai_hint: "Meshgrove brings no AI of its own. Switched on, your own assistant (Claude, LM Studio, Cursor …) can search the libraries you open below over MCP and suggest tags, notes, lists or moves. Only what you accept in the review goes into the library (in the AI chat at once if you like, with an undo arrow) – and all of it can be undone."
 settings.ai_review: "Review suggestions (%{count})"
 settings.ai_history: "History"
 settings.ai_off: "Switch the AI features on above first."

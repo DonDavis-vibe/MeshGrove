@@ -78,7 +78,11 @@ struct Server {
 
 impl Server {
     fn start(f: &Fixture, extra: &[&str]) -> Server {
+        // A home of its own: printers are not looked for in the slicers of whoever runs the tests.
+        let home = f.config.parent().unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_meshgrove-mcp"))
+            .env("HOME", home)
+            .env("XDG_CONFIG_HOME", home.join("xdg-config"))
             .args(["--config", f.config.to_str().unwrap(), "--db", f.db.to_str().unwrap()])
             .args(["--proposals", f.proposals.to_str().unwrap(), "--thumbs", f.thumbs.to_str().unwrap()])
             .args(["--client", "test"])

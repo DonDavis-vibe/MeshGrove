@@ -545,7 +545,7 @@ settings.inbox_hint: "Die Seitenleiste zeigt dann „Eingang“, sobald neue Mod
 settings.cat_ai: "KI & MCP"
 settings.ai: "KI-Assistent (freiwillig)"
 settings.ai_enable: "KI-Funktionen einschalten"
-settings.ai_hint: "Meshgrove bringt keine KI mit. Eingeschaltet kann dein eigener Assistent (Claude, LM Studio, Cursor …) über MCP in den Bibliotheken suchen, die du unten freigibst, und Tags, Notizen oder Listen vorschlagen. In die Bibliothek kommt nur, was du in der Prüfliste annimmst – und alles lässt sich rückgängig machen."
+settings.ai_hint: "Meshgrove bringt keine KI mit. Eingeschaltet kann dein eigener Assistent (Claude, LM Studio, Cursor …) über MCP in den Bibliotheken suchen, die du unten freigibst, und Tags, Notizen, Listen oder Verschiebungen vorschlagen. In die Bibliothek kommt nur, was du in der Prüfliste annimmst (im KI-Chat auf Wunsch gleich, mit Rückgängig-Pfeil) – und alles lässt sich rückgängig machen."
 settings.ai_review: "Vorschläge prüfen (%{count})"
 settings.ai_history: "Verlauf"
 settings.ai_off: "Erst die KI-Funktionen oben einschalten."

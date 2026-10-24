@@ -111,7 +111,10 @@ fn hidden_libraries_never_show() {
     assert!(!names.contains(&"Geheimprojekt"), "a tag only hidden files carry stays hidden: {names:?}");
     let lists: Vec<String> = list_lists(&cx).unwrap().into_iter().map(|l| l.name).collect();
     assert!(lists.contains(&"Gartenmarkt".to_owned()) && !lists.contains(&"Nur privat".to_owned()), "{lists:?}");
-    assert!(matches!(get_list(&cx, "Nur privat"), Err(ToolError::UnknownId(_))));
+    let hidden_list = get_list(&cx, "Nur privat").unwrap_err().to_string();
+    let no_list = get_list(&cx, "Gibt es nicht").unwrap_err().to_string();
+    assert_eq!(hidden_list.replace("Nur privat", "X"), no_list.replace("Gibt es nicht", "X"), "hidden is as unknown");
+    assert!(get_list(&cx, "favorites").unwrap().items.is_empty(), "the favourites always exist");
     let tagged = search_models(&cx, &ModelFilter { tags_all: vec!["Geheimprojekt".into()], ..Default::default() }).unwrap();
     assert!(tagged.items.is_empty());
     assert!(find_duplicates(&cx, None, 50).unwrap().is_empty(), "the hidden copy is no duplicate to see");

@@ -594,14 +594,18 @@ pub fn list_lists(cx: &Context) -> ToolResult<Vec<ListSummary>> {
 
 pub fn get_list(cx: &Context, name: &str) -> ToolResult<ListDetail> {
     let wanted = name.trim();
-    let list = cx
+    let favorites = wanted.eq_ignore_ascii_case("favorites");
+    let found = cx
         .lib
         .lists()?
         .into_iter()
-        .find(|l| {
-            l.name.eq_ignore_ascii_case(wanted) || (l.kind == ListKind::Favorites && wanted.eq_ignore_ascii_case("favorites"))
-        })
-        .ok_or_else(|| ToolError::UnknownId(name.to_owned()))?;
+        .find(|l| l.name.eq_ignore_ascii_case(wanted) || (l.kind == ListKind::Favorites && favorites));
+    let list = match found {
+        Some(list) => list,
+        // The favourites exist once the first file is starred; until then they are empty.
+        None if favorites => return Ok(ListDetail { name: "favorites".into(), kind: ListKind::Favorites.as_str().to_owned(), items: Vec::new() }),
+        None => return Err(ToolError::Invalid(format!("no list called {wanted:?} (list_lists shows them)"))),
+    };
     let facts = Facts::load(cx.lib)?;
     let mut items = Vec::new();
     for e in cx.lib.list_entries(list.id)? {
@@ -612,7 +616,8 @@ pub fn get_list(cx: &Context, name: &str) -> ToolResult<ListDetail> {
         }
     }
     if items.is_empty() && list.kind != ListKind::Favorites {
-        return Err(ToolError::UnknownId(name.to_owned())); // nothing of it is visible: as if it did not exist
+        // Nothing of it is visible: as if it did not exist.
+        return Err(ToolError::Invalid(format!("no list called {wanted:?} (list_lists shows them)")));
     }
     Ok(ListDetail { name: list.name, kind: list.kind.as_str().to_owned(), items })
 }

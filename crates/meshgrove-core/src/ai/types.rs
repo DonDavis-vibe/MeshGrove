@@ -2,6 +2,28 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Measures as people write them: at most two decimals, without what f32 → f64 adds
+/// ("0.4", not "0.4000000059604645").
+mod round {
+    use serde::{Serialize, Serializer};
+
+    fn r(v: f32) -> f64 {
+        (f64::from(v) * 100.0).round() / 100.0
+    }
+
+    pub fn one<S: Serializer>(v: &Option<f32>, s: S) -> Result<S::Ok, S::Error> {
+        v.map(r).serialize(s)
+    }
+
+    pub fn three<S: Serializer>(v: &Option<[f32; 3]>, s: S) -> Result<S::Ok, S::Error> {
+        v.map(|a| a.map(r)).serialize(s)
+    }
+
+    pub fn plain<S: Serializer>(v: &[f32; 3], s: S) -> Result<S::Ok, S::Error> {
+        v.map(r).serialize(s)
+    }
+}
+
 /// What `search_models` looks for. Every field is optional; all given ones must match.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -85,7 +107,7 @@ pub struct ModelSummary {
     pub folder: String,
     pub file_size: u64,
     /// Bounding box in millimetres.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "round::three")]
     pub size_mm: Option<[f32; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub triangles: Option<u64>,
@@ -119,7 +141,7 @@ pub struct GcodeSummary {
     pub printer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub print_minutes: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "round::one")]
     pub filament_g: Option<f32>,
 }
 
@@ -175,10 +197,10 @@ pub struct PrinterFit {
     pub printer: String,
     /// "fits", "rotated" (fits when turned) or "too_big".
     pub fit: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "round::one")]
     pub rotate_deg: Option<f32>,
     /// How far it sticks out (X, Y, Z mm) when too big.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "round::three")]
     pub over_mm: Option<[f32; 3]>,
 }
 
@@ -301,8 +323,9 @@ pub struct DuplicateOut {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PrinterOut {
     pub name: String,
+    #[serde(serialize_with = "round::plain")]
     pub bed_mm: [f32; 3],
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "round::one")]
     pub nozzle_mm: Option<f32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub materials: Vec<String>,

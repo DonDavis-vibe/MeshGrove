@@ -284,7 +284,12 @@ impl App {
         let chat = match self.chat.current {
             Some(c) => c,
             None => {
-                let plain: String = text.replace("[[ref:", "@").chars().take(40).collect();
+                // The references by name: "verschiebe @Griff.stl ins Archiv".
+                let mut plain = text.clone();
+                for (n, p) in pills.iter().enumerate() {
+                    plain = plain.replace(&format!("[[ref:{n}]]"), &format!("@{}", p.label));
+                }
+                let plain: String = plain.chars().take(40).collect();
                 match s.create_chat(plain.trim()) {
                     Ok(id) => id,
                     Err(e) => {
@@ -559,8 +564,15 @@ fn references(cx: &Context, query: &str, selection: &[PathBuf], current: &Path, 
     if cx.scope.allows(current) {
         out.push(pill(listing::file_name(current), t!("chat.ref_current_folder").into_owned(), true, Reference::Folder { path: current.to_path_buf() }));
     }
-    if inbox > 0 {
-        out.push(pill(t!("chat.ref_inbox").into_owned(), t!("chat.ref_new", count = inbox).into_owned(), true, Reference::Search { query: "is:neu".into() }));
+    // The inbox as far as this endpoint may see it.
+    let new = if inbox > 0 {
+        let filter = ModelFilter { new_only: true, limit: Some(200), ..Default::default() };
+        read::search_models(cx, &filter).map(|p| p.items.len()).unwrap_or(0)
+    } else {
+        0
+    };
+    if new > 0 {
+        out.push(pill(t!("chat.ref_inbox").into_owned(), t!("chat.ref_new", count = new).into_owned(), true, Reference::Search { query: "is:neu".into() }));
     }
     if query.contains(':') {
         let found = read::search_models(cx, &ModelFilter { q: Some(query.into()), limit: Some(200), ..Default::default() })
