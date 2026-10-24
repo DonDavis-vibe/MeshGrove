@@ -6,7 +6,7 @@ use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
 use meshgrove_core::config::{
     self, Config, DisplayUnits, DoubleClick, FOLDER_PREVIEW_DEPTH, FolderPreviews, GltfUnit, ModelUnits,
-    PreviewQuality, Program, Slicer, SuggestedTag, TILE_TAG_COUNT, TileTags, default_properties, default_states,
+    PreviewQuality, Program, Slicer, SuggestedTag, TileLayout, TileTags, default_properties, default_states,
     default_themes,
 };
 use meshgrove_core::printer::{self, DetectedPrinter, Printer};
@@ -15,7 +15,7 @@ use meshgrove_core::spacemouse::SpaceMouseConfig;
 use meshgrove_core::userdata;
 
 use super::spacemouse::MouseSettings;
-use super::tags::{self, Group, PALETTE};
+use super::tags::{self, Group, PALETTE, TagStyle};
 use crate::i18n;
 use crate::spacemouse::Snapshot;
 
@@ -67,13 +67,17 @@ pub enum SettingsChange {
     },
     ShowAiReview,
     ShowAiHistory,
-    /// Tags in colour; tags on the tiles, how many and how.
-    TagDisplay {
-        colored: bool,
-        on_tiles: bool,
+    /// Tags in their colours, or grey.
+    ColoredTags(bool),
+    /// How many tags a tile shows at most, and how.
+    TileTagLook {
         count: u8,
         style: TileTags,
     },
+    /// Which marks the tiles show where, and their names.
+    TileLayout(TileLayout),
+    /// The tile edge length.
+    TileSize(f32),
     /// The sidebar lists tags alphabetically, not grouped.
     FlatTagList(bool),
     /// Existing tags stay listed below the tag field while nothing is typed.
@@ -109,28 +113,12 @@ fn inbox(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
     ui.weak(t!("settings.inbox_hint"));
 }
 
-/// How tags are drawn.
+/// How tags are drawn (how they show on the tiles is under Tiles).
 fn tags(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
-    let (mut colored, mut on_tiles) = (config.colored_tags, config.tags_on_tiles);
-    let (mut count, mut style) = (config.tile_tag_count, config.tile_tags);
-    ui.checkbox(&mut colored, t!("settings.tags_colored"));
-    ui.checkbox(&mut on_tiles, t!("settings.tags_on_tiles"));
-    ui.add_enabled_ui(on_tiles, |ui| {
-        ui.indent("tile_tags", |ui| {
-            ui.horizontal(|ui| {
-                ui.label(t!("settings.tags_count"));
-                ui.add(egui::Slider::new(&mut count, TILE_TAG_COUNT));
-            });
-            ui.horizontal(|ui| {
-                ui.label(t!("settings.tags_style"));
-                ui.radio_value(&mut style, TileTags::Names, t!("settings.tags_names"));
-                ui.add_enabled_ui(colored, |ui| {
-                    ui.radio_value(&mut style, TileTags::Dots, t!("settings.tags_dots"))
-                        .on_disabled_hover_text(t!("settings.tags_dots_need_colors"));
-                });
-            });
-        });
-    });
+    let mut colored = config.colored_tags;
+    if ui.checkbox(&mut colored, t!("settings.tags_colored")).changed() {
+        changes.push(SettingsChange::ColoredTags(colored));
+    }
     ui.weak(t!("settings.tags_hint"));
     let mut flat = config.flat_tag_list;
     if ui.checkbox(&mut flat, t!("settings.tags_flat")).changed() {
@@ -142,10 +130,6 @@ fn tags(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
         changes.push(SettingsChange::IdleTagChips(idle));
     }
     ui.weak(t!("settings.tags_idle_hint"));
-    let now = (colored, on_tiles, count, style);
-    if now != (config.colored_tags, config.tags_on_tiles, config.tile_tag_count, config.tile_tags) {
-        changes.push(SettingsChange::TagDisplay { colored, on_tiles, count, style });
-    }
 }
 
 /// Model pictures on folder tiles.
@@ -261,6 +245,8 @@ pub struct AppInfo<'a> {
     pub mouse: &'a Snapshot,
     /// What the 3D mouse's picture needs to draw a cube.
     pub render: (&'a egui_wgpu::RenderState, &'a meshgrove_render::Renderer),
+    /// The tags' colours, for the sample tile.
+    pub tag_style: &'a TagStyle,
 }
 
 #[derive(Default)]
@@ -286,6 +272,8 @@ pub struct SettingsDialog {
     found_printers: Vec<DetectedPrinter>,
     /// The "KI & MCP" page.
     ai: super::settings_ai::AiSettings,
+    /// The sample tile of the "Kacheln" page.
+    tiles: super::settings_tiles::TileSettings,
     /// A new theme as typed.
     suggest_input: [String; 3],
     import_input: String,
@@ -342,6 +330,8 @@ enum Section {
     Library,
     Inbox,
     FolderPreviews,
+    TilePreview,
+    TileLook,
     Tags,
     Themes,
     Properties,
@@ -369,6 +359,7 @@ enum Category {
     General,
     Library,
     Tags,
+    Tiles,
     View,
     ModelsUnits,
     Programs,
@@ -379,10 +370,11 @@ enum Category {
 }
 
 impl Category {
-    const ALL: [Category; 10] = [
+    const ALL: [Category; 11] = [
         Category::General,
         Category::Library,
         Category::Tags,
+        Category::Tiles,
         Category::View,
         Category::ModelsUnits,
         Category::Programs,
@@ -397,6 +389,7 @@ impl Category {
             Category::General => "⚙",
             Category::Library => "📚",
             Category::Tags => "🏷",
+            Category::Tiles => "⊞",
             Category::View => "🎥",
             Category::ModelsUnits => "📏",
             Category::Programs => "🔧",
@@ -413,6 +406,7 @@ impl Category {
             "general" => Category::General,
             "library" => Category::Library,
             "tags" => Category::Tags,
+            "tiles" => Category::Tiles,
             "view" => Category::View,
             "models" => Category::ModelsUnits,
             "programs" => Category::Programs,
@@ -429,6 +423,7 @@ impl Category {
             Category::General => t!("settings.cat_general"),
             Category::Library => t!("settings.cat_library"),
             Category::Tags => t!("settings.cat_tags"),
+            Category::Tiles => t!("settings.cat_tiles"),
             Category::View => t!("settings.cat_view"),
             Category::ModelsUnits => t!("settings.cat_models_units"),
             Category::Programs => t!("settings.cat_programs"),
@@ -564,10 +559,11 @@ impl SettingsDialog {
                         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                             let sections: &[Section] = match self.category {
                                 Category::General => &[Section::Language, Section::DoubleClick, Section::Panes],
-                                Category::Library => &[Section::Library, Section::Inbox, Section::FolderPreviews],
+                                Category::Library => &[Section::Library, Section::Inbox],
                                 Category::Tags => {
                                     &[Section::Tags, Section::Themes, Section::Properties, Section::States]
                                 }
+                                Category::Tiles => &[Section::TilePreview, Section::TileLook, Section::FolderPreviews],
                                 Category::View => &[Section::Preview, Section::SpaceMouse],
                                 Category::ModelsUnits => &[Section::Models, Section::Units],
                                 Category::Programs => &[Section::Slicer, Section::Editor],
@@ -598,6 +594,10 @@ impl SettingsDialog {
                                     Section::Library => self.library(ui, config, &mut changes),
                                     Section::Inbox => inbox(ui, config, &mut changes),
                                     Section::FolderPreviews => folder_previews(ui, config, &mut changes),
+                                    Section::TilePreview => {
+                                        self.tiles.preview(ui, config, info.tag_style, &mut changes)
+                                    }
+                                    Section::TileLook => self.tiles.look(ui, config, &mut changes),
                                     Section::Tags => tags(ui, config, &mut changes),
                                     Section::Themes => self.suggestions(ui, config, Group::Themes, &mut changes),
                                     Section::Properties => {

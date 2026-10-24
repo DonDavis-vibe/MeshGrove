@@ -331,10 +331,11 @@ unpack it anywhere and start `meshgrove.exe`.
   left mouse button and drag to turn it by hand; turn the mouse wheel while holding the button
   to zoom into the tile.
 - **Badges on tiles:** the file type at the bottom left; `2×`, `3×` … at the top right when the
-  library holds duplicates of this file, and the file's tags below it (as pills or dots, see
-  *Settings → Tags*); at the bottom right the print bed check (↻ angle or ✕), ★ for favourites
-  and the print state (✓2 printed twice, ✗ last print failed, on a print list the copies done
-  of those needed); `⚠ 🖨` on G-code sliced for another printer.
+  library holds duplicates of this file, and the file's tags below it (as pills or dots); at the
+  bottom right the print bed check (↻ angle or ✕), ★ for favourites and the print state (✓2
+  printed twice, ✗ last print failed, on a print list the copies done of those needed); `⚠ 🖨`
+  on G-code sliced for another printer. *Settings → Tiles* shows a sample tile: drag its badges
+  into other corners or out of sight, and choose how tags, filaments, the check and the name look.
 - **Panes:** drag a pane's header to move it; drop it on the edge of another pane to split
   that, or on another header to stack both as tabs. The dividers between panes resize them.
   *Settings → Panes* can lock them, so they can only be resized, and resets the layout.
@@ -348,8 +349,8 @@ unpack it anywhere and start `meshgrove.exe`.
   with the system's default application instead (Enter does the same). Models that program
   does not open still get a model window.
 - **Folder previews from disk:** folder tiles outside the library can show models from their
-  subfolders too (*Settings → Folder previews*, off by default, up to five levels deep). With
-  more than four models the pictures slowly fade through them.
+  subfolders too (*Settings → Tiles → Folder previews*, off by default, up to five levels
+  deep). With more than four models the pictures slowly fade through them.
 
 ### The 3D viewer and its tools
 
@@ -469,8 +470,8 @@ again. F5 re-reads the current folder.
   (own design, remix, tested, needs tweaking …). Right-click → *Edit tags …* jumps straight
   into the field.
 - **Colours:** every tag gets a colour of its own, the same everywhere. Right-click a tag in the
-  sidebar to choose another one. *Settings → Tags* turns colours off, chooses whether tiles show
-  tags as names or as coloured dots, and how many.
+  sidebar to choose another one. *Settings → Tags* turns colours off; *Settings → Tiles* chooses
+  whether tiles show tags as names or as coloured dots, and how many.
 - **Remove a tag:** click the tag chip (`painted ✕`). With several files selected, chips show
   how many of them carry the tag (`painted (2/5)`).
 - **Notes:** write anything into the *Note* field: print settings, colours, what went wrong
@@ -815,8 +816,9 @@ Ctrl means ⌘ Cmd on macOS.
 
 Everything can be changed in the settings window (⚙ at the top right, or Ctrl+,), sorted into
 categories on the left: *General* (language, what a double-click on a model does, the panes),
-*Library* (library folders, the inbox, folder previews), *Tags* (colours, names or dots on the
-tiles, how many), *3D view* (picture quality of the large preview and the model windows, the
+*Library* (library folders, the inbox), *Tags* (colours, the tag list, suggested tags), *Tiles*
+(which badges show where on a sample tile, tags as names or dots, file names, tile size, folder
+previews), *3D view* (picture quality of the large preview and the model windows, the
 unit of glTF models), *Programs* (slicer and mesh editor), *Printer* (your printers), *AI & MCP*
 (optional assistant, what it may see, access log), *Data and storage* (backups, and the
 preview cache with its size and a *Clear cache* button) and *About Meshgrove*, which lists the
@@ -851,9 +853,19 @@ preview_controls = false   # large preview: show name, tools and hints
 gallery_view = "grid"      # grid | list
 print_filter = "all"       # all | unprinted | printed | failed
 colored_tags = true        # tags in colours (otherwise grey)
-tags_on_tiles = true
 tile_tags = "names"        # names | dots
 tile_tag_count = 3         # 1 … 8
+
+[tile_layout]              # badges on the tiles, each list from its corner inwards
+top_left = ["filaments"]
+top_right = ["duplicates", "tags"]
+bottom_left = ["file_type"]
+bottom_right = ["check", "favorite", "print_state"]
+hidden = []
+filaments = "dots"         # dots | stripe
+check = "text"             # text | symbol
+name_lines = 2             # 0 … 2
+name_extension = true
 
 [list_columns]
 hidden = ["type"]          # preview, folder, type, size, dimensions, modified, tags, favorite, print

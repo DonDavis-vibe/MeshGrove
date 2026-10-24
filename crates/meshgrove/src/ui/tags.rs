@@ -3,10 +3,11 @@
 //! looks the same everywhere and on every computer.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use meshgrove_core::config::SuggestedTag;
 
-use egui::{Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Color32, FontId, Galley, Painter, Pos2, Rect, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 
 /// (background, text): pastels spread round the colour wheel (OKLCH L 0.78, C 0.10, every 30°
 /// from 25°) with a very dark tone of the same hue as text, at least 7.5:1 contrast.
@@ -149,10 +150,11 @@ pub fn dot(ui: &mut Ui, style: &TagStyle, tag: &str) {
 }
 
 /// Paints a tag's colour dot (with a thin dark ring, so it shows on any thumbnail) whose right
-/// edge sits at `right_top`, on a 13 px row.
-pub fn paint_dot(p: &Painter, right_top: Pos2, color: Color32) {
+/// edge sits at `right_top`, on a 13 px row. Returns its rectangle.
+pub fn paint_dot(p: &Painter, right_top: Pos2, color: Color32) -> Rect {
     let center = pos2(right_top.x - 6.0, right_top.y + 6.0);
     p.circle(center, 5.0, color, Stroke::new(1.5, Color32::from_black_alpha(170)));
+    Rect::from_center_size(center, vec2(12.0, 12.0))
 }
 
 /// Paints a pill whose right edge sits at `right_top`; long names are cut with "…" to fit
@@ -172,21 +174,33 @@ pub fn paint_pill_from_left(
     pill(p, left_top, false, label, colors, max_width)
 }
 
-fn pill(p: &Painter, anchor: Pos2, from_right: bool, label: &str, colors: (Color32, Color32), max_width: f32) -> Rect {
+/// The size [`paint_pill`] gives a label.
+pub fn pill_size(p: &Painter, label: &str, max_width: f32) -> Vec2 {
+    pill_galley(p, label, Color32::WHITE, max_width).1
+}
+
+const PILL_PAD: Vec2 = vec2(6.0, 1.5);
+
+/// A pill's text, cut with "…" to fit `max_width`, and the size of the pill around it.
+fn pill_galley(p: &Painter, label: &str, fg: Color32, max_width: f32) -> (Arc<Galley>, Vec2) {
     let font = FontId::proportional(10.5);
-    let pad = vec2(6.0, 1.5);
     let mut text = label.to_owned();
-    let mut galley = p.layout_no_wrap(text.clone(), font.clone(), colors.1);
-    while galley.size().x + 2.0 * pad.x > max_width && text.chars().count() > 1 {
+    let mut galley = p.layout_no_wrap(text.clone(), font.clone(), fg);
+    while galley.size().x + 2.0 * PILL_PAD.x > max_width && text.chars().count() > 1 {
         text.pop();
         let cut = format!("{}…", text.trim_end());
-        galley = p.layout_no_wrap(cut, font.clone(), colors.1);
+        galley = p.layout_no_wrap(cut, font.clone(), fg);
     }
-    let size = galley.size() + 2.0 * pad;
+    let size = galley.size() + 2.0 * PILL_PAD;
+    (galley, size)
+}
+
+fn pill(p: &Painter, anchor: Pos2, from_right: bool, label: &str, colors: (Color32, Color32), max_width: f32) -> Rect {
+    let (galley, size) = pill_galley(p, label, colors.1, max_width);
     let left = if from_right { anchor.x - size.x } else { anchor.x };
     let rect = Rect::from_min_size(pos2(left, anchor.y), size);
     p.rect(rect, size.y / 2.0, colors.0, Stroke::NONE, StrokeKind::Inside);
-    p.galley(rect.min + pad, galley, colors.1);
+    p.galley(rect.min + PILL_PAD, galley, colors.1);
     rect
 }
 

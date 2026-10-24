@@ -11,10 +11,12 @@ pub mod offscreen;
 pub mod review;
 pub mod settings;
 pub mod settings_ai;
+pub mod settings_tiles;
 pub mod sidebar;
 pub mod spacemouse;
 pub mod suggest;
 pub mod tags;
+pub mod tile_overlay;
 pub mod turntable;
 pub mod viewer;
 

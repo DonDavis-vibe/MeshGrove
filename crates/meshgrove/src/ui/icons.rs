@@ -1,6 +1,8 @@
 //! Simple painted icons, so tiles without a picture still read at a glance.
 
-use egui::{Align2, Color32, FontId, Painter, Rect, Stroke, StrokeKind, pos2, vec2};
+use std::sync::Arc;
+
+use egui::{Align2, Color32, FontId, Galley, Painter, Pos2, Rect, Stroke, StrokeKind, Vec2, pos2, vec2};
 
 /// KDE Breeze folder blue.
 pub const FOLDER_BLUE: Color32 = Color32::from_rgb(61, 174, 233);
@@ -106,28 +108,27 @@ pub fn file(p: &Painter, r: Rect, label: &str, fill: Color32, ink: Color32) {
     }
 }
 
-/// Small format badge ("STL", "3MF") in the lower-left corner of a thumbnail.
-pub fn badge(p: &Painter, r: Rect, label: &str, bg: Color32, fg: Color32) {
-    let font = FontId::proportional(10.5);
-    let galley = p.layout_no_wrap(label.to_owned(), font, fg);
-    let pad = vec2(5.0, 2.0);
-    let rect = Rect::from_min_size(
-        pos2(r.min.x + 4.0, r.max.y - galley.size().y - 2.0 * pad.y - 4.0),
-        galley.size() + 2.0 * pad,
-    );
+/// Padding around a badge's text.
+const BADGE_PAD: Vec2 = vec2(5.0, 2.0);
+
+/// A badge's text laid out, and the size of the badge around it.
+pub fn badge_galley(p: &Painter, label: &str, fg: Color32) -> (Arc<Galley>, Vec2) {
+    let galley = p.layout_no_wrap(label.to_owned(), FontId::proportional(10.5), fg);
+    let size = galley.size() + 2.0 * BADGE_PAD;
+    (galley, size)
+}
+
+/// Paints a badge laid out by [`badge_galley`] into `rect`.
+pub fn paint_badge(p: &Painter, rect: Rect, galley: Arc<Galley>, bg: Color32, fg: Color32) {
     p.rect(rect, 4.0, bg, Stroke::NONE, StrokeKind::Inside);
-    p.galley(rect.min + pad, galley, fg);
+    p.galley(rect.min + BADGE_PAD, galley, fg);
 }
 
 /// Small badge in the upper-right corner (e.g. "2×" for duplicates).
 pub fn corner_badge(p: &Painter, r: Rect, label: &str, bg: Color32, fg: Color32) {
-    let font = FontId::proportional(10.5);
-    let galley = p.layout_no_wrap(label.to_owned(), font, fg);
-    let pad = vec2(5.0, 2.0);
-    let size = galley.size() + 2.0 * pad;
+    let (galley, size) = badge_galley(p, label, fg);
     let rect = Rect::from_min_size(pos2(r.max.x - size.x - 4.0, r.min.y + 4.0), size);
-    p.rect(rect, 4.0, bg, Stroke::NONE, StrokeKind::Inside);
-    p.galley(rect.min + pad, galley, fg);
+    paint_badge(p, rect, galley, bg, fg);
 }
 
 /// Small badge in the lower-right corner (e.g. the print bed check). Returns its rectangle.
@@ -137,41 +138,67 @@ pub fn bottom_right_badge(p: &Painter, r: Rect, label: &str, bg: Color32, fg: Co
 
 /// Small badge whose lower-right corner is `corner` (badges in a row, right to left).
 pub fn badge_left_of(p: &Painter, corner: egui::Pos2, label: &str, bg: Color32, fg: Color32) -> Rect {
-    let font = FontId::proportional(10.5);
-    let galley = p.layout_no_wrap(label.to_owned(), font, fg);
-    let pad = vec2(5.0, 2.0);
-    let size = galley.size() + 2.0 * pad;
+    let (galley, size) = badge_galley(p, label, fg);
     let rect = Rect::from_min_size(corner - size, size);
-    p.rect(rect, 4.0, bg, Stroke::NONE, StrokeKind::Inside);
-    p.galley(rect.min + pad, galley, fg);
+    paint_badge(p, rect, galley, bg, fg);
     rect
 }
 
-/// Height of [`corner_badge`] (to stack things below it).
+/// Height of a badge (to stack things below it).
 pub const BADGE_HEIGHT: f32 = 10.5 * 1.3 + 4.0;
 
-/// Filament colours of a slicer project as a row of dots in the upper-left corner.
-pub fn filament_dots(p: &Painter, r: Rect, colors: &[[u8; 3]]) {
-    const MAX: usize = 8;
-    let (radius, gap, pad) = (4.5, 3.0, vec2(4.0, 3.0));
-    let shown = colors.len().min(MAX);
-    let more = (colors.len() > MAX).then(|| {
-        p.layout_no_wrap(format!("+{}", colors.len() - MAX), FontId::proportional(9.5), Color32::from_gray(230))
-    });
-    let dots_w = shown as f32 * (2.0 * radius + gap) - gap;
-    let more_w = more.as_ref().map_or(0.0, |g| g.size().x + gap);
-    let size = vec2(dots_w + more_w, 2.0 * radius) + 2.0 * pad;
-    let rect = Rect::from_min_size(r.min + vec2(4.0, 4.0), size);
+/// Filament dots a tile shows at most (then "+N").
+pub const FILAMENT_DOTS: usize = 8;
+
+const DOT_RADIUS: f32 = 4.5;
+const DOT_GAP: f32 = 3.0;
+const DOTS_PAD: Vec2 = vec2(4.0, 3.0);
+
+/// How many of `count` colours show as dots when at most `max` do, the "+N" for the rest, and
+/// the size of the pill around them.
+fn dots_layout(p: &Painter, count: usize, max: usize) -> (usize, Option<Arc<Galley>>, Vec2) {
+    let shown = count.min(max);
+    let more = (count > shown)
+        .then(|| p.layout_no_wrap(format!("+{}", count - shown), FontId::proportional(9.5), Color32::from_gray(230)));
+    let dots_w = shown as f32 * (2.0 * DOT_RADIUS + DOT_GAP) - DOT_GAP;
+    let more_w = more.as_ref().map_or(0.0, |g| g.size().x + DOT_GAP);
+    (shown, more, vec2(dots_w + more_w, 2.0 * DOT_RADIUS) + 2.0 * DOTS_PAD)
+}
+
+/// Size of [`filament_dots`] for `count` colours shown as at most `max` dots.
+pub fn filament_dots_size(p: &Painter, count: usize, max: usize) -> Vec2 {
+    dots_layout(p, count, max).2
+}
+
+/// Filament colours of a slicer project as a row of at most `max` dots (then "+N") on a dark
+/// pill whose upper-left corner is `at`. Returns its rectangle.
+pub fn filament_dots(p: &Painter, at: Pos2, colors: &[[u8; 3]], max: usize) -> Rect {
+    let (shown, more, size) = dots_layout(p, colors.len(), max);
+    let rect = Rect::from_min_size(at, size);
     p.rect(rect, size.y / 2.0, Color32::from_black_alpha(150), Stroke::NONE, StrokeKind::Inside);
     let ring = Stroke::new(1.0, Color32::from_white_alpha(90));
-    for (i, &[red, green, blue]) in colors.iter().take(MAX).enumerate() {
-        let center = rect.min + pad + vec2(radius + i as f32 * (2.0 * radius + gap), radius);
-        p.circle(center, radius, Color32::from_rgb(red, green, blue), ring);
+    for (i, &[red, green, blue]) in colors.iter().take(shown).enumerate() {
+        let center = rect.min + DOTS_PAD + vec2(DOT_RADIUS + i as f32 * (2.0 * DOT_RADIUS + DOT_GAP), DOT_RADIUS);
+        p.circle(center, DOT_RADIUS, Color32::from_rgb(red, green, blue), ring);
     }
     if let Some(galley) = more {
-        let at = pos2(rect.min.x + pad.x + dots_w + gap, rect.center().y - galley.size().y / 2.0);
+        let dots_w = shown as f32 * (2.0 * DOT_RADIUS + DOT_GAP) - DOT_GAP;
+        let at = pos2(rect.min.x + DOTS_PAD.x + dots_w + DOT_GAP, rect.center().y - galley.size().y / 2.0);
         p.galley(at, galley, Color32::from_gray(230));
     }
+    rect
+}
+
+/// Filament colours as a thin band filling `band`, an equal part for each colour.
+pub fn filament_stripe(p: &Painter, band: Rect, colors: &[[u8; 3]]) {
+    let part = band.width() / colors.len().max(1) as f32;
+    for (i, &[red, green, blue]) in colors.iter().enumerate() {
+        let x = band.min.x + i as f32 * part;
+        let piece = Rect::from_min_max(pos2(x, band.min.y), pos2(x + part, band.max.y));
+        p.rect_filled(piece, 0.0, Color32::from_rgb(red, green, blue));
+    }
+    // A dark edge keeps light colours apart from a light picture.
+    p.rect_stroke(band, 0.0, Stroke::new(1.0, Color32::from_black_alpha(110)), StrokeKind::Inside);
 }
 
 /// Short label for the file icon: upper-case extension, at most five characters.

@@ -349,10 +349,11 @@ Programme: irgendwohin entpacken und `meshgrove.exe` starten.
   Mausrad bei gedrückter Taste zoomt in die Kachel.
 - **Markierungen auf Kacheln:** unten links der Dateityp; oben rechts `2×`, `3×` …, wenn es in
   der Bibliothek Duplikate dieser Datei gibt, darunter die Tags der Datei (als Kärtchen oder
-  Punkte, siehe *Einstellungen → Tags*); unten rechts der Druckbett-Check (↻ mit Winkel oder ✕),
-  ★ für Favoriten und der Druckstatus (✓2 zweimal gedruckt, ✗ letzter Druck fehlgeschlagen, auf
-  einer Druckliste die fertigen von den gewünschten Stück); `⚠ 🖨` bei G-code für einen anderen
-  Drucker.
+  Punkte); unten rechts der Druckbett-Check (↻ mit Winkel oder ✕), ★ für Favoriten und der
+  Druckstatus (✓2 zweimal gedruckt, ✗ letzter Druck fehlgeschlagen, auf einer Druckliste die
+  fertigen von den gewünschten Stück); `⚠ 🖨` bei G-code für einen anderen Drucker.
+  *Einstellungen → Kacheln* zeigt eine Beispielkachel: Markierungen in andere Ecken oder aus dem
+  Bild ziehen und festlegen, wie Tags, Filamente, der Check und der Name aussehen.
 - **Bereiche:** Die Kopfzeile eines Bereichs ziehen verschiebt ihn; am Rand eines anderen
   Bereichs abgelegt teilt er diesen, auf einer anderen Kopfzeile werden beide zu Tabs. Die
   Trennlinien zwischen den Bereichen ändern ihre Größe. *Einstellungen → Bereiche* fixiert sie,
@@ -367,8 +368,8 @@ Programme: irgendwohin entpacken und `meshgrove.exe` starten.
   Standardprogramm des Systems wählen (Enter macht dasselbe). Modelle, die das gewählte Programm
   nicht öffnet, bekommen trotzdem ein Modellfenster.
 - **Ordnervorschau von der Platte:** Ordnerkacheln außerhalb der Bibliothek können auch Modelle
-  aus ihren Unterordnern zeigen (*Einstellungen → Ordnervorschau*, standardmäßig aus, bis zu fünf
-  Ebenen tief). Bei mehr als vier Modellen blenden die Bilder langsam durch.
+  aus ihren Unterordnern zeigen (*Einstellungen → Kacheln → Ordnervorschau*, standardmäßig aus,
+  bis zu fünf Ebenen tief). Bei mehr als vier Modellen blenden die Bilder langsam durch.
 
 ### Der 3D-Viewer und seine Werkzeuge
 
@@ -493,8 +494,9 @@ Dateien. F5 liest den aktuellen Ordner neu ein.
   ohne Stützen, Magnete …) und Zustand (eigenes Design, Remix, getestet, muss angepasst werden …).
   Rechtsklick → *Tags bearbeiten …* springt direkt ins Feld.
 - **Farben:** Jeder Tag bekommt eine eigene Farbe, überall dieselbe. Per Rechtsklick auf einen Tag
-  in der Seitenleiste wählst du eine andere. *Einstellungen → Tags* schaltet die Farben ab und
-  legt fest, ob Kacheln Tags als Namen oder als Farbpunkte zeigen, und wie viele.
+  in der Seitenleiste wählst du eine andere. *Einstellungen → Tags* schaltet die Farben ab;
+  *Einstellungen → Kacheln* legt fest, ob Kacheln Tags als Namen oder als Farbpunkte zeigen, und
+  wie viele.
 - **Tag entfernen:** auf das Tag-Kärtchen klicken (`bemalt ✕`). Bei mehreren ausgewählten
   Dateien zeigen die Kärtchen, wie viele davon den Tag tragen (`bemalt (2/5)`).
 - **Notizen:** Ins Feld *Notiz* schreiben, was du willst: Druckeinstellungen, Farben, was
@@ -861,8 +863,9 @@ Strg heißt auf macOS ⌘ Cmd.
 
 Alles lässt sich im Einstellungsfenster ändern (⚙ oben rechts oder Strg+,), links nach
 Kategorien geordnet: *Allgemein* (Sprache, was ein Doppelklick auf ein Modell tut, die Bereiche),
-*Bibliothek* (Bibliotheksordner, Eingang, Ordnervorschau), *Tags* (Farben, Namen oder Punkte auf
-den Kacheln, wie viele), *3D-Ansicht* (Bildqualität der großen Vorschau und der Modellfenster, die
+*Bibliothek* (Bibliotheksordner, Eingang), *Tags* (Farben, die Tag-Liste, Vorschläge), *Kacheln*
+(welche Markierung wo sitzt, an einer Beispielkachel; Tags als Namen oder Punkte, Dateinamen,
+Kachelgröße, Ordnervorschau), *3D-Ansicht* (Bildqualität der großen Vorschau und der Modellfenster, die
 Einheit von glTF-Modellen), *Programme* (Slicer und Mesh-Editor), *Drucker* (deine Drucker), *KI &
 MCP* (freiwilliger Assistent, was er sehen darf, Zugriffsprotokoll), *Daten und Speicher*
 (Sicherungen und der Vorschau-Cache mit Größe und *Cache leeren*) und *Über Meshgrove*, das die
@@ -898,9 +901,19 @@ preview_controls = false   # große Vorschau: Name, Werkzeuge und Hinweise zeige
 gallery_view = "grid"      # grid (Kacheln) | list (Liste)
 print_filter = "all"       # all | unprinted | printed | failed
 colored_tags = true        # Tags farbig (sonst grau)
-tags_on_tiles = true
 tile_tags = "names"        # names | dots
 tile_tag_count = 3         # 1 … 8
+
+[tile_layout]              # Markierungen auf den Kacheln, jede Liste von ihrer Ecke nach innen
+top_left = ["filaments"]
+top_right = ["duplicates", "tags"]
+bottom_left = ["file_type"]
+bottom_right = ["check", "favorite", "print_state"]
+hidden = []
+filaments = "dots"         # dots | stripe
+check = "text"             # text | symbol
+name_lines = 2             # 0 … 2
+name_extension = true
 
 [list_columns]
 hidden = ["type"]          # preview, folder, type, size, dimensions, modified, tags, favorite, print

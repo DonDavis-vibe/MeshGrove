@@ -9,7 +9,8 @@ use meshgrove_core::cache::{ThumbCache, ThumbMeta};
 use meshgrove_core::changes::ChangeInfo;
 use meshgrove_core::checks::MeshChecks;
 use meshgrove_core::config::{
-    Config, DisplayUnits, DoubleClick, GalleryView, ModelUnits, PrintFilter, Program, Slicer, SortKey, TileTags,
+    Config, DisplayUnits, DoubleClick, GalleryView, ModelUnits, PrintFilter, Program, Slicer, SortKey, TILE_SIZE,
+    TileTags,
 };
 use meshgrove_core::db::Library;
 use meshgrove_core::listing::{self, Entry};
@@ -54,7 +55,6 @@ const VIEWER_DEBOUNCE: Duration = Duration::from_millis(250);
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(150);
 /// A note is saved this long after the last keystroke.
 const NOTE_DEBOUNCE: Duration = Duration::from_millis(800);
-const TILE_RANGE: std::ops::RangeInclusive<f32> = 96.0..=384.0;
 const MAX_RESULTS: usize = 5000;
 /// Texture uploads per frame; more would stutter when a whole folder comes out of the cache at once.
 const UPLOADS_PER_FRAME: usize = 24;
@@ -1371,13 +1371,20 @@ impl App {
                 }
                 SettingsChange::SpaceMouse(config) => self.config.spacemouse = config,
                 SettingsChange::FreeOrbit(on) => self.config.free_orbit = on,
-                SettingsChange::TagDisplay { colored, on_tiles, count, style } => {
+                SettingsChange::ColoredTags(colored) => {
                     self.config.colored_tags = colored;
-                    self.config.tags_on_tiles = on_tiles;
-                    self.config.tile_tag_count = count;
-                    self.config.tile_tags = style;
                     self.tag_style.colored = colored;
                     self.gallery.tag_style = self.tag_style.clone();
+                }
+                SettingsChange::TileTagLook { count, style } => {
+                    self.config.tile_tag_count = count;
+                    self.config.tile_tags = style;
+                }
+                SettingsChange::TileLayout(layout) => self.config.tile_layout = layout,
+                SettingsChange::TileSize(size) => {
+                    // Saved later, like the slider in the status bar: it changes on every frame of a drag.
+                    self.config.tile_size = size;
+                    continue;
                 }
                 SettingsChange::FlatTagList(flat) => self.config.flat_tag_list = flat,
                 SettingsChange::IdleTagChips(on) => self.config.tag_chips_idle = on,
@@ -1737,10 +1744,10 @@ impl App {
             self.focus_search = true;
         }
         if pressed(Modifiers::COMMAND, Key::Plus) || pressed(Modifiers::COMMAND, Key::Equals) {
-            self.config.tile_size = (self.config.tile_size + 32.0).min(*TILE_RANGE.end());
+            self.config.tile_size = (self.config.tile_size + 32.0).min(*TILE_SIZE.end());
         }
         if pressed(Modifiers::COMMAND, Key::Minus) {
-            self.config.tile_size = (self.config.tile_size - 32.0).max(*TILE_RANGE.start());
+            self.config.tile_size = (self.config.tile_size - 32.0).max(*TILE_SIZE.start());
         }
     }
 
@@ -1843,7 +1850,7 @@ impl App {
             }
             ui.separator();
             ui.label(RichText::new(t!("gallery.tile_size")).weak());
-            ui.add(egui::Slider::new(&mut self.config.tile_size, TILE_RANGE).show_value(false));
+            ui.add(egui::Slider::new(&mut self.config.tile_size, TILE_SIZE).show_value(false));
         });
         if flatten != self.flatten {
             self.set_flatten(flatten);
@@ -2026,7 +2033,7 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Preview size, as in a file manager's status bar (also Ctrl + mouse wheel over the files).
                 ui.spacing_mut().slider_width = 110.0;
-                ui.add(egui::Slider::new(&mut self.config.tile_size, TILE_RANGE).show_value(false))
+                ui.add(egui::Slider::new(&mut self.config.tile_size, TILE_SIZE).show_value(false))
                     .on_hover_text(t!("gallery.tile_size"));
                 ui.weak("🔍");
                 ui.separator();
@@ -2090,7 +2097,7 @@ impl App {
         }
         let zoom = ui.input(|i| i.zoom_delta());
         if zoom != 1.0 && ui.rect_contains_pointer(ui.max_rect()) {
-            self.config.tile_size = (self.config.tile_size * zoom).clamp(*TILE_RANGE.start(), *TILE_RANGE.end());
+            self.config.tile_size = (self.config.tile_size * zoom).clamp(*TILE_SIZE.start(), *TILE_SIZE.end());
         }
         if let View::Inbox { entries, groups } = &self.view {
             let ai = self.chat_available();
@@ -2527,7 +2534,9 @@ impl eframe::App for App {
         self.poll_spacemouse(&ctx);
         self.update_selection_facts();
         self.refresh_marks();
-        self.gallery.tags_on_tiles = self.config.tags_on_tiles;
+        if self.gallery.layout != self.config.tile_layout {
+            self.gallery.layout = self.config.tile_layout.clone();
+        }
         self.gallery.tile_tag_count = usize::from(self.config.tile_tag_count);
         // Dots only say something in colour.
         self.gallery.tag_dots = self.config.tile_tags == TileTags::Dots && self.config.colored_tags;
@@ -2649,6 +2658,7 @@ impl eframe::App for App {
             db_path: &self.db_path,
             mouse: &self.mouse_state,
             render: (&rs, &self.renderer),
+            tag_style: &self.tag_style,
         };
         let changes = self.settings.show(
             &ctx,

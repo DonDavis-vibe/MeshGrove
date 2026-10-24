@@ -281,6 +281,207 @@ pub struct ListColumns {
 /// How many tags a tile can show.
 pub const TILE_TAG_COUNT: std::ops::RangeInclusive<u8> = 1..=8;
 
+/// Tile edge lengths the gallery offers.
+pub const TILE_SIZE: std::ops::RangeInclusive<f32> = 96.0..=384.0;
+
+/// Lines of the file name below a tile's picture.
+pub const NAME_LINES: std::ops::RangeInclusive<u8> = 0..=2;
+
+/// The marks a gallery tile can carry over its picture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TileBadge {
+    /// "STL", "3MF" …
+    FileType,
+    /// The filament colours of a slicer project.
+    Filaments,
+    /// "2×": the file is in the library more than once.
+    Duplicates,
+    Tags,
+    /// How the model fits the printers and what the printability check found (↻, ✕, ⚠).
+    Check,
+    /// The favourite star.
+    Favorite,
+    /// Copies done of a print list, or the print log (✓2, ✗).
+    PrintState,
+}
+
+impl TileBadge {
+    pub const ALL: [TileBadge; 7] = [
+        TileBadge::FileType,
+        TileBadge::Filaments,
+        TileBadge::Duplicates,
+        TileBadge::Tags,
+        TileBadge::Check,
+        TileBadge::Favorite,
+        TileBadge::PrintState,
+    ];
+
+    /// The name in the settings file.
+    pub fn name(self) -> &'static str {
+        match self {
+            TileBadge::FileType => "file_type",
+            TileBadge::Filaments => "filaments",
+            TileBadge::Duplicates => "duplicates",
+            TileBadge::Tags => "tags",
+            TileBadge::Check => "check",
+            TileBadge::Favorite => "favorite",
+            TileBadge::PrintState => "print_state",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<TileBadge> {
+        TileBadge::ALL.into_iter().find(|b| b.name() == name)
+    }
+}
+
+/// Where on a tile's picture a mark sits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TileSlot {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    Hidden,
+}
+
+impl TileSlot {
+    pub const CORNERS: [TileSlot; 4] =
+        [TileSlot::TopLeft, TileSlot::TopRight, TileSlot::BottomLeft, TileSlot::BottomRight];
+
+    pub fn is_top(self) -> bool {
+        matches!(self, TileSlot::TopLeft | TileSlot::TopRight)
+    }
+
+    pub fn is_left(self) -> bool {
+        matches!(self, TileSlot::TopLeft | TileSlot::BottomLeft)
+    }
+}
+
+/// How the filament colours show on a tile.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FilamentStyle {
+    /// A row of dots in the corner.
+    #[default]
+    Dots,
+    /// A thin band along the top or bottom edge of the picture.
+    Stripe,
+}
+
+/// How the print bed and printability marks read on a tile.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CheckStyle {
+    /// "↻ 90°", "✕ too big", "⚠ 🖨"
+    #[default]
+    Text,
+    /// Just ↻, ✕ or ⚠ (the tooltip says why).
+    Symbol,
+}
+
+/// What the gallery tiles show and where: the marks over the picture by corner, each list from
+/// the corner inwards, how some of them look, and the name below the picture.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TileLayout {
+    #[serde(deserialize_with = "known_badges")]
+    pub top_left: Vec<TileBadge>,
+    #[serde(deserialize_with = "known_badges")]
+    pub top_right: Vec<TileBadge>,
+    #[serde(deserialize_with = "known_badges")]
+    pub bottom_left: Vec<TileBadge>,
+    #[serde(deserialize_with = "known_badges")]
+    pub bottom_right: Vec<TileBadge>,
+    #[serde(deserialize_with = "known_badges")]
+    pub hidden: Vec<TileBadge>,
+    pub filaments: FilamentStyle,
+    pub check: CheckStyle,
+    /// Lines of the file name ([`NAME_LINES`]; 0: none).
+    pub name_lines: u8,
+    /// The name keeps its ".stl", ".3mf" …
+    pub name_extension: bool,
+}
+
+impl Default for TileLayout {
+    /// The tiles as they always looked.
+    fn default() -> Self {
+        TileLayout {
+            top_left: vec![TileBadge::Filaments],
+            top_right: vec![TileBadge::Duplicates, TileBadge::Tags],
+            bottom_left: vec![TileBadge::FileType],
+            bottom_right: vec![TileBadge::Check, TileBadge::Favorite, TileBadge::PrintState],
+            hidden: Vec::new(),
+            filaments: FilamentStyle::Dots,
+            check: CheckStyle::Text,
+            name_lines: 2,
+            name_extension: true,
+        }
+    }
+}
+
+/// Mark names as written in the file; names this version does not know are skipped.
+fn known_badges<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<TileBadge>, D::Error> {
+    Ok(Vec::<String>::deserialize(d)?.iter().filter_map(|name| TileBadge::from_name(name)).collect())
+}
+
+impl TileLayout {
+    /// The marks of a corner (or the hidden ones), from the corner inwards.
+    pub fn slot(&self, slot: TileSlot) -> &[TileBadge] {
+        match slot {
+            TileSlot::TopLeft => &self.top_left,
+            TileSlot::TopRight => &self.top_right,
+            TileSlot::BottomLeft => &self.bottom_left,
+            TileSlot::BottomRight => &self.bottom_right,
+            TileSlot::Hidden => &self.hidden,
+        }
+    }
+
+    fn slot_mut(&mut self, slot: TileSlot) -> &mut Vec<TileBadge> {
+        match slot {
+            TileSlot::TopLeft => &mut self.top_left,
+            TileSlot::TopRight => &mut self.top_right,
+            TileSlot::BottomLeft => &mut self.bottom_left,
+            TileSlot::BottomRight => &mut self.bottom_right,
+            TileSlot::Hidden => &mut self.hidden,
+        }
+    }
+
+    /// Where a mark sits.
+    pub fn slot_of(&self, badge: TileBadge) -> TileSlot {
+        TileSlot::CORNERS.into_iter().find(|&s| self.slot(s).contains(&badge)).unwrap_or(TileSlot::Hidden)
+    }
+
+    pub fn shows(&self, badge: TileBadge) -> bool {
+        self.slot_of(badge) != TileSlot::Hidden
+    }
+
+    /// Moves a mark to `index` of `slot` (counted without the mark itself; past the end: last).
+    pub fn place(&mut self, badge: TileBadge, slot: TileSlot, index: usize) {
+        for s in TileSlot::CORNERS.into_iter().chain([TileSlot::Hidden]) {
+            self.slot_mut(s).retain(|&b| b != badge);
+        }
+        let list = self.slot_mut(slot);
+        list.insert(index.min(list.len()), badge);
+    }
+
+    /// Every mark exactly once: repeats are dropped, and marks the file does not mention (new in
+    /// this version) go where they sit by default.
+    pub fn normalize(&mut self) {
+        let mut seen = std::collections::HashSet::new();
+        for s in TileSlot::CORNERS.into_iter().chain([TileSlot::Hidden]) {
+            self.slot_mut(s).retain(|&b| seen.insert(b));
+        }
+        let default = TileLayout::default();
+        for badge in TileBadge::ALL {
+            if !seen.contains(&badge) {
+                self.slot_mut(default.slot_of(badge)).push(badge);
+            }
+        }
+        self.name_lines = self.name_lines.min(*NAME_LINES.end());
+    }
+}
+
 /// Optional AI. Meshgrove brings none of its own: the user's assistant reaches the library
 /// through `meshgrove-mcp`, or Meshgrove talks to an endpoint the user set up. Off by default.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -482,8 +683,9 @@ pub struct Config {
     pub editor: Option<Program>,
     /// Tags in their palette colours (otherwise grey) on tiles, in the details and the sidebar.
     pub colored_tags: bool,
-    /// Tag pills on the gallery tiles.
-    pub tags_on_tiles: bool,
+    /// Tag pills on the gallery tiles, as earlier versions wrote it; `tile_layout` says it now.
+    #[serde(skip_serializing)]
+    pub tags_on_tiles: Option<bool>,
     /// The theme tags offered in the tag menu; `None`: the built-in set ([`default_themes`]).
     pub themes: Option<Vec<SuggestedTag>>,
     /// The print-property tags offered; `None`: [`default_properties`].
@@ -501,6 +703,8 @@ pub struct Config {
     pub tile_tags: TileTags,
     /// Tags a tile shows at most (the last row says "+N" when there are more).
     pub tile_tag_count: u8,
+    /// Which marks the tiles show where, and their names.
+    pub tile_layout: TileLayout,
     /// Files shown by their print log (View menu).
     pub print_filter: PrintFilter,
     /// Tiles or a table.
@@ -679,7 +883,7 @@ impl Default for Config {
             default_editor: None,
             editor: None,
             colored_tags: true,
-            tags_on_tiles: true,
+            tags_on_tiles: None,
             themes: None,
             properties: None,
             states: None,
@@ -688,6 +892,7 @@ impl Default for Config {
             tag_chips_idle: true,
             tile_tags: TileTags::Names,
             tile_tag_count: 3,
+            tile_layout: TileLayout::default(),
             print_filter: PrintFilter::All,
             gallery_view: GalleryView::Grid,
             list_columns: ListColumns::default(),
@@ -732,6 +937,8 @@ impl Config {
             Ok(text) => {
                 let mut config: Config = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
                 config.migrate_programs();
+                config.migrate_tile_tags();
+                config.tile_layout.normalize();
                 Ok(config)
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Config::default()),
@@ -759,6 +966,14 @@ impl Config {
         {
             self.default_printer = Some(old.name.clone());
             self.printers = Some(vec![old.into()]);
+        }
+    }
+
+    /// Earlier versions switched the tags on tiles off with `tags_on_tiles = false`: they become
+    /// a hidden mark.
+    fn migrate_tile_tags(&mut self) {
+        if self.tags_on_tiles.take() == Some(false) {
+            self.tile_layout.place(TileBadge::Tags, TileSlot::Hidden, usize::MAX);
         }
     }
 
@@ -933,6 +1148,80 @@ mod tests {
         );
         assert_eq!(old.properties().len(), 16);
         assert_eq!(old.states().len(), 7);
+    }
+
+    #[test]
+    fn tile_layout_starts_as_tiles_always_looked_and_survives_a_save() {
+        let layout = TileLayout::default();
+        assert_eq!(layout.top_left, [TileBadge::Filaments]);
+        assert_eq!(layout.top_right, [TileBadge::Duplicates, TileBadge::Tags]);
+        assert_eq!(layout.bottom_left, [TileBadge::FileType]);
+        assert_eq!(layout.bottom_right, [TileBadge::Check, TileBadge::Favorite, TileBadge::PrintState]);
+        assert!(layout.hidden.is_empty() && layout.name_lines == 2 && layout.name_extension);
+        for badge in TileBadge::ALL {
+            assert_eq!(toml::Value::try_from(badge).unwrap().as_str(), Some(badge.name()));
+        }
+        let mut config = Config::default();
+        config.tile_layout.place(TileBadge::Tags, TileSlot::BottomLeft, 0);
+        config.tile_layout.place(TileBadge::Favorite, TileSlot::Hidden, 0);
+        config.tile_layout.filaments = FilamentStyle::Stripe;
+        config.tile_layout.check = CheckStyle::Symbol;
+        config.tile_layout.name_lines = 1;
+        config.tile_layout.name_extension = false;
+        let text = toml::to_string_pretty(&config).unwrap();
+        assert!(!text.contains("tags_on_tiles"), "{text}");
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(back, config);
+        assert_eq!(back.tile_layout.bottom_left, [TileBadge::Tags, TileBadge::FileType]);
+        assert_eq!(back.tile_layout.slot_of(TileBadge::Favorite), TileSlot::Hidden);
+        let old: Config = toml::from_str("tile_size = 120.0\n").unwrap();
+        assert_eq!(old.tile_layout, TileLayout::default());
+    }
+
+    #[test]
+    fn tile_marks_move_and_what_is_read_gets_cleaned_up() {
+        let mut layout = TileLayout::default();
+        // Within its own corner the index is counted without the mark itself.
+        layout.place(TileBadge::Check, TileSlot::BottomRight, 1);
+        assert_eq!(layout.bottom_right, [TileBadge::Favorite, TileBadge::Check, TileBadge::PrintState]);
+        layout.place(TileBadge::Duplicates, TileSlot::BottomRight, usize::MAX);
+        assert_eq!(layout.top_right, [TileBadge::Tags]);
+        assert_eq!(layout.bottom_right.last(), Some(&TileBadge::Duplicates));
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let text = "[tile_layout]\ntop_left = [\"tags\", \"sparkles\", \"tags\"]\nbottom_right = [\"favorite\"]\nname_lines = 7\n";
+        std::fs::write(&path, text).unwrap();
+        let layout = Config::load_from(&path).unwrap().tile_layout;
+        assert_eq!(layout.top_left, [TileBadge::Tags, TileBadge::Filaments], "unknown and repeated names dropped");
+        assert_eq!(layout.top_right, [TileBadge::Duplicates]);
+        assert_eq!(layout.bottom_right, [TileBadge::Favorite, TileBadge::Check, TileBadge::PrintState]);
+        assert_eq!(layout.name_lines, 2);
+        let mut all: Vec<_> = TileSlot::CORNERS
+            .into_iter()
+            .chain([TileSlot::Hidden])
+            .flat_map(|s| layout.slot(s).to_vec())
+            .map(TileBadge::name)
+            .collect();
+        all.sort_unstable();
+        let mut every: Vec<_> = TileBadge::ALL.map(TileBadge::name).to_vec();
+        every.sort_unstable();
+        assert_eq!(all, every, "every mark exactly once");
+    }
+
+    #[test]
+    fn tags_switched_off_on_tiles_become_a_hidden_mark() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "tags_on_tiles = false\n").unwrap();
+        let config = Config::load_from(&path).unwrap();
+        assert_eq!(config.tile_layout.slot_of(TileBadge::Tags), TileSlot::Hidden);
+        assert!(config.tags_on_tiles.is_none());
+        config.save_to(&path).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("tags_on_tiles"));
+        assert_eq!(Config::load_from(&path).unwrap(), config);
+        std::fs::write(&path, "tags_on_tiles = true\n").unwrap();
+        assert_eq!(Config::load_from(&path).unwrap().tile_layout, TileLayout::default());
     }
 
     #[test]

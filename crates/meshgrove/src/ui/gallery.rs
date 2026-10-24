@@ -11,13 +11,14 @@ use egui::{Align, Color32, FontId, Key, Rect, ScrollArea, Sense, TextureOptions,
 use meshgrove_core::Kind;
 use meshgrove_core::cache::{ThumbCache, ThumbMeta};
 use meshgrove_core::checks::{self, Problem};
-use meshgrove_core::config::{self, PrintFilter, SortKey};
+use meshgrove_core::config::{self, PrintFilter, SortKey, TileLayout};
 use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::lists::{ListKind, Marks, PrintResult};
 use meshgrove_core::printer::{self, Fit, Printer};
 
 use super::icons;
-use super::tags::{self, TagStyle};
+use super::tags::TagStyle;
+use super::tile_overlay::{self, Check, FAVORITE_GOLD, PRINTED_GREEN, PrintMark};
 
 mod list;
 use super::turntable::HoveredTile;
@@ -163,8 +164,8 @@ pub struct Gallery {
     /// A print list is shown: its copies wanted and done per file.
     list_counts: HashMap<PathBuf, (u32, u32)>,
     pub tag_style: TagStyle,
-    /// Tag pills on the tiles (a setting).
-    pub tags_on_tiles: bool,
+    /// Which marks the tiles show where, and their names.
+    pub layout: TileLayout,
     /// Tags a tile shows at most.
     pub tile_tag_count: usize,
     /// Colour dots instead of names on the tiles.
@@ -360,8 +361,6 @@ impl Gallery {
         service: &ThumbService,
         menu: &MenuContext,
     ) -> GalleryOutput {
-        let rows_of_text = if self.show_folders { 3.0 } else { 2.0 };
-        let label_h = rows_of_text * ui.ctx().fonts_mut(|f| f.row_height(&FontId::proportional(LABEL_FONT))) + 4.0;
         let avail = ui.available_width();
         // Where the tiles end up: whole columns, stretched a little so every row ends flush on the right.
         let target_cols = (((avail + SPACING) / (tile + SPACING)).floor() as usize).max(1);
@@ -372,7 +371,7 @@ impl Gallery {
         let settled = tile_w == target_w;
         let cols =
             if settled { target_cols } else { (((avail + SPACING) / (tile_w + SPACING)).floor() as usize).max(1) };
-        let tile_h = tile_w + label_h + PAD;
+        let tile_h = tile_height(ui.ctx(), tile_w, self.layout.name_lines, self.show_folders);
         let rows = self.shown.len().div_ceil(cols);
         let zoom_offset = self.zoom_scroll(ui, cols, tile_h, !settled);
 
@@ -598,130 +597,72 @@ impl Gallery {
             }
             (_, None) => icons::file(&painter, img, &icons::extension_label(&entry.name), paper, ink),
         }
-        if let Some(Thumb::Ready(_, meta)) = self.thumb(index)
-            && entry.kind.is_model()
-            && !meta.filaments.is_empty()
-        {
-            // Two slots with the same colour look like one filament on a tile.
-            let mut colors = meta.filaments.clone();
-            let mut seen = std::collections::HashSet::new();
-            colors.retain(|c| seen.insert(*c));
-            icons::filament_dots(&painter, img, &colors);
-        }
-        let duplicate = self.duplicates.get(&entry.path);
-        if let Some(n) = duplicate {
-            icons::corner_badge(
-                &painter,
-                img,
-                &format!("{n}×"),
-                visuals.warn_fg_color.linear_multiply(0.9),
-                Color32::BLACK,
-            );
-        }
         let marks = self.marks.get(&entry.path);
-        if self.tags_on_tiles
-            && let Some(marks) = marks.filter(|m| !m.tags.is_empty())
-        {
-            // Top to bottom below the duplicate badge, as many as set and as fit above the
-            // badges at the bottom; the last row says "+N" when there are more.
-            let top = img.min.y + 4.0 + if duplicate.is_some() { icons::BADGE_HEIGHT + 2.0 } else { 0.0 };
-            let row = if self.tag_dots { 13.0 } else { 18.0 };
-            let rows = (((img.max.y - 26.0 - top) / row).floor().max(0.0) as usize).min(self.tile_tag_count);
-            let (right, max_width) = (img.max.x - 4.0, img.width() * 0.45);
-            for (i, tag) in marks.tags.iter().enumerate().take(rows) {
-                let y = top + i as f32 * row;
-                let more = marks.tags.len() - i;
-                if i + 1 == rows && more > 1 {
-                    let grey = (Color32::from_black_alpha(170), Color32::from_gray(230));
-                    tags::paint_pill(&painter, pos2(right, y), &format!("+{more}"), grey, max_width);
-                } else if self.tag_dots {
-                    tags::paint_dot(&painter, pos2(right, y), self.tag_style.colors(tag).0);
-                } else {
-                    tags::paint_pill(&painter, pos2(right, y), tag, self.tag_style.colors(tag), max_width);
-                }
-            }
-        }
-        let labelled = entry.kind.is_model() || matches!(entry.kind, Kind::Gcode | Kind::Text);
-        let label = icons::extension_label(&entry.name);
-        if !label.is_empty() && (labelled || (entry.kind == Kind::Archive && self.mosaics.contains_key(&index))) {
-            icons::badge(&painter, img, &label, Color32::from_black_alpha(150), Color32::from_gray(230));
-        }
-        let fit = self.bed_fit(entry, index);
-        let bed_badge = match fit {
-            Some((Fit::Rotated(angle), _)) => {
-                let label = format!("↻ {}°", super::details::angle(angle));
-                Some(icons::bottom_right_badge(
-                    &painter,
-                    img,
-                    &label,
-                    visuals.warn_fg_color.linear_multiply(0.9),
-                    Color32::BLACK,
-                ))
-            }
-            Some((Fit::TooBig(_), _)) => {
-                let label = t!("bed.badge_too_big");
-                Some(icons::bottom_right_badge(&painter, img, &label, visuals.error_fg_color, Color32::WHITE))
-            }
-            // Kept small: a folder of G-code for a second printer would otherwise shout on every tile.
-            _ => self.other_printer(index).map(|_| {
-                let warn = visuals.warn_fg_color.linear_multiply(0.9);
-                icons::bottom_right_badge(&painter, img, "⚠ 🖨", warn, Color32::BLACK)
-            }),
-        }
-        .or_else(|| {
-            let (problems, flagged) = self.check_problems(entry, index);
-            (flagged || !problems.is_empty()).then(|| {
-                let warn = visuals.warn_fg_color.linear_multiply(0.9);
-                icons::bottom_right_badge(&painter, img, "⚠", warn, Color32::BLACK)
-            })
-        });
-        // Right to left along the bottom: bed check, favourite star, print state.
-        let mut corner = bed_badge.map_or(pos2(img.max.x - 4.0, img.max.y - 4.0), |r| pos2(r.min.x - 3.0, r.max.y));
-        let dark = Color32::from_black_alpha(150);
-        if marks.is_some_and(|m| m.favorite) {
-            let star = icons::badge_left_of(&painter, corner, "★", dark, FAVORITE_GOLD);
-            corner.x = star.min.x - 3.0;
-        }
-        if let Some(&(wanted, done)) = self.list_counts.get(&entry.path) {
-            // On a print list: copies done of those wanted.
-            let complete = done >= wanted;
-            let (bg, fg) = if complete { (PRINTED_GREEN, Color32::BLACK) } else { (dark, Color32::from_gray(230)) };
-            let label = if complete { format!("✓ {done}/{wanted}") } else { format!("{done}/{wanted}") };
-            icons::badge_left_of(&painter, corner, &label, bg, fg);
-        } else if let Some(m) = marks.filter(|m| m.printed > 0 || m.last_failed) {
-            let (label, fg) = if m.last_failed {
-                ("✗".to_owned(), visuals.error_fg_color)
-            } else {
-                (format!("✓{}", m.printed), PRINTED_GREEN)
-            };
-            icons::badge_left_of(&painter, corner, &label, dark, fg);
-        }
-
-        let wrap = |rows| TextWrapping {
-            max_width: w - 4.0,
-            max_rows: rows,
-            break_anywhere: true,
-            overflow_character: Some('…'),
+        let overlays = self.overlays(entry, index, marks);
+        let look = tile_overlay::Look {
+            layout: &self.layout,
+            tag_dots: self.tag_dots,
+            tag_count: self.tile_tag_count,
+            tag_style: &self.tag_style,
         };
+        tile_overlay::paint(&painter, img, &overlays, &look, visuals);
+
         // Archive members carry their inner path in `name`; show just the file name.
-        let shown_name = listing::file_name(&entry.path);
-        let mut job = LayoutJob::simple(shown_name, FontId::proportional(LABEL_FONT), ink, w - 4.0);
-        job.wrap = wrap(2);
-        job.halign = Align::Center;
-        let galley = painter.layout_job(job);
-        let name_bottom = img.bottom() + 4.0 + galley.size().y;
-        painter.galley(pos2(rect.center().x, img.bottom() + 4.0), galley, ink);
+        let name = tile_name(listing::file_name(&entry.path), self.layout.name_extension || entry.is_dir());
+        let name_bottom =
+            paint_name(&painter, pos2(rect.center().x, img.bottom() + 4.0), w - 4.0, name, self.layout.name_lines, ink);
         let folder = entry.path.parent().map(listing::file_name).unwrap_or_default();
         if self.show_folders {
             let weak = visuals.weak_text_color();
             let mut job =
                 LayoutJob::simple(format!("📁 {folder}"), FontId::proportional(LABEL_FONT - 1.5), weak, w - 4.0);
-            job.wrap = wrap(1);
+            job.wrap = name_wrap(w - 4.0, 1);
             job.halign = Align::Center;
             painter.galley(pos2(rect.center().x, name_bottom + 1.0), painter.layout_job(job), weak);
         }
 
         response.on_hover_text_at_pointer(self.tooltip(entry, index))
+    }
+
+    /// The marks a tile has to show over its picture.
+    fn overlays<'a>(&self, entry: &Entry, index: usize, marks: Option<&'a Marks>) -> tile_overlay::Overlays<'a> {
+        let thumb = self.thumb(index);
+        let labelled = entry.kind.is_model() || matches!(entry.kind, Kind::Gcode | Kind::Text);
+        let label = icons::extension_label(&entry.name);
+        let file_type = (!label.is_empty()
+            && (labelled || (entry.kind == Kind::Archive && self.mosaics.contains_key(&index))))
+        .then_some(label);
+        let mut filaments = match thumb {
+            Some(Thumb::Ready(_, meta)) if entry.kind.is_model() => meta.filaments.clone(),
+            _ => Vec::new(),
+        };
+        // Two slots with the same colour look like one filament on a tile.
+        let mut seen = HashSet::new();
+        filaments.retain(|c| seen.insert(*c));
+        let check = match self.bed_fit(entry, index) {
+            Some((Fit::Rotated(angle), _)) => Some(Check::Rotated(format!("{}°", super::details::angle(angle)))),
+            Some((Fit::TooBig(_), _)) => Some(Check::TooBig),
+            _ if self.other_printer(index).is_some() => Some(Check::OtherPrinter),
+            _ => {
+                let (problems, flagged) = self.check_problems(entry, index);
+                (flagged || !problems.is_empty()).then_some(Check::Problem)
+            }
+        };
+        let print = match (self.list_counts.get(&entry.path), marks) {
+            (Some(&(wanted, done)), _) => Some(PrintMark::List { done, wanted }),
+            (None, Some(m)) if m.last_failed => Some(PrintMark::Failed),
+            (None, Some(m)) if m.printed > 0 => Some(PrintMark::Printed(m.printed)),
+            _ => None,
+        };
+        tile_overlay::Overlays {
+            file_type,
+            filaments,
+            duplicates: self.duplicates.get(&entry.path).copied(),
+            tags: marks.map_or(&[], |m| m.tags.as_slice()),
+            check,
+            favorite: marks.is_some_and(|m| m.favorite),
+            print,
+        }
     }
 
     /// Name, folder and whatever the badges of a tile (or the cells of a row) stand for.
@@ -912,11 +853,6 @@ fn tile_background(visuals: &egui::Visuals, selected: bool, hovered: bool) -> Co
     }
 }
 
-/// The favourite star on tiles.
-const FAVORITE_GOLD: Color32 = Color32::from_rgb(245, 197, 66);
-/// Printed marks on tiles.
-const PRINTED_GREEN: Color32 = Color32::from_rgb(143, 201, 144);
-
 /// Memory slot of the name typed for a new list in the context menu.
 fn new_list_id() -> egui::Id {
     egui::Id::unique("gallery-new-list-name")
@@ -929,8 +865,49 @@ fn over(top: Color32, bottom: Color32) -> Color32 {
     Color32::from_rgb(mix(top.r(), bottom.r()), mix(top.g(), bottom.g()), mix(top.b(), bottom.b()))
 }
 
+/// A tile's name, without its extension unless `extension`.
+pub(super) fn tile_name(name: String, extension: bool) -> String {
+    match name.rsplit_once('.') {
+        Some((stem, _)) if !extension && !stem.is_empty() => stem.to_owned(),
+        _ => name,
+    }
+}
+
+/// Wrapping of the text below a tile: `rows` lines, the last one cut with "…".
+fn name_wrap(max_width: f32, rows: usize) -> TextWrapping {
+    TextWrapping { max_width, max_rows: rows, break_anywhere: true, overflow_character: Some('…') }
+}
+
+/// Height of a tile `width` wide: the picture and `name_lines` of name, plus the folder line.
+pub(super) fn tile_height(ctx: &egui::Context, width: f32, name_lines: u8, folders: bool) -> f32 {
+    let rows_of_text = f32::from(name_lines) + if folders { 1.0 } else { 0.0 };
+    let label_h = rows_of_text * ctx.fonts_mut(|f| f.row_height(&FontId::proportional(LABEL_FONT))) + 4.0;
+    width + label_h + PAD
+}
+
+/// Paints a tile's name in up to `lines` lines centred below `top`; returns where it ends.
+pub(super) fn paint_name(
+    painter: &egui::Painter,
+    top: egui::Pos2,
+    width: f32,
+    name: String,
+    lines: u8,
+    ink: Color32,
+) -> f32 {
+    if lines == 0 {
+        return top.y;
+    }
+    let mut job = LayoutJob::simple(name, FontId::proportional(LABEL_FONT), ink, width);
+    job.wrap = name_wrap(width, usize::from(lines));
+    job.halign = Align::Center;
+    let galley = painter.layout_job(job);
+    let bottom = top.y + galley.size().y;
+    painter.galley(top, galley, ink);
+    bottom
+}
+
 /// The square thumbnail area at the top of a tile.
-fn image_rect(tile: Rect) -> Rect {
+pub(super) fn image_rect(tile: Rect) -> Rect {
     let side = tile.width() - 2.0 * PAD;
     Rect::from_min_size(tile.min + vec2(PAD, PAD), vec2(side, side))
 }
@@ -980,7 +957,7 @@ fn arranged(
 }
 
 /// Largest rect with the image's aspect ratio that fits centred in `area`.
-fn fit_inside(size: egui::Vec2, area: Rect) -> Rect {
+pub(super) fn fit_inside(size: egui::Vec2, area: Rect) -> Rect {
     let scale = (area.width() / size.x).min(area.height() / size.y);
     Rect::from_center_size(area.center(), size * scale)
 }
