@@ -73,7 +73,11 @@ fn library() -> Library {
         lib.update_dir(root, Path::new(dir), 1, &entries, &subdirs).unwrap();
     }
     for (dir, name, hash, size) in files {
-        let meta = ThumbMeta { size_mm: Some([size, size / 2.0, 10.0]), content_hash: Some(hash.into()), ..Default::default() };
+        let meta = ThumbMeta {
+            size_mm: Some([size, size / 2.0, 10.0]),
+            content_hash: Some(hash.into()),
+            ..Default::default()
+        };
         lib.store_meta(&Path::new(dir).join(name), "k", &meta).unwrap();
     }
     lib.tag(&[Path::new(EIGENE).join("rose.stl")], "Garten").unwrap();
@@ -85,7 +89,9 @@ fn library() -> Library {
     let garden = lib.create_list(ListKind::Print, "Gartenmarkt").unwrap();
     lib.add_to_list(garden, &[Path::new(EIGENE).join("rose.stl")]).unwrap();
     // Only halter.stl came after the baseline: in the inbox.
-    lib.conn.execute("UPDATE inbox SET done_ns = 1, done_by = 'baseline' WHERE content_hash != 'h-halter'", []).unwrap();
+    lib.conn
+        .execute("UPDATE inbox SET done_ns = 1, done_by = 'baseline' WHERE content_hash != 'h-halter'", [])
+        .unwrap();
     lib.set_printers(&config().printers_in_order()).unwrap();
     lib
 }
@@ -115,7 +121,8 @@ fn hidden_libraries_never_show() {
     let no_list = get_list(&cx, "Gibt es nicht").unwrap_err().to_string();
     assert_eq!(hidden_list.replace("Nur privat", "X"), no_list.replace("Gibt es nicht", "X"), "hidden is as unknown");
     assert!(get_list(&cx, "favorites").unwrap().items.is_empty(), "the favourites always exist");
-    let tagged = search_models(&cx, &ModelFilter { tags_all: vec!["Geheimprojekt".into()], ..Default::default() }).unwrap();
+    let tagged =
+        search_models(&cx, &ModelFilter { tags_all: vec!["Geheimprojekt".into()], ..Default::default() }).unwrap();
     assert!(tagged.items.is_empty());
     assert!(find_duplicates(&cx, None, 50).unwrap().is_empty(), "the hidden copy is no duplicate to see");
     let (detail, _) = get_model(&cx, "eigene/kopie.stl", false).unwrap();
@@ -154,20 +161,22 @@ fn filters_and_facts() {
     let (lib, config) = (library(), config());
     let cx = Context::new(&lib, &config, AccessClass::Local, None).unwrap();
     let search = |f: ModelFilter| ids(&search_models(&cx, &f).unwrap());
-    assert_eq!(search(ModelFilter { fits_printer: Some("A1 mini".into()), ..Default::default() }), [
-        "eigene/deckel.3mf",
-        "eigene/kopie.stl",
-        "kunden/halter.stl"
-    ]);
-    assert_eq!(search(ModelFilter { max_size_mm: Some(60.0), ..Default::default() }), ["eigene/kopie.stl", "kunden/halter.stl"]);
-    assert_eq!(search(ModelFilter { tags_any: vec!["garten".into(), "Werkstatt".into()], ..Default::default() }), [
-        "eigene/deckel.3mf",
-        "eigene/rose.stl"
-    ]);
-    assert_eq!(search(ModelFilter { tags_none: vec!["Garten".into()], library: Some("eigene".into()), ..Default::default() }), [
-        "eigene/deckel.3mf",
-        "eigene/kopie.stl"
-    ]);
+    assert_eq!(
+        search(ModelFilter { fits_printer: Some("A1 mini".into()), ..Default::default() }),
+        ["eigene/deckel.3mf", "eigene/kopie.stl", "kunden/halter.stl"]
+    );
+    assert_eq!(
+        search(ModelFilter { max_size_mm: Some(60.0), ..Default::default() }),
+        ["eigene/kopie.stl", "kunden/halter.stl"]
+    );
+    assert_eq!(
+        search(ModelFilter { tags_any: vec!["garten".into(), "Werkstatt".into()], ..Default::default() }),
+        ["eigene/deckel.3mf", "eigene/rose.stl"]
+    );
+    assert_eq!(
+        search(ModelFilter { tags_none: vec!["Garten".into()], library: Some("eigene".into()), ..Default::default() }),
+        ["eigene/deckel.3mf", "eigene/kopie.stl"]
+    );
     assert!(matches!(
         search_models(&cx, &ModelFilter { kinds: vec!["banana".into()], ..Default::default() }),
         Err(ToolError::Invalid(_))
@@ -208,7 +217,11 @@ fn suggestions_wait_and_leave_the_library_alone() {
         &ProposeTags {
             title: "Kunde einordnen".into(),
             items: vec![
-                TagItem { id: "kunden/halter.stl".into(), add: vec!["werkstatt".into(), "Workshop".into(), "Halterung".into()], ..Default::default() },
+                TagItem {
+                    id: "kunden/halter.stl".into(),
+                    add: vec!["werkstatt".into(), "Workshop".into(), "Halterung".into()],
+                    ..Default::default()
+                },
                 TagItem { id: "privat/geheim.stl".into(), add: vec!["x".into()], ..Default::default() },
                 TagItem { id: "eigene/rose.stl".into(), add: vec!["zu\nlang".into()], ..Default::default() },
             ],
@@ -229,7 +242,10 @@ fn suggestions_wait_and_leave_the_library_alone() {
     assert!(batches[0].inbox_done);
     let p = &store.proposals(batches[0].id).unwrap()[0];
     let target = p.target.as_ref().unwrap();
-    assert_eq!((target.path.as_path(), target.hash.as_deref()), (Path::new("/lib/kunden/halter.stl"), Some("h-halter")));
+    assert_eq!(
+        (target.path.as_path(), target.hash.as_deref()),
+        (Path::new("/lib/kunden/halter.stl"), Some("h-halter"))
+    );
 
     let list = propose_list(
         &cx,
@@ -243,8 +259,13 @@ fn suggestions_wait_and_leave_the_library_alone() {
     )
     .unwrap();
     assert_eq!(list.items, 1);
-    let merge = propose_tag_merge(&cx, &mut store, &origin, &ProposeTagMerge { from: vec!["Werkstatt".into()], to: "Werkbank".into() })
-        .unwrap();
+    let merge = propose_tag_merge(
+        &cx,
+        &mut store,
+        &origin,
+        &ProposeTagMerge { from: vec!["Werkstatt".into()], to: "Werkbank".into() },
+    )
+    .unwrap();
     assert_eq!(merge.items, 1);
     assert_eq!(store.pending_count().unwrap(), 3);
     assert_eq!(file_tags(&lib), before);
@@ -260,7 +281,8 @@ fn print_time_comes_from_the_gcode_sliced_from_a_model() {
     lib.update_dir(Path::new(EIGENE), Path::new(EIGENE), 1, &entries, &[]).unwrap();
     for (name, time) in [("rose_PLA_1h.gcode", "1h 0m 0s"), ("lang.gcode", "3h 10m")] {
         let gcode = crate::loaders::gcode::GcodeFacts { print_time: Some(time.into()), ..Default::default() };
-        let meta = ThumbMeta { gcode: Some(Box::new(gcode)), content_hash: Some(format!("h-{name}")), ..Default::default() };
+        let meta =
+            ThumbMeta { gcode: Some(Box::new(gcode)), content_hash: Some(format!("h-{name}")), ..Default::default() };
         lib.store_meta(&Path::new(EIGENE).join(name), "k", &meta).unwrap();
     }
     let config = config();

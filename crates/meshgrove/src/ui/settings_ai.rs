@@ -4,11 +4,11 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
+use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
+use meshgrove_core::ai::guess_local;
 use meshgrove_core::ai::proposals::{AccessEntry, ProposalStore};
 use meshgrove_core::ai::snippets::{self, Client};
-use crossbeam_channel::{Receiver, bounded};
-use meshgrove_core::ai::guess_local;
 use meshgrove_core::config::{AccessClass, AiAccess, Config, EndpointConfig};
 use meshgrove_core::listing;
 
@@ -105,15 +105,19 @@ impl AiSettings {
                 let mut library = config.ai.library(root);
                 let before = library.clone();
                 ui.label(listing::file_name(root)).on_hover_text(root.display().to_string());
-                egui::ComboBox::from_id_salt(("ai_access", root))
-                    .selected_text(access_name(library.access))
-                    .show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt(("ai_access", root)).selected_text(access_name(library.access)).show_ui(
+                    ui,
+                    |ui| {
                         for access in [AiAccess::None, AiAccess::LocalOnly, AiAccess::Cloud] {
                             ui.selectable_value(&mut library.access, access, access_name(access));
                         }
-                    });
-                ui.add_enabled(library.access != AiAccess::None, egui::Checkbox::new(&mut library.images, t!("settings.ai_images")))
-                    .on_hover_text(t!("settings.ai_images_hint"));
+                    },
+                );
+                ui.add_enabled(
+                    library.access != AiAccess::None,
+                    egui::Checkbox::new(&mut library.images, t!("settings.ai_images")),
+                )
+                .on_hover_text(t!("settings.ai_images_hint"));
                 ui.end_row();
                 if library != before {
                     changes.push(SettingsChange::AiLibrary(library));
@@ -134,7 +138,10 @@ impl AiSettings {
         match (&appimage, exe.exists()) {
             (Some(image), _) => ui.weak(t!("settings.mcp_found", path = image.display().to_string())),
             (None, true) => ui.weak(t!("settings.mcp_found", path = exe.display().to_string())),
-            (None, false) => ui.colored_label(ui.visuals().warn_fg_color, t!("settings.mcp_missing", path = exe.display().to_string())),
+            (None, false) => ui.colored_label(
+                ui.visuals().warn_fg_color,
+                t!("settings.mcp_missing", path = exe.display().to_string()),
+            ),
         };
         ui.horizontal(|ui| {
             ui.label(t!("settings.mcp_client"));
@@ -236,9 +243,17 @@ impl AiSettings {
             ui.end_row();
             ui.label(t!("endpoint.key"));
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.key).password(true).hint_text(t!("endpoint.key_hint")).desired_width(220.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.key)
+                        .password(true)
+                        .hint_text(t!("endpoint.key_hint"))
+                        .desired_width(220.0),
+                );
                 if ui.add_enabled(!self.key.trim().is_empty(), egui::Button::new(t!("endpoint.key_save"))).clicked() {
-                    changes.push(SettingsChange::EndpointKey { url: form.base_url.clone(), key: self.key.trim().to_owned() });
+                    changes.push(SettingsChange::EndpointKey {
+                        url: form.base_url.clone(),
+                        key: self.key.trim().to_owned(),
+                    });
                     form.key_in_keyring = true;
                     self.key.clear();
                 }
@@ -264,7 +279,8 @@ impl AiSettings {
                 let key = Some(self.key.trim().to_owned())
                     .filter(|k| !k.is_empty())
                     .or_else(|| crate::assist::secret::load(&form.base_url, form.key_in_keyring, &form.key_env));
-                let endpoint = crate::assist::client::Endpoint::new(&form.base_url, &form.model, key, Duration::from_secs(15));
+                let endpoint =
+                    crate::assist::client::Endpoint::new(&form.base_url, &form.model, key, Duration::from_secs(15));
                 let ctx = ui.ctx().clone();
                 std::thread::spawn(move || {
                     let _ = tx.send(endpoint.models().map_err(|e| e.to_string()));
@@ -310,7 +326,10 @@ impl AiSettings {
                     let at = SystemTime::UNIX_EPOCH + Duration::from_nanos(e.at_ns.max(0) as u64);
                     ui.weak(i18n::datetime(at));
                     let client = e.client.as_deref().map(client_name).unwrap_or_else(|| e.source.clone());
-                    ui.label(format!("{client} · {}", if e.access_class == "local" { t!("review.local") } else { t!("review.cloud") }));
+                    ui.label(format!(
+                        "{client} · {}",
+                        if e.access_class == "local" { t!("review.local") } else { t!("review.cloud") }
+                    ));
                     ui.monospace(&e.tool);
                     let mut what = t!("settings.ai_log_items", count = e.items).into_owned();
                     if e.images > 0 {
@@ -356,7 +375,8 @@ fn client_name(id: &str) -> String {
 /// `meshgrove-mcp` next to this program, and the AppImage this runs from (if it does).
 pub fn mcp_binary() -> (PathBuf, Option<PathBuf>) {
     let name = if cfg!(windows) { "meshgrove-mcp.exe" } else { "meshgrove-mcp" };
-    let exe = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(name))).unwrap_or_else(|| name.into());
+    let exe =
+        std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(name))).unwrap_or_else(|| name.into());
     (exe, std::env::var_os("APPIMAGE").map(PathBuf::from))
 }
 

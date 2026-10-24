@@ -113,8 +113,8 @@ fn fallback(from: &Path, to: &Path) -> io::Result<()> {
 
 /// Names Windows keeps for devices, with or without an extension.
 const RESERVED: &[&str] = &[
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1",
-    "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2",
+    "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
 /// Whether `name` works as a file or folder name on every system Meshgrove runs on (NTFS and
@@ -170,8 +170,10 @@ mod tests {
         let (upper, lower) = (dir.path().join("Rose.STL"), dir.path().join("rose.stl"));
         std::fs::write(&upper, "x").unwrap();
         rename_no_replace(&upper, &lower).unwrap();
-        let names: Vec<String> =
-            std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
         assert_eq!(names, ["rose.stl"]);
     }
 
@@ -180,7 +182,9 @@ mod tests {
         for ok in ["rose.stl", "Kunde Müller", "Teil (2).3mf", ".hidden", "CONSOLE.stl"] {
             assert_eq!(check_name(ok), Ok(()), "{ok}");
         }
-        for bad in ["", " ", "..", "a/b", "a\\b", "c:d", "was?.stl", "x.", "x ", "NUL", "com1.stl", "a\nb", &"x".repeat(256)] {
+        for bad in
+            ["", " ", "..", "a/b", "a\\b", "c:d", "was?.stl", "x.", "x ", "NUL", "com1.stl", "a\nb", &"x".repeat(256)]
+        {
             assert!(check_name(bad).is_err(), "{bad:?}");
         }
     }

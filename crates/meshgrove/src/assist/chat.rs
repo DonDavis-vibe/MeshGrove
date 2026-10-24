@@ -37,11 +37,22 @@ pub enum ChatEvent {
     /// More of the answer.
     Text(String),
     /// A tool ran: its name and a short summary ("14 Treffer").
-    Tool { name: String, summary: String },
+    Tool {
+        name: String,
+        summary: String,
+    },
     /// Suggestions wait in the review.
-    Proposed { batch: String, title: String, items: usize },
+    Proposed {
+        batch: String,
+        title: String,
+        items: usize,
+    },
     /// Changes were made (automatic mode).
-    Applied { change: i64, title: String, applied: usize },
+    Applied {
+        change: i64,
+        title: String,
+        applied: usize,
+    },
     /// Something to tell, e.g. that the model cannot use tools.
     Notice(String),
     Done(String),
@@ -150,7 +161,10 @@ fn run(db: &Path, applier: &Applier, turn: Turn, cancel: &AtomicBool, send: &dyn
             let result = tool(db, applier, &turn, &endpoint_cfg, &call.name, args, send);
             let mut text = result.to_string();
             if text.len() > MAX_RESULT {
-                text = format!("{}… (cut; ask for less, e.g. with a smaller limit)", &text[..floor_char(&text, MAX_RESULT)]);
+                text = format!(
+                    "{}… (cut; ask for less, e.g. with a smaller limit)",
+                    &text[..floor_char(&text, MAX_RESULT)]
+                );
             }
             messages.push(json!({"role": "tool", "tool_call_id": call.id, "content": text}));
         }
@@ -235,7 +249,10 @@ fn tool(
             value
         }
         Err(e) => {
-            send(ChatEvent::Tool { name: name.to_owned(), summary: t!("chat.tool_failed", error = e.clone()).into_owned() });
+            send(ChatEvent::Tool {
+                name: name.to_owned(),
+                summary: t!("chat.tool_failed", error = e.clone()).into_owned(),
+            });
             json!({"error": e})
         }
     }

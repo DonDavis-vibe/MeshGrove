@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use egui::{Color32, RichText, Ui};
-use meshgrove_core::ai::proposals::{ListPayload, MovePayload, NotePayload, Picked, Proposal, ProposalKind, TagsPayload};
+use meshgrove_core::ai::proposals::{
+    ListPayload, MovePayload, NotePayload, Picked, Proposal, ProposalKind, TagsPayload,
+};
 use meshgrove_core::ai::vocab::TagStatus;
 use meshgrove_core::changes::ChangeInfo;
 use meshgrove_core::listing::{self, Entry};
@@ -55,7 +57,10 @@ pub enum ReviewAction {
     Select(usize),
     Open(usize),
     /// Accept the batch: what is picked, or everything.
-    Accept { batch: usize, all: bool },
+    Accept {
+        batch: usize,
+        all: bool,
+    },
     Reject(usize),
     History,
 }
@@ -92,26 +97,29 @@ pub fn show(
         for (bi, batch) in batches.iter_mut().enumerate() {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal(|ui| ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(t!("review.reject")).clicked() {
-                        action = Some(ReviewAction::Reject(bi));
-                    }
-                    if ui.button(t!("review.accept_all")).clicked() {
-                        action = Some(ReviewAction::Accept { batch: bi, all: true });
-                    }
-                    let any = batch.items.iter().any(|i| !i.picked.is_empty() && !i.stale);
-                    if ui.add_enabled(any, egui::Button::new(t!("review.accept_picked"))).clicked() {
-                        action = Some(ReviewAction::Accept { batch: bi, all: false });
-                    }
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.add(egui::Label::new(RichText::new(format!("✧ {}", batch.title)).strong()).truncate());
-                        let mut facts = vec![batch.source.clone(), t!("review.items", count = batch.items.len()).into_owned()];
-                        if let Some(t) = batch.created {
-                            facts.push(i18n::datetime(t));
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(t!("review.reject")).clicked() {
+                            action = Some(ReviewAction::Reject(bi));
                         }
-                        ui.add(egui::Label::new(RichText::new(facts.join(" · ")).weak()).truncate());
-                    });
-                }));
+                        if ui.button(t!("review.accept_all")).clicked() {
+                            action = Some(ReviewAction::Accept { batch: bi, all: true });
+                        }
+                        let any = batch.items.iter().any(|i| !i.picked.is_empty() && !i.stale);
+                        if ui.add_enabled(any, egui::Button::new(t!("review.accept_picked"))).clicked() {
+                            action = Some(ReviewAction::Accept { batch: bi, all: false });
+                        }
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.add(egui::Label::new(RichText::new(format!("✧ {}", batch.title)).strong()).truncate());
+                            let mut facts =
+                                vec![batch.source.clone(), t!("review.items", count = batch.items.len()).into_owned()];
+                            if let Some(t) = batch.created {
+                                facts.push(i18n::datetime(t));
+                            }
+                            ui.add(egui::Label::new(RichText::new(facts.join(" · ")).weak()).truncate());
+                        });
+                    })
+                });
                 if batch.inbox_done {
                     ui.weak(t!("review.inbox_done"));
                 }
@@ -131,7 +139,13 @@ pub fn show(
     action
 }
 
-fn item_row(ui: &mut Ui, entries: &[Entry], item: &mut ReviewItem, gallery: &Gallery, style: &TagStyle) -> Option<ReviewAction> {
+fn item_row(
+    ui: &mut Ui,
+    entries: &[Entry],
+    item: &mut ReviewItem,
+    gallery: &Gallery,
+    style: &TagStyle,
+) -> Option<ReviewAction> {
     let mut action = None;
     ui.horizontal_top(|ui| {
         if let Some(i) = item.entry {
@@ -232,11 +246,8 @@ fn move_row(ui: &mut Ui, item: &mut ReviewItem) {
         let what = if rename { t!("review.rename") } else { t!("review.move") };
         ui.label(RichText::new(format!("{icon} {what}")).strong());
     });
-    let (old, new) = if rename {
-        (listing::file_name(&from), listing::file_name(&m.to))
-    } else {
-        (rel(&from), rel(&m.to))
-    };
+    let (old, new) =
+        if rename { (listing::file_name(&from), listing::file_name(&m.to)) } else { (rel(&from), rel(&m.to)) };
     ui.label(RichText::new(old).weak().strikethrough());
     ui.label(RichText::new(format!("→ {new}")).strong());
     let made = meshgrove_core::moves::missing_folders(&m.root, m.to.parent().unwrap_or(&m.root));

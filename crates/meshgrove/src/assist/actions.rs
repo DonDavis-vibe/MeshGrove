@@ -201,8 +201,11 @@ fn tags(
             }
             let ids: Vec<String> = chunk.iter().map(|f| f.id.clone()).collect();
             // Pictures only where the library allows them (the others are left out).
-            let pictures =
-                if cfg.vision { read::get_thumbnails(&cx, &ids, PICTURE).map(|(p, _)| p).unwrap_or_default() } else { Vec::new() };
+            let pictures = if cfg.vision {
+                read::get_thumbnails(&cx, &ids, PICTURE).map(|(p, _)| p).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             let prompt = assist::tag_prompt(chunk, &vocab, context.as_deref());
             match ask(&endpoint, &prompt, &pictures, &assist::tag_schema(), |a| assist::parse_tags(a, &ids)) {
                 Ok(mut found) => {
@@ -216,9 +219,10 @@ fn tags(
                     send(ChatEvent::Tool { name: "tags".into(), summary });
                     items.extend(found);
                 }
-                Err(e) => {
-                    send(ChatEvent::Tool { name: "tags".into(), summary: t!("chat.tool_failed", error = e).into_owned() })
-                }
+                Err(e) => send(ChatEvent::Tool {
+                    name: "tags".into(),
+                    summary: t!("chat.tool_failed", error = e).into_owned(),
+                }),
             }
         }
         for part in items.chunks(MAX_ITEMS) {
@@ -282,7 +286,10 @@ fn list(
             }),
         }
     }
-    send(ChatEvent::Tool { name: "search_models".into(), summary: t!("chat.tool_results", count = found.len()).into_owned() });
+    send(ChatEvent::Tool {
+        name: "search_models".into(),
+        summary: t!("chat.tool_results", count = found.len()).into_owned(),
+    });
     if found.is_empty() {
         return Ok(Some(t!("actions.list_nothing", search = wanted).into_owned()));
     }
@@ -340,7 +347,12 @@ fn list(
 
 /// Tags for the tag editor, suggested for these files (at most one request's worth): those
 /// suggested most often first, spelled as the library spells them. Nothing is stored.
-pub fn tag_candidates(db: &Path, config: &Config, key: Option<String>, paths: &[PathBuf]) -> Result<Vec<String>, String> {
+pub fn tag_candidates(
+    db: &Path,
+    config: &Config,
+    key: Option<String>,
+    paths: &[PathBuf],
+) -> Result<Vec<String>, String> {
     let cfg = config.ai.endpoint.as_ref().ok_or_else(|| t!("chat.no_endpoint").into_owned())?;
     let endpoint = Endpoint::from_config(cfg, key);
     let lib = open_library(db, config)?;
@@ -354,9 +366,16 @@ pub fn tag_candidates(db: &Path, config: &Config, key: Option<String>, paths: &[
     let vocab = read::list_tags(&cx).map_err(|e| e.to_string())?;
     let spelling = Vocabulary::new(config, vocab.existing.iter().map(|t| t.name.clone()).collect());
     let ids: Vec<String> = files.iter().map(|f| f.id.clone()).collect();
-    let pictures = if cfg.vision { read::get_thumbnails(&cx, &ids, PICTURE).map(|(p, _)| p).unwrap_or_default() } else { Vec::new() };
+    let pictures = if cfg.vision {
+        read::get_thumbnails(&cx, &ids, PICTURE).map(|(p, _)| p).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let folder = paths.first().and_then(|p| p.parent()).filter(|f| paths.iter().all(|p| p.parent() == Some(*f)));
-    let context = folder.and_then(|f| cx.scope.id_of(f)).and_then(|id| read::folder_summary(&cx, &id).ok()).map(|s| folder_context(&s));
+    let context = folder
+        .and_then(|f| cx.scope.id_of(f))
+        .and_then(|id| read::folder_summary(&cx, &id).ok())
+        .map(|s| folder_context(&s));
     let prompt = assist::tag_prompt(&files, &vocab, context.as_deref());
     let items = ask(&endpoint, &prompt, &pictures, &assist::tag_schema(), |a| assist::parse_tags(a, &ids))?;
     let mut counted: Vec<(String, usize)> = Vec::new();
@@ -397,10 +416,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (open, hidden) = (dir.path().join("offen"), dir.path().join("privat"));
         let db = dir.path().join("library.db");
-        let mut config = Config { library_roots: vec![open.clone(), hidden.clone()], language: Some("de".into()), ..Default::default() };
+        let mut config = Config {
+            library_roots: vec![open.clone(), hidden.clone()],
+            language: Some("de".into()),
+            ..Default::default()
+        };
         config.ai.enabled = true;
         config.ai.libraries = vec![LibraryAi { root: open.clone(), access: AiAccess::Cloud, images: false }];
-        config.ai.endpoint = Some(EndpointConfig { base_url: url.into(), model: "mock".into(), local: false, ..Default::default() });
+        config.ai.endpoint =
+            Some(EndpointConfig { base_url: url.into(), model: "mock".into(), local: false, ..Default::default() });
         let mut lib = Library::open(&db).unwrap();
         for (root, names) in [(&open, &["rose.stl", "deckel.stl"][..]), (&hidden, &["geheim.stl"][..])] {
             lib.finish_baseline(root).unwrap();
@@ -416,7 +440,11 @@ mod tests {
                 .collect();
             lib.update_dir(root, root, 1, &entries, &[]).unwrap();
             for n in names {
-                let meta = ThumbMeta { size_mm: Some([40.0, 20.0, 10.0]), content_hash: Some(format!("h-{n}")), ..Default::default() };
+                let meta = ThumbMeta {
+                    size_mm: Some([40.0, 20.0, 10.0]),
+                    content_hash: Some(format!("h-{n}")),
+                    ..Default::default()
+                };
                 lib.store_meta(&root.join(n), "k", &meta).unwrap();
             }
         }
@@ -459,7 +487,9 @@ mod tests {
         let events = run_job(&f, Action::Tags { groups: vec![group], inbox_done: true });
         let proposed: Vec<&ChatEvent> = events.iter().filter(|e| matches!(e, ChatEvent::Proposed { .. })).collect();
         assert_eq!(proposed.len(), 1, "{events:?}");
-        let Some(ChatEvent::Text(text)) = events.iter().find(|e| matches!(e, ChatEvent::Text(_))) else { panic!("{events:?}") };
+        let Some(ChatEvent::Text(text)) = events.iter().find(|e| matches!(e, ChatEvent::Text(_))) else {
+            panic!("{events:?}")
+        };
         // "werkstatt" as Meshgrove's suggested tag spells it.
         assert!(text.contains("[[offen/deckel.stl]]: Werkstatt, Ersatzteil") && !text.contains("geheim"), "{text}");
         assert!(matches!(events.last(), Some(ChatEvent::Done(_))));
@@ -487,8 +517,11 @@ mod tests {
             answer(json!({"items": [{"id": "offen/rose.stl"}, {"id": "privat/geheim.stl"}]})),
         ]);
         let f = fixture(&url);
-        let events = run_job(&f, Action::List { description: "Alles für den Gartenmarkt, je 3 Stück".into(), print: true });
-        let Some(ChatEvent::Text(text)) = events.iter().find(|e| matches!(e, ChatEvent::Text(_))) else { panic!("{events:?}") };
+        let events =
+            run_job(&f, Action::List { description: "Alles für den Gartenmarkt, je 3 Stück".into(), print: true });
+        let Some(ChatEvent::Text(text)) = events.iter().find(|e| matches!(e, ChatEvent::Text(_))) else {
+            panic!("{events:?}")
+        };
         assert!(text.contains("Gartenmarkt") && text.contains("[[offen/rose.stl]] ×3"), "{text}");
         let requests = seen.lock().unwrap();
         // The words found nothing, so the search went on without them; only one file was found:

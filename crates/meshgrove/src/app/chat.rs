@@ -57,7 +57,13 @@ pub struct ChatState {
 pub enum Pending {
     /// The message in the field.
     Message,
-    Action { title: String, user_text: String, llm: String, files: usize, action: Action },
+    Action {
+        title: String,
+        user_text: String,
+        llm: String,
+        files: usize,
+        action: Action,
+    },
     /// The tag editor's ✧ for the selection.
     TagCandidates,
 }
@@ -96,7 +102,9 @@ impl App {
         let config = &self.config;
         let class = self.chat_class();
         let scope = meshgrove_core::ai::Scope::new(config, class);
-        let names = |id: &str| scope.resolve(id).map_or_else(|| id.rsplit('/').next().unwrap_or(id).to_owned(), |p| listing::file_name(&p));
+        let names = |id: &str| {
+            scope.resolve(id).map_or_else(|| id.rsplit('/').next().unwrap_or(id).to_owned(), |p| listing::file_name(&p))
+        };
         let model = config.ai.endpoint.as_ref().map(|e| e.model.clone()).unwrap_or_default();
         let view = ChatView {
             chats: &self.chat.chats,
@@ -369,7 +377,9 @@ impl App {
                         msg.failed = true;
                     }
                     if let (Some(mut s), Some(chat)) = (store(), self.chat.current) {
-                        msg.id = s.add_message(chat, "assistant", &serde_json::to_value(&msg).unwrap_or_default()).unwrap_or(0);
+                        msg.id = s
+                            .add_message(chat, "assistant", &serde_json::to_value(&msg).unwrap_or_default())
+                            .unwrap_or(0);
                     }
                     self.chat.messages.push(msg);
                     self.chat.changes_stale = true;
@@ -393,7 +403,9 @@ impl App {
             .filter_map(|p| cx.scope.id_of(&p))
             .take(MAX_PICTURES)
             .collect();
-        read::get_thumbnails(&cx, &ids, 256).map(|(images, _)| images.into_iter().map(|(_, png)| png).collect()).unwrap_or_default()
+        read::get_thumbnails(&cx, &ids, 256)
+            .map(|(images, _)| images.into_iter().map(|(_, png)| png).collect())
+            .unwrap_or_default()
     }
 
     /// The message for the model: the text with each reference as ⟦n⟧ and their data below.
@@ -474,7 +486,8 @@ impl App {
         let Some(endpoint) = self.config.ai.endpoint.clone() else { return };
         if !endpoint.local && !confirmed {
             let pictures = if endpoint.vision { files } else { 0 };
-            let text = t!("actions.confirm_text", host = host_of(&endpoint.base_url), files = files, pictures = pictures);
+            let text =
+                t!("actions.confirm_text", host = host_of(&endpoint.base_url), files = files, pictures = pictures);
             self.chat.confirm = Some((text.into_owned(), Pending::Action { title, user_text, llm, files, action }));
             return;
         }
@@ -510,7 +523,11 @@ impl App {
             self.toast(t!("actions.nothing_visible").into_owned());
             return;
         }
-        let label = if paths.len() == 1 { listing::file_name(&paths[0]) } else { t!("chat.ref_files", count = paths.len()).into_owned() };
+        let label = if paths.len() == 1 {
+            listing::file_name(&paths[0])
+        } else {
+            t!("chat.ref_files", count = paths.len()).into_owned()
+        };
         self.chat.input.append_pill(Pill { label, reference: Reference::Files { paths } });
         self.layout.focus_chat();
         self.egui_ctx.request_repaint();
@@ -520,21 +537,28 @@ impl App {
 /// What a reference stands for, as the model gets it.
 fn reference_data(cx: &Context, r: &Reference) -> String {
     let value: Value = match r {
-        Reference::Files { paths } => serde_json::to_value(read::summaries(cx, &paths[..paths.len().min(20)]).unwrap_or_default()),
+        Reference::Files { paths } => {
+            serde_json::to_value(read::summaries(cx, &paths[..paths.len().min(20)]).unwrap_or_default())
+        }
         Reference::Folder { path } => match cx.scope.id_of(path) {
             Some(id) => serde_json::to_value(read::folder_summary(cx, &id).ok()),
             None => Ok(Value::Null),
         },
         Reference::List { name } => serde_json::to_value(read::get_list(cx, name).ok()),
         Reference::Tag { name } => serde_json::to_value(
-            read::search_models(cx, &ModelFilter { tags_all: vec![name.clone()], limit: Some(30), ..Default::default() }).ok(),
+            read::search_models(
+                cx,
+                &ModelFilter { tags_all: vec![name.clone()], limit: Some(30), ..Default::default() },
+            )
+            .ok(),
         ),
         Reference::Printer { name } => {
             serde_json::to_value(read::list_printers(cx).into_iter().find(|p| p.name == *name))
         }
-        Reference::Search { query } => {
-            serde_json::to_value(read::search_models(cx, &ModelFilter { q: Some(query.clone()), limit: Some(30), ..Default::default() }).ok())
-        }
+        Reference::Search { query } => serde_json::to_value(
+            read::search_models(cx, &ModelFilter { q: Some(query.clone()), limit: Some(30), ..Default::default() })
+                .ok(),
+        ),
     }
     .unwrap_or(Value::Null);
     let mut text = value.to_string();
@@ -558,11 +582,22 @@ fn references(cx: &Context, query: &str, selection: &[PathBuf], current: &Path, 
     let mut out = Vec::new();
     let visible: Vec<PathBuf> = selection.iter().filter(|p| cx.scope.allows(p)).cloned().collect();
     if !visible.is_empty() {
-        let label = if visible.len() == 1 { listing::file_name(&visible[0]) } else { t!("chat.ref_selection").into_owned() };
-        out.push(pill(label, t!("chat.ref_files", count = visible.len()).into_owned(), true, Reference::Files { paths: visible }));
+        let label =
+            if visible.len() == 1 { listing::file_name(&visible[0]) } else { t!("chat.ref_selection").into_owned() };
+        out.push(pill(
+            label,
+            t!("chat.ref_files", count = visible.len()).into_owned(),
+            true,
+            Reference::Files { paths: visible },
+        ));
     }
     if cx.scope.allows(current) {
-        out.push(pill(listing::file_name(current), t!("chat.ref_current_folder").into_owned(), true, Reference::Folder { path: current.to_path_buf() }));
+        out.push(pill(
+            listing::file_name(current),
+            t!("chat.ref_current_folder").into_owned(),
+            true,
+            Reference::Folder { path: current.to_path_buf() },
+        ));
     }
     // The inbox as far as this endpoint may see it.
     let new = if inbox > 0 {
@@ -572,39 +607,73 @@ fn references(cx: &Context, query: &str, selection: &[PathBuf], current: &Path, 
         0
     };
     if new > 0 {
-        out.push(pill(t!("chat.ref_inbox").into_owned(), t!("chat.ref_new", count = new).into_owned(), true, Reference::Search { query: "is:neu".into() }));
+        out.push(pill(
+            t!("chat.ref_inbox").into_owned(),
+            t!("chat.ref_new", count = new).into_owned(),
+            true,
+            Reference::Search { query: "is:neu".into() },
+        ));
     }
     if query.contains(':') {
-        let found = read::search_models(cx, &ModelFilter { q: Some(query.into()), limit: Some(200), ..Default::default() })
-            .map(|p| p.items.len())
-            .unwrap_or(0);
-        out.insert(0, pill(format!("{} {query}", t!("chat.ref_search")), t!("chat.ref_hits", count = found).into_owned(), true, Reference::Search { query: query.into() }));
+        let found =
+            read::search_models(cx, &ModelFilter { q: Some(query.into()), limit: Some(200), ..Default::default() })
+                .map(|p| p.items.len())
+                .unwrap_or(0);
+        out.insert(
+            0,
+            pill(
+                format!("{} {query}", t!("chat.ref_search")),
+                t!("chat.ref_hits", count = found).into_owned(),
+                true,
+                Reference::Search { query: query.into() },
+            ),
+        );
         return out;
     }
     if let Ok(tags) = read::list_tags(cx) {
         for t in tags.existing.into_iter().take(200) {
-            out.push(pill(t.name.clone(), t!("chat.ref_tag", count = t.count).into_owned(), true, Reference::Tag { name: t.name }));
+            out.push(pill(
+                t.name.clone(),
+                t!("chat.ref_tag", count = t.count).into_owned(),
+                true,
+                Reference::Tag { name: t.name },
+            ));
         }
     }
     if let Ok(lists) = read::list_lists(cx) {
         for l in lists {
-            out.push(pill(l.name.clone(), t!("chat.ref_list", count = l.count).into_owned(), true, Reference::List { name: l.name }));
+            out.push(pill(
+                l.name.clone(),
+                t!("chat.ref_list", count = l.count).into_owned(),
+                true,
+                Reference::List { name: l.name },
+            ));
         }
     }
     for p in read::list_printers(cx) {
         out.push(pill(p.name.clone(), t!("chat.ref_printer").into_owned(), true, Reference::Printer { name: p.name }));
     }
     if query.chars().count() >= 2 {
-        if let Ok(page) = read::search_models(cx, &ModelFilter { q: Some(query.into()), limit: Some(8), ..Default::default() }) {
+        if let Ok(page) =
+            read::search_models(cx, &ModelFilter { q: Some(query.into()), limit: Some(8), ..Default::default() })
+        {
             for m in page.items {
                 if let Some(path) = cx.scope.resolve(&m.id) {
-                    let detail = m.size_mm.map_or_else(|| m.kind.clone(), |s| format!("{} · {:.0}×{:.0}×{:.0} mm", m.kind, s[0], s[1], s[2]));
+                    let detail = m.size_mm.map_or_else(
+                        || m.kind.clone(),
+                        |s| format!("{} · {:.0}×{:.0}×{:.0} mm", m.kind, s[0], s[1], s[2]),
+                    );
                     out.push(pill(m.name, detail, false, Reference::Files { paths: vec![path] }));
                 }
             }
         }
         for path in read::find_folders(cx, query, 5).unwrap_or_default() {
-            out.push(pill(listing::file_name(&path), t!("chat.ref_folder").into_owned(), false, Reference::Folder { path }));
+            out.push(pill(
+                listing::file_name(&path),
+                t!("chat.ref_folder").into_owned(),
+                false,
+                Reference::Folder { path },
+            ));
         }
     }
     out

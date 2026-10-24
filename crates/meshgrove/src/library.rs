@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
-use meshgrove_core::cache::ThumbMeta;
 use meshgrove_core::ai::proposals::{Decision, ProposalStore};
+use meshgrove_core::cache::ThumbMeta;
 use meshgrove_core::changes::{ApplyOp, ChangeReport, UndoReport};
 use meshgrove_core::checks::MeshChecks;
 use meshgrove_core::db::{self, Counts, Error, Library};
@@ -80,13 +80,27 @@ enum Cmd {
     /// Takes these files out of the inbox; `None`: everything.
     InboxDone(Option<Vec<PathBuf>>),
     /// Applies what the user picked of a batch of suggestions and records the decisions.
-    Accept { batch: i64, uid: String, title: String, ops: Vec<ApplyOp>, decisions: Vec<(i64, Decision)> },
+    Accept {
+        batch: i64,
+        uid: String,
+        title: String,
+        ops: Vec<ApplyOp>,
+        decisions: Vec<(i64, Decision)>,
+    },
     /// Records decisions without changing the library (rejected suggestions).
-    Decide { batch: i64, decisions: Vec<(i64, Decision)> },
+    Decide {
+        batch: i64,
+        decisions: Vec<(i64, Decision)>,
+    },
     Undo(i64),
     Redo(i64),
     /// Applies changes at once (the chat in automatic mode) and answers how it went.
-    ApplyNow { origin: String, title: String, ops: Vec<ApplyOp>, reply: Sender<Result<ChangeReport, String>> },
+    ApplyNow {
+        origin: String,
+        title: String,
+        ops: Vec<ApplyOp>,
+        reply: Sender<Result<ChangeReport, String>>,
+    },
     Tag(Vec<PathBuf>, String),
     Untag(Vec<PathBuf>, String),
     SetNote(Vec<PathBuf>, String),
@@ -608,7 +622,8 @@ impl Proposals {
     fn get(&mut self) -> Option<&mut ProposalStore> {
         if self.store.is_none() {
             let path = ProposalStore::default_location().filter(|p| p.exists());
-            self.store = path.and_then(|p| ProposalStore::open(&p).map_err(|e| log::warn!("suggestion store: {e}")).ok());
+            self.store =
+                path.and_then(|p| ProposalStore::open(&p).map_err(|e| log::warn!("suggestion store: {e}")).ok());
         }
         self.store.as_mut()
     }

@@ -91,7 +91,8 @@ fn language_name(vocab: &TagVocabulary) -> &'static str {
 
 /// What the model gets to know about a file.
 fn file_line(f: &ModelSummary) -> String {
-    let mut v = json!({"id": f.id, "name": untrusted(&f.name, 120), "folder": untrusted(&f.folder, 200), "kind": f.kind});
+    let mut v =
+        json!({"id": f.id, "name": untrusted(&f.name, 120), "folder": untrusted(&f.folder, 200), "kind": f.kind});
     if let Some(s) = f.size_mm {
         v["size_mm"] = json!(s.map(|x| (x * 10.0).round() / 10.0));
     }
@@ -192,7 +193,16 @@ pub struct ListPlan {
 pub fn filter_prompt(description: &str, vocab: &TagVocabulary, printers: &[PrinterOut]) -> Prompt {
     let printers: Vec<String> = printers
         .iter()
-        .map(|p| format!("{} ({:.0}×{:.0}×{:.0} mm{})", p.name, p.bed_mm[0], p.bed_mm[1], p.bed_mm[2], if p.main { ", main" } else { "" }))
+        .map(|p| {
+            format!(
+                "{} ({:.0}×{:.0}×{:.0} mm{})",
+                p.name,
+                p.bed_mm[0],
+                p.bed_mm[1],
+                p.bed_mm[2],
+                if p.main { ", main" } else { "" }
+            )
+        })
         .collect();
     let system = format!(
         "You turn the user's description of a list of 3D-print files into a search in their Meshgrove library. \
@@ -233,8 +243,19 @@ pub fn filter_schema() -> Value {
 
 /// Filter fields a model may set (no paging, no folders or libraries it cannot know).
 const FILTER_FIELDS: &[&str] = &[
-    "q", "tags_any", "tags_all", "tags_none", "kinds", "fits_printer", "max_print_minutes", "min_size_mm",
-    "max_size_mm", "new_only", "untagged_only", "favorites_only", "printed",
+    "q",
+    "tags_any",
+    "tags_all",
+    "tags_none",
+    "kinds",
+    "fits_printer",
+    "max_print_minutes",
+    "min_size_mm",
+    "max_size_mm",
+    "new_only",
+    "untagged_only",
+    "favorites_only",
+    "printed",
 ];
 
 /// The search in an answer. Fields that do not fit are left out rather than failing it all;
@@ -451,7 +472,11 @@ mod tests {
     #[test]
     fn picks_are_files_that_were_sent() {
         let sent = ids(&["L/a.stl", "L/b.stl"]);
-        let picked = parse_pick(r#"{"items": [{"id": "L/b.stl", "quantity": 3}, {"id": "L/x.stl"}, "L/a.stl", {"id": "L/b.stl"}]}"#, &sent).unwrap();
+        let picked = parse_pick(
+            r#"{"items": [{"id": "L/b.stl", "quantity": 3}, {"id": "L/x.stl"}, "L/a.stl", {"id": "L/b.stl"}]}"#,
+            &sent,
+        )
+        .unwrap();
         assert_eq!(picked.len(), 2);
         assert_eq!((picked[0].id.as_str(), picked[0].quantity), ("L/b.stl", Some(3)));
         assert_eq!((picked[1].id.as_str(), picked[1].quantity), ("L/a.stl", None));

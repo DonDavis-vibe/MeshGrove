@@ -46,12 +46,32 @@ pub struct DuplicatesArgs {
 
 /// (name, description, writes)
 const TOOLS: &[(&str, &str, bool)] = &[
-    ("library_overview", "The libraries you may see, counts (inbox, untagged, problems), printers, most used tags.", false),
-    ("search_models", "Find files. All given filters must match; q takes Meshgrove's search syntax (tag:, liste:, passt:, is:neu, ext:).", false),
-    ("get_model", "Everything about one file: facts, 3MF metadata, note, lists, copies, printability, fit per printer, the folder's readme.", false),
-    ("folder_summary", "A folder or archive: files by kind, subfolders, common tags, how many are new, readme, a sample.", false),
+    (
+        "library_overview",
+        "The libraries you may see, counts (inbox, untagged, problems), printers, most used tags.",
+        false,
+    ),
+    (
+        "search_models",
+        "Find files. All given filters must match; q takes Meshgrove's search syntax (tag:, liste:, passt:, is:neu, ext:).",
+        false,
+    ),
+    (
+        "get_model",
+        "Everything about one file: facts, 3MF metadata, note, lists, copies, printability, fit per printer, the folder's readme.",
+        false,
+    ),
+    (
+        "folder_summary",
+        "A folder or archive: files by kind, subfolders, common tags, how many are new, readme, a sample.",
+        false,
+    ),
     ("list_inbox", "New files waiting in the inbox, grouped by the folder or archive they came in.", false),
-    ("list_tags", "Tags in use (with counts and groups) and Meshgrove's suggested tags. Call before suggesting tags.", false),
+    (
+        "list_tags",
+        "Tags in use (with counts and groups) and Meshgrove's suggested tags. Call before suggesting tags.",
+        false,
+    ),
     ("list_lists", "The user's lists: favourites, print lists, collections.", false),
     ("get_list", "The files of one list with copies wanted and done.", false),
     ("find_duplicates", "Groups of duplicate files.", false),
@@ -59,9 +79,21 @@ const TOOLS: &[(&str, &str, bool)] = &[
     ("check_printability", "Printability of up to 100 files: mesh problems, suspicious sizes, fit per printer.", false),
     ("propose_tags", "Tags to add (and remove) per file.", true),
     ("propose_note", "A note per file (replacing or appended).", true),
-    ("propose_list", "A new print list (with copies) or collection, or an automatic collection from a saved search.", true),
-    ("propose_tag_merge", "Replace tags by one (spelling variants, synonyms, the other language) on every file carrying them.", true),
-    ("propose_moves", "Move or rename files, archives or folders within their library; always waits for the user's review, never replaces anything.", true),
+    (
+        "propose_list",
+        "A new print list (with copies) or collection, or an automatic collection from a saved search.",
+        true,
+    ),
+    (
+        "propose_tag_merge",
+        "Replace tags by one (spelling variants, synonyms, the other language) on every file carrying them.",
+        true,
+    ),
+    (
+        "propose_moves",
+        "Move or rename files, archives or folders within their library; always waits for the user's review, never replaces anything.",
+        true,
+    ),
 ];
 
 /// Whether the tool changes something (or suggests a change).
@@ -120,7 +152,13 @@ fn to_value<T: serde::Serialize>(value: T) -> ToolResult<Value> {
 }
 
 /// Calls tool `name`; suggestions go to `store` as coming from `origin`.
-pub fn call(cx: &Context, store: &mut ProposalStore, origin: &Origin, name: &str, arguments: Value) -> ToolResult<Value> {
+pub fn call(
+    cx: &Context,
+    store: &mut ProposalStore,
+    origin: &Origin,
+    name: &str,
+    arguments: Value,
+) -> ToolResult<Value> {
     match name {
         "library_overview" => to_value(read::library_overview(cx)?),
         "search_models" => to_value(read::search_models(cx, &args::<ModelFilter>(arguments)?)?),
@@ -130,7 +168,9 @@ pub fn call(cx: &Context, store: &mut ProposalStore, origin: &Origin, name: &str
         "list_tags" => to_value(read::list_tags(cx)?),
         "list_lists" => to_value(read::list_lists(cx)?),
         "get_list" => to_value(read::get_list(cx, &args::<ListArgs>(arguments)?.name)?),
-        "find_duplicates" => to_value(read::find_duplicates(cx, args::<DuplicatesArgs>(arguments)?.library.as_deref(), 50)?),
+        "find_duplicates" => {
+            to_value(read::find_duplicates(cx, args::<DuplicatesArgs>(arguments)?.library.as_deref(), 50)?)
+        }
         "list_printers" => to_value(read::list_printers(cx)),
         "check_printability" => to_value(read::check_printability(cx, &args::<IdsArgs>(arguments)?.ids)?),
         "propose_tags" => to_value(proposals::propose_tags(cx, store, origin, &args(arguments)?)?),

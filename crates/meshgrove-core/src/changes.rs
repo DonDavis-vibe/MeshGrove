@@ -21,30 +21,77 @@ use crate::lists::ListKind;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum ApplyOp {
-    AddTag { target: Target, tag: String },
-    RemoveTag { target: Target, tag: String },
-    SetNote { target: Target, text: String, append: bool },
+    AddTag {
+        target: Target,
+        tag: String,
+    },
+    RemoveTag {
+        target: Target,
+        tag: String,
+    },
+    SetNote {
+        target: Target,
+        text: String,
+        append: bool,
+    },
     /// A list (or the existing one of that kind and name) with these files and copies.
-    List { kind: ListKind, name: String, query: Option<String>, items: Vec<(Target, u32)> },
-    InboxDone { target: Target },
+    List {
+        kind: ListKind,
+        name: String,
+        query: Option<String>,
+        items: Vec<(Target, u32)>,
+    },
+    InboxDone {
+        target: Target,
+    },
     /// A file, archive or folder to another place in its library `root`; folders that do not
     /// exist yet are made. Never onto anything that is there.
-    Move { root: PathBuf, target: Target, to: PathBuf, folder: bool },
+    Move {
+        root: PathBuf,
+        target: Target,
+        to: PathBuf,
+        folder: bool,
+    },
 }
 
 /// What takes a step back.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "undo", rename_all = "snake_case")]
 enum UndoOp {
-    Untag { hash: String, tag: String },
-    Retag { hash: String, tag: String },
-    Note { hash: String, before: Option<String>, after: Option<String> },
-    DeleteList { list: i64 },
-    RemoveItem { list: i64, hash: String },
-    Reopen { hash: String },
+    Untag {
+        hash: String,
+        tag: String,
+    },
+    Retag {
+        hash: String,
+        tag: String,
+    },
+    Note {
+        hash: String,
+        before: Option<String>,
+        after: Option<String>,
+    },
+    DeleteList {
+        list: i64,
+    },
+    RemoveItem {
+        list: i64,
+        hash: String,
+    },
+    Reopen {
+        hash: String,
+    },
     /// From `at` back to `to`, if it is still as the move left it; `made` are the folders the
     /// move created, removed again when empty.
-    MoveBack { root: PathBuf, at: PathBuf, to: PathBuf, size: u64, mtime_ns: i64, folder: bool, made: Vec<PathBuf> },
+    MoveBack {
+        root: PathBuf,
+        at: PathBuf,
+        to: PathBuf,
+        size: u64,
+        mtime_ns: i64,
+        folder: bool,
+        made: Vec<PathBuf>,
+    },
 }
 
 /// Moves done on disk during a change: (from, to, folders made), to do backwards on failure.
@@ -158,7 +205,8 @@ impl Library {
 
     /// How many files carry content `hash` (copies get a tag too).
     pub fn copies_of(&self, hash: &str) -> Result<usize, Error> {
-        Ok(self.conn.query_row("SELECT COUNT(*) FROM files WHERE content_hash = ?1", [hash], |r| r.get::<_, i64>(0))? as usize)
+        Ok(self.conn.query_row("SELECT COUNT(*) FROM files WHERE content_hash = ?1", [hash], |r| r.get::<_, i64>(0))?
+            as usize)
     }
 
     /// Applies `ops` in one go and journals how to undo them; `origin` names where they came from
@@ -173,7 +221,13 @@ impl Library {
         result
     }
 
-    fn apply_journalled(&mut self, origin: &str, title: &str, ops: &[ApplyOp], moved: &mut Moved) -> Result<ChangeReport, Error> {
+    fn apply_journalled(
+        &mut self,
+        origin: &str,
+        title: &str,
+        ops: &[ApplyOp],
+        moved: &mut Moved,
+    ) -> Result<ChangeReport, Error> {
         match self.apply_ops(ops, moved) {
             Ok((undo, report)) => {
                 let result = (|| {
@@ -215,7 +269,8 @@ impl Library {
                         let tag = tag.trim();
                         self.conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", [tag])?;
                         let id: i64 =
-                            self.conn.query_row("SELECT id FROM tags WHERE name = ?1 COLLATE NOCASE", [tag], |r| r.get(0))?;
+                            self.conn
+                                .query_row("SELECT id FROM tags WHERE name = ?1 COLLATE NOCASE", [tag], |r| r.get(0))?;
                         let added = self.conn.execute(
                             "INSERT OR IGNORE INTO file_tags (content_hash, tag_id) VALUES (?1, ?2)",
                             params![hash, id],
@@ -283,7 +338,8 @@ impl Library {
                         None => {
                             let id = self.create_list(*kind, name)?;
                             if let Some(q) = query {
-                                self.conn.execute("UPDATE lists SET query = ?2 WHERE id = ?1", params![id, q.trim()])?;
+                                self.conn
+                                    .execute("UPDATE lists SET query = ?2 WHERE id = ?1", params![id, q.trim()])?;
                             }
                             undo.push(UndoOp::DeleteList { list: id });
                             id
@@ -436,9 +492,12 @@ impl Library {
             }
             UndoOp::Retag { hash, tag } => {
                 self.conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", [tag])?;
-                let id: i64 = self.conn.query_row("SELECT id FROM tags WHERE name = ?1 COLLATE NOCASE", [tag], |r| r.get(0))?;
-                self.conn.execute("INSERT OR IGNORE INTO file_tags (content_hash, tag_id) VALUES (?1, ?2)", params![hash, id])?
-                    > 0
+                let id: i64 =
+                    self.conn.query_row("SELECT id FROM tags WHERE name = ?1 COLLATE NOCASE", [tag], |r| r.get(0))?;
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO file_tags (content_hash, tag_id) VALUES (?1, ?2)",
+                    params![hash, id],
+                )? > 0
             }
             UndoOp::Note { hash, before, after } => {
                 // Only if the note is still what the change wrote.
@@ -450,10 +509,11 @@ impl Library {
                 }
             }
             UndoOp::DeleteList { list } => self.conn.execute("DELETE FROM lists WHERE id = ?1", [list])? > 0,
-            UndoOp::RemoveItem { list, hash } => self
-                .conn
-                .execute("DELETE FROM list_items WHERE list_id = ?1 AND content_hash = ?2", params![list, hash])?
-                > 0,
+            UndoOp::RemoveItem { list, hash } => {
+                self.conn
+                    .execute("DELETE FROM list_items WHERE list_id = ?1 AND content_hash = ?2", params![list, hash])?
+                    > 0
+            }
             UndoOp::Reopen { hash } => {
                 self.conn.execute(
                     "UPDATE inbox SET done_ns = NULL, done_by = NULL WHERE content_hash = ?1 AND done_by = 'proposal'",

@@ -43,7 +43,11 @@ fn fixture(ai_enabled: bool) -> Fixture {
     let db = dir.path().join("library.db");
     let proposals = dir.path().join("proposals.db");
     let thumbs = dir.path().join("thumbs");
-    let mut c = Config { library_roots: vec![eigene.clone(), kunden.clone()], language: Some("de".into()), ..Config::default() };
+    let mut c = Config {
+        library_roots: vec![eigene.clone(), kunden.clone()],
+        language: Some("de".into()),
+        ..Config::default()
+    };
     c.ai.enabled = ai_enabled;
     c.ai.libraries = vec![
         LibraryAi { root: eigene.clone(), access: AiAccess::Cloud, images: true },
@@ -63,7 +67,9 @@ fn fixture(ai_enabled: bool) -> Fixture {
             ..Default::default()
         };
         lib.store_meta(&root.join(name), &key, &meta).unwrap();
-        cache.store(&key, &Thumbnail { image: RgbaImage::from_pixel(64, 64, image::Rgba([200, 100, 50, 255])), meta }).unwrap();
+        cache
+            .store(&key, &Thumbnail { image: RgbaImage::from_pixel(64, 64, image::Rgba([200, 100, 50, 255])), meta })
+            .unwrap();
     }
     lib.tag(&[eigene.join("rose.stl")], "Garten").unwrap();
     Fixture { _dir: dir, root, config, db, proposals, thumbs }
@@ -119,7 +125,8 @@ impl Server {
         loop {
             let mut line = String::new();
             assert!(self.stdout.read_line(&mut line).unwrap() > 0, "server closed stdout");
-            let message: Value = serde_json::from_str(&line).unwrap_or_else(|e| panic!("not JSON-RPC on stdout: {line:?} ({e})"));
+            let message: Value =
+                serde_json::from_str(&line).unwrap_or_else(|e| panic!("not JSON-RPC on stdout: {line:?} ({e})"));
             if message["id"] == id {
                 assert!(message.get("error").is_none(), "{method}: {message}");
                 return message["result"].clone();
@@ -140,8 +147,12 @@ impl Drop for Server {
 }
 
 fn ids(result: &Value) -> Vec<String> {
-    let mut ids: Vec<String> =
-        result["structuredContent"]["items"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap().to_owned()).collect();
+    let mut ids: Vec<String> = result["structuredContent"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap().to_owned())
+        .collect();
     ids.sort();
     ids
 }
@@ -153,7 +164,15 @@ fn lists_tools_with_annotations_and_prompts() {
     let tools = s.request("tools/list", json!({}));
     let tools = tools["tools"].as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    for name in ["library_overview", "search_models", "get_model", "get_thumbnails", "list_inbox", "propose_tags", "propose_list"] {
+    for name in [
+        "library_overview",
+        "search_models",
+        "get_model",
+        "get_thumbnails",
+        "list_inbox",
+        "propose_tags",
+        "propose_list",
+    ] {
         assert!(names.contains(&name), "{name} in {names:?}");
     }
     for t in tools {
@@ -165,7 +184,8 @@ fn lists_tools_with_annotations_and_prompts() {
     let search = tools.iter().find(|t| t["name"] == "search_models").unwrap();
     assert!(search["inputSchema"]["properties"]["fits_printer"].is_object(), "filter fields have a schema");
     let prompts = s.request("prompts/list", json!({}));
-    let prompts: Vec<&str> = prompts["prompts"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
+    let prompts: Vec<&str> =
+        prompts["prompts"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
     assert!(prompts.contains(&"eingang-einordnen") && prompts.contains(&"druckliste-zusammenstellen"));
     let prompt = s.request("prompts/get", json!({"name": "eingang-einordnen", "arguments": {}}));
     assert!(prompt["messages"][0]["content"]["text"].as_str().unwrap().starts_with("Ordne die neuen Dateien"));
@@ -209,7 +229,10 @@ fn suggestions_are_queued_not_applied() {
     let store = ProposalStore::open(&f.proposals).unwrap();
     assert_eq!(store.pending_count().unwrap(), 1);
     let log = store.access_log(10).unwrap();
-    assert!(log.iter().any(|e| e.tool == "propose_tags" && e.client.as_deref() == Some("test") && e.access_class == "local"));
+    assert!(
+        log.iter()
+            .any(|e| e.tool == "propose_tags" && e.client.as_deref() == Some("test") && e.access_class == "local")
+    );
     let mine = s.call("list_proposals", json!({}));
     assert_eq!(mine["structuredContent"][0]["title"], "Kunde einordnen");
 }

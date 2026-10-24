@@ -166,7 +166,11 @@ impl Meshgrove {
     }
 
     /// Like [`Meshgrove::run`], with the suggestion store.
-    fn run_store<T>(&self, tool: &str, f: impl FnOnce(&Context, &mut ProposalStore) -> ToolResult<(T, usize)>) -> ToolResult<T> {
+    fn run_store<T>(
+        &self,
+        tool: &str,
+        f: impl FnOnce(&Context, &mut ProposalStore) -> ToolResult<(T, usize)>,
+    ) -> ToolResult<T> {
         let mut store = ProposalStore::open(&self.paths.proposals)?;
         self.run(tool, |cx| f(cx, &mut store).map(|(v, n)| (v, n, 0)))
     }
@@ -217,14 +221,24 @@ fn with_images<T: Serialize>(value: &T, images: Vec<(String, Vec<u8>)>) -> CallT
 impl Meshgrove {
     /// The libraries this assistant may see, with counts (inbox, untagged, problems), printers,
     /// the most used tags and how old the index is. A good first call.
-    #[tool(annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    #[tool(annotations(
+        read_only_hint = true,
+        destructive_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
     async fn library_overview(&self) -> Result<CallToolResult, ErrorData> {
         answer(self.run("library_overview", |cx| read::library_overview(cx).map(|o| (o, 1, 0))))
     }
 
     /// Finds files. All given filters must match; `q` takes Meshgrove's search syntax. Returns
     /// pages of summaries (size, tags, new, printed, fits on which printer, problems, G-code facts).
-    #[tool(annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    #[tool(annotations(
+        read_only_hint = true,
+        destructive_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
     async fn search_models(&self, Parameters(filter): Parameters<ModelFilter>) -> Result<CallToolResult, ErrorData> {
         answer(self.run("search_models", |cx| {
             let page = read::search_models(cx, &filter)?;
@@ -236,7 +250,12 @@ impl Meshgrove {
     /// Everything about one file: facts, 3MF title/designer/licence, note, lists, copies,
     /// printability check, fit per printer, G-code next to it, the folder's readme, the full path;
     /// with `include_thumbnail` its picture where allowed.
-    #[tool(annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    #[tool(annotations(
+        read_only_hint = true,
+        destructive_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
     async fn get_model(&self, Parameters(p): Parameters<ModelParam>) -> Result<CallToolResult, ErrorData> {
         let result = self.run("get_model", |cx| {
             let (detail, image) = read::get_model(cx, &p.id, p.include_thumbnail)?;
@@ -250,7 +269,12 @@ impl Meshgrove {
     }
 
     /// Pictures of up to 12 files (PNG), where the user allows pictures; lists the others as denied.
-    #[tool(annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    #[tool(annotations(
+        read_only_hint = true,
+        destructive_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
     async fn get_thumbnails(&self, Parameters(p): Parameters<ThumbnailsParam>) -> Result<CallToolResult, ErrorData> {
         let result = self.run("get_thumbnails", |cx| {
             let (images, denied) = read::get_thumbnails(cx, &p.ids, p.size.unwrap_or(256))?;
@@ -265,13 +289,23 @@ impl Meshgrove {
 
     /// A folder (or archive): files by kind, subfolders, common tags, how many are new, its
     /// readme and a sample of its files.
-    #[tool(annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    #[tool(annotations(
+        read_only_hint = true,
+        destructive_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
     async fn folder_summary(&self, Parameters(p): Parameters<IdParam>) -> Result<CallToolResult, ErrorData> {
         answer(self.run("folder_summary", |cx| read::folder_summary(cx, &p.id).map(|f| (f, 1, 0))))
     }
 
     /// New files waiting in the inbox, grouped by the folder or archive they came in.
-    #[tool(annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    #[tool(annotations(
+        read_only_hint = true,
+        destructive_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
     async fn list_inbox(&self, Parameters(p): Parameters<InboxParam>) -> Result<CallToolResult, ErrorData> {
         answer(self.run("list_inbox", |cx| {
             let groups = read::list_inbox(cx, p.folder.as_deref(), p.limit.unwrap_or(200))?;
@@ -282,19 +316,34 @@ impl Meshgrove {
 
     /// The tag vocabulary: tags in use (with counts and groups) and Meshgrove's suggested tags.
     /// Call before suggesting tags.
-    #[tool(annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    #[tool(annotations(
+        read_only_hint = true,
+        destructive_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
     async fn list_tags(&self) -> Result<CallToolResult, ErrorData> {
         answer(self.run("list_tags", |cx| read::list_tags(cx).map(|t| (t, 1, 0))))
     }
 
     /// The user's lists: favourites, print lists, collections (and saved searches).
-    #[tool(annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    #[tool(annotations(
+        read_only_hint = true,
+        destructive_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
     async fn list_lists(&self) -> Result<CallToolResult, ErrorData> {
         answer(self.run("list_lists", |cx| read::list_lists(cx).map(|l| (l, 1, 0))))
     }
 
     /// The files of one list, with copies wanted and done.
-    #[tool(annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    #[tool(annotations(
+        read_only_hint = true,
+        destructive_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
     async fn get_list(&self, Parameters(p): Parameters<ListParam>) -> Result<CallToolResult, ErrorData> {
         answer(self.run("get_list", |cx| {
             let list = read::get_list(cx, &p.name)?;
@@ -304,7 +353,12 @@ impl Meshgrove {
     }
 
     /// Groups of duplicate files: exact copies and the same geometry in other files.
-    #[tool(annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    #[tool(annotations(
+        read_only_hint = true,
+        destructive_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
     async fn find_duplicates(&self, Parameters(p): Parameters<DuplicatesParam>) -> Result<CallToolResult, ErrorData> {
         answer(self.run("find_duplicates", |cx| {
             let groups = read::find_duplicates(cx, p.library.as_deref(), p.limit.unwrap_or(50))?;
@@ -314,14 +368,24 @@ impl Meshgrove {
     }
 
     /// The user's printers with their build volumes; the first is the main one.
-    #[tool(annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    #[tool(annotations(
+        read_only_hint = true,
+        destructive_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
     async fn list_printers(&self) -> Result<CallToolResult, ErrorData> {
         answer(self.run("list_printers", |cx| Ok((read::list_printers(cx), 1, 0))))
     }
 
     /// Printability of up to 100 files: mesh check (holes, non-manifold edges …), suspicious
     /// sizes, and how they fit on each printer.
-    #[tool(annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    #[tool(annotations(
+        read_only_hint = true,
+        destructive_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
     async fn check_printability(&self, Parameters(p): Parameters<IdsParam>) -> Result<CallToolResult, ErrorData> {
         answer(self.run("check_printability", |cx| {
             let checks = read::check_printability(cx, &p.ids)?;
@@ -331,7 +395,12 @@ impl Meshgrove {
     }
 
     /// Your earlier suggestions and what the user did with them.
-    #[tool(annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    #[tool(annotations(
+        read_only_hint = true,
+        destructive_hint = false,
+        idempotent_hint = true,
+        open_world_hint = false
+    ))]
     async fn list_proposals(&self, Parameters(p): Parameters<ProposalsParam>) -> Result<CallToolResult, ErrorData> {
         answer(self.run_store("list_proposals", |_, store| {
             let states: Vec<&str> = p.state.as_deref().into_iter().collect();
@@ -344,8 +413,16 @@ impl Meshgrove {
     /// Suggests tags to add (and remove) per file. Queued for the user's review in Meshgrove;
     /// returns how each tag will be spelled and which are new. `mark_inbox_done` also takes the
     /// files out of the inbox once accepted.
-    #[tool(annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false))]
-    async fn propose_tags(&self, Parameters(req): Parameters<proposals::ProposeTags>) -> Result<CallToolResult, ErrorData> {
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = false,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
+    async fn propose_tags(
+        &self,
+        Parameters(req): Parameters<proposals::ProposeTags>,
+    ) -> Result<CallToolResult, ErrorData> {
         let origin = self.origin();
         answer(self.run_store("propose_tags", |cx, store| {
             let r = proposals::propose_tags(cx, store, &origin, &req)?;
@@ -355,8 +432,16 @@ impl Meshgrove {
     }
 
     /// Suggests a note per file (replacing or appended). Queued for the user's review.
-    #[tool(annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false))]
-    async fn propose_note(&self, Parameters(req): Parameters<proposals::ProposeNote>) -> Result<CallToolResult, ErrorData> {
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = false,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
+    async fn propose_note(
+        &self,
+        Parameters(req): Parameters<proposals::ProposeNote>,
+    ) -> Result<CallToolResult, ErrorData> {
         let origin = self.origin();
         answer(self.run_store("propose_note", |cx, store| {
             let r = proposals::propose_note(cx, store, &origin, &req)?;
@@ -367,8 +452,16 @@ impl Meshgrove {
 
     /// Suggests a new list: a print list (with copies) or a collection of files, or an automatic
     /// collection from a saved search. Queued for the user's review.
-    #[tool(annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false))]
-    async fn propose_list(&self, Parameters(req): Parameters<proposals::ProposeList>) -> Result<CallToolResult, ErrorData> {
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = false,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
+    async fn propose_list(
+        &self,
+        Parameters(req): Parameters<proposals::ProposeList>,
+    ) -> Result<CallToolResult, ErrorData> {
         let origin = self.origin();
         answer(self.run_store("propose_list", |cx, store| {
             let r = proposals::propose_list(cx, store, &origin, &req)?;
@@ -379,7 +472,12 @@ impl Meshgrove {
 
     /// Suggests replacing tags by one (spelling variants, synonyms, the other language) on every
     /// file you can see that carries them. Queued for the user's review.
-    #[tool(annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false))]
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = false,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
     async fn propose_tag_merge(
         &self,
         Parameters(req): Parameters<proposals::ProposeTagMerge>,
@@ -395,8 +493,16 @@ impl Meshgrove {
     /// Suggests moving or renaming files, archives or folders within their library; missing
     /// folders are made. Never replaces anything, nothing inside archives. Queued for the user's
     /// review, who sees old and new place side by side; accepted moves can be undone.
-    #[tool(annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false))]
-    async fn propose_moves(&self, Parameters(req): Parameters<proposals::ProposeMoves>) -> Result<CallToolResult, ErrorData> {
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = false,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
+    async fn propose_moves(
+        &self,
+        Parameters(req): Parameters<proposals::ProposeMoves>,
+    ) -> Result<CallToolResult, ErrorData> {
         let origin = self.origin();
         answer(self.run_store("propose_moves", |cx, store| {
             let r = proposals::propose_moves(cx, store, &origin, &req)?;

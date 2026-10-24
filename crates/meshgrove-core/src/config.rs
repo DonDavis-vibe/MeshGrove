@@ -828,7 +828,8 @@ mod tests {
         config.save_to(&path).unwrap();
         Config { tile_size: 300.0, ..Config::default() }.save_to(&path).unwrap();
         assert_eq!(Config::load_from(&path).unwrap().tile_size, 300.0);
-        let names: Vec<_> = std::fs::read_dir(path.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let names: Vec<_> =
+            std::fs::read_dir(path.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(names, ["config.toml"], "no temporary file left behind");
     }
 

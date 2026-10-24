@@ -211,8 +211,7 @@ pub fn sliced_from(gcode: &str, model: &str) -> bool {
     let model = model.to_lowercase();
     let stem = model.rsplit_once('.').map_or(model.as_str(), |(stem, _)| stem);
     let gcode = gcode.to_lowercase();
-    !stem.is_empty()
-        && gcode.strip_prefix(stem).is_some_and(|rest| rest.starts_with(['.', '_', ' ', '-']))
+    !stem.is_empty() && gcode.strip_prefix(stem).is_some_and(|rest| rest.starts_with(['.', '_', ' ', '-']))
 }
 
 /// Seconds in a print time as slicers write it: "1d 2h 3m 4s", "1h 6m 46s", "66m 46s" or "01:06:46".

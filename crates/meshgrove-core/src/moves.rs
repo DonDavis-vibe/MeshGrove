@@ -38,8 +38,11 @@ pub fn check_move(from: &Target, to: &Path, folder: bool) -> Result<(), MoveProb
 
 /// The folders between `root` and `dir` (`dir` included) that do not exist yet, outermost first.
 pub fn missing_folders(root: &Path, dir: &Path) -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> =
-        dir.ancestors().take_while(|a| a.starts_with(root) && *a != root && a.symlink_metadata().is_err()).map(Path::to_path_buf).collect();
+    let mut out: Vec<PathBuf> = dir
+        .ancestors()
+        .take_while(|a| a.starts_with(root) && *a != root && a.symlink_metadata().is_err())
+        .map(Path::to_path_buf)
+        .collect();
     out.reverse();
     out
 }
@@ -73,7 +76,9 @@ impl Library {
 
     /// The index row of folder `dir`, made (with those above it up to `root`) when missing.
     fn dir_id(&mut self, root: &Path, dir: &Path) -> Result<i64, Error> {
-        if let Some(id) = self.conn.query_row("SELECT id FROM dirs WHERE path = ?1", [text(dir)], |r| r.get(0)).optional()? {
+        if let Some(id) =
+            self.conn.query_row("SELECT id FROM dirs WHERE path = ?1", [text(dir)], |r| r.get(0)).optional()?
+        {
             return Ok(id);
         }
         let parent = match dir.parent() {
@@ -84,7 +89,10 @@ impl Library {
             _ => None,
         };
         let mtime = nanos(dir.symlink_metadata().ok().and_then(|m| m.modified().ok()));
-        self.conn.execute("INSERT INTO dirs (path, parent, mtime_ns) VALUES (?1, ?2, ?3)", params![text(dir), parent, mtime])?;
+        self.conn.execute(
+            "INSERT INTO dirs (path, parent, mtime_ns) VALUES (?1, ?2, ?3)",
+            params![text(dir), parent, mtime],
+        )?;
         Ok(self.conn.last_insert_rowid())
     }
 
@@ -132,7 +140,10 @@ impl Library {
             } else {
                 parent.map(|p| text(&rebase(Path::new(&p), from, to)))
             };
-            self.conn.execute("UPDATE dirs SET path = ?2, parent = ?3 WHERE id = ?1", params![id, text(&new_path), new_parent])?;
+            self.conn.execute(
+                "UPDATE dirs SET path = ?2, parent = ?3 WHERE id = ?1",
+                params![id, text(&new_path), new_parent],
+            )?;
         }
         // The moved files: search text for the new folder, cache entries under the new path.
         let mut moved = Vec::new();
@@ -223,7 +234,10 @@ mod tests {
         let found = lib.search(&crate::query::parse("draußen"), 10).unwrap();
         assert_eq!(found.len(), 2, "search texts follow the folder: {found:?}");
         let new_key = ThumbCache::key(&moved, e.size, e.modified, None);
-        assert!(dir.path().join("thumbs").join(&new_key[..2]).join(format!("{new_key}.png")).exists(), "the thumbnail moved");
+        assert!(
+            dir.path().join("thumbs").join(&new_key[..2]).join(format!("{new_key}.png")).exists(),
+            "the thumbnail moved"
+        );
         assert!(lib.needing_meta().unwrap().iter().all(|(e, _)| e.path != moved), "nothing to render again");
         let parent: Option<String> = lib
             .conn
@@ -261,7 +275,8 @@ mod tests {
         zip.start_file("orc.stl", zip::write::SimpleFileOptions::default()).unwrap();
         std::io::Write::write_all(&mut zip, b"abc").unwrap();
         zip.finish().unwrap();
-        let mut config = crate::config::Config { library_roots: vec![root.clone(), other.clone()], ..Default::default() };
+        let mut config =
+            crate::config::Config { library_roots: vec![root.clone(), other.clone()], ..Default::default() };
         config.ai.enabled = true;
         config.ai.libraries = [&root, &other]
             .iter()
@@ -278,7 +293,10 @@ mod tests {
         Setup { _dir: dir, root, other, config, lib }
     }
 
-    fn propose(s: &Setup, items: &[(&str, &str)]) -> crate::ai::ToolResult<(crate::ai::proposals::Receipt, Vec<crate::changes::ApplyOp>)> {
+    fn propose(
+        s: &Setup,
+        items: &[(&str, &str)],
+    ) -> crate::ai::ToolResult<(crate::ai::proposals::Receipt, Vec<crate::changes::ApplyOp>)> {
         use crate::ai::proposals::*;
         let cx = crate::ai::Context::new(&s.lib, &s.config, crate::config::AccessClass::Cloud, None)?;
         let mut store = ProposalStore::open_in_memory()?;
@@ -314,10 +332,19 @@ mod tests {
         assert_eq!(receipt.items, 2, "{:?}", receipt.rejected);
         let why: Vec<&str> = receipt.rejected.iter().map(|r| r.why.as_str()).collect();
         assert_eq!(why.len(), 7, "{why:?}");
-        assert!(why[0].contains("there already") && why[1].contains("one library") && why[2].contains("archive"), "{why:?}");
-        assert!(why[3].contains("Windows") && why[4].contains("itself") && why[5].contains("library itself"), "{why:?}");
+        assert!(
+            why[0].contains("there already") && why[1].contains("one library") && why[2].contains("archive"),
+            "{why:?}"
+        );
+        assert!(
+            why[3].contains("Windows") && why[4].contains("itself") && why[5].contains("library itself"),
+            "{why:?}"
+        );
         assert!(why[6].contains("another move"), "{why:?}");
-        assert!(propose(&s, &[("Werkstatt/Kunde/teil.stl", "Werkstatt/Kunde/alt/deckel.stl")]).is_err(), "nothing usable");
+        assert!(
+            propose(&s, &[("Werkstatt/Kunde/teil.stl", "Werkstatt/Kunde/alt/deckel.stl")]).is_err(),
+            "nothing usable"
+        );
         assert!(s.other.read_dir().unwrap().next().is_none(), "suggesting moves nothing");
     }
 
@@ -327,7 +354,10 @@ mod tests {
         let kunde = s.root.join("Kunde");
         let (_, ops) = propose(
             &s,
-            &[("Werkstatt/Kunde/teil.stl", "Werkstatt/Teile/Kunde/teil-oben.stl"), ("Werkstatt/Kunde/alt", "Werkstatt/Archiv/")],
+            &[
+                ("Werkstatt/Kunde/teil.stl", "Werkstatt/Teile/Kunde/teil-oben.stl"),
+                ("Werkstatt/Kunde/alt", "Werkstatt/Archiv/"),
+            ],
         )
         .unwrap();
         let report = s.lib.apply_change("proposal:m", "Aufräumen", &ops).unwrap();
@@ -335,7 +365,8 @@ mod tests {
         let (teil, alt) = (s.root.join("Teile").join("Kunde").join("teil-oben.stl"), s.root.join("Archiv").join("alt"));
         assert!(teil.is_file() && alt.join("deckel.stl").is_file() && !kunde.join("teil.stl").exists());
         assert_eq!(s.lib.entry_of(&alt.join("deckel.stl")).unwrap().map(|e| e.size), Some(3), "the index followed");
-        let row = s.lib.resolve_target(&Target { path: teil.clone(), hash: Some("h-teil".into()), size: 3, mtime_ns: 0 });
+        let row =
+            s.lib.resolve_target(&Target { path: teil.clone(), hash: Some("h-teil".into()), size: 3, mtime_ns: 0 });
         assert_eq!(row.unwrap(), crate::changes::TargetState::Here, "the hash went along");
 
         let undo = s.lib.undo_change(report.id).unwrap();
@@ -371,7 +402,10 @@ mod tests {
         let t = Target { path: a.clone(), hash: None, size: m.len(), mtime_ns: nanos(m.modified().ok()) };
         assert_eq!(check_move(&t, &dir.path().join("c.stl"), false), Ok(()));
         assert_eq!(check_move(&t, &b, false), Err(MoveProblem::Taken));
-        assert_eq!(check_move(&Target { size: 9, ..t.clone() }, &dir.path().join("c.stl"), false), Err(MoveProblem::Gone));
+        assert_eq!(
+            check_move(&Target { size: 9, ..t.clone() }, &dir.path().join("c.stl"), false),
+            Err(MoveProblem::Gone)
+        );
         assert_eq!(check_move(&t, &dir.path().join("c"), true), Err(MoveProblem::Gone), "no folder");
         let deep = dir.path().join("x").join("y");
         assert_eq!(missing_folders(dir.path(), &deep), [dir.path().join("x"), deep.clone()]);

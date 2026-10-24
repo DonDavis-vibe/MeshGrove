@@ -4,9 +4,9 @@
 use std::time::{Duration, SystemTime};
 
 use meshgrove_core::ai::proposals::{self, BatchInfo, Decision, MovePayload, Picked, ProposalKind, ProposalStore};
-use meshgrove_core::moves::MoveProblem;
 use meshgrove_core::ai::snippets::Client;
 use meshgrove_core::changes::TargetState;
+use meshgrove_core::moves::MoveProblem;
 
 use super::{App, View};
 use crate::library::Applied;
@@ -72,7 +72,8 @@ impl App {
             for b in store.batches(None, None, &["pending", "partly"], 100).unwrap_or_default() {
                 let mut items = Vec::new();
                 for proposal in store.proposals(b.id).unwrap_or_default().into_iter().filter(|p| p.state == "pending") {
-                    let (mut entry, mut moved_to, mut stale, mut copies, mut note_before) = (None, None, false, 0, None);
+                    let (mut entry, mut moved_to, mut stale, mut copies, mut note_before) =
+                        (None, None, false, 0, None);
                     let mut taken = false;
                     if proposal.kind == ProposalKind::Move {
                         // A move works on the place it names, not on the content.
@@ -208,7 +209,9 @@ impl App {
 /// "Claude Desktop · lokal", "Chat · Cloud"
 fn source_label(b: &BatchInfo) -> String {
     let who = match (b.source.as_str(), b.client.as_deref()) {
-        (_, Some(id)) => Client::ALL.into_iter().find(|c| c.id() == id).map_or_else(|| id.to_owned(), |c| c.name().to_owned()),
+        (_, Some(id)) => {
+            Client::ALL.into_iter().find(|c| c.id() == id).map_or_else(|| id.to_owned(), |c| c.name().to_owned())
+        }
         ("chat", None) => t!("review.source_chat").into_owned(),
         _ => t!("review.source_assistant").into_owned(),
     };

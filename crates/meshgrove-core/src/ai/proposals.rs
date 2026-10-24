@@ -337,7 +337,9 @@ impl ProposalStore {
 
     /// Batches waiting for a decision.
     pub fn pending_count(&self) -> ToolResult<usize> {
-        let n: i64 = self.conn.query_row("SELECT COUNT(*) FROM batches WHERE state IN ('pending', 'partly')", [], |r| r.get(0))?;
+        let n: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM batches WHERE state IN ('pending', 'partly')", [], |r| r.get(0))?;
         Ok(n as usize)
     }
 
@@ -453,14 +455,16 @@ impl ProposalStore {
     /// library's journal shows it was applied).
     pub fn set_batch_state(&mut self, batch_id: i64, state: &str) -> ToolResult<()> {
         let now = nanos(Some(SystemTime::now()));
-        self.conn.execute("UPDATE batches SET state = ?2, decided_ns = ?3 WHERE id = ?1", params![batch_id, state, now])?;
+        self.conn
+            .execute("UPDATE batches SET state = ?2, decided_ns = ?3 WHERE id = ?1", params![batch_id, state, now])?;
         Ok(())
     }
 
     /// An accepted batch was taken back again.
     pub fn mark_undone(&mut self, batch_id: i64) -> ToolResult<()> {
         let now = nanos(Some(SystemTime::now()));
-        self.conn.execute("UPDATE batches SET state = 'undone', decided_ns = ?2 WHERE id = ?1", params![batch_id, now])?;
+        self.conn
+            .execute("UPDATE batches SET state = 'undone', decided_ns = ?2 WHERE id = ?1", params![batch_id, now])?;
         Ok(())
     }
 
@@ -538,10 +542,8 @@ pub struct StoredMessage {
 impl ProposalStore {
     pub fn create_chat(&mut self, title: &str) -> ToolResult<i64> {
         let now = nanos(Some(SystemTime::now()));
-        self.conn.execute(
-            "INSERT INTO chats (title, created_ns, updated_ns) VALUES (?1, ?2, ?2)",
-            params![title, now],
-        )?;
+        self.conn
+            .execute("INSERT INTO chats (title, created_ns, updated_ns) VALUES (?1, ?2, ?2)", params![title, now])?;
         Ok(self.conn.last_insert_rowid())
     }
 
@@ -557,14 +559,17 @@ impl ProposalStore {
 
     /// The newest conversations first.
     pub fn chats(&self, limit: usize) -> ToolResult<Vec<ChatInfo>> {
-        let mut stmt = self.conn.prepare("SELECT id, title, updated_ns FROM chats ORDER BY updated_ns DESC, id DESC LIMIT ?1")?;
-        let rows = stmt.query_map([limit as i64], |r| Ok(ChatInfo { id: r.get(0)?, title: r.get(1)?, updated_ns: r.get(2)? }))?;
+        let mut stmt =
+            self.conn.prepare("SELECT id, title, updated_ns FROM chats ORDER BY updated_ns DESC, id DESC LIMIT ?1")?;
+        let rows = stmt
+            .query_map([limit as i64], |r| Ok(ChatInfo { id: r.get(0)?, title: r.get(1)?, updated_ns: r.get(2)? }))?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
     pub fn messages(&self, chat: i64) -> ToolResult<Vec<StoredMessage>> {
-        let mut stmt =
-            self.conn.prepare("SELECT id, role, content, created_ns FROM chat_messages WHERE chat_id = ?1 ORDER BY id")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, role, content, created_ns FROM chat_messages WHERE chat_id = ?1 ORDER BY id")?;
         let rows = stmt.query_map([chat], |r| {
             let content: String = r.get(2)?;
             Ok(StoredMessage {
@@ -829,7 +834,12 @@ fn summary_line(text: Option<&str>) -> Option<String> {
     text.map(|t| super::untrusted(t.trim(), 200)).filter(|t| !t.is_empty())
 }
 
-pub fn propose_tags(cx: &Context, store: &mut ProposalStore, origin: &Origin, req: &ProposeTags) -> ToolResult<Receipt> {
+pub fn propose_tags(
+    cx: &Context,
+    store: &mut ProposalStore,
+    origin: &Origin,
+    req: &ProposeTags,
+) -> ToolResult<Receipt> {
     check_room(store, origin, req.items.len())?;
     let vocab = vocabulary(cx)?;
     let mut proposals = Vec::new();
@@ -849,7 +859,8 @@ pub fn propose_tags(cx: &Context, store: &mut ProposalStore, origin: &Origin, re
             continue;
         }
         if item.add.len() > MAX_TAGS_PER_FILE {
-            rejected.push(RejectedItem { id: item.id.clone(), why: format!("at most {MAX_TAGS_PER_FILE} tags per file") });
+            rejected
+                .push(RejectedItem { id: item.id.clone(), why: format!("at most {MAX_TAGS_PER_FILE} tags per file") });
             continue;
         }
         let mut add: Vec<TagOut> = Vec::new();
@@ -895,7 +906,12 @@ pub fn propose_tags(cx: &Context, store: &mut ProposalStore, origin: &Origin, re
     Ok(Receipt { batch: uid, items: proposals.len(), rejected, tags, message })
 }
 
-pub fn propose_note(cx: &Context, store: &mut ProposalStore, origin: &Origin, req: &ProposeNote) -> ToolResult<Receipt> {
+pub fn propose_note(
+    cx: &Context,
+    store: &mut ProposalStore,
+    origin: &Origin,
+    req: &ProposeNote,
+) -> ToolResult<Receipt> {
     check_room(store, origin, req.items.len())?;
     let mut proposals = Vec::new();
     let mut rejected = Vec::new();
@@ -925,7 +941,12 @@ pub fn propose_note(cx: &Context, store: &mut ProposalStore, origin: &Origin, re
     Ok(Receipt { batch: uid, items: proposals.len(), rejected, tags: Vec::new(), message: WAITING.into() })
 }
 
-pub fn propose_list(cx: &Context, store: &mut ProposalStore, origin: &Origin, req: &ProposeList) -> ToolResult<Receipt> {
+pub fn propose_list(
+    cx: &Context,
+    store: &mut ProposalStore,
+    origin: &Origin,
+    req: &ProposeList,
+) -> ToolResult<Receipt> {
     check_room(store, origin, req.items.len())?;
     let name = req.name.trim();
     if name.is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
@@ -975,7 +996,12 @@ pub fn propose_list(cx: &Context, store: &mut ProposalStore, origin: &Origin, re
 /// and add `to`.
 /// Moves and renames, checked now and again when accepted: within one library, never onto
 /// anything, nothing inside an archive, names that work on every system.
-pub fn propose_moves(cx: &Context, store: &mut ProposalStore, origin: &Origin, req: &ProposeMoves) -> ToolResult<Receipt> {
+pub fn propose_moves(
+    cx: &Context,
+    store: &mut ProposalStore,
+    origin: &Origin,
+    req: &ProposeMoves,
+) -> ToolResult<Receipt> {
     check_room(store, origin, req.items.len())?;
     let mut proposals = Vec::new();
     let mut rejected = Vec::new();
@@ -1007,7 +1033,12 @@ pub fn propose_moves(cx: &Context, store: &mut ProposalStore, origin: &Origin, r
 }
 
 /// One move, checked; `targets` and `sources` are those of the batch so far.
-fn move_of(cx: &Context, item: &MoveItem, targets: &[PathBuf], sources: &[PathBuf]) -> Result<(Target, MovePayload), String> {
+fn move_of(
+    cx: &Context,
+    item: &MoveItem,
+    targets: &[PathBuf],
+    sources: &[PathBuf],
+) -> Result<(Target, MovePayload), String> {
     let from = cx.resolve(&item.id).map_err(|e| e.to_string())?;
     let root = cx.scope.root_of(&from).map(|r| r.path.clone()).ok_or_else(|| format!("unknown id: {}", item.id))?;
     if from == root {
@@ -1050,7 +1081,8 @@ fn move_of(cx: &Context, item: &MoveItem, targets: &[PathBuf], sources: &[PathBu
     if sources.iter().any(|s| from.starts_with(s) || s.starts_with(&from)) {
         return Err("it moves with a folder of this batch already".into());
     }
-    let (size, mtime_ns) = if folder { (0, nanos(meta.modified().ok())) } else { (meta.len(), nanos(meta.modified().ok())) };
+    let (size, mtime_ns) =
+        if folder { (0, nanos(meta.modified().ok())) } else { (meta.len(), nanos(meta.modified().ok())) };
     // The content, when the index knows the file as it is.
     let hash = cx
         .lib
@@ -1083,11 +1115,19 @@ pub fn propose_tag_merge(
         };
         let mut cursor = None;
         loop {
-            let page = super::read::search_models(cx, &super::types::ModelFilter { cursor: cursor.clone(), ..filter.clone() })?;
+            let page = super::read::search_models(
+                cx,
+                &super::types::ModelFilter { cursor: cursor.clone(), ..filter.clone() },
+            )?;
             for m in page.items {
                 match items.iter_mut().find(|i| i.id == m.id) {
                     Some(i) => i.remove.push(from.clone()),
-                    None => items.push(TagItem { id: m.id, add: vec![req.to.clone()], remove: vec![from.clone()], reason: None }),
+                    None => items.push(TagItem {
+                        id: m.id,
+                        add: vec![req.to.clone()],
+                        remove: vec![from.clone()],
+                        reason: None,
+                    }),
                 }
             }
             match page.next_cursor {

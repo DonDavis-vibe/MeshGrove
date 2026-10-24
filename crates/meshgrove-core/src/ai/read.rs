@@ -268,7 +268,8 @@ fn filter_sql(cx: &Context, f: &ModelFilter, args: &mut Vec<String>) -> ToolResu
         sql += &format!(" AND (f.content_hash IS NULL OR f.content_hash NOT IN ({}))", tag_in(&f.tags_none, args));
     }
     if let Some(alias) = &f.library {
-        let root = cx.scope.roots().iter().find(|r| r.alias == *alias).ok_or_else(|| ToolError::UnknownId(alias.clone()))?;
+        let root =
+            cx.scope.roots().iter().find(|r| r.alias == *alias).ok_or_else(|| ToolError::UnknownId(alias.clone()))?;
         sql += &format!(" AND {}", below_sql("d.path", &root.path, args));
     }
     if let Some(folder) = &f.folder {
@@ -397,7 +398,11 @@ pub fn get_model(cx: &Context, id: &str, include_thumbnail: bool) -> ToolResult<
     let detail = ModelDetail {
         summary,
         path: path.display().to_string(),
-        modified_unix: row.entry.modified.and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64),
+        modified_unix: row
+            .entry
+            .modified
+            .and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64),
         content_hash: row.hash.clone(),
         title: meta.title,
         designer: meta.designer,
@@ -441,7 +446,8 @@ pub fn get_thumbnails(cx: &Context, ids: &[String], size: u32) -> ToolResult<(Pi
     let size = size.clamp(64, 384);
     let (mut images, mut denied) = (Vec::new(), Vec::new());
     for id in ids {
-        let picture = row_for(cx, id).ok().filter(|(p, _)| cx.scope.images_allowed(p)).and_then(|(_, r)| thumbnail(cx, &r));
+        let picture =
+            row_for(cx, id).ok().filter(|(p, _)| cx.scope.images_allowed(p)).and_then(|(_, r)| thumbnail(cx, &r));
         match picture {
             Some(t) => images.push((id.clone(), png(&t.image, size))),
             None => denied.push(id.clone()),
@@ -484,15 +490,10 @@ pub fn folder_summary(cx: &Context, id: &str) -> ToolResult<FolderSummary> {
         &format!("{within} AND f.content_hash IN (SELECT content_hash FROM inbox WHERE done_ns IS NULL)"),
         &args,
     )?;
-    let subfolders = cx
-        .lib
-        .child_dirs(&path)
-        .into_iter()
-        .filter(|p| cx.scope.allows(p))
-        .take(100)
-        .map(|p| cx.id_of(&p))
-        .collect();
-    let sample = search_models(cx, &ModelFilter { folder: Some(id.to_owned()), limit: Some(20), ..Default::default() })?.items;
+    let subfolders =
+        cx.lib.child_dirs(&path).into_iter().filter(|p| cx.scope.allows(p)).take(100).map(|p| cx.id_of(&p)).collect();
+    let sample =
+        search_models(cx, &ModelFilter { folder: Some(id.to_owned()), limit: Some(20), ..Default::default() })?.items;
     Ok(FolderSummary {
         id: cx.id_of(&path),
         files,
@@ -603,7 +604,13 @@ pub fn get_list(cx: &Context, name: &str) -> ToolResult<ListDetail> {
     let list = match found {
         Some(list) => list,
         // The favourites exist once the first file is starred; until then they are empty.
-        None if favorites => return Ok(ListDetail { name: "favorites".into(), kind: ListKind::Favorites.as_str().to_owned(), items: Vec::new() }),
+        None if favorites => {
+            return Ok(ListDetail {
+                name: "favorites".into(),
+                kind: ListKind::Favorites.as_str().to_owned(),
+                items: Vec::new(),
+            });
+        }
         None => return Err(ToolError::Invalid(format!("no list called {wanted:?} (list_lists shows them)"))),
     };
     let facts = Facts::load(cx.lib)?;
@@ -625,7 +632,13 @@ pub fn get_list(cx: &Context, name: &str) -> ToolResult<ListDetail> {
 pub fn find_duplicates(cx: &Context, library: Option<&str>, limit: usize) -> ToolResult<Vec<DuplicateOut>> {
     let root = match library {
         Some(alias) => Some(
-            cx.scope.roots().iter().find(|r| r.alias == alias).ok_or_else(|| ToolError::UnknownId(alias.to_owned()))?.path.clone(),
+            cx.scope
+                .roots()
+                .iter()
+                .find(|r| r.alias == alias)
+                .ok_or_else(|| ToolError::UnknownId(alias.to_owned()))?
+                .path
+                .clone(),
         ),
         None => None,
     };
@@ -662,8 +675,11 @@ pub fn find_folders(cx: &Context, needle: &str, limit: usize) -> ToolResult<Vec<
         limit * 4
     );
     let mut stmt = cx.lib.conn.prepare(&sql)?;
-    let paths: Vec<std::path::PathBuf> =
-        stmt.query_map(params_from_iter(&args), |r| r.get::<_, String>(0))?.filter_map(Result::ok).map(Into::into).collect();
+    let paths: Vec<std::path::PathBuf> = stmt
+        .query_map(params_from_iter(&args), |r| r.get::<_, String>(0))?
+        .filter_map(Result::ok)
+        .map(Into::into)
+        .collect();
     let needle = needle.to_lowercase();
     // Only where the name itself matches, not a folder above it.
     Ok(paths
@@ -694,7 +710,12 @@ pub fn check_printability(cx: &Context, ids: &[String]) -> ToolResult<Vec<CheckO
     let mut out = Vec::new();
     for id in ids {
         let Ok((_, row)) = row_for(cx, id) else {
-            out.push(CheckOut { id: id.clone(), checks: None, problems: vec!["unknown_id".into()], fit_per_printer: Vec::new() });
+            out.push(CheckOut {
+                id: id.clone(),
+                checks: None,
+                problems: vec!["unknown_id".into()],
+                fit_per_printer: Vec::new(),
+            });
             continue;
         };
         let checks = row.hash.as_deref().map(|h| cx.lib.checks_by_hash(h)).transpose()?.flatten();

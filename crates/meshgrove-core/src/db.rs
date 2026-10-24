@@ -345,7 +345,15 @@ impl Library {
                     }
                     None => {
                         let search = format!("{}\n{rel}", f.name.to_lowercase());
-                        insert.execute(params![dir_id, f.name, f.kind.as_str(), f.size as i64, mtime, search, added])?;
+                        insert.execute(params![
+                            dir_id,
+                            f.name,
+                            f.kind.as_str(),
+                            f.size as i64,
+                            mtime,
+                            search,
+                            added
+                        ])?;
                         changed = true;
                     }
                 }
@@ -558,7 +566,8 @@ impl Library {
             } else {
                 ""
             };
-            let fits_none = if self.printers.is_empty() { "" } else { "OR NOT mg_fits_any(f.size_x, f.size_y, f.size_z)" };
+            let fits_none =
+                if self.printers.is_empty() { "" } else { "OR NOT mg_fits_any(f.size_x, f.size_y, f.size_z)" };
             let problem = format!(
                 " AND f.kind IN ({MODEL_KINDS}) AND (
                      f.content_hash IN (SELECT content_hash FROM mesh_checks WHERE flags != 0 AND version = {CHECKS_VERSION})
@@ -1340,7 +1349,8 @@ mod tests {
     fn printers_filter_what_fits_on_them() {
         let mut lib = Library::open_in_memory().unwrap();
         let r = Path::new("/r");
-        let files = ["mittel.stl", "riesig.stl", "stab.stl", "s1.gcode", "mini.gcode", "neu.stl"].map(|n| file("/r", n, 1, 1));
+        let files =
+            ["mittel.stl", "riesig.stl", "stab.stl", "s1.gcode", "mini.gcode", "neu.stl"].map(|n| file("/r", n, 1, 1));
         lib.update_dir(r, r, 1, &files, &[]).unwrap();
         for (name, size, sliced_for) in [
             ("mittel.stl", [170.0, 170.0, 10.0], None),
@@ -1359,7 +1369,8 @@ mod tests {
         assert!(search(&lib, "is:zugross").is_empty(), "no printers: nothing is too big");
         assert!(search(&lib, "passt:a1").is_empty(), "unknown printer matches nothing");
 
-        let printer = |name: &str, side: f32| Printer::from(printer::Bed { name: name.into(), x: side, y: side, z: side });
+        let printer =
+            |name: &str, side: f32| Printer::from(printer::Bed { name: name.into(), x: side, y: side, z: side });
         lib.set_printers(&[printer("Anycubic Kobra S1", 250.0), printer("Bambu Lab A1 mini", 180.0)]).unwrap();
         assert_eq!(search(&lib, r#"passt:"Kobra S1""#), ["mittel.stl", "s1.gcode", "stab.stl"], "diagonal rod fits");
         assert_eq!(search(&lib, "passt:mini"), ["mini.gcode", "mittel.stl"]);

@@ -459,7 +459,9 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
     let in_library = |tag: &str| ed.all.iter().any(|(t, _)| t.eq_ignore_ascii_case(tag));
     let mut all: Vec<Candidate<bool>> = ed
         .ai
-        .map(|(tags, _)| tags.iter().filter(|t| !on_all(t)).map(|t| candidate(t.clone(), in_library(t), true)).collect())
+        .map(|(tags, _)| {
+            tags.iter().filter(|t| !on_all(t)).map(|t| candidate(t.clone(), in_library(t), true)).collect()
+        })
         .unwrap_or_default();
     let from_ai = all.len();
     if !needle.is_empty() || ed.idle_chips {

@@ -35,11 +35,7 @@ pub struct Job {
 
 pub enum ThumbResult {
     /// `image` is `None` for background jobs.
-    Ready {
-        job: Job,
-        image: Option<egui::ColorImage>,
-        meta: ThumbMeta,
-    },
+    Ready { job: Job, image: Option<egui::ColorImage>, meta: ThumbMeta },
     Failed {
         job: Job,
         error: String,

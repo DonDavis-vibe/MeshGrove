@@ -68,43 +68,51 @@ pub fn show(
         ui.weak(t!("inbox.explain"));
         ui.add_space(8.0);
         for (n, group) in groups.iter().enumerate() {
-            let warned: Vec<bool> =
-                group.range.clone().map(|i| check_flag(gallery, &entries[i], i)).collect();
+            let warned: Vec<bool> = group.range.clone().map(|i| check_flag(gallery, &entries[i], i)).collect();
             let problems = warned.iter().filter(|w| **w).count();
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 // The button first, so a long folder name is shortened instead of hiding it.
-                ui.horizontal(|ui| ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(t!("inbox.done")).on_hover_text(t!("inbox.done_hint")).clicked() {
-                        action = Some(InboxAction::Done(group.range.clone().collect()));
-                    }
-                    if ai && ui.button(t!("actions.classify")).on_hover_text(t!("actions.classify_hint")).clicked() {
-                        action = Some(InboxAction::Classify(Some(n)));
-                    }
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        let icon = if group.archive { "📦" } else { "📁" };
-                        let title = RichText::new(format!("{icon} {}", group.title)).strong();
-                        ui.add(egui::Label::new(title).truncate()).on_hover_text(&group.title);
-                        let mut facts = vec![t!("inbox.new", count = group.range.len()).into_owned()];
-                        if group.known > 0 {
-                            facts.push(t!("inbox.known", count = group.known).into_owned());
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(t!("inbox.done")).on_hover_text(t!("inbox.done_hint")).clicked() {
+                            action = Some(InboxAction::Done(group.range.clone().collect()));
                         }
-                        if let Some(t) = group.newest {
-                            facts.push(t!("inbox.since", time = i18n::datetime(t)).into_owned());
+                        if ai && ui.button(t!("actions.classify")).on_hover_text(t!("actions.classify_hint")).clicked()
+                        {
+                            action = Some(InboxAction::Classify(Some(n)));
                         }
-                        let facts = RichText::new(facts.join(" · ")).weak();
-                        ui.add(egui::Label::new(facts).truncate()).on_hover_text(t!("inbox.known_hint"));
-                        if problems > 0 {
-                            let text = RichText::new(format!("⚠ {}", t!("inbox.problems", count = problems)))
-                                .color(ui.visuals().warn_fg_color);
-                            ui.add(egui::Label::new(text).truncate());
-                        }
-                    });
-                }));
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            let icon = if group.archive { "📦" } else { "📁" };
+                            let title = RichText::new(format!("{icon} {}", group.title)).strong();
+                            ui.add(egui::Label::new(title).truncate()).on_hover_text(&group.title);
+                            let mut facts = vec![t!("inbox.new", count = group.range.len()).into_owned()];
+                            if group.known > 0 {
+                                facts.push(t!("inbox.known", count = group.known).into_owned());
+                            }
+                            if let Some(t) = group.newest {
+                                facts.push(t!("inbox.since", time = i18n::datetime(t)).into_owned());
+                            }
+                            let facts = RichText::new(facts.join(" · ")).weak();
+                            ui.add(egui::Label::new(facts).truncate()).on_hover_text(t!("inbox.known_hint"));
+                            if problems > 0 {
+                                let text = RichText::new(format!("⚠ {}", t!("inbox.problems", count = problems)))
+                                    .color(ui.visuals().warn_fg_color);
+                                ui.add(egui::Label::new(text).truncate());
+                            }
+                        });
+                    })
+                });
                 ui.horizontal_wrapped(|ui| {
                     for (i, warn) in group.range.clone().zip(warned) {
-                        let (response, click) =
-                            tile(ui, &entries[i], gallery.thumb(i), (None, warn), gallery.selected == Some(i), TILE_WIDTH);
+                        let (response, click) = tile(
+                            ui,
+                            &entries[i],
+                            gallery.thumb(i),
+                            (None, warn),
+                            gallery.selected == Some(i),
+                            TILE_WIDTH,
+                        );
                         match click {
                             Some(TileClick::Select) => action = Some(InboxAction::Select(i)),
                             Some(TileClick::Open) => action = Some(InboxAction::Open(i)),

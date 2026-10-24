@@ -73,7 +73,9 @@ impl ScreenshotHook {
             clicks,
             next_click: 0,
             release: None,
-            typing: std::env::var("MESHGROVE_TYPE").map(|s| s.split('|').map(str::to_owned).collect()).unwrap_or_default(),
+            typing: std::env::var("MESHGROVE_TYPE")
+                .map(|s| s.split('|').map(str::to_owned).collect())
+                .unwrap_or_default(),
             typed_at: 0.0,
             started: Instant::now(),
             pressed: false,
@@ -133,7 +135,12 @@ impl ScreenshotHook {
             )
         });
         let t = self.started.elapsed().as_secs_f32();
-        let press = |pos, button, pressed| egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::NONE };
+        let press = |pos, button, pressed| egui::Event::PointerButton {
+            pos,
+            button,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
         let button = |pos, pressed| press(pos, egui::PointerButton::Primary, pressed);
         if let Some((pos, which)) = self.release.take() {
             raw.events.push(press(pos, which, false));

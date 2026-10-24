@@ -61,7 +61,10 @@ pub enum SettingsChange {
     /// The user's own endpoint (`None`: none).
     Endpoint(Option<meshgrove_core::config::EndpointConfig>),
     /// Keeps the endpoint's key in the keyring.
-    EndpointKey { url: String, key: String },
+    EndpointKey {
+        url: String,
+        key: String,
+    },
     ShowAiReview,
     ShowAiHistory,
     /// Tags in colour; tags on the tiles, how many and how.
@@ -569,7 +572,13 @@ impl SettingsDialog {
                                 Category::ModelsUnits => &[Section::Models, Section::Units],
                                 Category::Programs => &[Section::Slicer, Section::Editor],
                                 Category::Printer => &[Section::Printer],
-                                Category::Ai => &[Section::Ai, Section::AiLibraries, Section::Mcp, Section::Endpoint, Section::AiLog],
+                                Category::Ai => &[
+                                    Section::Ai,
+                                    Section::AiLibraries,
+                                    Section::Mcp,
+                                    Section::Endpoint,
+                                    Section::AiLog,
+                                ],
                                 Category::Data => &[Section::UserData, Section::Storage],
                                 Category::About => {
                                     about(ui, &info);

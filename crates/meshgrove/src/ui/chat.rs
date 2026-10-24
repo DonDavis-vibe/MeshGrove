@@ -106,8 +106,10 @@ pub fn show(
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut mode = view.mode;
-            ui.selectable_value(&mut mode, ChatMode::Auto, t!("chat.mode_auto")).on_hover_text(t!("chat.mode_auto_hint"));
-            ui.selectable_value(&mut mode, ChatMode::Review, t!("chat.mode_review")).on_hover_text(t!("chat.mode_review_hint"));
+            ui.selectable_value(&mut mode, ChatMode::Auto, t!("chat.mode_auto"))
+                .on_hover_text(t!("chat.mode_auto_hint"));
+            ui.selectable_value(&mut mode, ChatMode::Review, t!("chat.mode_review"))
+                .on_hover_text(t!("chat.mode_review_hint"));
             if mode != view.mode {
                 action = Some(ChatAction::Mode(mode));
             }
@@ -125,7 +127,11 @@ pub fn show(
                     if ui.button("⏹").on_hover_text(t!("chat.stop")).clicked() {
                         action = Some(ChatAction::Stop);
                     }
-                } else if ui.add_enabled(!input.is_empty(), egui::Button::new("➤")).on_hover_text(t!("chat.send")).clicked() {
+                } else if ui
+                    .add_enabled(!input.is_empty(), egui::Button::new("➤"))
+                    .on_hover_text(t!("chat.send"))
+                    .clicked()
+                {
                     action = Some(ChatAction::Send);
                 }
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -270,7 +276,13 @@ fn user_text(ui: &mut Ui, m: &ChatMsg) {
             if let Some(p) = m.pills.get(n) {
                 let fill = ui.visuals().selection.bg_fill.linear_multiply(0.6);
                 let text = RichText::new(format!("@{}", p.label)).small().color(ui.visuals().strong_text_color());
-                ui.add(egui::Button::new(text).fill(fill).stroke(egui::Stroke::NONE).corner_radius(8.0).sense(egui::Sense::hover()));
+                ui.add(
+                    egui::Button::new(text)
+                        .fill(fill)
+                        .stroke(egui::Stroke::NONE)
+                        .corner_radius(8.0)
+                        .sense(egui::Sense::hover()),
+                );
             }
             rest = &rest[start + end + 2..];
         }
@@ -310,7 +322,8 @@ mod tests {
     fn references_in_answers_become_names() {
         let names = |id: &str| id.rsplit('/').next().unwrap_or(id).to_owned();
         let mut ids = Vec::new();
-        let text = with_references("Nimm [[Garten/rose.stl]] und [[ Garten/rose.stl ]], nicht [[ref:0]].", &names, &mut ids);
+        let text =
+            with_references("Nimm [[Garten/rose.stl]] und [[ Garten/rose.stl ]], nicht [[ref:0]].", &names, &mut ids);
         assert_eq!(text, "Nimm **rose.stl** und **rose.stl**, nicht [[ref:0]].");
         assert_eq!(ids, ["Garten/rose.stl"]);
     }

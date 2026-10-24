@@ -41,9 +41,7 @@ pub fn forget(base_url: &str) {
 /// The key for the endpoint: keyring (when kept there), the environment variable, the session.
 pub fn load(base_url: &str, in_keyring: bool, env: &str) -> Option<String> {
     let account = account(base_url);
-    if in_keyring
-        && let Ok(key) = keyring::Entry::new(SERVICE, &account).and_then(|e| e.get_password())
-    {
+    if in_keyring && let Ok(key) = keyring::Entry::new(SERVICE, &account).and_then(|e| e.get_password()) {
         return Some(key);
     }
     if !env.trim().is_empty()

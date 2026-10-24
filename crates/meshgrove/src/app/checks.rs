@@ -32,7 +32,8 @@ impl App {
         while let Some(result) = self.checker.try_recv() {
             self.checks_done.push(result);
         }
-        let flush = self.checks_done.len() >= BATCH || self.checks_flushed.elapsed() >= FLUSH || self.checker.is_empty();
+        let flush =
+            self.checks_done.len() >= BATCH || self.checks_flushed.elapsed() >= FLUSH || self.checker.is_empty();
         if !self.checks_done.is_empty() && flush {
             self.library.store_checks(std::mem::take(&mut self.checks_done));
             self.checks_flushed = Instant::now();

@@ -50,7 +50,8 @@ impl App {
     pub(super) fn suggest_tags(&mut self, paths: Vec<PathBuf>) {
         let files = paths.len();
         let folder = paths.first().and_then(|p| p.parent()).filter(|f| paths.iter().all(|p| p.parent() == Some(*f)));
-        let name = if files == 1 { listing::file_name(&paths[0]) } else { t!("chat.ref_files", count = files).into_owned() };
+        let name =
+            if files == 1 { listing::file_name(&paths[0]) } else { t!("chat.ref_files", count = files).into_owned() };
         let group = TagGroup {
             title: t!("actions.selection_batch", name = name).into_owned(),
             folder: folder.map(Path::to_path_buf),
@@ -58,7 +59,8 @@ impl App {
         };
         let title = t!("actions.selection_chat", name = name, date = i18n::date(SystemTime::now())).into_owned();
         let user_text = t!("actions.selection_text", name = name).into_owned();
-        let llm = format!("(One-click action) Suggest tags for {files} selected files; the suggestions wait in the review.");
+        let llm =
+            format!("(One-click action) Suggest tags for {files} selected files; the suggestions wait in the review.");
         self.start_action(title, user_text, llm, files, Action::Tags { groups: vec![group], inbox_done: false }, false);
     }
 
@@ -80,7 +82,8 @@ impl App {
     /// `meshgrove:<id>` for each file an AI may see, one per line, for the user's assistant.
     pub(super) fn copy_references(&mut self, paths: &[PathBuf], ctx: &egui::Context) {
         let scope = Scope::new(&self.config, AccessClass::Local);
-        let ids: Vec<String> = paths.iter().filter_map(|p| scope.id_of(p)).map(|id| format!("meshgrove:{id}")).collect();
+        let ids: Vec<String> =
+            paths.iter().filter_map(|p| scope.id_of(p)).map(|id| format!("meshgrove:{id}")).collect();
         if ids.is_empty() {
             return;
         }

@@ -251,7 +251,8 @@ impl Sidebar {
                     );
                     let description = self.list_description.trim().to_owned();
                     ui.horizontal(|ui| {
-                        for (print, label) in [(true, t!("actions.list_print")), (false, t!("actions.list_collection"))] {
+                        for (print, label) in [(true, t!("actions.list_print")), (false, t!("actions.list_collection"))]
+                        {
                             if ui.add_enabled(!description.is_empty(), egui::Button::new(label)).clicked() {
                                 *action = Some(SidebarAction::ListFromDescription(description.clone(), print));
                                 self.list_description.clear();

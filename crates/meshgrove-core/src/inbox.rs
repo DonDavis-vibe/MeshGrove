@@ -147,11 +147,9 @@ impl Library {
                 None => {
                     let value: Option<Option<i64>> = self
                         .conn
-                        .query_row(
-                            "SELECT added_ns FROM dirs WHERE path = ?1",
-                            [current.to_string_lossy()],
-                            |r| r.get(0),
-                        )
+                        .query_row("SELECT added_ns FROM dirs WHERE path = ?1", [current.to_string_lossy()], |r| {
+                            r.get(0)
+                        })
                         .optional()?;
                     let is_new = value.flatten().is_some();
                     added.insert(current.to_path_buf(), is_new);

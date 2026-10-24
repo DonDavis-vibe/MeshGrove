@@ -71,9 +71,14 @@ pub fn show(ui: &mut Ui, entries: &[Entry], groups: &[GroupInfo], gallery: &Gall
                     for i in group.range.clone() {
                         let keep = format!("★ {}", t!("dupes.keep"));
                         let badge = (i == group.keep).then_some((keep.as_str(), KEEP_GREEN));
-                        if let (_, Some(a)) =
-                            tile(ui, &entries[i], gallery.thumb(i), (badge, false), gallery.selected == Some(i), TILE_WIDTH)
-                        {
+                        if let (_, Some(a)) = tile(
+                            ui,
+                            &entries[i],
+                            gallery.thumb(i),
+                            (badge, false),
+                            gallery.selected == Some(i),
+                            TILE_WIDTH,
+                        ) {
                             action = Some(match a {
                                 TileClick::Select => DupAction::Select(i),
                                 TileClick::Open => DupAction::Open(i),
@@ -131,7 +136,13 @@ pub(super) fn tile(
         super::icons::corner_badge(&painter, img, label, color, Color32::BLACK);
     }
     if warn {
-        super::icons::bottom_right_badge(&painter, img, "⚠", visuals.warn_fg_color.linear_multiply(0.9), Color32::BLACK);
+        super::icons::bottom_right_badge(
+            &painter,
+            img,
+            "⚠",
+            visuals.warn_fg_color.linear_multiply(0.9),
+            Color32::BLACK,
+        );
     }
     let text = visuals.text_color();
     let weak = visuals.weak_text_color();

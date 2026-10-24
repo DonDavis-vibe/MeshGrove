@@ -43,7 +43,8 @@ impl App {
             Some(InboxAction::Select(i)) => self.gallery.select(Some(i)),
             Some(InboxAction::Open(i)) => self.open_entry(i),
             Some(InboxAction::Done(indices)) => {
-                let paths: Vec<PathBuf> = indices.iter().filter_map(|&i| entries.get(i)).map(|e| e.path.clone()).collect();
+                let paths: Vec<PathBuf> =
+                    indices.iter().filter_map(|&i| entries.get(i)).map(|e| e.path.clone()).collect();
                 self.library.inbox_done(Some(paths));
             }
             Some(InboxAction::AllDone) => self.library.inbox_done(None),

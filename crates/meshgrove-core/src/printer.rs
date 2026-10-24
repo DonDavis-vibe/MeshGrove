@@ -44,7 +44,15 @@ impl Printer {
 
 impl From<Bed> for Printer {
     fn from(bed: Bed) -> Printer {
-        Printer { name: bed.name, x: bed.x, y: bed.y, z: bed.z, nozzle: None, materials: Vec::new(), gcode_names: Vec::new() }
+        Printer {
+            name: bed.name,
+            x: bed.x,
+            y: bed.y,
+            z: bed.z,
+            nozzle: None,
+            materials: Vec::new(),
+            gcode_names: Vec::new(),
+        }
     }
 }
 

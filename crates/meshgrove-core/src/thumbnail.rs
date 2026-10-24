@@ -124,8 +124,8 @@ pub fn make(
 
 fn mesh_meta(kind: Kind, mesh: &Mesh, bytes: &[u8]) -> ThumbMeta {
     // Larger meshes are checked later, in the background, so the thumbnail is not held up.
-    let checks = (checks::checked(kind) && mesh.triangle_count() <= checks::INLINE_LIMIT)
-        .then(|| Box::new(checks::check(mesh)));
+    let checks =
+        (checks::checked(kind) && mesh.triangle_count() <= checks::INLINE_LIMIT).then(|| Box::new(checks::check(mesh)));
     ThumbMeta {
         triangles: Some(mesh.triangle_count()),
         size_mm: mesh.bounds().map(|b| b.size().to_array()),

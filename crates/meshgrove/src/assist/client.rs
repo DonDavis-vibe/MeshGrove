@@ -163,7 +163,11 @@ impl Endpoint {
                 return Err(ClientError::Cancelled);
             }
             let line = line.map_err(|e| {
-                if e.kind() == std::io::ErrorKind::TimedOut { ClientError::Timeout } else { ClientError::Network(e.to_string()) }
+                if e.kind() == std::io::ErrorKind::TimedOut {
+                    ClientError::Timeout
+                } else {
+                    ClientError::Network(e.to_string())
+                }
             })?;
             let Some(data) = line.strip_prefix("data:").map(str::trim) else { continue };
             if data == "[DONE]" {
@@ -292,7 +296,11 @@ pub mod tests {
                     if let Some(end) = text.find("\r\n\r\n") {
                         let length = text
                             .lines()
-                            .find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                            .find_map(|l| {
+                                l.to_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
                             .unwrap_or(0);
                         if request.len() >= end + 4 + length || n == 0 {
                             break;
@@ -334,10 +342,18 @@ pub mod tests {
         let (url, seen) = serve(vec![(200, "text/event-stream", body)]);
         let mut streamed = String::new();
         let reply = endpoint(&url, Some("geheim"))
-            .chat(&[json!({"role": "user", "content": "Garten?"})], Some(&[json!({"type": "function"})]), &mut |t| streamed.push_str(t), &AtomicBool::new(false))
+            .chat(
+                &[json!({"role": "user", "content": "Garten?"})],
+                Some(&[json!({"type": "function"})]),
+                &mut |t| streamed.push_str(t),
+                &AtomicBool::new(false),
+            )
             .unwrap();
         assert_eq!((reply.text.as_str(), streamed.as_str()), ("Ich suche.", "Ich suche."));
-        assert_eq!(reply.tool_calls, [ToolCall { id: "c1".into(), name: "search_models".into(), arguments: "{\"q\":\"tag:garten\"}".into() }]);
+        assert_eq!(
+            reply.tool_calls,
+            [ToolCall { id: "c1".into(), name: "search_models".into(), arguments: "{\"q\":\"tag:garten\"}".into() }]
+        );
         let request = seen.lock().unwrap()[0].clone();
         assert!(request.contains("authorization: Bearer geheim"), "{request}");
         let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
@@ -367,10 +383,16 @@ pub mod tests {
     #[test]
     fn json_answers_fall_back_to_plainer_formats() {
         let (url, seen) = serve(vec![
-            (400, "application/json", json!({"error": {"message": "response_format json_schema not supported"}}).to_string()),
+            (
+                400,
+                "application/json",
+                json!({"error": {"message": "response_format json_schema not supported"}}).to_string(),
+            ),
             (200, "application/json", json!({"choices": [{"message": {"content": "{\"ok\":true}"}}]}).to_string()),
         ]);
-        let text = endpoint(&url, None).complete_json(&[json!({"role": "user", "content": "x"})], &json!({"type": "object"})).unwrap();
+        let text = endpoint(&url, None)
+            .complete_json(&[json!({"role": "user", "content": "x"})], &json!({"type": "object"}))
+            .unwrap();
         assert_eq!(text, "{\"ok\":true}");
         let requests = seen.lock().unwrap();
         assert!(requests[0].contains("json_schema") && requests[1].contains("json_object"));

@@ -20,25 +20,25 @@ use meshgrove_core::{Kind, query};
 use meshgrove_render::Renderer;
 
 use crate::actions;
+use crate::checker::Checker;
 use crate::folder_scan::FolderScanner;
 use crate::i18n;
 use crate::library::{LibEvent, LibraryService, ListOp, Transfer};
 use crate::meshes::{self, MeshState, MeshStore};
 use crate::nav::{Listing, Navigator};
 use crate::print_export;
-use crate::text_preview::TextPreview;
-use crate::checker::Checker;
 use crate::proposals::ProposalWatcher;
+use crate::text_preview::TextPreview;
 use crate::thumbs::{ThumbResult, ThumbService};
 use crate::ui::details::{
     self, DetailsContext, DetailsOutput, ListsOfSelection, ModelStatus, NoteEditor, PrintInfo, TagEditor,
 };
 use crate::ui::duplicates::{self, DupAction, GroupInfo};
-use crate::ui::inbox::{self as inbox_view, InboxGroupInfo};
-use crate::ui::review::{self as review_view, ReviewBatch};
 use crate::ui::gallery::{Action, Arrange, Gallery, ListSettings, MenuContext};
+use crate::ui::inbox::{self as inbox_view, InboxGroupInfo};
 use crate::ui::layout::{Layout, Pane};
 use crate::ui::model_window::{self, ModelWindow, WindowAction, WindowContext};
+use crate::ui::review::{self as review_view, ReviewBatch};
 use crate::ui::settings::{AppInfo, SettingsChange, SettingsDialog};
 use crate::ui::sidebar::{LibraryInfo, ListExport, Sidebar, SidebarAction};
 use crate::ui::tags::{Group, TagStyle};
@@ -490,7 +490,16 @@ impl App {
 
     fn navigate(&mut self, path: PathBuf) {
         self.leave_search();
-        if path == self.nav.current() && matches!(self.view, View::Duplicates { .. } | View::List { .. } | View::Inbox { .. } | View::Review { .. } | View::History { .. }) {
+        if path == self.nav.current()
+            && matches!(
+                self.view,
+                View::Duplicates { .. }
+                    | View::List { .. }
+                    | View::Inbox { .. }
+                    | View::Review { .. }
+                    | View::History { .. }
+            )
+        {
             // The folder is already read; going "there" means leaving the duplicates or the list.
             self.view = View::Folder;
             self.on_listing_arrived();
@@ -670,7 +679,14 @@ impl App {
         if matches!(self.view, View::Folder) && self.select_after_load.is_none() {
             self.select_after_load = self.selected_entry().map(|e| e.path.clone());
         }
-        if matches!(self.view, View::Duplicates { .. } | View::List { .. } | View::Inbox { .. } | View::Review { .. } | View::History { .. }) {
+        if matches!(
+            self.view,
+            View::Duplicates { .. }
+                | View::List { .. }
+                | View::Inbox { .. }
+                | View::Review { .. }
+                | View::History { .. }
+        ) {
             self.nav.refresh();
         } else {
             self.nav.reload();
@@ -681,7 +697,16 @@ impl App {
         if matches!(self.view, View::Search(_)) {
             return; // the folder changed underneath the results; it is shown when the search ends
         }
-        if self.nav.refreshed() && matches!(self.view, View::Duplicates { .. } | View::List { .. } | View::Inbox { .. } | View::Review { .. } | View::History { .. }) {
+        if self.nav.refreshed()
+            && matches!(
+                self.view,
+                View::Duplicates { .. }
+                    | View::List { .. }
+                    | View::Inbox { .. }
+                    | View::Review { .. }
+                    | View::History { .. }
+            )
+        {
             return; // likewise: only the folder underneath was read again
         }
         if self.flatten {
@@ -1287,8 +1312,10 @@ impl App {
                     {
                         log::warn!("printer search filters: {e}");
                     }
-                    let name =
-                        self.printers.first().map_or_else(|| t!("settings.printer_none").into_owned(), |p| p.name.clone());
+                    let name = self
+                        .printers
+                        .first()
+                        .map_or_else(|| t!("settings.printer_none").into_owned(), |p| p.name.clone());
                     self.toast(t!("toast.printer_set", name = name).into_owned());
                 }
                 SettingsChange::FolderPreviews(fp) => {
@@ -1934,7 +1961,8 @@ impl App {
                 return;
             }
             View::Review { .. } | View::History { .. } => {
-                let title = if matches!(self.view, View::Review { .. }) { t!("review.title") } else { t!("history.title") };
+                let title =
+                    if matches!(self.view, View::Review { .. }) { t!("review.title") } else { t!("history.title") };
                 ui.label(RichText::new(format!("✧ {title}")).strong());
                 if ui.button(t!("search.close")).clicked() {
                     self.view = View::Folder;
@@ -2680,7 +2708,6 @@ fn list_title(list: &ListInfo) -> String {
         _ => list.name.clone(),
     }
 }
-
 
 /// Use the desktop's UI font (Noto Sans on KDE) so the app does not look foreign;
 /// glyphs it lacks still fall back to egui's bundled fonts and the system fallback.

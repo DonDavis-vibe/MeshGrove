@@ -30,7 +30,8 @@ pub struct Vocabulary {
 impl Vocabulary {
     pub fn new(config: &Config, existing: Vec<String>) -> Vocabulary {
         let mut suggested = Vec::new();
-        for (list, group) in [(config.themes(), "theme"), (config.properties(), "property"), (config.states(), "state")] {
+        for (list, group) in [(config.themes(), "theme"), (config.properties(), "property"), (config.states(), "state")]
+        {
             suggested.extend(list.into_iter().map(|t| (t, group)));
         }
         let german = config.language.as_deref().is_none_or(|l| l.starts_with("de"));

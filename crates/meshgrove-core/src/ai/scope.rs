@@ -178,10 +178,8 @@ mod tests {
         let mut c =
             Config { library_roots: libraries.iter().map(|(p, ..)| PathBuf::from(p)).collect(), ..Default::default() };
         c.ai.enabled = true;
-        c.ai.libraries = libraries
-            .iter()
-            .map(|&(p, access, images)| LibraryAi { root: p.into(), access, images })
-            .collect();
+        c.ai.libraries =
+            libraries.iter().map(|&(p, access, images)| LibraryAi { root: p.into(), access, images }).collect();
         c
     }
 
@@ -198,7 +196,10 @@ mod tests {
         assert_eq!(aliases(&cloud), ["eigene"]);
         assert_eq!(aliases(&local), ["eigene", "kunden"]);
         assert!(!local.allows(Path::new("/lib/privat/x.stl")));
-        assert!(cloud.images_allowed(Path::new("/lib/eigene/a.stl")) && !local.images_allowed(Path::new("/lib/kunden/a.stl")));
+        assert!(
+            cloud.images_allowed(Path::new("/lib/eigene/a.stl"))
+                && !local.images_allowed(Path::new("/lib/kunden/a.stl"))
+        );
         let off = Config { ai: crate::config::AiConfig { enabled: false, ..c.ai.clone() }, ..c.clone() };
         assert!(Scope::new(&off, AccessClass::Local).is_empty(), "switched off: nothing");
         let unlisted = Config { library_roots: vec!["/lib/neu".into()], ..c };
@@ -250,7 +251,8 @@ mod tests {
         ] {
             assert!(guess_local(url), "{url}");
         }
-        for url in ["https://api.openai.com/v1", "https://openrouter.ai/api/v1", "http://8.8.8.8", "http://172.32.0.1"] {
+        for url in ["https://api.openai.com/v1", "https://openrouter.ai/api/v1", "http://8.8.8.8", "http://172.32.0.1"]
+        {
             assert!(!guess_local(url), "{url}");
         }
     }

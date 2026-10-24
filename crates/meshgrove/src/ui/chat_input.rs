@@ -17,13 +17,25 @@ use super::suggest::{self, Candidate};
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Reference {
     /// One file, the selection, a drop in the inbox …
-    Files { paths: Vec<PathBuf> },
-    Folder { path: PathBuf },
-    List { name: String },
-    Tag { name: String },
-    Printer { name: String },
+    Files {
+        paths: Vec<PathBuf>,
+    },
+    Folder {
+        path: PathBuf,
+    },
+    List {
+        name: String,
+    },
+    Tag {
+        name: String,
+    },
+    Printer {
+        name: String,
+    },
     /// A search in Meshgrove's syntax.
-    Search { query: String },
+    Search {
+        query: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -237,11 +249,14 @@ pub fn show(
     let dismissed: Option<usize> = ui.data(|d| d.get_temp(id.with("dismissed")));
     let mention = input.mention(cursor).filter(|(r, _)| focused && dismissed != Some(r.start));
     let mut list = mention.as_ref().map(|(_, q)| suggest::rank(q, candidates(q), 8)).unwrap_or_default();
-    let highlighted = suggest::highlight(ui, id.with("pick"), mention.as_ref().map_or("", |m| &m.1), list.len(), focused);
+    let highlighted =
+        suggest::highlight(ui, id.with("pick"), mention.as_ref().map_or("", |m| &m.1), list.len(), focused);
     let mut chosen: Option<usize> = None;
     if focused {
         if mention.is_some() && !list.is_empty() {
-            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter) || i.consume_key(egui::Modifiers::NONE, Key::Tab)) {
+            if ui.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, Key::Enter) || i.consume_key(egui::Modifiers::NONE, Key::Tab)
+            }) {
                 chosen = Some(highlighted.unwrap_or(0));
             }
             if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
@@ -292,9 +307,15 @@ pub fn show(
             background: visuals.selection.bg_fill.linear_multiply(0.6),
             ..Default::default()
         };
-        let mut job = LayoutJob { wrap: egui::text::TextWrapping { max_width: wrap_width, ..Default::default() }, ..Default::default() };
+        let mut job = LayoutJob {
+            wrap: egui::text::TextWrapping { max_width: wrap_width, ..Default::default() },
+            ..Default::default()
+        };
         let mut last = 0;
-        for r in pills.iter().filter(|r| r.end <= text.len() && text.is_char_boundary(r.start) && text.is_char_boundary(r.end)) {
+        for r in pills
+            .iter()
+            .filter(|r| r.end <= text.len() && text.is_char_boundary(r.start) && text.is_char_boundary(r.end))
+        {
             job.append(&text[last..r.start], 0.0, plain.clone());
             job.append(&text[r.clone()], 0.0, pill.clone());
             last = r.end;

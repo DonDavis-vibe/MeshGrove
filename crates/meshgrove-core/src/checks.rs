@@ -201,8 +201,13 @@ pub enum Problem {
     Degenerate(u64),
     ManyTriangles(u64),
     /// Largest side `max_mm`; drawn in inches, it would be `as_inch_mm`.
-    Tiny { max_mm: f32, as_inch_mm: f32 },
-    Huge { max_mm: f32 },
+    Tiny {
+        max_mm: f32,
+        as_inch_mm: f32,
+    },
+    Huge {
+        max_mm: f32,
+    },
     /// Too big for every printer.
     FitsNone,
     Unreadable(String),
@@ -331,10 +336,7 @@ mod tests {
         for (i, t) in nudged.iter_mut().enumerate() {
             t[0][0] += if i % 2 == 0 { 0.00001 } else { 0.0 };
         }
-        let mesh = Mesh {
-            indices: Some((0..nudged.len() as u32 * 3).collect()),
-            ..soup(&nudged)
-        };
+        let mesh = Mesh { indices: Some((0..nudged.len() as u32 * 3).collect()), ..soup(&nudged) };
         let c = check(&mesh);
         assert_eq!((c.open_edges, c.non_manifold_edges, c.shells), (0, 0, 1));
     }
