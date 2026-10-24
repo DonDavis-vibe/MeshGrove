@@ -88,7 +88,7 @@ pub fn snippet(client: Client, exe: &Path, appimage: Option<&Path>, class: Acces
             let mut words = vec!["claude".to_owned(), "mcp".into(), "add".into(), "--scope".into(), "user".into()];
             words.extend(["meshgrove".to_owned(), "--".into(), program]);
             words.extend(args);
-            return words.iter().map(|w| shell_quote(w)).collect::<Vec<_>>().join(" ");
+            return words.iter().map(|w| shell_quote(w, cfg!(windows))).collect::<Vec<_>>().join(" ");
         }
         Client::VsCode => json!({ "servers": { "meshgrove": { "type": "stdio", "command": program, "args": args } } }),
         _ => json!({ "mcpServers": { "meshgrove": { "command": program, "args": args } } }),
@@ -96,10 +96,13 @@ pub fn snippet(client: Client, exe: &Path, appimage: Option<&Path>, class: Acces
     serde_json::to_string_pretty(&value).unwrap_or_default()
 }
 
-/// A word for POSIX shells (and PowerShell, which takes single quotes the same way).
-fn shell_quote(word: &str) -> String {
+/// A word for the shell the command is pasted into: POSIX shells take single quotes; on Windows
+/// cmd does not, so double quotes, which PowerShell takes too (Windows paths hold no `"`).
+fn shell_quote(word: &str, windows: bool) -> String {
     if !word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || "-_./:=@".contains(c)) {
         word.to_owned()
+    } else if windows {
+        format!("\"{word}\"")
     } else {
         format!("'{}'", word.replace('\'', "'\\''"))
     }
@@ -136,10 +139,20 @@ mod tests {
             Some(Path::new("/home/davis/Apps/Meshgrove 0.5.AppImage")),
             AccessClass::Local,
         );
-        assert_eq!(
-            cmd,
-            "claude mcp add --scope user meshgrove -- '/home/davis/Apps/Meshgrove 0.5.AppImage' mcp --local --client claude-code"
-        );
+        let image = if cfg!(windows) {
+            "\"/home/davis/Apps/Meshgrove 0.5.AppImage\""
+        } else {
+            "'/home/davis/Apps/Meshgrove 0.5.AppImage'"
+        };
+        assert_eq!(cmd, format!("claude mcp add --scope user meshgrove -- {image} mcp --local --client claude-code"));
         assert!(Client::ClaudeDesktop.config_files()[0].ends_with("Claude/claude_desktop_config.json"));
+    }
+
+    #[test]
+    fn windows_commands_quote_for_cmd_and_powershell() {
+        let exe = r"C:\Program Files\Meshgrove\meshgrove-mcp.exe";
+        assert_eq!(shell_quote(exe, true), format!("\"{exe}\""));
+        assert_eq!(shell_quote("--local", true), "--local");
+        assert_eq!(shell_quote("it's", false), r"'it'\''s'");
     }
 }

@@ -829,7 +829,7 @@ exact paths on your system.
 | Settings (`config.toml`) and pane layout (`layout.json`) | `~/.config/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Library index (`library.db`) and `backups/` | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | AI suggestions and access log (`proposals.db`, only once an assistant was used) | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
-| Cache: previews, STEP meshes, extracted archive files | `~/.cache/meshgrove/` | `%LOCALAPPDATA%\meshgrove\` | `~/Library/Caches/meshgrove/` |
+| Cache: previews, STEP meshes, extracted archive files, the log (`meshgrove.log`) | `~/.cache/meshgrove/` | `%LOCALAPPDATA%\meshgrove\` | `~/Library/Caches/meshgrove/` |
 | Exported pictures | `~/Pictures/Meshgrove` (localised, e.g. `~/Bilder`) | `Pictures\Meshgrove` | `~/Pictures/Meshgrove` |
 | Exported print lists (PDF, CSV), tags and notes | Documents folder | Documents folder | Documents folder |
 
@@ -920,7 +920,7 @@ Environment variables for special cases:
 | Variable | Effect |
 |---|---|
 | `WGPU_BACKEND=gl` (or `vulkan`, `dx12`, `metal`) | Choose the graphics backend, e.g. if the window stays black |
-| `RUST_LOG=meshgrove=debug` | More log output on the terminal |
+| `RUST_LOG=meshgrove=debug` | More log output (on the terminal and in `meshgrove.log`) |
 | `MESHGROVE_STEP_MESHER=/path/to/meshgrove-step-mesher` | Use a specific STEP helper |
 
 Meshgrove was called *STL-Browser* during development. On the first start it moves the
@@ -978,8 +978,8 @@ Meshgrove is built for collections of thousands of files on ordinary hard drives
 
 **The window stays black or the app does not start.**
 Meshgrove needs Vulkan (Linux, Windows), Metal (macOS) or DirectX 12 (Windows). Update the
-graphics driver. As a workaround, try another backend: `WGPU_BACKEND=gl meshgrove`. Start it
-from a terminal to see the log.
+graphics driver. As a workaround, try another backend: `WGPU_BACKEND=gl meshgrove`. The log
+is `meshgrove.log` in the cache folder; *Settings → About Meshgrove* shows its path.
 
 **Changes on disk show up only after a while (Linux).**
 Linux limits how many programs may watch folders (`fs.inotify.max_user_instances`, often 128).
@@ -1177,8 +1177,9 @@ Ideas and next steps, roughly in order:
 
 Bug reports, ideas and pull requests are welcome in the
 [issue tracker](https://github.com/DonDavis-vibe/MeshGrove/issues). Helpful details in a bug
-report: your operating system, graphics card, what you did, and the log from starting
-`meshgrove` in a terminal (with `RUST_LOG=meshgrove=debug` for more detail). A sample file
+report: your operating system, graphics card, what you did, and the log file `meshgrove.log`
+(its path is under *Settings → About Meshgrove*; start Meshgrove with `RUST_LOG=meshgrove=debug`
+for more detail). A sample file
 helps a lot when a model shows wrongly, if you are allowed to share it.
 
 For code: run `cargo fmt`, `cargo clippy` and `cargo test` before opening a pull request, and

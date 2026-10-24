@@ -876,7 +876,7 @@ genauen Pfade auf deinem System nennt.
 | Einstellungen (`config.toml`) und Anordnung der Bereiche (`layout.json`) | `~/.config/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Bibliotheks-Index (`library.db`) und `backups/` | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | KI-Vorschläge und Zugriffsprotokoll (`proposals.db`, erst wenn ein Assistent da war) | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
-| Cache: Vorschauen, STEP-Netze, entpackte Archivdateien | `~/.cache/meshgrove/` | `%LOCALAPPDATA%\meshgrove\` | `~/Library/Caches/meshgrove/` |
+| Cache: Vorschauen, STEP-Netze, entpackte Archivdateien, das Log (`meshgrove.log`) | `~/.cache/meshgrove/` | `%LOCALAPPDATA%\meshgrove\` | `~/Library/Caches/meshgrove/` |
 | Exportierte Bilder | `~/Bilder/Meshgrove` | `Bilder\Meshgrove` | `~/Bilder/Meshgrove` |
 | Exportierte Drucklisten (PDF, CSV), Tags und Notizen | Dokumente-Ordner | Dokumente-Ordner | Dokumente-Ordner |
 
@@ -968,7 +968,7 @@ Umgebungsvariablen für Sonderfälle:
 | Variable | Wirkung |
 |---|---|
 | `WGPU_BACKEND=gl` (oder `vulkan`, `dx12`, `metal`) | Grafik-Schnittstelle wählen, etwa wenn das Fenster schwarz bleibt |
-| `RUST_LOG=meshgrove=debug` | Mehr Ausgaben im Terminal |
+| `RUST_LOG=meshgrove=debug` | Mehr Ausgaben (im Terminal und in `meshgrove.log`) |
 | `MESHGROVE_STEP_MESHER=/pfad/zu/meshgrove-step-mesher` | Einen bestimmten STEP-Helfer benutzen |
 
 Während der Entwicklung hieß Meshgrove *STL-Browser*. Beim ersten Start zieht es die Ordner
@@ -1030,7 +1030,7 @@ Meshgrove ist für Sammlungen mit Tausenden Dateien auf ganz normalen Festplatte
 **Das Fenster bleibt schwarz oder die App startet nicht.**
 Meshgrove braucht Vulkan (Linux, Windows), Metal (macOS) oder DirectX 12 (Windows). Aktualisiere
 den Grafiktreiber. Als Ausweg eine andere Schnittstelle probieren: `WGPU_BACKEND=gl meshgrove`.
-Im Terminal gestartet, siehst du die Ausgaben.
+Das Log steht in `meshgrove.log` im Cache-Ordner; *Einstellungen → Über Meshgrove* zeigt den Pfad.
 
 **Änderungen auf der Platte erscheinen erst nach einer Weile (Linux).**
 Linux begrenzt, wie viele Programme Ordner beobachten dürfen
@@ -1235,8 +1235,9 @@ Ideen und nächste Schritte, grob nach Reihenfolge:
 
 Fehlermeldungen, Ideen und Pull Requests sind im
 [Issue-Tracker](https://github.com/DonDavis-vibe/MeshGrove/issues) willkommen. Hilfreich in
-einer Fehlermeldung: Betriebssystem, Grafikkarte, was du getan hast, und die Ausgabe von
-`meshgrove`, im Terminal gestartet (mit `RUST_LOG=meshgrove=debug` für mehr Details). Eine
+einer Fehlermeldung: Betriebssystem, Grafikkarte, was du getan hast, und die Log-Datei
+`meshgrove.log` (den Pfad zeigt *Einstellungen → Über Meshgrove*; mit `RUST_LOG=meshgrove=debug`
+gestartet, steht mehr darin). Eine
 Beispieldatei hilft sehr, wenn ein Modell falsch dargestellt wird, sofern du sie teilen darfst.
 
 Für Code: Vor einem Pull Request `cargo fmt`, `cargo clippy` und `cargo test` ausführen.

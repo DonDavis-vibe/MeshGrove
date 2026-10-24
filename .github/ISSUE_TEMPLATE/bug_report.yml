@@ -41,7 +41,7 @@ body:
     id: log
     attributes:
       label: Log output
-      description: Start Meshgrove from a terminal with `RUST_LOG=meshgrove=debug meshgrove` and paste what it prints around the problem.
+      description: Paste the part of `meshgrove.log` around the problem; Settings → About Meshgrove → Log file shows where it is. For more detail, start Meshgrove with the environment variable `RUST_LOG=meshgrove=debug` first.
       render: text
   - type: textarea
     id: file

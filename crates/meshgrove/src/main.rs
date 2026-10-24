@@ -13,6 +13,7 @@ mod checker;
 mod folder_scan;
 mod i18n;
 mod library;
+mod logging;
 mod meshes;
 mod nav;
 mod print_export;
@@ -28,7 +29,7 @@ use std::path::PathBuf;
 use meshgrove_core::config::Config;
 
 fn main() -> eframe::Result {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,meshgrove=info")).init();
+    logging::init();
     meshgrove_core::config::migrate_legacy_dirs();
     let (config, config_error) = match Config::load() {
         Ok(config) => (config, None),

@@ -1186,5 +1186,7 @@ fn about(ui: &mut Ui, info: &AppInfo) {
         row(ui, t!("settings.config_file"), Config::path().map(|p| p.display().to_string()).unwrap_or_default());
         row(ui, t!("settings.index_file"), info.db_path.display().to_string());
         row(ui, t!("settings.cache_dir"), cache_dir().map(|p| p.display().to_string()).unwrap_or_default());
+        let log = crate::logging::log_file().map(|p| p.display().to_string()).unwrap_or_default();
+        row(ui, t!("settings.log_file"), log);
     });
 }
