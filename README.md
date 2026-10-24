@@ -40,8 +40,11 @@
   - [The print log](#the-print-log)
   - [G-code files](#g-code-files)
   - [Readmes and text files](#readmes-and-text-files)
-  - [Print bed check](#print-bed-check)
+  - [Printers and the bed check](#printers-and-the-bed-check)
+  - [Printability check](#printability-check)
+  - [The inbox](#the-inbox)
   - [Duplicate finder](#duplicate-finder)
+  - [AI assistant and MCP (optional)](#ai-assistant-and-mcp-optional)
   - [Working with your slicer and other apps](#working-with-your-slicer-and-other-apps)
   - [Archives (ZIP, 7z, RAR, TAR)](#archives-zip-7z-rar-tar)
   - [Moving files to the trash](#moving-files-to-the-trash)
@@ -105,7 +108,10 @@ What makes it different from other model managers:
 | **Print log** | Log a print as printed or failed (and undo it); tiles show ✓2 or ✗; show only what is not printed yet, printed or failed; search with `is:printed`, `is:unprinted`, `is:failed` |
 | **G-code** | Previews from the picture the slicer embedded (PNG, JPG, QOI), or the toolpaths drawn when there is none; slicer, printer, print time, filament (grams, metres, material, colour), layers, nozzle and cost; a warning when a file was sliced for another printer |
 | **Readmes** | Text files (`.txt`, `.md`, `.nfo`, `README`, `LICENSE`) get a page preview; the preview pane shows them in full, Markdown formatted with links that open in the browser; a selected folder shows its readme |
-| **Print bed check** | Reads the printer selected in Anycubic Slicer Next, OrcaSlicer or Bambu Studio (or takes your own build volume) and marks models that only fit when turned (↻ 41°) or are too big (✕) |
+| **Printers** | All your printers with their build volumes, found in Anycubic Slicer Next, OrcaSlicer, Bambu Studio and PrusaSlicer or entered by hand; each model says which printers it fits on, tiles mark models that fit only when turned (↻ 41°) or on no printer (✕); G-code is matched to its printer; search with `passt:"Kobra S1"` and `is:zugross` |
+| **Printability check** | Every model is checked for holes (open edges), edges shared by more than two faces, faces without area, separate parts and volume, and for suspicious sizes (drawn in inches?); ⚠ on the tile, details in the info pane, `is:problem` in the search |
+| **Inbox** | New files are collected in an inbox, grouped by the folder or archive they came in (a customer's ZIP, a new download), with copies of known models counted apart; tick them off when sorted |
+| **AI (optional)** | Meshgrove brings no AI, but your own assistant (Claude, LM Studio, Cursor …) can search the libraries you open to it over MCP and suggest tags, notes and lists; nothing changes until you accept it in the review, and everything can be undone |
 | **Duplicates** | Finds exact copies and the same model saved differently (ASCII vs binary STL, STL vs 3MF, rotated or moved copies), suggests which copy to keep and can move the others to the trash |
 | **Slicer and apps** | "Open in slicer" for one or many models (finds over 30 common filament and resin slicers, among them Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer, Cura, Creality Print, QIDI Studio, FlashPrint, Lychee, ChiTuBox and UVtools, whether installed as a package, Flatpak, Snap or AppImage; add the ones you use with a ＋ in the settings, pick a default, the others sit in a submenu), into the slicer window that is already open where the slicer allows it; "open in" your **mesh editors or CAD programs** (finds over 20 programs, among them Blender, FreeCAD, Autodesk Fusion, MeshLab, SolidCraft, OpenSCAD, SolveSpace, Rhino, SketchUp, SolidWorks and fstl, again in every install variant; add and choose a default in the settings); **Ctrl+C copies the files** for pasting into the file manager or slicer; "show in file manager"; open with the default app |
 | **Desktop integration** | Menu entry, icon, file associations; on Linux the same renderer also provides **thumbnails in Dolphin and file dialogs** |
@@ -378,7 +384,8 @@ The *Info* pane (below the viewer unless you move it) shows:
 
 - type, file size and modification date
 - **dimensions** in mm (X × Y × Z) and the **triangle** count
-- the **print bed** result (see [Print bed check](#print-bed-check))
+- which of your **printers** it fits on (see [Printers and the bed check](#printers-and-the-bed-check))
+- the **printability check** (see [Printability check](#printability-check))
 - for 3MF: title, designer, the application that wrote it, the **filaments** (colour, slot and
   material) and whether the preview comes from the slicer's embedded picture
 - for G-code: slicer, printer, print time, filament, layers, nozzle and cost (see
@@ -413,6 +420,9 @@ type. Results come from all library folders at once.
 | `tag:"to print"` | tags with spaces |
 | `is:fav` | favourites (also `is:favourite`, `is:favorit`) |
 | `is:printed`, `is:unprinted`, `is:failed` | printed at least once, never printed (models and G-code only), newest print failed |
+| `passt:"Kobra S1"` (also `fits:`) | fits on that printer (G-code: sliced for it) |
+| `is:zugross` (also `is:toobig`), `is:problem` | fits on none of your printers; possible printing problems |
+| `is:neu` (also `is:new`), `is:ohne-tags` (also `is:untagged`) | waiting in the inbox; models and G-code without tags |
 | `list:market` (also `liste:`) | files on the list "market" |
 | `dragon ext:stl tag:painted` | all conditions combined |
 
@@ -500,7 +510,7 @@ G-code files (`.gcode`, `.gco`, `.g`) get a preview like models:
 The *Info* pane lists what the slicer wrote into the file: slicer and version, the printer, print
 time, filament in grams and metres with material and colour, the number of layers and the layer
 height, nozzle and filament cost (in the currency of your slicer profile). When a file was sliced
-for another printer than yours (see [Print bed check](#print-bed-check)), the printer is shown in
+for none of your printers (see [Printers and the bed check](#printers-and-the-bed-check)), the printer is shown in
 orange and the tile gets a small `⚠ 🖨` badge, so a file for the wrong machine does not end up on
 the SD card. G-code counts as printable: it has a print log and passes *Models and G-code only*.
 A double-click opens the file in its default app, usually the slicer's G-code viewer.
@@ -515,20 +525,61 @@ as wrapped text. Select a **folder** and the preview pane shows its readme (or e
 with a button to open it. Model packs from Thingiverse and similar sites usually bring one, with
 the designer, the licence and print tips.
 
-### Print bed check
+### Printers and the bed check
 
-Meshgrove compares every model's size with your printer's build volume:
+Meshgrove compares every model's size with the build volume of each of your printers:
 
-- **Fits as it is:** nothing on the tile; the details panel says *✔ fits on Anycubic Kobra S1*.
-- **Fits only when turned:** an amber ↻ badge with the angle (for example ↻ 41° for a long
-  part that fits only diagonally). The details panel says so too.
-- **Too big:** a red ✕ badge. The details panel tells you by how much, for example
-  *too big for Anycubic Kobra S1: X +50.0 mm*.
+- **Fits on all:** nothing on the tile. The info pane says *✔ fits on Anycubic Kobra S1, Bambu
+  Lab A1 mini* (with one printer: *✔ fits on Anycubic Kobra S1*).
+- **Fits only when turned:** an amber ↻ badge with the angle, for example ↻ 41° for a long
+  part that fits only diagonally.
+- **Fits on some:** the info pane lists them, and those it is too big for (*✕ too big for Bambu
+  Lab A1 mini*); hover for by how much.
+- **Fits on none:** a red ✕ badge on the tile.
 
-The printer is read from the profile currently selected in **Anycubic Slicer Next**,
-**OrcaSlicer** or **Bambu Studio**, including profiles that inherit from system profiles. In
-*Settings → Printer* you can enter your own name and build volume, or go back to *Take from
-slicer*.
+*Settings → Printer* lists your printers. On the first start Meshgrove takes every printer set
+up in **Anycubic Slicer Next**, **OrcaSlicer**, **Bambu Studio** and **PrusaSlicer**: the
+selected one, your own profiles and the models picked in their setup wizards, following
+profiles that inherit from system profiles. Add more with ＋, edit or remove them, or enter one
+by hand (name, build volume, nozzle, materials). The ● marks the main printer, named first.
+
+G-code shows the printer it was sliced for; a ⚠ appears only when that is none of your
+printers. In the search, `passt:"Kobra S1"` (also `fits:`) finds what fits on that printer and
+G-code sliced for it, `is:zugross` (also `is:toobig`) what fits on none.
+
+### Printability check
+
+Every model (STL, 3MF, OBJ, PLY, glTF) is checked once, while its thumbnail is made or, for
+files already in the cache and very large meshes, in the background while nothing else needs
+the disk:
+
+- **Open edges:** holes in the surface. Slicers repair small ones themselves, but with
+  customer files it pays to look.
+- **Edges shared by more than two faces** and **faces without area.**
+- **Parts:** how many separate pieces the file holds, and the **volume** of a closed surface.
+- **Suspicious sizes:** a model of a few millimetres may be drawn in inches (*very small
+  (3.2 mm) – drawn in inches? That would be 81 mm*); one of metres has the wrong unit.
+- **Unreadable files** are noted as such.
+
+Results show as ⚠ on the tile, with the reasons in its tooltip, and as a *Check* row in the info
+pane (*✔ closed · 1 part · 41.2 cm³*). `is:problem` finds every model with something to look at,
+including those too big for every printer. The check belongs to the file content, so copies
+share it.
+
+### The inbox
+
+Files whose content Meshgrove did not know before come into the **inbox**: the sidebar shows
+*📥 Inbox (n)* once something arrived. What is in a library when it is searched for the first
+time does not count as new, so the inbox starts empty.
+
+The inbox groups the new files by the drop they came with: the topmost new folder, or the
+archive, such as a customer's ZIP or a model pack. Each group says how many files are new, how
+many are copies of models the library already had, since when, and how many have possible
+printing problems. Sort the files (tags, lists), then click *✓ Done* for the group, right-click a
+file for *✓ Done*, or *✓ All done*. Tagging alone does not take a file out of the inbox.
+
+`is:neu` (also `is:new`) finds the files waiting in the inbox, `is:ohne-tags` (also `is:untagged`)
+models and G-code without tags. *Settings → Library → Inbox* switches the inbox off.
 
 ### Duplicate finder
 
@@ -543,6 +594,48 @@ Groups are sorted by wasted space. The ★ *Keep* badge marks the suggested copy
 not inside an archive, then the oldest, then the one with the shortest path. *Move all but ★
 to the trash* cleans up a group after a confirmation. Tiles everywhere in the gallery show a
 `2×` / `3×` badge for files that have duplicates.
+
+### AI assistant and MCP (optional)
+
+Meshgrove brings **no AI of its own** and is off by default. If you use an AI assistant that
+speaks the [Model Context Protocol](https://modelcontextprotocol.io) – Claude Desktop, Claude
+Code, LM Studio, Cursor, VS Code and others – it can work with your library: search it ("all
+garden models under 2 hours that fit on the A1 mini"), look at new customer files, and suggest
+tags, notes or print lists. **Nothing changes until you accept it in Meshgrove**, and accepted
+changes can be undone.
+
+**Set up:**
+
+1. *Settings → AI & MCP:* tick *Switch AI features on*.
+2. *What AI may see:* for each library choose *no AI*, *local AI only* or *cloud AI too*, and
+   whether thumbnails may be sent. New libraries start hidden. Pick *local AI only* for
+   customer files when your assistant uses a model on your computer or network (LM Studio,
+   Ollama) – that assistant is set up with `--local`.
+3. *Set up your assistant:* choose it, choose where its model runs, copy the entry and paste it
+   where the page says (for Claude Code it is a command to run). Restart the assistant.
+
+The assistant starts `meshgrove-mcp` itself; Meshgrove need not be running. It sees only the
+libraries you opened to it, gets ids like `Garten/Rankhilfe/rose.stl` instead of your folder
+paths (the full path only when it asks about one file, to hand it to a slicer or a printer
+server), and never the model files themselves. Ready-made tasks come with it: *eingang-
+einordnen* (sort the inbox), *druckliste-zusammenstellen* (put together a print list) and
+*tags-aufraeumen* (clean up tags).
+
+**Review:** suggestions wait in Meshgrove. The ✧ button in the toolbar shows how many; it
+opens the review, where each batch shows what was suggested for which file: tags to add (✓ to
+keep, tags the library does not have yet marked *new*), tags to remove, notes, new lists. Click a
+tag to leave it out, then *Accept selected*, *Accept all* or *Discard*. Accepting a batch for the
+inbox also takes its files out of the inbox. Tags and notes belong to the content, so they also
+reach identical copies; the review says when.
+
+**History:** *Review → History* lists what was accepted. *↶ Undo* takes back exactly those
+changes, leaving what you changed by hand since; *↷ Redo* applies them again. *Settings → AI &
+MCP* also shows the **access log** – which assistant looked at what, and when – and *Delete AI
+data* removes all open suggestions and the log.
+
+`meshgrove-mcp --print-config claude-desktop` (or `claude-code`, `lm-studio`, `cursor`, `vscode`,
+with `--local` if needed) prints the entry on the command line too. With the AppImage the
+command is `Meshgrove.AppImage mcp`.
 
 ### Working with your slicer and other apps
 
@@ -676,9 +769,10 @@ Ctrl means ⌘ Cmd on macOS.
 
 Everything can be changed in the settings window (⚙ at the top right, or Ctrl+,), sorted into
 categories on the left: *General* (language, what a double-click on a model does, the panes),
-*Library* (library folders, folder previews), *Tags* (colours, names or dots on the tiles, how
-many), *3D view* (picture quality of the large preview and the model windows, the unit of glTF
-models), *Programs* (slicer and mesh editor), *Printer*, *Data and storage* (backups, and the
+*Library* (library folders, the inbox, folder previews), *Tags* (colours, names or dots on the
+tiles, how many), *3D view* (picture quality of the large preview and the model windows, the
+unit of glTF models), *Programs* (slicer and mesh editor), *Printer* (your printers), *AI & MCP*
+(optional assistant, what it may see, access log), *Data and storage* (backups, and the
 preview cache with its size and a *Clear cache* button) and *About Meshgrove*, which lists the
 exact paths on your system.
 
@@ -686,6 +780,7 @@ exact paths on your system.
 |---|---|---|---|
 | Settings (`config.toml`) and pane layout (`layout.json`) | `~/.config/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Library index (`library.db`) and `backups/` | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
+| AI suggestions and access log (`proposals.db`, only once an assistant was used) | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Cache: previews, STEP meshes, extracted archive files | `~/.cache/meshgrove/` | `%LOCALAPPDATA%\meshgrove\` | `~/Library/Caches/meshgrove/` |
 | Exported pictures | `~/Pictures/Meshgrove` (localised, e.g. `~/Bilder`) | `Pictures\Meshgrove` | `~/Pictures/Meshgrove` |
 | Exported print lists (PDF, CSV), tags and notes | Documents folder | Documents folder | Documents folder |
@@ -734,11 +829,23 @@ workdir = "/opt/myslicer"
 name = "FreeCAD"
 program = "/usr/bin/freecad"
 
-[printer]                  # leave out to take it from the slicer
+inbox = true               # collect new files in the inbox
+
+[[printers]]               # leave all out to take them from the slicers
 name = "Anycubic Kobra S1"
 x = 250.0
 y = 250.0
 z = 250.0
+nozzle = 0.4
+materials = ["PLA", "PETG"]
+
+[ai]                       # optional assistant over MCP
+enabled = false
+
+[[ai.libraries]]
+root = "/home/me/3D-Models"
+access = "cloud"           # none | local_only | cloud
+images = true              # thumbnails may be sent
 ```
 
 Environment variables for special cases:
@@ -757,6 +864,11 @@ made under the old name.
 
 - **Offline.** Meshgrove makes no network connections: no telemetry, no update checks, no
   accounts.
+- **AI only if you want it.** The optional MCP server runs on your computer and talks to your
+  assistant over a local pipe. What the assistant sends on to its model provider is between you
+  and that provider, so choose per library what it may see; customer files can stay with local
+  models. The model files never leave the computer, and AI cannot change anything you did not
+  accept.
 - **Read-only by design.** It only reads your model files. It writes to its own settings, index
   and cache folders, and otherwise only when you explicitly move files to the trash, export
   tags and notes or a print list, or save a picture.
@@ -890,15 +1002,16 @@ distribution's libraries. The scripts for each format are in [`packaging`](packa
 
 ## Architecture
 
-Meshgrove is a Cargo workspace of five crates:
+Meshgrove is a Cargo workspace of six crates:
 
 | Crate | Purpose |
 |---|---|
-| [`meshgrove-core`](crates/meshgrove-core) | Everything without a window or GPU: file formats (STL, 3MF, STEP, OBJ, PLY, glTF, G-code, archives, images, PDF, text), the SQLite library index, scanner, search syntax, duplicate signatures, tags, notes, lists, the print log and backups, thumbnail cache, settings, printer profiles |
+| [`meshgrove-core`](crates/meshgrove-core) | Everything without a window or GPU: file formats (STL, 3MF, STEP, OBJ, PLY, glTF, G-code, archives, images, PDF, text), the SQLite library index, scanner, search syntax, duplicate signatures, tags, notes, lists, the print log and backups, thumbnail cache, settings, printer profiles, printability checks, the inbox, the change journal, and `ai`: what an assistant may see and suggest |
 | [`meshgrove-render`](crates/meshgrove-render) | The wgpu mesh renderer, shared by thumbnails (headless), the 3D viewer, the hover turntable and the Dolphin thumbnailer |
 | [`meshgrove`](crates/meshgrove) | The egui application |
 | [`meshgrove-step`](crates/meshgrove-step) | `meshgrove-step-mesher`: STEP → STL with OpenCascade, as a separate process |
 | [`meshgrove-thumbnailer`](crates/meshgrove-thumbnailer) | The freedesktop thumbnailer for Dolphin and file dialogs |
+| [`meshgrove-mcp`](crates/meshgrove-mcp) | `meshgrove-mcp`: the optional MCP server the user's own assistant starts (stdio); reads the index, writes only suggestions |
 
 How work flows through the app:
 
@@ -933,6 +1046,9 @@ Some design decisions:
   skipped.
 - **No WebKit.** WebKitGTK still has rendering problems on NVIDIA + Wayland. A native egui UI on
   wgpu avoids them entirely.
+- **AI proposes, the user decides.** `meshgrove-mcp` never writes the library: suggestions go to a
+  database of their own (`proposals.db`), and only Meshgrove's library service applies what the
+  user accepts, journalling every step so it can be undone.
 
 ## Development
 

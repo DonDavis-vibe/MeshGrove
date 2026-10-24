@@ -53,6 +53,13 @@ pub enum SettingsChange {
     LockPanes(bool),
     /// The inbox of new files in the sidebar.
     Inbox(bool),
+    AiEnabled(bool),
+    /// What a library shows to which AI.
+    AiLibrary(meshgrove_core::config::LibraryAi),
+    /// Deletes the suggestion store and the access log.
+    ClearAiData,
+    ShowAiReview,
+    ShowAiHistory,
     /// Tags in colour; tags on the tiles, how many and how.
     TagDisplay {
         colored: bool,
@@ -270,6 +277,8 @@ pub struct SettingsDialog {
     printer_editing: Option<String>,
     /// The printers set up in the slicers on this computer.
     found_printers: Vec<DetectedPrinter>,
+    /// The "KI & MCP" page.
+    ai: super::settings_ai::AiSettings,
     /// A new theme as typed.
     suggest_input: [String; 3],
     import_input: String,
@@ -339,6 +348,10 @@ enum Section {
     Printer,
     UserData,
     Storage,
+    Ai,
+    AiLibraries,
+    Mcp,
+    AiLog,
 }
 
 /// The settings' categories, listed on the left of the window.
@@ -352,12 +365,13 @@ enum Category {
     ModelsUnits,
     Programs,
     Printer,
+    Ai,
     Data,
     About,
 }
 
 impl Category {
-    const ALL: [Category; 9] = [
+    const ALL: [Category; 10] = [
         Category::General,
         Category::Library,
         Category::Tags,
@@ -365,6 +379,7 @@ impl Category {
         Category::ModelsUnits,
         Category::Programs,
         Category::Printer,
+        Category::Ai,
         Category::Data,
         Category::About,
     ];
@@ -378,6 +393,7 @@ impl Category {
             Category::ModelsUnits => "📏",
             Category::Programs => "🔧",
             Category::Printer => "🖨",
+            Category::Ai => "✧",
             Category::Data => "💾",
             Category::About => "ℹ",
         }
@@ -393,6 +409,7 @@ impl Category {
             "models" => Category::ModelsUnits,
             "programs" => Category::Programs,
             "printer" => Category::Printer,
+            "ai" => Category::Ai,
             "data" => Category::Data,
             "about" => Category::About,
             _ => return None,
@@ -408,6 +425,7 @@ impl Category {
             Category::ModelsUnits => t!("settings.cat_models_units"),
             Category::Programs => t!("settings.cat_programs"),
             Category::Printer => t!("settings.cat_printer"),
+            Category::Ai => t!("settings.cat_ai"),
             Category::Data => t!("settings.cat_data"),
             Category::About => t!("settings.cat_about"),
         }
@@ -443,6 +461,7 @@ impl SettingsDialog {
         self.printer_error = false;
         self.printer_editing = None;
         self.found_printers = printer::detect_all();
+        self.ai.reset();
         if self.import_input.is_empty() {
             self.import_input = export_path().display().to_string();
         }
@@ -545,6 +564,7 @@ impl SettingsDialog {
                                 Category::ModelsUnits => &[Section::Models, Section::Units],
                                 Category::Programs => &[Section::Slicer, Section::Editor],
                                 Category::Printer => &[Section::Printer],
+                                Category::Ai => &[Section::Ai, Section::AiLibraries, Section::Mcp, Section::AiLog],
                                 Category::Data => &[Section::UserData, Section::Storage],
                                 Category::About => {
                                     about(ui, &info);
@@ -583,6 +603,10 @@ impl SettingsDialog {
                                         self.program_list(ui, true, editors, default_editor, &mut changes)
                                     }
                                     Section::Printer => self.printers(ui, printers, default_printer, &mut changes),
+                                    Section::Ai => self.ai.main(ui, config, &mut changes),
+                                    Section::AiLibraries => self.ai.libraries(ui, config, &mut changes),
+                                    Section::Mcp => self.ai.mcp(ui, config),
+                                    Section::AiLog => self.ai.log(ui, &mut changes),
                                     Section::UserData => self.user_data(ui, &mut changes),
                                     Section::Storage => self.storage(ui, &mut changes),
                                 }

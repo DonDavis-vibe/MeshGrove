@@ -10,6 +10,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
 use meshgrove_core::cache::ThumbMeta;
+use meshgrove_core::ai::proposals::{Decision, ProposalStore};
+use meshgrove_core::changes::{ApplyOp, ChangeReport, UndoReport};
 use meshgrove_core::checks::MeshChecks;
 use meshgrove_core::db::{self, Counts, Error, Library};
 use meshgrove_core::lists::{ListKind, PrintResult};
@@ -39,8 +41,18 @@ pub enum LibEvent {
     UserDataChanged,
     /// Printability checks were stored.
     ChecksStored,
+    /// Suggestions were accepted, or a change was undone or redone.
+    Applied(Applied),
     /// Result of an export or import, for a message.
     Transfer(Result<Transfer, String>),
+}
+
+/// What became of accepting suggestions, an undo or a redo.
+pub enum Applied {
+    Accepted { title: String, report: ChangeReport },
+    Undone { title: String, report: UndoReport },
+    Redone { title: String, report: ChangeReport },
+    Failed(String),
 }
 
 pub enum Transfer {
@@ -67,6 +79,12 @@ enum Cmd {
     StoreChecks(Vec<(String, MeshChecks)>),
     /// Takes these files out of the inbox; `None`: everything.
     InboxDone(Option<Vec<PathBuf>>),
+    /// Applies what the user picked of a batch of suggestions and records the decisions.
+    Accept { batch: i64, uid: String, title: String, ops: Vec<ApplyOp>, decisions: Vec<(i64, Decision)> },
+    /// Records decisions without changing the library (rejected suggestions).
+    Decide { batch: i64, decisions: Vec<(i64, Decision)> },
+    Undo(i64),
+    Redo(i64),
     Tag(Vec<PathBuf>, String),
     Untag(Vec<PathBuf>, String),
     SetNote(Vec<PathBuf>, String),
@@ -151,6 +169,23 @@ impl LibraryService {
 
     pub fn store_meta(&self, path: PathBuf, key: String, meta: ThumbMeta) {
         let _ = self.tx.send(Cmd::StoreMeta(path, key, meta));
+    }
+
+    pub fn accept(&self, batch: i64, uid: String, title: String, ops: Vec<ApplyOp>, decisions: Vec<(i64, Decision)>) {
+        let _ = self.tx.send(Cmd::Accept { batch, uid, title, ops, decisions });
+    }
+
+    pub fn decide(&self, batch: i64, decisions: Vec<(i64, Decision)>) {
+        let _ = self.tx.send(Cmd::Decide { batch, decisions });
+    }
+
+    /// Takes back a change of the journal.
+    pub fn undo(&self, change: i64) {
+        let _ = self.tx.send(Cmd::Undo(change));
+    }
+
+    pub fn redo(&self, change: i64) {
+        let _ = self.tx.send(Cmd::Redo(change));
     }
 
     /// Marks files of the inbox as done (`None`: all of them).
@@ -242,6 +277,8 @@ impl Worker {
         .map_err(|e| log::warn!("file watching unavailable: {e}"))
         .ok();
 
+        let mut proposals = Proposals::default();
+        proposals.reconcile(&lib);
         let interval = if watcher.is_some() { RESCAN_WITH_WATCHER } else { RESCAN_WITHOUT_WATCHER };
         let mut next_full = Instant::now() + interval;
         let mut dirty: BTreeSet<PathBuf> = BTreeSet::new();
@@ -342,6 +379,63 @@ impl Worker {
                     if let Err(e) = result {
                         log::warn!("inbox update failed: {e}");
                     }
+                    self.send(LibEvent::UserDataChanged);
+                }
+                Ok(Cmd::Accept { batch, uid, title, ops, decisions }) => {
+                    let result = lib.apply_change(&format!("proposal:{uid}"), &title, &ops);
+                    let applied = match result {
+                        Ok(report) => {
+                            if let Some(store) = proposals.get()
+                                && let Err(e) = store.decide(batch, &decisions)
+                            {
+                                log::warn!("recording the decisions failed: {e}");
+                            }
+                            Applied::Accepted { title, report }
+                        }
+                        Err(e) => Applied::Failed(e.to_string()),
+                    };
+                    self.send(LibEvent::Applied(applied));
+                    self.send(LibEvent::UserDataChanged);
+                }
+                Ok(Cmd::Decide { batch, decisions }) => {
+                    if let Some(store) = proposals.get()
+                        && let Err(e) = store.decide(batch, &decisions)
+                    {
+                        log::warn!("recording the decisions failed: {e}");
+                    }
+                }
+                Ok(Cmd::Undo(id)) => {
+                    let title = change_title(&lib, id);
+                    let applied = match lib.undo_change(id) {
+                        Ok(report) => {
+                            // A batch taken back is no longer accepted.
+                            if let Some((uid, store)) = proposal_uid(&lib, id).zip(proposals.get())
+                                && let Ok(Some(batch)) = store.batch_by_uid(&uid)
+                            {
+                                let _ = store.mark_undone(batch);
+                            }
+                            Applied::Undone { title, report }
+                        }
+                        Err(e) => Applied::Failed(e.to_string()),
+                    };
+                    self.send(LibEvent::Applied(applied));
+                    self.send(LibEvent::UserDataChanged);
+                }
+                Ok(Cmd::Redo(id)) => {
+                    let title = change_title(&lib, id);
+                    let uid = proposal_uid(&lib, id);
+                    let applied = match lib.redo_change(id) {
+                        Ok(report) => {
+                            if let Some((uid, store)) = uid.zip(proposals.get())
+                                && let Ok(Some(batch)) = store.batch_by_uid(&uid)
+                            {
+                                let _ = store.set_batch_state(batch, "accepted");
+                            }
+                            Applied::Redone { title, report }
+                        }
+                        Err(e) => Applied::Failed(e.to_string()),
+                    };
+                    self.send(LibEvent::Applied(applied));
                     self.send(LibEvent::UserDataChanged);
                 }
                 Ok(Cmd::StoreChecks(checks)) => {
@@ -474,6 +568,42 @@ fn is_change(kind: &EventKind) -> bool {
         EventKind::Modify(_) => true,
         _ => false,
     }
+}
+
+/// The suggestion store, opened once an assistant made one (most users never have one).
+#[derive(Default)]
+struct Proposals {
+    store: Option<ProposalStore>,
+}
+
+impl Proposals {
+    fn get(&mut self) -> Option<&mut ProposalStore> {
+        if self.store.is_none() {
+            let path = ProposalStore::default_location().filter(|p| p.exists());
+            self.store = path.and_then(|p| ProposalStore::open(&p).map_err(|e| log::warn!("suggestion store: {e}")).ok());
+        }
+        self.store.as_mut()
+    }
+
+    /// Batches still pending that the journal shows applied (Meshgrove stopped in between).
+    fn reconcile(&mut self, lib: &Library) {
+        let Some(store) = self.get() else { return };
+        for b in store.batches(None, None, &["pending", "partly"], 1000).unwrap_or_default() {
+            if lib.changes_by_origin(&format!("proposal:{}", b.uid)).is_ok_and(|c| !c.is_empty()) {
+                let _ = store.set_batch_state(b.id, "accepted");
+            }
+        }
+    }
+}
+
+fn change_title(lib: &Library, id: i64) -> String {
+    lib.changes(1000).unwrap_or_default().into_iter().find(|c| c.id == id).map(|c| c.title).unwrap_or_default()
+}
+
+/// The batch a journalled change came from, if it came from one.
+fn proposal_uid(lib: &Library, id: i64) -> Option<String> {
+    let change = lib.changes(1000).ok()?.into_iter().find(|c| c.id == id)?;
+    change.origin.strip_prefix("proposal:").map(str::to_owned)
 }
 
 #[cfg(test)]

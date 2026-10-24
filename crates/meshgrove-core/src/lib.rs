@@ -3,6 +3,7 @@
 pub mod ai;
 pub mod archive;
 pub mod cache;
+pub mod changes;
 pub mod checks;
 pub mod config;
 pub mod db;

@@ -72,7 +72,7 @@ pub fn show(ui: &mut Ui, entries: &[Entry], groups: &[GroupInfo], gallery: &Gall
                         let keep = format!("★ {}", t!("dupes.keep"));
                         let badge = (i == group.keep).then_some((keep.as_str(), KEEP_GREEN));
                         if let (_, Some(a)) =
-                            tile(ui, &entries[i], gallery.thumb(i), badge, false, gallery.selected == Some(i))
+                            tile(ui, &entries[i], gallery.thumb(i), (badge, false), gallery.selected == Some(i), TILE_WIDTH)
                         {
                             action = Some(match a {
                                 TileClick::Select => DupAction::Select(i),
@@ -95,17 +95,20 @@ pub(super) enum TileClick {
     Open,
 }
 
-/// A file of a group: picture, name, folder, size and date; `badge` (text, colour) in the top
-/// corner, `warn` a printability warning at the bottom. The response is for context menus.
+/// Width of the tiles in the duplicates and inbox views.
+pub(super) const TILE_WIDTH: f32 = 170.0;
+
+/// A file of a group, `width` wide: picture, name, folder, size and date; `badge` (text,
+/// colour) in the top corner, `warn` a printability warning at the bottom. The response is for
+/// context menus.
 pub(super) fn tile(
     ui: &mut Ui,
     entry: &Entry,
     thumb: Option<&Thumb>,
-    badge: Option<(&str, Color32)>,
-    warn: bool,
+    (badge, warn): (Option<(&str, Color32)>, bool),
     selected: bool,
+    width: f32,
 ) -> (egui::Response, Option<TileClick>) {
-    let width = 170.0;
     let (rect, response) = ui.allocate_exact_size(vec2(width, width + 64.0), Sense::click());
     let visuals = ui.visuals();
     let bg = if selected {

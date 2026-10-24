@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use egui::{RichText, Ui};
 use meshgrove_core::listing::Entry;
 
-use super::duplicates::{TileClick, tile};
+use super::duplicates::{TILE_WIDTH, TileClick, tile};
 use super::gallery::Gallery;
 use crate::i18n;
 
@@ -87,7 +87,7 @@ pub fn show(ui: &mut Ui, entries: &[Entry], groups: &[InboxGroupInfo], gallery: 
                 ui.horizontal_wrapped(|ui| {
                     for (i, warn) in group.range.clone().zip(warned) {
                         let (response, click) =
-                            tile(ui, &entries[i], gallery.thumb(i), None, warn, gallery.selected == Some(i));
+                            tile(ui, &entries[i], gallery.thumb(i), (None, warn), gallery.selected == Some(i), TILE_WIDTH);
                         match click {
                             Some(TileClick::Select) => action = Some(InboxAction::Select(i)),
                             Some(TileClick::Open) => action = Some(InboxAction::Open(i)),

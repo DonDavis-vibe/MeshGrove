@@ -420,6 +420,14 @@ impl ProposalStore {
         Ok(())
     }
 
+    /// Sets a batch's state without deciding its suggestions one by one (after a crash, the
+    /// library's journal shows it was applied).
+    pub fn set_batch_state(&mut self, batch_id: i64, state: &str) -> ToolResult<()> {
+        let now = nanos(Some(SystemTime::now()));
+        self.conn.execute("UPDATE batches SET state = ?2, decided_ns = ?3 WHERE id = ?1", params![batch_id, state, now])?;
+        Ok(())
+    }
+
     /// An accepted batch was taken back again.
     pub fn mark_undone(&mut self, batch_id: i64) -> ToolResult<()> {
         let now = nanos(Some(SystemTime::now()));
@@ -493,6 +501,69 @@ fn new_uid() -> String {
         COUNTER.fetch_add(1, Ordering::Relaxed)
     );
     blake3::hash(seed.as_bytes()).to_hex()[..16].to_owned()
+}
+
+// ---- From suggestions to changes ----
+
+/// What the user picked of one suggestion in the review.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Picked {
+    /// Tags to add and to remove, as named in the suggestion.
+    pub add: Vec<String>,
+    pub remove: Vec<String>,
+    /// The note, the list (or the move) as suggested.
+    pub whole: bool,
+}
+
+impl Picked {
+    /// Everything a suggestion offers.
+    pub fn all(p: &Proposal) -> Picked {
+        match p.kind {
+            ProposalKind::Tags => {
+                let tags: Option<TagsPayload> = serde_json::from_value(p.payload.clone()).ok();
+                let tags = tags.unwrap_or(TagsPayload { add: Vec::new(), remove: Vec::new() });
+                Picked { add: tags.add.into_iter().map(|t| t.name).collect(), remove: tags.remove, whole: false }
+            }
+            _ => Picked { whole: true, ..Picked::default() },
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.add.is_empty() && self.remove.is_empty() && !self.whole
+    }
+}
+
+/// The library changes for what was picked of `p`; `inbox_done` also takes its file out of the inbox.
+pub fn to_ops(p: &Proposal, picked: &Picked, inbox_done: bool) -> Vec<crate::changes::ApplyOp> {
+    use crate::changes::ApplyOp;
+    use crate::lists::ListKind;
+    let mut ops = Vec::new();
+    match (p.kind, &p.target) {
+        (ProposalKind::Tags, Some(t)) => {
+            ops.extend(picked.add.iter().map(|tag| ApplyOp::AddTag { target: t.clone(), tag: tag.clone() }));
+            ops.extend(picked.remove.iter().map(|tag| ApplyOp::RemoveTag { target: t.clone(), tag: tag.clone() }));
+        }
+        (ProposalKind::Note, Some(t)) if picked.whole => {
+            if let Ok(note) = serde_json::from_value::<NotePayload>(p.payload.clone()) {
+                ops.push(ApplyOp::SetNote { target: t.clone(), text: note.text, append: note.append });
+            }
+        }
+        (ProposalKind::List, _) if picked.whole => {
+            if let Ok(list) = serde_json::from_value::<ListPayload>(p.payload.clone()) {
+                let kind = if list.kind == "print" { ListKind::Print } else { ListKind::Collection };
+                let items = list.items.into_iter().map(|i| (i.target, i.quantity)).collect();
+                ops.push(ApplyOp::List { kind, name: list.name, query: list.query, items });
+            }
+        }
+        _ => {}
+    }
+    if inbox_done
+        && !ops.is_empty()
+        && let Some(t) = &p.target
+    {
+        ops.push(ApplyOp::InboxDone { target: t.clone() });
+    }
+    ops
 }
 
 // ---- The suggesting tools ----

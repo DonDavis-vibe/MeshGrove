@@ -15,6 +15,7 @@ mod library;
 mod meshes;
 mod nav;
 mod print_export;
+mod proposals;
 mod screenshot;
 mod spacemouse;
 mod text_preview;

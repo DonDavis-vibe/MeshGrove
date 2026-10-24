@@ -40,8 +40,11 @@
   - [Das Druckprotokoll](#das-druckprotokoll)
   - [G-code-Dateien](#g-code-dateien)
   - [Readmes und Textdateien](#readmes-und-textdateien)
-  - [Druckbett-Check](#druckbett-check)
+  - [Drucker und Druckbett-Check](#drucker-und-druckbett-check)
+  - [Druckbarkeits-Check](#druckbarkeits-check)
+  - [Der Eingang](#der-eingang)
   - [Duplikate finden](#duplikate-finden)
+  - [KI-Assistent und MCP (freiwillig)](#ki-assistent-und-mcp-freiwillig)
   - [Zusammenarbeit mit Slicer und anderen Programmen](#zusammenarbeit-mit-slicer-und-anderen-programmen)
   - [Archive (ZIP, 7z, RAR, TAR)](#archive-zip-7z-rar-tar)
   - [Dateien in den Papierkorb](#dateien-in-den-papierkorb)
@@ -107,7 +110,10 @@ Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 | **Druckprotokoll** | Drucke als gedruckt oder fehlgeschlagen eintragen (und zurücknehmen); Kacheln zeigen ✓2 oder ✗; nur Ungedrucktes, Gedrucktes oder Fehlgeschlagenes zeigen; Suche mit `is:gedruckt`, `is:ungedruckt`, `is:fehlgeschlagen` |
 | **G-code** | Vorschau aus dem Bild, das der Slicer eingebettet hat (PNG, JPG, QOI), sonst aus den gezeichneten Druckbahnen; Slicer, Drucker, Druckzeit, Filament (Gramm, Meter, Material, Farbe), Schichten, Düse und Kosten; eine Warnung, wenn eine Datei für einen anderen Drucker gesliced wurde |
 | **Readmes** | Textdateien (`.txt`, `.md`, `.nfo`, `README`, `LICENSE`) bekommen eine Seitenvorschau; der Vorschau-Bereich zeigt sie ganz, Markdown formatiert, Links öffnen im Browser; ein gewählter Ordner zeigt sein Readme |
-| **Druckbett-Check** | Liest den in Anycubic Slicer Next, OrcaSlicer oder Bambu Studio gewählten Drucker (oder deinen eigenen Bauraum) und markiert Modelle, die nur gedreht passen (↻ 41°) oder zu groß sind (✕) |
+| **Drucker** | Alle deine Drucker mit Bauraum, gefunden in Anycubic Slicer Next, OrcaSlicer, Bambu Studio und PrusaSlicer oder von Hand eingetragen; jedes Modell sagt, auf welche Drucker es passt, Kacheln markieren Modelle, die nur gedreht (↻ 41°) oder auf keinen Drucker passen (✕); G-code wird seinem Drucker zugeordnet; Suche mit `passt:"Kobra S1"` und `is:zugross` |
+| **Druckbarkeits-Check** | Jedes Modell wird auf Löcher (offene Kanten), Kanten an mehr als zwei Flächen, Dreiecke ohne Fläche, getrennte Teile und Volumen geprüft, dazu auf verdächtige Größen (in Zoll gezeichnet?); ⚠ auf der Kachel, Einzelheiten im Bereich *Info*, `is:problem` in der Suche |
+| **Eingang** | Neue Dateien landen im Eingang, gruppiert nach dem Ordner oder Archiv, mit dem sie kamen (das ZIP eines Kunden, ein neuer Download); Kopien bekannter Modelle werden getrennt gezählt; abhaken, wenn eingeordnet |
+| **KI (freiwillig)** | Meshgrove bringt keine KI mit, aber dein eigener Assistent (Claude, LM Studio, Cursor …) kann über MCP in den freigegebenen Bibliotheken suchen und Tags, Notizen und Listen vorschlagen; nichts ändert sich, bevor du es in der Prüfliste annimmst, und alles lässt sich rückgängig machen |
 | **Duplikate** | Findet exakte Kopien und dasselbe Modell in anderer Form (ASCII- statt Binär-STL, STL statt 3MF, gedrehte oder verschobene Kopien), schlägt vor, welche Kopie bleiben soll, und kann die anderen in den Papierkorb legen |
 | **Slicer und Programme** | „In Slicer öffnen“ für ein oder viele Modelle (erkennt Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer), ins schon offene Slicer-Fenster, wo der Slicer das erlaubt; „In … öffnen“ für deinen **Mesh-Editor oder dein CAD-Programm** (erkennt Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer); **Strg+C kopiert die Dateien** zum Einfügen im Dateimanager oder Slicer; „Im Dateimanager zeigen“; Öffnen mit dem Standardprogramm |
 | **Desktop-Einbindung** | Menüeintrag, Symbol, Dateizuordnungen; unter Linux liefert derselbe Renderer auch **Vorschauen in Dolphin und Dateidialogen** |
@@ -398,7 +404,8 @@ Der Bereich *Info* (unter dem Viewer, solange du ihn nicht verschiebst) zeigt:
 
 - Typ, Dateigröße und Änderungsdatum
 - **Maße** in mm (X × Y × Z) und die Anzahl der **Dreiecke**
-- das Ergebnis des **Druckbett-Checks** (siehe [Druckbett-Check](#druckbett-check))
+- auf welche deiner **Drucker** es passt (siehe [Drucker und Druckbett-Check](#drucker-und-druckbett-check))
+- die **Druckbarkeits-Prüfung** (siehe [Druckbarkeits-Check](#druckbarkeits-check))
 - bei 3MF: Titel, Designer, das erzeugende Programm, die **Filamente** (Farbe, Slot und
   Material) und ob die Vorschau das eingebettete Bild des Slicers ist
 - bei G-code: Slicer, Drucker, Druckzeit, Filament, Schichten, Düse und Kosten (siehe
@@ -434,6 +441,9 @@ und tippen. Die Treffer kommen aus allen Bibliotheksordnern zugleich.
 | `tag:"zu drucken"` | Tags mit Leerzeichen |
 | `is:favorit` | Favoriten (auch `is:fav`, `is:favoriten`) |
 | `is:gedruckt`, `is:ungedruckt`, `is:fehlgeschlagen` | mindestens einmal gedruckt, nie gedruckt (nur Modelle und G-code), letzter Druck fehlgeschlagen; auch englisch `is:printed` … |
+| `passt:"Kobra S1"` (auch `fits:`) | passt auf diesen Drucker (G-code: für ihn gesliced) |
+| `is:zugross` (auch `is:toobig`), `is:problem` | passt auf keinen deiner Drucker; mögliche Druckprobleme |
+| `is:neu` (auch `is:new`), `is:ohne-tags` (auch `is:untagged`) | wartet im Eingang; Modelle und G-code ohne Tags |
 | `liste:markt` (auch `list:`) | Dateien auf der Liste „markt“ |
 | `drache ext:stl tag:bemalt` | alle Bedingungen zusammen |
 
@@ -527,8 +537,8 @@ G-code-Dateien (`.gcode`, `.gco`, `.g`) bekommen eine Vorschau wie Modelle:
 Der Bereich *Info* zeigt, was der Slicer in die Datei geschrieben hat: Slicer und Version, den
 Drucker, die Druckzeit, das Filament in Gramm und Metern mit Material und Farbe, die Zahl der
 Schichten und die Schichthöhe, die Düse und die Filamentkosten (in der Währung deines
-Slicer-Profils). Wurde eine Datei für einen anderen als deinen Drucker gesliced (siehe
-[Druckbett-Check](#druckbett-check)), steht der Drucker in Orange da und die Kachel bekommt ein
+Slicer-Profils). Wurde eine Datei für keinen deiner Drucker gesliced (siehe
+[Drucker und Druckbett-Check](#drucker-und-druckbett-check)), steht der Drucker in Orange da und die Kachel bekommt ein
 kleines `⚠ 🖨`, damit keine Datei für die falsche Maschine auf der SD-Karte landet. G-code zählt
 als druckbar: Er hat ein Druckprotokoll und bleibt bei *Nur Modelle und G-code* sichtbar. Ein
 Doppelklick öffnet die Datei im Standardprogramm, meist der G-code-Ansicht des Slicers.
@@ -543,21 +553,65 @@ umbrochenen Text. Wählst du einen **Ordner**, zeigt der Vorschau-Bereich sein R
 seine Lizenz), mit einem Knopf zum Öffnen. Modellpakete von Thingiverse und ähnlichen Seiten
 bringen meist eins mit, mit Designer, Lizenz und Drucktipps.
 
-### Druckbett-Check
+### Drucker und Druckbett-Check
 
-Meshgrove vergleicht die Größe jedes Modells mit dem Bauraum deines Druckers:
+Meshgrove vergleicht die Größe jedes Modells mit dem Bauraum jedes deiner Drucker:
 
-- **Passt so, wie es ist:** keine Markierung; die Detailansicht sagt *✔ passt auf Anycubic
-  Kobra S1*.
-- **Passt nur gedreht:** eine gelbe ↻-Markierung mit Winkel (zum Beispiel ↻ 41° für ein langes
-  Teil, das nur diagonal passt). Auch die Detailansicht sagt das.
-- **Zu groß:** eine rote ✕-Markierung. Die Detailansicht sagt, um wie viel, zum Beispiel *zu
-  groß für Anycubic Kobra S1: X +50,0 mm*.
+- **Passt auf alle:** keine Markierung. Der Bereich *Info* sagt *✔ passt auf Anycubic Kobra S1,
+  Bambu Lab A1 mini* (bei einem Drucker: *✔ passt auf Anycubic Kobra S1*).
+- **Passt nur gedreht:** eine gelbe ↻-Markierung mit Winkel, zum Beispiel ↻ 41° für ein langes
+  Teil, das nur diagonal passt.
+- **Passt auf manche:** *Info* nennt sie und die, für die es zu groß ist (*✕ zu groß für Bambu Lab
+  A1 mini*); mit der Maus darüber steht, um wie viel.
+- **Passt auf keinen:** eine rote ✕-Markierung auf der Kachel.
 
-Der Drucker wird aus dem gerade gewählten Profil in **Anycubic Slicer Next**, **OrcaSlicer**
-oder **Bambu Studio** gelesen, auch wenn es von einem Systemprofil erbt. Unter *Einstellungen →
-Drucker* kannst du einen eigenen Namen und Bauraum eintragen oder mit *Aus Slicer übernehmen*
-zurückwechseln.
+*Einstellungen → Drucker* listet deine Drucker. Beim ersten Start übernimmt Meshgrove jeden
+Drucker, der in **Anycubic Slicer Next**, **OrcaSlicer**, **Bambu Studio** und **PrusaSlicer**
+eingerichtet ist: den gewählten, deine eigenen Profile und die im Einrichtungs-Assistenten
+gewählten Modelle, auch wenn sie von Systemprofilen erben. Weitere fügst du mit ＋ hinzu, du kannst
+sie bearbeiten, entfernen oder einen von Hand eintragen (Name, Bauraum, Düse, Materialien). Der ●
+markiert den Hauptdrucker, der zuerst genannt wird.
+
+G-code zeigt den Drucker, für den er gesliced wurde; ein ⚠ erscheint nur, wenn das keiner deiner
+Drucker ist. In der Suche findet `passt:"Kobra S1"` (auch `fits:`), was auf diesen Drucker passt,
+und G-code für ihn, `is:zugross` (auch `is:toobig`), was auf keinen passt.
+
+### Druckbarkeits-Check
+
+Jedes Modell (STL, 3MF, OBJ, PLY, glTF) wird einmal geprüft: wenn sein Vorschaubild entsteht oder,
+bei Dateien, die schon im Cache sind, und sehr großen Netzen, im Hintergrund, wenn sonst nichts
+die Platte braucht:
+
+- **Offene Kanten:** Löcher in der Oberfläche. Kleine repariert der Slicer selbst, aber bei
+  Kundendateien lohnt sich ein Blick.
+- **Kanten an mehr als zwei Flächen** und **Dreiecke ohne Fläche.**
+- **Teile:** wie viele getrennte Stücke die Datei enthält, und das **Volumen** einer
+  geschlossenen Oberfläche.
+- **Verdächtige Größen:** Ein Modell von wenigen Millimetern ist vielleicht in Zoll gezeichnet
+  (*sehr klein (3,2 mm) – in Zoll gezeichnet? Dann wären es 81 mm*); eines von mehreren Metern hat
+  die falsche Einheit.
+- **Unlesbare Dateien** werden als solche vermerkt.
+
+Das Ergebnis steht als ⚠ auf der Kachel, mit den Gründen im Tooltip, und als Zeile *Prüfung* im
+Bereich *Info* (*✔ geschlossen · 1 Teil · 41,2 cm³*). `is:problem` findet alle Modelle, bei denen
+es etwas zu prüfen gibt, auch die, die auf keinen Drucker passen. Die Prüfung gehört zum
+Dateiinhalt, Kopien teilen sie.
+
+### Der Eingang
+
+Dateien, deren Inhalt Meshgrove noch nicht kannte, landen im **Eingang**: Die Seitenleiste zeigt
+*📥 Eingang (n)*, sobald etwas Neues da ist. Was beim ersten Durchsuchen einer Bibliothek schon da
+ist, zählt nicht als neu, der Eingang beginnt also leer.
+
+Der Eingang gruppiert die neuen Dateien nach dem, womit sie kamen: dem obersten neuen Ordner oder
+dem Archiv, etwa dem ZIP eines Kunden oder einem Modellpaket. Jede Gruppe sagt, wie viele Dateien
+neu sind, wie viele Kopien von Modellen sind, die die Bibliothek schon hatte, seit wann, und wie
+viele mögliche Druckprobleme haben. Ordne die Dateien ein (Tags, Listen) und klick dann *✓ Erledigt*
+für die Gruppe, per Rechtsklick *✓ Erledigt* für eine Datei, oder *✓ Alle erledigt*. Taggen allein
+nimmt eine Datei nicht aus dem Eingang.
+
+`is:neu` (auch `is:new`) findet die Dateien im Eingang, `is:ohne-tags` (auch `is:untagged`) Modelle
+und G-code ohne Tags. *Einstellungen → Bibliothek → Eingang* schaltet den Eingang ab.
 
 ### Duplikate finden
 
@@ -572,6 +626,49 @@ Die Gruppen sind nach verschwendetem Platz sortiert. Die Markierung ★ *Behalte
 Vorschlag: eine Kopie außerhalb eines Archivs, dann die älteste, dann die mit dem kürzesten
 Pfad. *Alle außer ★ in den Papierkorb* räumt eine Gruppe nach Rückfrage auf. Überall in der
 Galerie tragen Dateien mit Duplikaten eine `2×`/`3×`-Markierung.
+
+### KI-Assistent und MCP (freiwillig)
+
+Meshgrove bringt **keine eigene KI** mit und ist ab Werk ohne KI. Nutzt du einen KI-Assistenten,
+der das [Model Context Protocol](https://modelcontextprotocol.io) spricht – Claude Desktop, Claude
+Code, LM Studio, Cursor, VS Code und andere –, kann er mit deiner Bibliothek arbeiten: darin suchen
+(„alle Gartenmodelle unter 2 Stunden, die auf den A1 mini passen“), neue Kundendateien ansehen und
+Tags, Notizen oder Drucklisten vorschlagen. **Nichts ändert sich, bevor du es in Meshgrove
+annimmst**, und Angenommenes lässt sich rückgängig machen.
+
+**Einrichten:**
+
+1. *Einstellungen → KI & MCP:* *KI-Funktionen einschalten* anhaken.
+2. *Was die KI sehen darf:* für jede Bibliothek *keine KI*, *nur lokale KI* oder *auch Cloud-KI*
+   wählen, und ob Vorschaubilder mitgehen dürfen. Neue Bibliotheken sind erst einmal versteckt.
+   *Nur lokale KI* passt für Kundendateien, wenn dein Assistent ein Modell auf deinem Rechner oder
+   im eigenen Netz nutzt (LM Studio, Ollama) – so ein Assistent wird mit `--local` eingerichtet.
+3. *Assistent einrichten:* ihn auswählen, angeben, wo sein Modell läuft, den Eintrag kopieren und
+   dort einfügen, wo die Seite es sagt (bei Claude Code ist es ein Befehl). Den Assistenten neu
+   starten.
+
+Der Assistent startet `meshgrove-mcp` selbst; Meshgrove muss dafür nicht laufen. Er sieht nur die
+Bibliotheken, die du ihm freigibst, bekommt Kennungen wie `Garten/Rankhilfe/rose.stl` statt deiner
+Ordnerpfade (den vollen Pfad nur, wenn er nach einer Datei fragt, um sie an einen Slicer oder
+Druckserver zu geben) und nie die Modelldateien selbst. Fertige Aufgaben sind dabei:
+*eingang-einordnen*, *druckliste-zusammenstellen* und *tags-aufraeumen*.
+
+**Prüfen:** Vorschläge warten in Meshgrove. Der ✧-Knopf in der Werkzeugleiste zeigt, wie viele;
+er öffnet die Prüfliste. Jeder Block zeigt, was für welche Datei vorgeschlagen wurde: neue Tags (☑
+zum Behalten, Tags, die es in der Bibliothek noch nicht gibt, als *neu* markiert), Tags zum
+Entfernen, Notizen, neue Listen. Klick auf einen Tag lässt ihn weg, dann *Ausgewählte annehmen*,
+*Alle annehmen* oder *Verwerfen*. Wer einen Block für den Eingang annimmt, nimmt die Dateien damit
+auch aus dem Eingang. Tags und Notizen gehören zum Inhalt und gelten damit auch für identische
+Kopien; die Prüfliste sagt es dann.
+
+**Verlauf:** *Prüfliste → Verlauf* listet, was angenommen wurde. *↶ Rückgängig* nimmt genau diese
+Änderungen zurück und lässt, was du seither von Hand geändert hast; *↷ Wiederherstellen* wendet sie
+wieder an. *Einstellungen → KI & MCP* zeigt außerdem das **Zugriffsprotokoll** – welcher Assistent
+wann was angesehen hat –, und *KI-Daten löschen* entfernt alle offenen Vorschläge und das Protokoll.
+
+`meshgrove-mcp --print-config claude-desktop` (oder `claude-code`, `lm-studio`, `cursor`, `vscode`,
+bei Bedarf mit `--local`) gibt den Eintrag auch auf der Kommandozeile aus. Beim AppImage lautet der
+Befehl `Meshgrove.AppImage mcp`.
 
 ### Zusammenarbeit mit Slicer und anderen Programmen
 
@@ -711,9 +808,10 @@ Strg heißt auf macOS ⌘ Cmd.
 
 Alles lässt sich im Einstellungsfenster ändern (⚙ oben rechts oder Strg+,), links nach
 Kategorien geordnet: *Allgemein* (Sprache, was ein Doppelklick auf ein Modell tut, die Bereiche),
-*Bibliothek* (Bibliotheksordner, Ordnervorschau), *Tags* (Farben, Namen oder Punkte auf den
-Kacheln, wie viele), *3D-Ansicht* (Bildqualität der großen Vorschau und der Modellfenster, die
-Einheit von glTF-Modellen), *Programme* (Slicer und Mesh-Editor), *Drucker*, *Daten und Speicher*
+*Bibliothek* (Bibliotheksordner, Eingang, Ordnervorschau), *Tags* (Farben, Namen oder Punkte auf
+den Kacheln, wie viele), *3D-Ansicht* (Bildqualität der großen Vorschau und der Modellfenster, die
+Einheit von glTF-Modellen), *Programme* (Slicer und Mesh-Editor), *Drucker* (deine Drucker), *KI &
+MCP* (freiwilliger Assistent, was er sehen darf, Zugriffsprotokoll), *Daten und Speicher*
 (Sicherungen und der Vorschau-Cache mit Größe und *Cache leeren*) und *Über Meshgrove*, das die
 genauen Pfade auf deinem System nennt.
 
@@ -721,6 +819,7 @@ genauen Pfade auf deinem System nennt.
 |---|---|---|---|
 | Einstellungen (`config.toml`) und Anordnung der Bereiche (`layout.json`) | `~/.config/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Bibliotheks-Index (`library.db`) und `backups/` | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
+| KI-Vorschläge und Zugriffsprotokoll (`proposals.db`, erst wenn ein Assistent da war) | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Cache: Vorschauen, STEP-Netze, entpackte Archivdateien | `~/.cache/meshgrove/` | `%LOCALAPPDATA%\meshgrove\` | `~/Library/Caches/meshgrove/` |
 | Exportierte Bilder | `~/Bilder/Meshgrove` | `Bilder\Meshgrove` | `~/Bilder/Meshgrove` |
 | Exportierte Drucklisten (PDF, CSV), Tags und Notizen | Dokumente-Ordner | Dokumente-Ordner | Dokumente-Ordner |
@@ -770,11 +869,23 @@ workdir = "/opt/meinslicer"
 name = "FreeCAD"
 program = "/usr/bin/freecad"
 
-[printer]                  # weglassen = aus dem Slicer übernehmen
+inbox = true               # neue Dateien im Eingang sammeln
+
+[[printers]]               # alle weglassen = aus den Slicern übernehmen
 name = "Anycubic Kobra S1"
 x = 250.0
 y = 250.0
 z = 250.0
+nozzle = 0.4
+materials = ["PLA", "PETG"]
+
+[ai]                       # freiwilliger Assistent über MCP
+enabled = false
+
+[[ai.libraries]]
+root = "/home/ich/3D-Modelle"
+access = "cloud"           # none | local_only | cloud
+images = true              # Vorschaubilder dürfen mit
 ```
 
 Umgebungsvariablen für Sonderfälle:
@@ -793,6 +904,11 @@ Namen lassen sich weiter importieren.
 
 - **Offline.** Meshgrove baut keine Netzwerkverbindungen auf: keine Telemetrie, keine
   Update-Prüfung, keine Konten.
+- **KI nur, wenn du willst.** Der freiwillige MCP-Server läuft auf deinem Rechner und spricht über
+  eine lokale Verbindung mit deinem Assistenten. Was der Assistent an seinen Modell-Anbieter
+  weitergibt, ist eine Sache zwischen dir und diesem Anbieter; deshalb legst du pro Bibliothek
+  fest, was er sehen darf, und Kundendateien können bei lokalen Modellen bleiben. Die
+  Modelldateien verlassen den Rechner nie, und die KI kann nichts ändern, was du nicht annimmst.
 - **Grundsätzlich nur lesend.** Deine Modelldateien werden nur gelesen. Meshgrove schreibt in
   seine eigenen Ordner für Einstellungen, Index und Cache, und sonst nur, wenn du ausdrücklich
   Dateien in den Papierkorb legst, Tags und Notizen oder eine Druckliste exportierst oder ein Bild
@@ -933,15 +1049,16 @@ die Bibliotheken der Distribution. Die Skripte für die einzelnen Formate liegen
 
 ## Aufbau
 
-Meshgrove ist ein Cargo-Workspace aus fünf Crates:
+Meshgrove ist ein Cargo-Workspace aus sechs Crates:
 
 | Crate | Aufgabe |
 |---|---|
-| [`meshgrove-core`](crates/meshgrove-core) | Alles ohne Fenster und Grafikkarte: Dateiformate (STL, 3MF, STEP, OBJ, PLY, glTF, G-code, Archive, Bilder, PDF, Text), der SQLite-Bibliotheks-Index, Scanner, Suchsyntax, Duplikat-Signaturen, Tags, Notizen, Listen, das Druckprotokoll und Sicherungen, Vorschau-Cache, Einstellungen, Druckerprofile |
+| [`meshgrove-core`](crates/meshgrove-core) | Alles ohne Fenster und Grafikkarte: Dateiformate (STL, 3MF, STEP, OBJ, PLY, glTF, G-code, Archive, Bilder, PDF, Text), der SQLite-Bibliotheks-Index, Scanner, Suchsyntax, Duplikat-Signaturen, Tags, Notizen, Listen, das Druckprotokoll und Sicherungen, Vorschau-Cache, Einstellungen, Druckerprofile, Druckbarkeits-Prüfung, der Eingang, das Änderungsjournal, und `ai`: was ein Assistent sehen und vorschlagen darf |
 | [`meshgrove-render`](crates/meshgrove-render) | Der wgpu-Renderer, gemeinsam für Vorschauen (ohne Fenster), 3D-Viewer, Drehvorschau und den Dolphin-Thumbnailer |
 | [`meshgrove`](crates/meshgrove) | Die egui-Anwendung |
 | [`meshgrove-step`](crates/meshgrove-step) | `meshgrove-step-mesher`: STEP → STL mit OpenCascade, als eigener Prozess |
 | [`meshgrove-thumbnailer`](crates/meshgrove-thumbnailer) | Der freedesktop-Thumbnailer für Dolphin und Dateidialoge |
+| [`meshgrove-mcp`](crates/meshgrove-mcp) | `meshgrove-mcp`: der freiwillige MCP-Server, den der eigene Assistent startet (stdio); liest den Index, schreibt nur Vorschläge |
 
 Wie die Arbeit durch die App läuft:
 
@@ -976,6 +1093,10 @@ Ein paar Entscheidungen dahinter:
   Oberfläche werden erkannt und übersprungen.
 - **Kein WebKit.** WebKitGTK hat unter NVIDIA und Wayland noch Darstellungsprobleme. Eine native
   egui-Oberfläche auf wgpu umgeht sie ganz.
+- **Die KI schlägt vor, du entscheidest.** `meshgrove-mcp` schreibt nie in die Bibliothek:
+  Vorschläge landen in einer eigenen Datenbank (`proposals.db`), und nur Meshgroves
+  Bibliotheksdienst wendet an, was du annimmst – mit jedem Schritt im Journal, damit er sich
+  rückgängig machen lässt.
 
 ## Entwicklung
 

@@ -117,7 +117,9 @@ CREATE TABLE IF NOT EXISTS changes (
     applied_ns INTEGER NOT NULL,
     undone_ns INTEGER,
     -- JSON list of steps that revert the change, applied in reverse order
-    undo TEXT NOT NULL
+    undo TEXT NOT NULL,
+    -- JSON list of the steps done, to do them again after an undo
+    ops TEXT NOT NULL DEFAULT '[]'
 );
 ";
 /// Columns v6 added to the index tables of v1–v5 databases, which are upgraded in place.
@@ -230,6 +232,7 @@ impl Library {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         crate::lists::upgrade(&conn)?;
+        upgrade_index(&conn)?;
         reclassify_unknown(&conn)?;
         crate::inbox::start(&conn)?;
         let printers = Arc::new(Vec::new());
@@ -949,6 +952,11 @@ fn upgrade_index(conn: &Connection) -> Result<(), Error> {
     }
     if added {
         conn.execute("UPDATE files SET meta_key = NULL WHERE kind = 'gcode'", [])?;
+    }
+    // Early 0.5 builds journalled changes without their steps.
+    let has_ops = conn.prepare("SELECT 1 FROM pragma_table_info('changes') WHERE name = 'ops'")?.exists([])?;
+    if !has_ops {
+        conn.execute_batch("ALTER TABLE changes ADD COLUMN ops TEXT NOT NULL DEFAULT '[]'")?;
     }
     Ok(())
 }

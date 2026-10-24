@@ -6,6 +6,7 @@ use anyhow::Context as _;
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use egui::{Button, Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use meshgrove_core::cache::{ThumbCache, ThumbMeta};
+use meshgrove_core::changes::ChangeInfo;
 use meshgrove_core::checks::MeshChecks;
 use meshgrove_core::config::{
     Config, DisplayUnits, DoubleClick, GalleryView, ModelUnits, PrintFilter, Program, Slicer, SortKey, TileTags,
@@ -27,12 +28,14 @@ use crate::nav::{Listing, Navigator};
 use crate::print_export;
 use crate::text_preview::TextPreview;
 use crate::checker::Checker;
+use crate::proposals::ProposalWatcher;
 use crate::thumbs::{ThumbResult, ThumbService};
 use crate::ui::details::{
     self, DetailsContext, DetailsOutput, ListsOfSelection, ModelStatus, NoteEditor, PrintInfo, TagEditor,
 };
 use crate::ui::duplicates::{self, DupAction, GroupInfo};
 use crate::ui::inbox::{self as inbox_view, InboxGroupInfo};
+use crate::ui::review::{self as review_view, ReviewBatch};
 use crate::ui::gallery::{Action, Arrange, Gallery, ListSettings, MenuContext};
 use crate::ui::layout::{Layout, Pane};
 use crate::ui::model_window::{self, ModelWindow, WindowAction, WindowContext};
@@ -75,6 +78,10 @@ enum View {
     List { id: i64, entries: Vec<Entry> },
     /// New files waiting to be sorted, by the drop they came with.
     Inbox { entries: Vec<Entry>, groups: Vec<InboxGroupInfo> },
+    /// AI suggestions waiting for the user (the files they are about as entries).
+    Review { entries: Vec<Entry>, batches: Vec<ReviewBatch> },
+    /// Accepted changes, to undo or redo.
+    History { changes: Vec<ChangeInfo> },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -85,6 +92,7 @@ enum Scope {
 
 mod checks;
 mod inbox;
+mod review;
 
 /// Which switch to inches the question is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,6 +183,9 @@ pub struct App {
     checks_flushed: Instant,
     checks_queued: HashSet<String>,
     checks_next: Instant,
+    /// Watches the suggestion store while AI is on, and its change count last seen.
+    proposals: Option<ProposalWatcher>,
+    proposals_seen: u64,
     /// Files waiting in the inbox, and when to count them again (new files were processed).
     inbox_count: usize,
     inbox_due: Option<Instant>,
@@ -343,6 +354,8 @@ impl App {
             checks_flushed: Instant::now(),
             checks_queued: HashSet::new(),
             checks_next: Instant::now(),
+            proposals: None,
+            proposals_seen: 0,
             inbox_count: 0,
             inbox_due: None,
             tag_style: TagStyle {
@@ -467,7 +480,7 @@ impl App {
 
     fn navigate(&mut self, path: PathBuf) {
         self.leave_search();
-        if path == self.nav.current() && matches!(self.view, View::Duplicates { .. } | View::List { .. } | View::Inbox { .. }) {
+        if path == self.nav.current() && matches!(self.view, View::Duplicates { .. } | View::List { .. } | View::Inbox { .. } | View::Review { .. } | View::History { .. }) {
             // The folder is already read; going "there" means leaving the duplicates or the list.
             self.view = View::Folder;
             self.on_listing_arrived();
@@ -647,7 +660,7 @@ impl App {
         if matches!(self.view, View::Folder) && self.select_after_load.is_none() {
             self.select_after_load = self.selected_entry().map(|e| e.path.clone());
         }
-        if matches!(self.view, View::Duplicates { .. } | View::List { .. } | View::Inbox { .. }) {
+        if matches!(self.view, View::Duplicates { .. } | View::List { .. } | View::Inbox { .. } | View::Review { .. } | View::History { .. }) {
             self.nav.refresh();
         } else {
             self.nav.reload();
@@ -658,7 +671,7 @@ impl App {
         if matches!(self.view, View::Search(_)) {
             return; // the folder changed underneath the results; it is shown when the search ends
         }
-        if self.nav.refreshed() && matches!(self.view, View::Duplicates { .. } | View::List { .. } | View::Inbox { .. }) {
+        if self.nav.refreshed() && matches!(self.view, View::Duplicates { .. } | View::List { .. } | View::Inbox { .. } | View::Review { .. } | View::History { .. }) {
             return; // likewise: only the folder underneath was read again
         }
         if self.flatten {
@@ -797,6 +810,7 @@ impl App {
                     self.tags_dirty = true;
                     self.marks_dirty = true;
                 }
+                LibEvent::Applied(applied) => self.applied(applied),
                 LibEvent::ChecksStored => {
                     self.marks_dirty = true;
                     self.tags_dirty = true; // reloads the selection's check too
@@ -1264,6 +1278,22 @@ impl App {
                     self.refresh_gallery(false);
                 }
                 SettingsChange::LockPanes(locked) => self.config.lock_panes = locked,
+                SettingsChange::AiEnabled(on) => {
+                    self.config.ai.enabled = on;
+                    if !on && matches!(self.view, View::Review { .. } | View::History { .. }) {
+                        self.view = View::Folder;
+                        self.on_listing_arrived();
+                    }
+                }
+                SettingsChange::AiLibrary(library) => {
+                    match self.config.ai.libraries.iter_mut().find(|l| l.root == library.root) {
+                        Some(l) => *l = library,
+                        None => self.config.ai.libraries.push(library),
+                    }
+                }
+                SettingsChange::ClearAiData => self.clear_ai_data(),
+                SettingsChange::ShowAiReview => self.show_review(),
+                SettingsChange::ShowAiHistory => self.show_history(),
                 SettingsChange::Inbox(on) => {
                     self.config.inbox = on;
                     if !on && matches!(self.view, View::Inbox { .. }) {
@@ -1496,6 +1526,7 @@ impl App {
         match self.view {
             View::Duplicates { .. } => self.show_duplicates_without(&gone),
             View::Inbox { .. } => self.show_inbox(),
+            View::Review { .. } => self.show_review(),
             _ => self.reload(),
         }
     }
@@ -1616,6 +1647,8 @@ impl App {
                 View::Duplicates { .. } => self.show_duplicates(),
                 View::List { id, .. } => self.show_list(id, false),
                 View::Inbox { .. } => self.show_inbox(),
+                View::Review { .. } => self.show_review(),
+                View::History { .. } => self.show_history(),
                 _ => {}
             }
             // The index too: what the watcher missed (copied on another system, a network share).
@@ -1687,6 +1720,16 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button(RichText::new("⚙").size(16.0)).on_hover_text(t!("settings.open")).clicked() {
                     self.settings.open();
+                }
+                // Only with AI on and something to review (or the review open).
+                let pending = self.pending_proposals();
+                let reviewing = matches!(self.view, View::Review { .. } | View::History { .. });
+                if self.config.ai.enabled && (pending > 0 || reviewing) {
+                    let label = if pending > 0 { format!("✧ {pending}") } else { "✧".to_owned() };
+                    let button = Button::new(RichText::new(label).size(15.0)).selected(reviewing);
+                    if ui.add(button).on_hover_text(t!("review.open_hint")).clicked() {
+                        self.show_review();
+                    }
                 }
                 self.view_menu(ui);
                 self.search_field(ui);
@@ -1849,6 +1892,15 @@ impl App {
                 }
                 return;
             }
+            View::Review { .. } | View::History { .. } => {
+                let title = if matches!(self.view, View::Review { .. }) { t!("review.title") } else { t!("history.title") };
+                ui.label(RichText::new(format!("✧ {title}")).strong());
+                if ui.button(t!("search.close")).clicked() {
+                    self.view = View::Folder;
+                    self.on_listing_arrived();
+                }
+                return;
+            }
             View::Folder => {}
         }
         let current = self.nav.current().to_path_buf();
@@ -1955,7 +2007,7 @@ impl App {
             (View::Search(results), _) if results.is_empty() => {
                 Some(if self.index.is_none() { t!("search.unavailable") } else { t!("search.none") }.into_owned())
             }
-            (View::Duplicates { .. } | View::Inbox { .. }, _) => None,
+            (View::Duplicates { .. } | View::Inbox { .. } | View::Review { .. } | View::History { .. }, _) => None,
             (View::List { id, entries }, _) if entries.is_empty() => {
                 let favorites = self.lists.iter().any(|l| l.id == *id && l.kind == ListKind::Favorites);
                 Some(if favorites { t!("lists.favorites_empty") } else { t!("lists.empty") }.into_owned())
@@ -1974,6 +2026,16 @@ impl App {
         if let View::Inbox { entries, groups } = &self.view {
             let action = inbox_view::show(ui, entries, groups, &self.gallery);
             self.inbox_action(action);
+            return;
+        }
+        if let View::Review { entries, batches } = &mut self.view {
+            let action = review_view::show(ui, entries, batches, &self.gallery, &self.tag_style);
+            self.review_action(action);
+            return;
+        }
+        if let View::History { changes } = &self.view {
+            let action = review_view::show_history(ui, changes);
+            self.history_action(action);
             return;
         }
         if let View::Duplicates { entries, groups } = &self.view {
@@ -2387,6 +2449,7 @@ impl eframe::App for App {
         self.receive_thumbnails(&ctx);
         self.poll_checks();
         self.recount_inbox();
+        self.watch_proposals(&ctx);
         self.shortcuts(&ctx);
         if let Some(changed) = self.search_changed {
             if changed.elapsed() >= SEARCH_DEBOUNCE {
@@ -2422,6 +2485,7 @@ impl eframe::App for App {
         self.update_viewer(&ctx);
         let selected = self.selected_entry().cloned();
         self.text.follow(selected.as_ref(), &ctx);
+        let pending_proposals = self.pending_proposals();
         if let Some(hook) = &mut self.screenshot {
             let view = hook.view.clone().unwrap_or_default();
             match view.split_once(':').unwrap_or((&view, "")) {
@@ -2436,6 +2500,14 @@ impl eframe::App for App {
                 ("inbox", _) if self.index.is_some() && self.inbox_count > 0 => {
                     hook.view = None;
                     self.show_inbox();
+                }
+                ("review", _) if self.index.is_some() && pending_proposals > 0 => {
+                    hook.view = None;
+                    self.show_review();
+                }
+                ("history", _) if self.index.is_some() => {
+                    hook.view = None;
+                    self.show_history();
                 }
                 _ => {}
             }
@@ -2520,6 +2592,8 @@ fn view_entries<'a>(view: &'a View, nav: &'a Navigator) -> &'a [Entry] {
         View::Duplicates { entries, .. } => entries,
         View::List { entries, .. } => entries,
         View::Inbox { entries, .. } => entries,
+        View::Review { entries, .. } => entries,
+        View::History { .. } => &[],
     }
 }
 
