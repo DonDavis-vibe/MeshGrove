@@ -466,10 +466,20 @@ impl Library {
 
     /// Files matching `query`, folders excluded, sorted by name.
     pub fn search(&self, query: &Query, limit: usize) -> Result<Vec<Entry>, Error> {
+        let mut args: Vec<String> = Vec::new();
         let mut sql = String::from(
             "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns FROM files f JOIN dirs d ON d.id = f.dir_id WHERE 1",
         );
-        let mut args: Vec<String> = Vec::new();
+        sql += &self.query_sql(query, &mut args);
+        sql += &format!(" ORDER BY f.name COLLATE NOCASE LIMIT {limit}");
+        let mut stmt = self.conn.prepare(&sql)?;
+        stmt.query_map(params_from_iter(args), entry_from_row)?.collect()
+    }
+
+    /// The conditions of `query` on `files f` and `dirs d`, each starting with " AND "; their
+    /// values are appended to `args` (placeholders numbered after those already there).
+    pub(crate) fn query_sql(&self, query: &Query, args: &mut Vec<String>) -> String {
+        let mut sql = String::new();
         for term in &query.terms {
             args.push(format!("%{}%", escape_like(term)));
             let n = args.len();
@@ -556,9 +566,7 @@ impl Library {
             let list: Vec<String> = query.kinds.iter().map(|k| format!("'{}'", k.as_str())).collect();
             sql += &format!(" AND f.kind IN ({})", list.join(","));
         }
-        sql += &format!(" ORDER BY f.name COLLATE NOCASE LIMIT {limit}");
-        let mut stmt = self.conn.prepare(&sql)?;
-        stmt.query_map(params_from_iter(args), entry_from_row)?.collect()
+        sql
     }
 
     /// Up to `n` thumbnail-capable files in or below `dir` for its mosaic: models before images

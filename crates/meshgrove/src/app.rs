@@ -257,7 +257,7 @@ impl App {
                 config.printers = Some(found.into_iter().map(|d| d.printer).collect());
             }
         }
-        let printers = main_printer_first(&config);
+        let printers = config.printers_in_order();
         for p in &printers {
             log::info!("printer: {} ({} × {} × {} mm)", p.name, p.x, p.y, p.z);
         }
@@ -1216,6 +1216,7 @@ impl App {
                 }
                 SettingsChange::RemoveRoot(path) => {
                     self.config.library_roots.retain(|r| r != &path);
+                    self.config.ai.libraries.retain(|l| l.root != path); // added again later: hidden from AI
                     self.library.set_roots(self.config.library_roots.clone());
                 }
                 SettingsChange::Slicers { list, default } => {
@@ -1246,7 +1247,7 @@ impl App {
                 SettingsChange::Printers { list, default } => {
                     self.config.printers = Some(list);
                     self.config.default_printer = default;
-                    self.printers = main_printer_first(&self.config);
+                    self.printers = self.config.printers_in_order();
                     self.gallery.printers = self.printers.clone();
                     if let Some(index) = &mut self.index
                         && let Err(e) = index.set_printers(&self.printers)
@@ -2052,6 +2053,7 @@ impl App {
             Some(SidebarAction::Rescan(path)) => self.library.rescan(path, true),
             Some(SidebarAction::RemoveRoot(path)) => {
                 self.config.library_roots.retain(|r| r != &path);
+                self.config.ai.libraries.retain(|l| l.root != path);
                 self.save_config();
                 self.library.set_roots(self.config.library_roots.clone());
             }
@@ -2546,17 +2548,6 @@ fn list_title(list: &ListInfo) -> String {
         ListKind::Favorites => t!("lists.favorites").into_owned(),
         _ => list.name.clone(),
     }
-}
-
-/// The configured printers with the main one first (that order is what the views show).
-fn main_printer_first(config: &Config) -> Vec<Printer> {
-    let mut printers = config.printers.clone().unwrap_or_default();
-    let main = Config::default_printer_index(&printers, config.default_printer.as_deref());
-    if main < printers.len() {
-        let p = printers.remove(main);
-        printers.insert(0, p);
-    }
-    printers
 }
 
 

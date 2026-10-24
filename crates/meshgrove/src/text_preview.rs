@@ -94,25 +94,7 @@ fn read_text(path: &Path) -> Result<Text, String> {
 
 /// The folder's readme, or else its licence.
 fn readme_in(dir: &Path) -> Result<Option<Text>, String> {
-    let entries = listing::list_dir(dir).map_err(|e| e.to_string())?;
-    let best = entries
-        .iter()
-        .filter(|e| e.kind == Kind::Text)
-        .filter_map(|e| Some((rank(&e.name)?, e)))
-        .min_by(|(ra, a), (rb, b)| ra.cmp(rb).then(a.name.len().cmp(&b.name.len())).then(a.name.cmp(&b.name)));
-    best.map(|(_, e)| read_text(&e.path)).transpose()
-}
-
-/// Readmes first, then licences; other texts are no folder description.
-fn rank(name: &str) -> Option<u8> {
-    let lower = name.to_lowercase();
-    if lower.starts_with("readme") || lower.starts_with("liesmich") {
-        Some(0)
-    } else if lower.starts_with("license") || lower.starts_with("licence") || lower.starts_with("copying") {
-        Some(1)
-    } else {
-        None
-    }
+    listing::readme_in(dir).map_err(|e| e.to_string())?.map(|e| read_text(&e.path)).transpose()
 }
 
 #[cfg(test)]

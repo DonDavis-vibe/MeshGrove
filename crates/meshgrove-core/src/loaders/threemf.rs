@@ -50,6 +50,65 @@ pub struct Filament {
     pub material: Option<String>,
 }
 
+/// What a 3MF project says about itself (the `<metadata>` of its model, read without the mesh).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Meta {
+    pub title: Option<String>,
+    pub designer: Option<String>,
+    pub application: Option<String>,
+    pub license: Option<String>,
+    pub description: Option<String>,
+}
+
+/// Reads [`Meta`]: only the start of the model part, up to its resources.
+pub fn metadata(bytes: &[u8]) -> Result<Meta, LoadError> {
+    let mut package = Package::open(bytes)?;
+    let start = package.start_part();
+    let data = package.read(&start)?;
+    let mut reader = Reader::from_reader(data.as_slice());
+    let mut meta = Meta::default();
+    let mut name: Option<String> = None;
+    let mut text = String::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) if e.local_name().as_ref() == "metadata" => {
+                name = attr(&e, "name");
+                text.clear();
+            }
+            Ok(Event::Text(t)) if name.is_some() => text.push_str(&t.xml10_content()),
+            Ok(Event::GeneralRef(r)) if name.is_some() => {
+                if let Ok(Some(c)) = r.resolve_char_ref() {
+                    text.push(c);
+                } else {
+                    text.push_str(match r.xml10_content().as_ref() {
+                        "amp" => "&",
+                        "lt" => "<",
+                        "gt" => ">",
+                        "quot" => "\"",
+                        "apos" => "'",
+                        _ => "",
+                    });
+                }
+            }
+            Ok(Event::End(e)) if e.local_name().as_ref() == "metadata" => {
+                let value = Some(text.trim().to_owned()).filter(|v| !v.is_empty());
+                match name.take().as_deref().map(|n| n.rsplit(':').next().unwrap_or(n).to_lowercase()).as_deref() {
+                    Some("title") => meta.title = value,
+                    Some("designer") => meta.designer = value,
+                    Some("application") => meta.application = value,
+                    Some("license" | "licenseterms") => meta.license = meta.license.take().or(value),
+                    Some("description") => meta.description = value,
+                    _ => {}
+                }
+            }
+            Ok(Event::Start(e)) if e.local_name().as_ref() == "resources" => break,
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    Ok(meta)
+}
+
 /// Parses the model. Multi-plate slicer projects show their first plate, matching the
 /// plate picture used as thumbnail; see [`parse_plate`] for the others. Painted triangles keep
 /// their part's colour, so the triangle count matches the file (facts, duplicate detection).
@@ -888,6 +947,27 @@ mod tests {
         assert_eq!(m.title.as_deref(), Some("Tom & Jerry"));
         assert_eq!(m.application.as_deref(), Some("FreeCAD"));
         assert_eq!(m.designer, None);
+    }
+
+    #[test]
+    fn metadata_is_read_without_the_mesh() {
+        let pkg = package(&[(
+            "3D/3dmodel.model",
+            model(
+                "millimeter",
+                "<metadata name=\"Title\">Rankhilfe &amp; Topf</metadata><metadata name=\"Designer\">DonDavis</metadata>\
+                 <metadata name=\"License\">CC BY 4.0</metadata><metadata name=\"Description\">Für &lt;Kletterrosen&gt;</metadata>",
+                &cube_object(1, "type=\"model\""),
+                "<item objectid=\"1\"/>",
+            ),
+        )]);
+        let m = metadata(&pkg).unwrap();
+        assert_eq!(m.title.as_deref(), Some("Rankhilfe & Topf"));
+        assert_eq!(m.designer.as_deref(), Some("DonDavis"));
+        assert_eq!(m.license.as_deref(), Some("CC BY 4.0"));
+        assert_eq!(m.description.as_deref(), Some("Für <Kletterrosen>"));
+        assert_eq!(m.application, None);
+        assert!(metadata(b"no zip").is_err());
     }
 
     #[test]

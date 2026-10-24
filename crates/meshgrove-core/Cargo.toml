@@ -31,6 +31,11 @@ base64.workspace = true
 percent-encoding.workspace = true
 ab_glyph.workspace = true
 epaint_default_fonts.workspace = true
+# JSON schemas of the AI tool parameters, for meshgrove-mcp (feature "schema").
+schemars = { version = "1", optional = true }
+
+[features]
+schema = ["dep:schemars"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,5 +1,6 @@
 //! Core of Meshgrove: everything that does not need a window or a GPU.
 
+pub mod ai;
 pub mod archive;
 pub mod cache;
 pub mod checks;

@@ -140,6 +140,38 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
     }
 }
 
+/// The folder's readme, or else its licence: the text that describes what is in it.
+pub fn readme_in(dir: &Path) -> io::Result<Option<Entry>> {
+    let entries = list_dir(dir)?;
+    Ok(entries
+        .into_iter()
+        .filter(|e| e.kind == crate::Kind::Text)
+        .filter_map(|e| Some((readme_rank(&e.name)?, e)))
+        .min_by(|(ra, a), (rb, b)| ra.cmp(rb).then(a.name.len().cmp(&b.name.len())).then(a.name.cmp(&b.name)))
+        .map(|(_, e)| e))
+}
+
+/// Readmes first, then licences; other texts are no folder description.
+pub fn readme_rank(name: &str) -> Option<u8> {
+    let lower = name.to_lowercase();
+    if lower.starts_with("readme") || lower.starts_with("liesmich") {
+        Some(0)
+    } else if lower.starts_with("license") || lower.starts_with("licence") || lower.starts_with("copying") {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+/// The start of the folder's readme as text, at most `max_chars` characters.
+pub fn readme_excerpt(dir: &Path, max_chars: usize) -> Option<String> {
+    let readme = readme_in(dir).ok()??;
+    let mut bytes = crate::archive::read(&readme.path).ok()?;
+    bytes.truncate(max_chars * 4);
+    let text = crate::loaders::text::decode(&bytes);
+    Some(text.chars().take(max_chars).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

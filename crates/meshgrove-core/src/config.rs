@@ -281,6 +281,86 @@ pub struct ListColumns {
 /// How many tags a tile can show.
 pub const TILE_TAG_COUNT: std::ops::RangeInclusive<u8> = 1..=8;
 
+/// Optional AI. Meshgrove brings none of its own: the user's assistant reaches the library
+/// through `meshgrove-mcp`, or Meshgrove talks to an endpoint the user set up. Off by default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiConfig {
+    pub enabled: bool,
+    /// What AI may see of each library; a library not listed here is hidden.
+    pub libraries: Vec<LibraryAi>,
+    /// Days the access log is kept.
+    pub log_days: u16,
+    /// Days an undecided suggestion waits before it expires.
+    pub expire_days: u16,
+}
+
+impl Default for AiConfig {
+    fn default() -> AiConfig {
+        AiConfig { enabled: false, libraries: Vec::new(), log_days: 90, expire_days: 30 }
+    }
+}
+
+impl AiConfig {
+    /// How far AI may look into the library at `root`.
+    pub fn library(&self, root: &Path) -> LibraryAi {
+        self.libraries.iter().find(|l| l.root == root).cloned().unwrap_or(LibraryAi {
+            root: root.to_path_buf(),
+            access: AiAccess::None,
+            images: false,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LibraryAi {
+    pub root: PathBuf,
+    #[serde(default)]
+    pub access: AiAccess,
+    /// Thumbnails may be sent along (to a model that can see).
+    #[serde(default)]
+    pub images: bool,
+}
+
+/// Which AI may see a library.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiAccess {
+    #[default]
+    None,
+    /// Only AI running on this computer or network.
+    LocalOnly,
+    /// Also AI services on the internet.
+    Cloud,
+}
+
+/// Where the AI asking runs: the user says so (`meshgrove-mcp --local`, the endpoint's "local").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AccessClass {
+    Local,
+    Cloud,
+}
+
+impl AccessClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AccessClass::Local => "local",
+            AccessClass::Cloud => "cloud",
+        }
+    }
+}
+
+impl AiAccess {
+    pub fn allows(self, class: AccessClass) -> bool {
+        match self {
+            AiAccess::None => false,
+            AiAccess::LocalOnly => class == AccessClass::Local,
+            AiAccess::Cloud => true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -331,6 +411,8 @@ pub struct Config {
     pub lock_panes: bool,
     /// The sidebar lists the inbox of new files.
     pub inbox: bool,
+    /// Optional AI through the user's own assistant (MCP) or endpoint.
+    pub ai: AiConfig,
     /// Mesh editors and CAD programs for "open in …"; `None`: take the ones found on this computer.
     pub editors: Option<Vec<Program>>,
     /// Name of the default editor (double-click); `None`: the first that opens the file.
@@ -529,6 +611,7 @@ impl Default for Config {
             folder_previews: FolderPreviews::default(),
             lock_panes: false,
             inbox: true,
+            ai: AiConfig::default(),
             editors: None,
             default_editor: None,
             editor: None,
@@ -613,6 +696,17 @@ impl Config {
             self.default_printer = Some(old.name.clone());
             self.printers = Some(vec![old.into()]);
         }
+    }
+
+    /// The configured printers with the main one first (the order the views and the AI use).
+    pub fn printers_in_order(&self) -> Vec<crate::printer::Printer> {
+        let mut printers = self.printers.clone().unwrap_or_default();
+        let main = Self::default_printer_index(&printers, self.default_printer.as_deref());
+        if main < printers.len() {
+            let p = printers.remove(main);
+            printers.insert(0, p);
+        }
+        printers
     }
 
     /// The main printer's place among `printers`.
