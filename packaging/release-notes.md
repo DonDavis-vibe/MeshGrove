@@ -4,28 +4,11 @@
 
 ![Meshgrove](https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-hero.png)
 
-## Highlights
+## Fixed
 
-**Your own AI, if you want it** – new, optional and off until you switch it on. Meshgrove brings no AI of its own.
+- **Copy and paste work.** Ctrl+C and Ctrl+V in text fields, the *Copy* button for the MCP entry in Settings → AI & MCP, *Copy path* and *Copy as AI reference* did nothing, so neither the MCP entry could be copied nor a key pasted. This had been so since the first version.
 
-- **MCP server** `meshgrove-mcp`: Claude Desktop, Claude Code, LM Studio, Cursor, VS Code and other MCP assistants can search the libraries you open to them and suggest tags, notes, lists, moves and renames. Ready-made tasks: sort the inbox, put together a print list, clean up tags, tidy up a folder.
-- **AI chat** with an OpenAI-compatible endpoint of your own (Ollama, LM Studio, llama.cpp, OpenAI, OpenRouter …): `@` adds files, folders, tags, lists, printers or a search as references, answers link the files they name.
-- **One-click actions** that work with small local models too: sort a delivery from the inbox, suggest tags for the selection or right in the tag field, a print list from a description ("gifts under 2 h for the A1 mini").
-- **You decide:** suggestions wait in a review with old → new; in the chat's automatic mode an undo arrow sits on your message. Moves always wait for the review and never overwrite anything. Everything accepted can be undone in the history.
-- **Per library:** no AI, local AI only (for customer files) or cloud AI too, with or without thumbnails; an access log shows what was looked at.
-
-**For several printers and customer files**
-
-- **Several printers** with their build volumes, found in your slicers; `passt:"A1 mini"` and "fits on / too big for" everywhere.
-- **Printability check:** open edges, non-manifold edges, several parts, volume, suspicious sizes (inches?), too big for every printer; `is:problem`.
-- **Inbox:** everything new since the last time, grouped by the folder or ZIP it came in, with copies of files you already have counted as known.
-
-**Lists, print log and more** (never released as 0.4, so here they are)
-
-- ★ Favourites, collections (hand-picked or a saved search) and print lists with copies, ticked off as you print, exported as a PDF checklist or CSV.
-- A print log (printed / failed) with `is:printed`, `is:unprinted`, `is:failed`.
-- G-code previews with slicer, printer, print time and filament; readmes in the preview; a sortable list view; *Rescan folder*.
-- Thanks to [@Rec0iL](https://github.com/Rec0iL): several slicers and mesh editors, found automatically in every common install, your own tag themes, files in inches and imperial display units, and 3D mice (SpaceMouse and DIY).
+Everything new in 0.5 (your own AI over MCP or an endpoint of your own, several printers, the printability check, the inbox, lists and the print log) is described in the [0.5.0 release notes](https://github.com/DonDavis-vibe/MeshGrove/releases/tag/v0.5.0).
 
 ## Downloads
 
@@ -62,7 +45,7 @@ If Meshgrove saves you time, you can leave a tip on [Ko-fi](https://ko-fi.com/do
 
 **Meshgrove @VERSION@**: eine schnelle, native Galerie für 3D-Druck-Dateien unter Linux, Windows und macOS, mit echten Vorschauen für STL, 3MF, STEP, OBJ, PLY, glTF, G-code, Modelle in ZIP/7z/RAR, PDFs und Readmes, dazu Favoriten, Drucklisten und einem Druckprotokoll.
 
-**Neu:** mehrere Drucker, ein Druckbarkeits-Check und ein Eingang für neue Dateien und Kundenlieferungen. Dazu, freiwillig und ab Werk aus, deine eigene KI: ein MCP-Server für Claude, LM Studio, Cursor & Co. und mit eigenem Endpunkt (Ollama, LM Studio, OpenAI-kompatibel) ein KI-Chat mit `@`-Verweisen und Ein-Klick-Aktionen. Die KI schlägt vor, du nimmst an, und alles lässt sich rückgängig machen.
+**Behoben:** Kopieren und Einfügen funktionieren – Strg+C/Strg+V in Textfeldern und die Knöpfe zum Kopieren (etwa der MCP-Eintrag unter Einstellungen → KI & MCP). Alles Neue aus 0.5 steht in den [Release-Notes zu 0.5.0](https://github.com/DonDavis-vibe/MeshGrove/releases/tag/v0.5.0).
 
 **Installation** (alle Pakete können STEP, nichts muss gebaut werden):
 - **Windows:** `…-windows-x64-setup.exe` ausführen. Installiert ohne Adminrechte für dich (oder für alle Benutzer), mit Startmenü-Eintrag und „Öffnen mit“ für STL, 3MF, STEP, OBJ, PLY und glTF. Bei der SmartScreen-Warnung *Weitere Informationen → Trotzdem ausführen* wählen. Ohne Installation: die `…-portable.zip` entpacken und `meshgrove.exe` starten.
