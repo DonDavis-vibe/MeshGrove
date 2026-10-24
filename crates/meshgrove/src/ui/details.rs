@@ -716,8 +716,11 @@ fn volume_text(mm3: f64) -> String {
 /// One line about a [`Problem`], for the info pane, tooltips and the inbox.
 pub fn problem_text(p: &Problem) -> String {
     match p {
+        Problem::Open(1) => t!("checks.open_one"),
         Problem::Open(n) => t!("checks.open", count = i18n::count(*n as usize)),
+        Problem::NonManifold(1) => t!("checks.non_manifold_one"),
         Problem::NonManifold(n) => t!("checks.non_manifold", count = i18n::count(*n as usize)),
+        Problem::Degenerate(1) => t!("checks.degenerate_one"),
         Problem::Degenerate(n) => t!("checks.degenerate", count = i18n::count(*n as usize)),
         Problem::ManyTriangles(n) => t!("checks.many_triangles", count = i18n::count(*n as usize)),
         Problem::Tiny { max_mm, as_inch_mm } => {

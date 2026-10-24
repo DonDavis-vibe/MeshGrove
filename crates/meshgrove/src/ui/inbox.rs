@@ -112,6 +112,7 @@ pub fn show(
                             (None, warn),
                             gallery.selected == Some(i),
                             TILE_WIDTH,
+                            false,
                         );
                         match click {
                             Some(TileClick::Select) => action = Some(InboxAction::Select(i)),

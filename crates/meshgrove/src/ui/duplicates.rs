@@ -78,6 +78,7 @@ pub fn show(ui: &mut Ui, entries: &[Entry], groups: &[GroupInfo], gallery: &Gall
                             (badge, false),
                             gallery.selected == Some(i),
                             TILE_WIDTH,
+                            true,
                         ) {
                             action = Some(match a {
                                 TileClick::Select => DupAction::Select(i),
@@ -113,6 +114,7 @@ pub(super) fn tile(
     (badge, warn): (Option<(&str, Color32)>, bool),
     selected: bool,
     width: f32,
+    full_path: bool,
 ) -> (egui::Response, Option<TileClick>) {
     let (rect, response) = ui.allocate_exact_size(vec2(width, width + 64.0), Sense::click());
     let visuals = ui.visuals();
@@ -149,7 +151,12 @@ pub(super) fn tile(
     let mut y = img.bottom() + 4.0;
     for (line, color, size) in [
         (listing::file_name(&entry.path), text, 12.5),
-        (entry.path.parent().map(|p| p.display().to_string()).unwrap_or_default(), weak, 11.0),
+        // Copies are told apart by their whole path; elsewhere the folder name does.
+        match entry.path.parent() {
+            Some(p) if full_path => (p.display().to_string(), weak, 11.0),
+            Some(p) => (format!("📁 {}", listing::file_name(p)), weak, 11.0),
+            None => (String::new(), weak, 11.0),
+        },
         (
             format!("{} · {}", i18n::file_size(entry.size), entry.modified.map(i18n::datetime).unwrap_or_default()),
             weak,

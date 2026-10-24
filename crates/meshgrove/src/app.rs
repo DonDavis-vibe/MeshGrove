@@ -1946,7 +1946,7 @@ impl App {
             }
             View::Duplicates { groups, .. } => {
                 ui.label(RichText::new(format!("⧉ {}", t!("dupes.title", count = groups.len()))).strong());
-                if ui.button(t!("search.close")).clicked() {
+                if ui.button(t!("view.close")).clicked() {
                     self.view = View::Folder;
                     self.on_listing_arrived();
                 }
@@ -1954,7 +1954,7 @@ impl App {
             }
             View::Inbox { entries, .. } => {
                 ui.label(RichText::new(format!("📥 {}", t!("inbox.title", count = entries.len()))).strong());
-                if ui.button(t!("search.close")).clicked() {
+                if ui.button(t!("view.close")).clicked() {
                     self.view = View::Folder;
                     self.on_listing_arrived();
                 }
@@ -1964,7 +1964,7 @@ impl App {
                 let title =
                     if matches!(self.view, View::Review { .. }) { t!("review.title") } else { t!("history.title") };
                 ui.label(RichText::new(format!("✧ {title}")).strong());
-                if ui.button(t!("search.close")).clicked() {
+                if ui.button(t!("view.close")).clicked() {
                     self.view = View::Folder;
                     self.on_listing_arrived();
                 }

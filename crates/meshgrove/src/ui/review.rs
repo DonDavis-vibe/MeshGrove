@@ -149,7 +149,8 @@ fn item_row(
     let mut action = None;
     ui.horizontal_top(|ui| {
         if let Some(i) = item.entry {
-            let (_, click) = tile(ui, &entries[i], gallery.thumb(i), (None, false), gallery.selected == Some(i), 120.0);
+            let (_, click) =
+                tile(ui, &entries[i], gallery.thumb(i), (None, false), gallery.selected == Some(i), 120.0, false);
             match click {
                 Some(TileClick::Select) => action = Some(ReviewAction::Select(i)),
                 Some(TileClick::Open) => action = Some(ReviewAction::Open(i)),
