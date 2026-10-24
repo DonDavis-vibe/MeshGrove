@@ -1,0 +1,27 @@
+[package]
+name = "meshgrove-mcp"
+description = "MCP server for Meshgrove: lets the user's own AI assistant search the library and suggest tags and lists"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+meshgrove-core = { workspace = true, features = ["schema"] }
+rmcp.workspace = true
+tokio.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+log.workspace = true
+env_logger.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+rusqlite.workspace = true
+image.workspace = true

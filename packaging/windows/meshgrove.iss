@@ -56,6 +56,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "{#BinDir}\meshgrove.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\meshgrove-step-mesher.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BinDir}\meshgrove-mcp.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoDir}\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"
 Source: "{#RepoDir}\THIRD-PARTY-LICENSES.md"; DestDir: "{app}"
 Source: "{#RepoDir}\README.md"; DestDir: "{app}"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs Meshgrove for the current user on Linux (no root needed):
-#   ~/.local/bin                     meshgrove, meshgrove-step-mesher, meshgrove-thumbnailer
+#   ~/.local/bin                     meshgrove, meshgrove-step-mesher, meshgrove-thumbnailer, meshgrove-mcp
 #   ~/.local/share/applications      menu entry
 #   ~/.local/share/icons             icon
 #   ~/.local/share/mime              model/step file type
@@ -12,7 +12,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 BIN="${XDG_BIN_HOME:-$HOME/.local/bin}"
 DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
-PROGRAMS=(meshgrove meshgrove-step-mesher meshgrove-thumbnailer)
+PROGRAMS=(meshgrove meshgrove-step-mesher meshgrove-thumbnailer meshgrove-mcp)
 ICON_SIZES=(16 24 32 48 64 128 256 512)
 FILES=(
     "${PROGRAMS[@]/#/$BIN/}"
@@ -52,7 +52,7 @@ fi
 if [[ -x bin/meshgrove ]]; then
     SOURCE=bin   # unpacked release package
 else
-    cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
+    cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer -p meshgrove-mcp
     SOURCE=target/release
 fi
 rm -f "${LEGACY[@]}"

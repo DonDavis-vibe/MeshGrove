@@ -19,7 +19,8 @@ use crate::userdata::{UserData, UserEntry};
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i32 = 6;
+/// Layout of the index; readers of another version refuse it.
+pub const SCHEMA_VERSION: i32 = 6;
 /// `kind` values of model files ([`Kind::is_model`]) for SQL `IN (…)` lists.
 const MODEL_KINDS: &str = "'stl', '3mf', 'step', 'obj', 'ply', 'gltf'";
 /// The index proper: a cache of the disk, rebuilt when its layout changes.
@@ -191,6 +192,17 @@ impl Library {
         let printers = Arc::new(Vec::new());
         printer_functions(&conn, &printers).ok()?;
         Some(Library { conn, printers, baseline_roots: HashSet::new() })
+    }
+
+    /// The layout version of the index at `path`, without opening it for use; `None` when
+    /// there is none (yet).
+    pub fn index_version(path: &Path) -> Option<i32> {
+        use rusqlite::OpenFlags;
+        if !path.exists() {
+            return None;
+        }
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+        conn.query_row("PRAGMA user_version", [], |r| r.get(0)).ok().filter(|v| *v != 0)
     }
 
     pub fn open_in_memory() -> Result<Library, Error> {

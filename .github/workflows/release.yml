@@ -89,14 +89,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo build --release -p meshgrove -p meshgrove-step
+      - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-mcp
 
       - name: Check the programs
         shell: bash
         run: |
           vs=$("/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)
           dumpbin=$(find "$(cygpath -u "$vs")/VC/Tools/MSVC" -path '*/Hostx64/x64/dumpbin.exe' | head -1)
-          for exe in meshgrove meshgrove-step-mesher; do
+          for exe in meshgrove meshgrove-step-mesher meshgrove-mcp; do
             echo "== $exe.exe"
             dlls=$("$dumpbin" -nologo -dependents "target/release/$exe.exe" | tr -d '\r' | grep -iE '^\s+\S+\.dll$' | tr -d ' ')
             echo "$dlls"
@@ -121,7 +121,7 @@ jobs:
           echo "VERSION=$version" >> "$GITHUB_ENV"
           dir="Meshgrove-$version-windows-x64-portable"
           mkdir -p "$dir"
-          cp target/release/meshgrove.exe target/release/meshgrove-step-mesher.exe README.md THIRD-PARTY-LICENSES.md "$dir/"
+          cp target/release/meshgrove.exe target/release/meshgrove-step-mesher.exe target/release/meshgrove-mcp.exe README.md THIRD-PARTY-LICENSES.md "$dir/"
           cp LICENSE "$dir/LICENSE.txt"
           7z a "$dir.zip" "$dir"
       - name: Installer (Inno Setup)
@@ -138,7 +138,7 @@ jobs:
           $setup = (Get-ChildItem Meshgrove-*-setup.exe).FullName
           Start-Process -Wait $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/LOG=setup.log'
           $app = "$env:LOCALAPPDATA\Programs\Meshgrove"
-          foreach ($file in 'meshgrove.exe', 'meshgrove-step-mesher.exe', 'LICENSE.txt', 'THIRD-PARTY-LICENSES.md', 'unins000.exe') {
+          foreach ($file in 'meshgrove.exe', 'meshgrove-step-mesher.exe', 'meshgrove-mcp.exe', 'LICENSE.txt', 'THIRD-PARTY-LICENSES.md', 'unins000.exe') {
             if (-not (Test-Path "$app\$file")) { Get-Content setup.log; throw "$file was not installed" }
           }
           if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Meshgrove.lnk")) { throw 'no Start menu entry' }
@@ -212,7 +212,7 @@ jobs:
             PKG_CONFIG_LIBDIR="$installed/lib/pkgconfig" PKG_CONFIG_ALLOW_CROSS=1 LIBARCHIVE_STATIC=1 \
             OCCT_INCLUDE="$installed/include/opencascade" OCCT_LIB="$installed/lib" OCCT_STATIC=1 \
             MACOSX_DEPLOYMENT_TARGET=11.0 \
-              cargo build --release --target "${arch%%:*}-apple-darwin" -p meshgrove -p meshgrove-step
+              cargo build --release --target "${arch%%:*}-apple-darwin" -p meshgrove -p meshgrove-step -p meshgrove-mcp
           done
 
       - name: Package
@@ -231,7 +231,7 @@ jobs:
           app=/tmp/meshgrove-dmg/Meshgrove.app
           ls -la /tmp/meshgrove-dmg "$app/Contents/MacOS" "$app/Contents/Resources"
           codesign --verify --strict --verbose "$app"
-          for program in meshgrove meshgrove-step-mesher; do
+          for program in meshgrove meshgrove-step-mesher meshgrove-mcp; do
             binary="$app/Contents/MacOS/$program"
             lipo -archs "$binary"
             [[ "$(lipo -archs "$binary")" == *x86_64* && "$(lipo -archs "$binary")" == *arm64* ]]
@@ -311,11 +311,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
+      - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer -p meshgrove-mcp
 
       - name: Check the programs
         run: |
-          for program in meshgrove meshgrove-step-mesher meshgrove-thumbnailer; do
+          for program in meshgrove meshgrove-step-mesher meshgrove-thumbnailer meshgrove-mcp; do
             echo "== $program"
             ldd "target/release/$program"
             # The base system's libraries only, which an AppImage takes from the host.
@@ -395,7 +395,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: ${{ matrix.distro }}
-      - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
+      - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer -p meshgrove-mcp
       - name: Package
         run: |
           target/release/meshgrove-step-mesher --write-test-cube /tmp/cube.step
@@ -434,7 +434,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y ./meshgrove_*.deb
-          for program in meshgrove meshgrove-step-mesher meshgrove-thumbnailer; do
+          for program in meshgrove meshgrove-step-mesher meshgrove-thumbnailer meshgrove-mcp; do
             if ldd "/usr/bin/$program" | grep 'not found'; then exit 1; fi
           done
           meshgrove-step-mesher --write-test-cube /tmp/cube.step
@@ -465,7 +465,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: fedora44
-      - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
+      - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer -p meshgrove-mcp
       - name: Package
         run: |
           target/release/meshgrove-step-mesher --write-test-cube /tmp/cube.step
@@ -496,7 +496,7 @@ jobs:
       - name: Install and run
         run: |
           dnf install -y ./meshgrove-*.rpm
-          for program in meshgrove meshgrove-step-mesher meshgrove-thumbnailer; do
+          for program in meshgrove meshgrove-step-mesher meshgrove-thumbnailer meshgrove-mcp; do
             if ldd "/usr/bin/$program" | grep 'not found'; then exit 1; fi
           done
           meshgrove-step-mesher --write-test-cube /tmp/cube.step

@@ -1,4 +1,10 @@
 #!/bin/sh
 # Starts Meshgrove inside the AppImage; the STEP helper sits next to it in usr/bin.
+# "Meshgrove.AppImage mcp …" starts the MCP server instead: AI clients need a fixed path to
+# start it by, and the AppImage's own path is the only one that stays the same.
 here=$(dirname "$(readlink -f "$0")")
+if [ "$1" = mcp ]; then
+    shift
+    exec "$here/usr/bin/meshgrove-mcp" "$@"
+fi
 exec "$here/usr/bin/meshgrove" "$@"

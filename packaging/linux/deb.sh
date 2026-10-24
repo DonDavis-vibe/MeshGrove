@@ -21,7 +21,7 @@ install -Dm644 "$here/debian-copyright" "$root/usr/share/doc/meshgrove/copyright
 mkdir -p "$work/debian"
 printf 'Source: meshgrove\n\nPackage: meshgrove\nArchitecture: any\n' > "$work/debian/control"
 depends=$(cd "$work" && dpkg-shlibdeps -O "$root/usr/bin/meshgrove" "$root/usr/bin/meshgrove-step-mesher" \
-    "$root/usr/bin/meshgrove-thumbnailer" | sed -n 's/^shlibs:Depends=//p')
+    "$root/usr/bin/meshgrove-thumbnailer" "$root/usr/bin/meshgrove-mcp" | sed -n 's/^shlibs:Depends=//p')
 
 mkdir -p "$root/DEBIAN"
 (cd "$root" && find usr -type f -exec md5sum {} + | sort -k2) > "$root/DEBIAN/md5sums"

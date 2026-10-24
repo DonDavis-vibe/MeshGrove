@@ -2,13 +2,13 @@
 # Lays out Meshgrove as a system-wide install under DEST_DIR/usr, the common ground of the
 # .deb, the .rpm and the AppImage:
 #   packaging/linux/stage.sh BIN_DIR DEST_DIR
-# BIN_DIR holds meshgrove, meshgrove-step-mesher and meshgrove-thumbnailer.
+# BIN_DIR holds meshgrove, meshgrove-step-mesher, meshgrove-thumbnailer and meshgrove-mcp.
 set -euo pipefail
 bin=$(realpath "$1")
 dest=$(realpath -m "$2")
 cd "$(dirname "$0")/../.."
 
-for program in meshgrove meshgrove-step-mesher meshgrove-thumbnailer; do
+for program in meshgrove meshgrove-step-mesher meshgrove-thumbnailer meshgrove-mcp; do
     install -Dm755 "$bin/$program" "$dest/usr/bin/$program"
     strip --strip-unneeded "$dest/usr/bin/$program"
 done

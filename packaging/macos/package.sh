@@ -14,7 +14,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 app="$work/dmg/Meshgrove.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-for program in meshgrove meshgrove-step-mesher; do
+for program in meshgrove meshgrove-step-mesher meshgrove-mcp; do
     lipo -create "$arm/$program" "$intel/$program" -output "$app/Contents/MacOS/$program"
 done
 sed "s/@VERSION@/$version/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
@@ -35,6 +35,7 @@ cp LICENSE THIRD-PARTY-LICENSES.md "$app/Contents/Resources/"
 
 # No Apple developer account yet: ad-hoc signatures, so Gatekeeper asks once on the first start.
 codesign --force --sign - "$app/Contents/MacOS/meshgrove-step-mesher"
+codesign --force --sign - "$app/Contents/MacOS/meshgrove-mcp"
 codesign --force --sign - "$app"
 codesign --verify --strict "$app"
 
