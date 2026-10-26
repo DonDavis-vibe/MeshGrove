@@ -277,6 +277,25 @@ fn suggestions_wait_and_leave_the_library_alone() {
 }
 
 #[test]
+fn assistants_are_told_when_meshgrove_accepts_by_itself() {
+    let lib = library();
+    let mut config = config();
+    let note = |cx: &Context, origin: &Origin| {
+        let mut store = ProposalStore::open_in_memory().unwrap();
+        let items = vec![NoteItem { id: "eigene/rose.stl".into(), note: "Rosa drucken".into(), append: false }];
+        propose_note(cx, &mut store, origin, &ProposeNote { title: None, items }).unwrap().message
+    };
+    let mcp = Origin { source: "mcp".into(), client: Some("test".into()), class: AccessClass::Local };
+    let chat = Origin { source: "chat".into(), client: None, class: AccessClass::Local };
+    let cx = Context::new(&lib, &config, AccessClass::Local, None).unwrap();
+    assert!(note(&cx, &mcp).contains("wait in Meshgrove"));
+    config.ai.auto_accept_since = Some(1);
+    let cx = Context::new(&lib, &config, AccessClass::Local, None).unwrap();
+    assert!(note(&cx, &mcp).contains("by itself"));
+    assert!(note(&cx, &chat).contains("wait in Meshgrove"), "the chat has its own switch");
+}
+
+#[test]
 fn print_time_comes_from_the_gcode_sliced_from_a_model() {
     let mut lib = Library::open_in_memory().unwrap();
     lib.finish_baseline(Path::new(EIGENE)).unwrap();

@@ -807,6 +807,14 @@ pub struct RejectedItem {
 }
 
 const WAITING: &str = "Nothing has changed yet: the suggestions wait in Meshgrove until the user accepts them.";
+const ACCEPTED: &str = "The user lets Meshgrove accept suggestions by itself: these are applied once Meshgrove runs, \
+and can be undone in its history.";
+
+/// What happens to new suggestions: they wait for the review, or (when the user turned that on)
+/// Meshgrove accepts them by itself; never moves, nor the chat's, which has its own switch.
+fn next_step(cx: &Context, origin: &Origin) -> &'static str {
+    if cx.config.ai.auto_accept_since.is_some() && origin.source != "chat" { ACCEPTED } else { WAITING }
+}
 
 fn target(cx: &Context, id: &str) -> ToolResult<Target> {
     let path = cx.resolve(id)?;
@@ -898,10 +906,11 @@ pub fn propose_tags(
     let batch = NewBatch { origin, kind: "tags", title: &title, summary: None, inbox_done: req.mark_inbox_done };
     let (_, uid) = store.insert_batch(&batch, &proposals)?;
     let new = tags.iter().filter(|t| t.status == TagStatus::New).count();
+    let step = next_step(cx, origin);
     let message = if new > 0 {
-        format!("{WAITING} {new} of the tags are new to the library; the review marks them.")
+        format!("{step} {new} of the tags are new to the library; the review marks them.")
     } else {
-        WAITING.to_owned()
+        step.to_owned()
     };
     Ok(Receipt { batch: uid, items: proposals.len(), rejected, tags, message })
 }
@@ -938,7 +947,13 @@ pub fn propose_note(
     let title = summary_line(req.title.as_deref()).unwrap_or_else(|| "Notizen".into());
     let batch = NewBatch { origin, kind: "note", title: &title, summary: None, inbox_done: false };
     let (_, uid) = store.insert_batch(&batch, &proposals)?;
-    Ok(Receipt { batch: uid, items: proposals.len(), rejected, tags: Vec::new(), message: WAITING.into() })
+    Ok(Receipt {
+        batch: uid,
+        items: proposals.len(),
+        rejected,
+        tags: Vec::new(),
+        message: next_step(cx, origin).into(),
+    })
 }
 
 pub fn propose_list(
@@ -989,7 +1004,7 @@ pub fn propose_list(
     };
     let batch = NewBatch { origin, kind: "list", title: name, summary: None, inbox_done: false };
     let (_, uid) = store.insert_batch(&batch, &[proposal])?;
-    Ok(Receipt { batch: uid, items: count, rejected, tags: Vec::new(), message: WAITING.into() })
+    Ok(Receipt { batch: uid, items: count, rejected, tags: Vec::new(), message: next_step(cx, origin).into() })
 }
 
 /// Replaces tags by one: per visible file carrying one of `from`, a suggestion to remove it

@@ -59,6 +59,8 @@ pub enum SettingsChange {
     AiEnabled(bool),
     /// Make Meshgrove available to the AI apps on this computer.
     AiConnectApps(bool),
+    /// Accept the suggestions made from now on without the review (moves excepted).
+    AiAutoAccept(bool),
     /// Connect the AI apps found now.
     AiConnectNow,
     /// What a library shows to which AI.

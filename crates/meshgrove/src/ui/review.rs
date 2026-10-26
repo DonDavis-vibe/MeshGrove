@@ -28,6 +28,8 @@ pub struct ReviewBatch {
     pub source: String,
     pub created: Option<SystemTime>,
     pub inbox_done: bool,
+    /// Made in the chat (its own switch decides whether it applies at once).
+    pub chat: bool,
     pub items: Vec<ReviewItem>,
 }
 
@@ -110,6 +112,15 @@ pub fn show(
                             action = Some(ReviewAction::Accept { batch: bi, all: false });
                         }
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            let picked = batch.items.iter().filter(|i| !i.picked.is_empty()).count();
+                            let mut all = picked == batch.items.len();
+                            let some = picked > 0 && !all;
+                            let check = egui::Checkbox::without_text(&mut all).indeterminate(some);
+                            if ui.add(check).on_hover_text(t!("review.toggle_batch")).changed() {
+                                for item in &mut batch.items {
+                                    item.picked = if all { Picked::all(&item.proposal) } else { Picked::default() };
+                                }
+                            }
                             ui.add(egui::Label::new(RichText::new(format!("✧ {}", batch.title)).strong()).truncate());
                             let mut facts =
                                 vec![batch.source.clone(), t!("review.items", count = batch.items.len()).into_owned()];
@@ -189,13 +200,20 @@ fn target_name(item: &ReviewItem) -> String {
 }
 
 fn tags_row(ui: &mut Ui, item: &mut ReviewItem, style: &TagStyle) {
-    ui.label(RichText::new(target_name(item)).strong());
+    ui.horizontal(|ui| {
+        // The file as a whole: all its tags, or none.
+        let mut on = !item.picked.is_empty();
+        if ui.checkbox(&mut on, "").on_hover_text(t!("review.toggle_file")).changed() {
+            item.picked = if on { Picked::all(&item.proposal) } else { Picked::default() };
+        }
+        ui.label(RichText::new(target_name(item)).strong());
+    });
     let Ok(payload) = serde_json::from_value::<TagsPayload>(item.proposal.payload.clone()) else { return };
     ui.horizontal_wrapped(|ui| {
         for tag in &payload.add {
             let on = item.picked.add.contains(&tag.name);
             let label = format!("{} +{}", if on { "☑" } else { "☐" }, tag.name);
-            let response = tags::chip(ui, style, &tag.name, &label);
+            let response = chip(ui, style, &tag.name, &label, on);
             if tag.status == TagStatus::New {
                 ui.colored_label(NEW_TAG, t!("review.new_tag")).on_hover_text(t!("review.new_tag_hint"));
             }
@@ -206,11 +224,22 @@ fn tags_row(ui: &mut Ui, item: &mut ReviewItem, style: &TagStyle) {
         for tag in &payload.remove {
             let on = item.picked.remove.contains(tag);
             let label = format!("{} −{tag}", if on { "☑" } else { "☐" });
-            if tags::chip(ui, style, tag, &label).on_hover_text(t!("review.toggle")).clicked() {
+            if chip(ui, style, tag, &label, on).on_hover_text(t!("review.toggle")).clicked() {
                 toggle(&mut item.picked.remove, tag);
             }
         }
     });
+}
+
+/// A tag of the suggestion, faded while it is left out.
+fn chip(ui: &mut Ui, style: &TagStyle, tag: &str, label: &str, on: bool) -> egui::Response {
+    ui.scope(|ui| {
+        if !on {
+            ui.multiply_opacity(0.4);
+        }
+        tags::chip(ui, style, tag, label)
+    })
+    .inner
 }
 
 fn toggle(list: &mut Vec<String>, tag: &str) {

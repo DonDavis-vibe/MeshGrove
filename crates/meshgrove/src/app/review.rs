@@ -31,8 +31,37 @@ impl App {
         {
             self.proposals_seen = w.generation();
             self.chat_changed(); // the chat's cards show what became of their suggestions
+            self.auto_accept();
             if matches!(self.view, View::Review { .. }) {
                 self.show_review();
+            }
+        }
+    }
+
+    /// Accepts the suggestions made since the user let Meshgrove do so (Settings → AI): all but
+    /// moves, which always wait, and not the chat's, which has its own switch. Each batch once:
+    /// the decisions are recorded only after the library applied them.
+    fn auto_accept(&mut self) {
+        let Some(since) = self.config.ai.auto_accept_since else { return };
+        let since = SystemTime::UNIX_EPOCH + Duration::from_secs(since);
+        let (_, batches) = self.pending_batches();
+        for b in batches {
+            if b.chat || b.created.is_none_or(|c| c < since) || !self.auto_accepted.insert(b.id) {
+                continue;
+            }
+            let mut ops = Vec::new();
+            let mut decisions = Vec::new();
+            for item in b.items.iter().filter(|i| i.proposal.kind != ProposalKind::Move) {
+                let decision = if item.stale {
+                    Decision::Stale
+                } else {
+                    ops.extend(proposals::to_ops(&item.proposal, &Picked::all(&item.proposal), b.inbox_done));
+                    Decision::Accepted
+                };
+                decisions.push((item.proposal.id, decision));
+            }
+            if !decisions.is_empty() {
+                self.library.accept(b.id, b.uid, b.title, ops, decisions);
             }
         }
     }
@@ -65,6 +94,16 @@ impl App {
     }
 
     pub(super) fn show_review(&mut self) {
+        let (entries, batches) = self.pending_batches();
+        self.leave_search();
+        self.flatten = false;
+        self.view = View::Review { entries, batches };
+        self.refresh_gallery(true);
+    }
+
+    /// The suggestions waiting, by batch, with the files they are about (still there, moved or
+    /// gone) as entries.
+    fn pending_batches(&self) -> (Vec<meshgrove_core::listing::Entry>, Vec<ReviewBatch>) {
         let store = ProposalStore::default_location().filter(|p| p.exists()).and_then(|p| ProposalStore::open(&p).ok());
         let mut entries = Vec::new();
         let mut batches = Vec::new();
@@ -120,10 +159,7 @@ impl App {
                 }
             }
         }
-        self.leave_search();
-        self.flatten = false;
-        self.view = View::Review { entries, batches };
-        self.refresh_gallery(true);
+        (entries, batches)
     }
 
     pub(super) fn review_action(&mut self, action: Option<ReviewAction>) {
@@ -227,6 +263,7 @@ fn review_batch(b: &BatchInfo, items: Vec<ReviewItem>) -> ReviewBatch {
         source: source_label(b),
         created: (b.created_ns > 0).then(|| SystemTime::UNIX_EPOCH + Duration::from_nanos(b.created_ns as u64)),
         inbox_done: b.inbox_done,
+        chat: b.source == "chat",
         items,
     }
 }

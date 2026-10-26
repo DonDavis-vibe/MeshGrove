@@ -198,6 +198,8 @@ pub struct App {
     /// Watches the suggestion store while AI is on, and its change count last seen.
     proposals: Option<ProposalWatcher>,
     proposals_seen: u64,
+    /// Batches of suggestions handed to the library to accept on their own (Settings → AI).
+    auto_accepted: HashSet<i64>,
     /// Files waiting in the inbox, and when to count them again (new files were processed).
     inbox_count: usize,
     inbox_due: Option<Instant>,
@@ -373,6 +375,7 @@ impl App {
             checks_next: Instant::now(),
             proposals: None,
             proposals_seen: 0,
+            auto_accepted: HashSet::new(),
             chat: chat::ChatState::default(),
             ai_tags: ai_actions::AiTags::default(),
             egui_ctx: cc.egui_ctx.clone(),
@@ -1339,6 +1342,11 @@ impl App {
                     }
                 }
                 SettingsChange::AiConnectApps(on) => self.config.ai.connect_apps = on,
+                SettingsChange::AiAutoAccept(on) => {
+                    // From now on: what waits already stays for the review.
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                    self.config.ai.auto_accept_since = on.then_some(now.as_secs());
+                }
                 SettingsChange::AiConnectNow => self.ai_connect.connect_now(),
                 SettingsChange::AiLibrary(library) => {
                     match self.config.ai.libraries.iter_mut().find(|l| l.root == library.root) {

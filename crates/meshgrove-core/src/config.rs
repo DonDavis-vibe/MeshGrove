@@ -501,6 +501,11 @@ pub struct AiConfig {
     /// While AI is on, Meshgrove adds itself to the AI assistants installed on this computer
     /// (and takes itself out again when this or AI is turned off).
     pub connect_apps: bool,
+    /// Since when (Unix seconds) suggestions are accepted without the review: those of the AI
+    /// apps and of the one-click actions, never moves; the chat has its own switch. `None`: all
+    /// wait for the user.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_accept_since: Option<u64>,
 }
 
 impl Default for AiConfig {
@@ -513,6 +518,7 @@ impl Default for AiConfig {
             endpoint: None,
             chat_mode: ChatMode::Review,
             connect_apps: true,
+            auto_accept_since: None,
         }
     }
 }

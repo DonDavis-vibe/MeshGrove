@@ -85,6 +85,10 @@ impl AiSettings {
             changes.push(SettingsChange::AiEnabled(on));
         }
         if config.ai.enabled {
+            let mut auto = config.ai.auto_accept_since.is_some();
+            if check(ui, &mut auto, t!("settings.ai_auto_accept"), t!("settings.ai_auto_accept_hint")) {
+                changes.push(SettingsChange::AiAutoAccept(auto));
+            }
             ui.horizontal(|ui| {
                 if ui.button(t!("settings.ai_review", count = self.pending)).clicked() {
                     changes.push(SettingsChange::ShowAiReview);

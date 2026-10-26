@@ -682,10 +682,12 @@ Druckserver zu geben) und nie die Modelldateien selbst. Fertige Aufgaben sind da
 **Prüfen:** Vorschläge warten in Meshgrove. Der ✧-Knopf in der Werkzeugleiste zeigt, wie viele;
 er öffnet die Prüfliste. Jeder Block zeigt, was für welche Datei vorgeschlagen wurde: neue Tags (☑
 zum Behalten, Tags, die es in der Bibliothek noch nicht gibt, als *neu* markiert), Tags zum
-Entfernen, Notizen, neue Listen. Klick auf einen Tag lässt ihn weg, dann *Ausgewählte annehmen*,
-*Alle annehmen* oder *Verwerfen*. Wer einen Block für den Eingang annimmt, nimmt die Dateien damit
-auch aus dem Eingang. Tags und Notizen gehören zum Inhalt und gelten damit auch für identische
-Kopien; die Prüfliste sagt es dann.
+Entfernen, Notizen, neue Listen. Haken weg bei einer Datei oder Klick auf einen Tag lässt ihn weg
+(der Haken am Titel gilt für den ganzen Block), dann *Ausgewählte annehmen*, *Alle annehmen* oder
+*Verwerfen*. Wer einen Block für den Eingang annimmt, nimmt die Dateien damit auch aus dem
+Eingang. Tags und Notizen gehören zum Inhalt und gelten damit auch für identische Kopien; die
+Prüfliste sagt es dann. *Einstellungen → KI & MCP → Vorschläge automatisch annehmen* überspringt
+die Prüfung für neue Vorschläge von KI-Apps und Ein-Klick-Aktionen; Verschiebungen warten immer.
 
 **Verlauf:** *Prüfliste → Verlauf* listet, was angenommen wurde. *↶ Rückgängig* nimmt genau diese
 Änderungen zurück und lässt, was du seither von Hand geändert hast; *↷ Wiederherstellen* wendet sie

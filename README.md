@@ -647,10 +647,12 @@ einordnen* (sort the inbox), *druckliste-zusammenstellen* (put together a print 
 
 **Review:** suggestions wait in Meshgrove. The ✧ button in the toolbar shows how many; it
 opens the review, where each batch shows what was suggested for which file: tags to add (✓ to
-keep, tags the library does not have yet marked *new*), tags to remove, notes, new lists. Click a
-tag to leave it out, then *Accept selected*, *Accept all* or *Discard*. Accepting a batch for the
-inbox also takes its files out of the inbox. Tags and notes belong to the content, so they also
-reach identical copies; the review says when.
+keep, tags the library does not have yet marked *new*), tags to remove, notes, new lists. Untick a
+file or click a tag to leave it out (the tick at the title covers the whole batch), then *Accept
+selected*, *Accept all* or *Discard*. Accepting a batch for the inbox also takes its files out of
+the inbox. Tags and notes belong to the content, so they also reach identical copies; the review
+says when. *Settings → AI & MCP → Accept suggestions automatically* skips the review for new
+suggestions of AI apps and one-click actions; moves always wait.
 
 **History:** *Review → History* lists what was accepted. *↶ Undo* takes back exactly those
 changes, leaving what you changed by hand since; *↷ Redo* applies them again. *Settings → AI &
