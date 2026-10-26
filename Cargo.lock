@@ -2961,7 +2961,7 @@ dependencies = [
 
 [[package]]
 name = "meshgrove"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3001,7 +3001,7 @@ dependencies = [
 
 [[package]]
 name = "meshgrove-core"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ab_glyph",
  "base64 0.23.1",
@@ -3031,7 +3031,7 @@ dependencies = [
 
 [[package]]
 name = "meshgrove-mcp"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "base64 0.23.1",
  "env_logger",
@@ -3049,7 +3049,7 @@ dependencies = [
 
 [[package]]
 name = "meshgrove-render"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -3065,14 +3065,14 @@ dependencies = [
 
 [[package]]
 name = "meshgrove-step"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "meshgrove-thumbnailer"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "image",
  "meshgrove-core",

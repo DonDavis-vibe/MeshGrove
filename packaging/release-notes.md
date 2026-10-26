@@ -6,7 +6,29 @@
 
 ## Highlights
 
-**Tiles your way** (new in 0.5.2)
+**Your AI apps connect themselves** (new in 0.6)
+
+- While AI is on, Meshgrove adds itself to the assistants it finds on your computer – Claude Desktop, Claude Code, LM Studio, Cursor, VS Code, Codex, Gemini CLI, Copilot CLI, Windsurf, Zed and OpenCode – and *Settings → AI & MCP* lists them with their state. No more copying entries; restart an app once and it can use Meshgrove.
+- Only Meshgrove's own entry changes in their settings, each file is kept as `.bak` before the first change, your own entries are left alone, and switching it off takes the entries out again. `meshgrove-mcp setup` (and `remove`) does the same from a terminal.
+- The idea and the code that finds and edits the apps' settings come from [SolidCraft](https://github.com/tangency-labs/solidcraft) – thank you.
+
+**Settings, rearranged** (new in 0.6)
+
+- The pages are grouped (display, printing, extend), each says in a line what it holds, and its sections fold away with a click on their title.
+- Labels and controls sit in aligned columns, choices among a few are buttons side by side, and *Restore defaults* puts a page back to how Meshgrove comes (your library folders, programs, printers and AI permissions stay).
+
+<p>
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-settings.png" alt="The settings: pages in groups, folding sections, aligned rows and Restore defaults" width="60%">
+</p>
+
+**Reviewing suggestions** (new in 0.6)
+
+- A tick for each file and one for the whole batch: leave out what does not fit, then *Accept selected*.
+- New, for experienced users: *Accept suggestions automatically*. New suggestions of AI apps and one-click actions are applied without the review; moves still wait for you, and everything can be undone in the history.
+- Fixed: back in the library after a tag or a search, its folders had no pictures and files were missing until F5.
+
+
+**Tiles your way** (since 0.5.2)
 
 - *Settings → Tiles* shows a sample tile with every badge on it. Drag the file type, filament colours, duplicates, tags, print bed check, favourite and print state into any corner of the picture, reorder them within a corner, or drop them into a tray to hide them; a right-click does the same.
 - Tags as names or colour dots, filament colours as dots or a stripe along the picture's edge, the bed check with text or as a symbol only, and file names on two, one or no lines, with or without the extension. The tile size and the folder previews have moved there too.
@@ -17,7 +39,7 @@
 </p>
 
 
-**Your own AI, if you want it** – new, optional and off until you switch it on. Meshgrove brings no AI of its own.
+**Your own AI, if you want it** (since 0.5) – optional and off until you switch it on. Meshgrove brings no AI of its own.
 
 - **MCP server** `meshgrove-mcp`: Claude Desktop, Claude Code, LM Studio, Cursor, VS Code and other MCP assistants can search the libraries you open to them and suggest tags, notes, lists, moves and renames. Ready-made tasks: sort the inbox, put together a print list, clean up tags, tidy up a folder.
 - **AI chat** with an OpenAI-compatible endpoint of your own (Ollama, LM Studio, llama.cpp, OpenAI, OpenRouter …): `@` adds files, folders, tags, lists, printers or a search as references, answers link the files they name.
@@ -94,9 +116,11 @@ If Meshgrove saves you time, you can leave a tip on [Ko-fi](https://ko-fi.com/do
 
 **Meshgrove @VERSION@**: eine schnelle, native Galerie für 3D-Druck-Dateien unter Linux, Windows und macOS, mit echten Vorschauen für STL, 3MF, STEP, OBJ, PLY, glTF, G-code, Modelle in ZIP/7z/RAR, PDFs und Readmes, dazu Favoriten, Drucklisten und einem Druckprotokoll.
 
-**Neu:** mehrere Drucker, ein Druckbarkeits-Check und ein Eingang für neue Dateien und Kundenlieferungen. Dazu, freiwillig und ab Werk aus, deine eigene KI: ein MCP-Server für Claude, LM Studio, Cursor & Co. und mit eigenem Endpunkt (Ollama, LM Studio, OpenAI-kompatibel) ein KI-Chat mit `@`-Verweisen und Ein-Klick-Aktionen. Die KI schlägt vor, du nimmst an, und alles lässt sich rückgängig machen. Außerdem lassen sich Listen, Tags und Tag-Gruppen in der Seitenleiste einklappen, und Kopieren und Einfügen in Textfeldern funktioniert.
+**Neu in 0.6:** Meshgrove trägt sich selbst bei deinen KI-Apps ein (Claude Desktop, Claude Code, LM Studio, Cursor, VS Code, Codex, Gemini CLI und weitere; Idee und Code von SolidCraft) – kein Eintrag muss mehr kopiert werden. Die Einstellungen sind neu geordnet: Seiten in Gruppen, einklappbare Abschnitte, ausgerichtete Zeilen und „Standard wiederherstellen“. In der Prüfliste gibt es Häkchen pro Datei und pro Block, und wer möchte, lässt neue Vorschläge automatisch annehmen (Verschiebungen warten immer). Behoben: Nach einem Tag oder einer Suche zeigte die Bibliothek ihre Ordner ohne Bilder, bis man F5 drückte.
 
-**Neu in 0.5.2:** Unter *Einstellungen → Kacheln* stellst du an einer Beispielkachel selbst zusammen, welche Markierungen wo auf den Kacheln stehen: einfach in eine Ecke ziehen oder ausblenden, dazu Tags als Namen oder Punkte, Filamente als Punkte oder Streifen und den Dateinamen ein- oder zweizeilig, mit oder ohne Endung. Unter Windows schreibt Meshgrove jetzt eine Log-Datei (`meshgrove.log`, Pfad unter *Über Meshgrove*), der MCP-Befehl für Claude Code funktioniert auch in der Eingabeaufforderung, und die Hinweise zu Papierkorb und kopierten Dateien nennen nicht mehr Dolphin.
+**Seit 0.5:** mehrere Drucker, ein Druckbarkeits-Check und ein Eingang für neue Dateien und Kundenlieferungen. Dazu, freiwillig und ab Werk aus, deine eigene KI: ein MCP-Server für Claude, LM Studio, Cursor & Co. und mit eigenem Endpunkt (Ollama, LM Studio, OpenAI-kompatibel) ein KI-Chat mit `@`-Verweisen und Ein-Klick-Aktionen. Die KI schlägt vor, du nimmst an, und alles lässt sich rückgängig machen. Außerdem lassen sich Listen, Tags und Tag-Gruppen in der Seitenleiste einklappen, und Kopieren und Einfügen in Textfeldern funktioniert.
+
+**Seit 0.5.2:** Unter *Einstellungen → Kacheln* stellst du an einer Beispielkachel selbst zusammen, welche Markierungen wo auf den Kacheln stehen: einfach in eine Ecke ziehen oder ausblenden, dazu Tags als Namen oder Punkte, Filamente als Punkte oder Streifen und den Dateinamen ein- oder zweizeilig, mit oder ohne Endung. Unter Windows schreibt Meshgrove jetzt eine Log-Datei (`meshgrove.log`, Pfad unter *Über Meshgrove*), der MCP-Befehl für Claude Code funktioniert auch in der Eingabeaufforderung, und die Hinweise zu Papierkorb und kopierten Dateien nennen nicht mehr Dolphin.
 
 **Installation** (alle Pakete können STEP, nichts muss gebaut werden):
 - **Windows:** `…-windows-x64-setup.exe` ausführen. Installiert ohne Adminrechte für dich (oder für alle Benutzer), mit Startmenü-Eintrag und „Öffnen mit“ für STL, 3MF, STEP, OBJ, PLY und glTF. Bei der SmartScreen-Warnung *Weitere Informationen → Trotzdem ausführen* wählen. Ohne Installation: die `…-portable.zip` entpacken und `meshgrove.exe` starten.
