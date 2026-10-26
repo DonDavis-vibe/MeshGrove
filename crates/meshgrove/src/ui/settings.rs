@@ -54,6 +54,10 @@ pub enum SettingsChange {
     /// The inbox of new files in the sidebar.
     Inbox(bool),
     AiEnabled(bool),
+    /// Make Meshgrove available to the AI apps on this computer.
+    AiConnectApps(bool),
+    /// Connect the AI apps found now.
+    AiConnectNow,
     /// What a library shows to which AI.
     AiLibrary(meshgrove_core::config::LibraryAi),
     /// Deletes the suggestion store and the access log.
@@ -247,6 +251,8 @@ pub struct AppInfo<'a> {
     pub render: (&'a egui_wgpu::RenderState, &'a meshgrove_render::Renderer),
     /// The tags' colours, for the sample tile.
     pub tag_style: &'a TagStyle,
+    /// Connecting the AI apps: allowed in this launch, and going on now.
+    pub ai_connect: (bool, bool),
 }
 
 #[derive(Default)]
@@ -619,7 +625,7 @@ impl SettingsDialog {
                                     Section::Printer => self.printers(ui, printers, default_printer, &mut changes),
                                     Section::Ai => self.ai.main(ui, config, &mut changes),
                                     Section::AiLibraries => self.ai.libraries(ui, config, &mut changes),
-                                    Section::Mcp => self.ai.mcp(ui, config),
+                                    Section::Mcp => self.ai.mcp(ui, config, info.ai_connect, &mut changes),
                                     Section::Endpoint => self.ai.endpoint(ui, config, &mut changes),
                                     Section::AiLog => self.ai.log(ui, &mut changes),
                                     Section::UserData => self.user_data(ui, &mut changes),

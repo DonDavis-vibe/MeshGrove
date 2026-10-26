@@ -17,6 +17,7 @@ fast-float2.workspace = true
 blake3.workspace = true
 serde.workspace = true
 toml.workspace = true
+toml_edit.workspace = true
 dirs.workspace = true
 png.workspace = true
 image.workspace = true

@@ -48,6 +48,7 @@ egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 rust-i18n = "4.2"
 serde = { version = "1.0", features = ["derive"] }
 toml = "1.1"
+toml_edit = "0.25"
 dirs = "7.0"
 png = "0.18"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

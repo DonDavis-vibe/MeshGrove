@@ -155,6 +155,8 @@ pub struct App {
     gpu_name: String,
     rate: RateMeter,
     screenshot: Option<crate::screenshot::ScreenshotHook>,
+    /// Adds Meshgrove to the AI assistants on this computer while AI is on.
+    ai_connect: crate::assist::connect::AiConnect,
     /// The slicers models can be sent to, and which one is the default.
     slicers: Vec<Slicer>,
     slicer_names: Vec<String>,
@@ -341,6 +343,10 @@ impl App {
             gpu_name: rs.adapter.get_info().name,
             rate: RateMeter::default(),
             screenshot: crate::screenshot::ScreenshotHook::from_env(),
+            // Test and screenshot runs never touch the user's AI assistants.
+            ai_connect: crate::assist::connect::AiConnect::new(
+                std::env::var_os("MESHGROVE_SCREENSHOT").is_none() && crate::assist::connect::AiConnect::allowed(),
+            ),
             slicers,
             slicer_names,
             default_slicer,
@@ -1331,6 +1337,8 @@ impl App {
                         self.on_listing_arrived();
                     }
                 }
+                SettingsChange::AiConnectApps(on) => self.config.ai.connect_apps = on,
+                SettingsChange::AiConnectNow => self.ai_connect.connect_now(),
                 SettingsChange::AiLibrary(library) => {
                     match self.config.ai.libraries.iter_mut().find(|l| l.root == library.root) {
                         Some(l) => *l = library,
@@ -2531,6 +2539,13 @@ impl eframe::App for App {
             self.toast(message);
         }
         self.library_events();
+        let want = self.config.ai.enabled && self.config.ai.connect_apps;
+        if let Some(names) = self.ai_connect.tick(want) {
+            self.toast(t!("ai_connect.connected", names = names.join(", ")).into_owned());
+        }
+        if self.ai_connect.busy() {
+            ctx.request_repaint_after(Duration::from_millis(200));
+        }
         self.poll_spacemouse(&ctx);
         self.update_selection_facts();
         self.refresh_marks();
@@ -2659,6 +2674,7 @@ impl eframe::App for App {
             mouse: &self.mouse_state,
             render: (&rs, &self.renderer),
             tag_style: &self.tag_style,
+            ai_connect: (self.ai_connect.armed(), self.ai_connect.busy()),
         };
         let changes = self.settings.show(
             &ctx,

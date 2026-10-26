@@ -7,7 +7,7 @@
 //! `MESHGROVE_CLICKS=x,y;x,y;…` clicks those points one after the other, from 3 s on, every 0.8 s
 //! (`x,y*2` double-clicks, `x,y*r` right-clicks), and `MESHGROVE_TYPE=text` types the text after the last click; steps
 //! separated by `|` follow half a second apart, `{enter}`, `{down}` and `{esc}` press those keys,
-//! `{click x,y}` clicks there (to click after typing).
+//! `{click x,y}` clicks there (to click after typing), `{wheel dy}` turns the wheel at the pointer.
 //! `MESHGROVE_MEASURE=fx,fy;fx,fy` measures between those points (fractions of the view) in the
 //! first model window that opens, which the hook's input cannot reach; `MESHGROVE_WINDOW_VIEW=top`
 //! (or `front`, `left` …) starts that window in a standard view.
@@ -175,7 +175,16 @@ impl ScreenshotHook {
                 let (x, y) = s.split_once(',')?;
                 Some(egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?))
             });
+            let wheel =
+                step.strip_prefix("{wheel ").and_then(|s| s.strip_suffix('}')).and_then(|s| s.trim().parse().ok());
             match key {
+                _ if wheel.is_some() => raw.events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, wheel.unwrap_or_default()),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Wheel,
+                    modifiers: egui::Modifiers::NONE,
+                }),
                 _ if click.is_some() => {
                     let pos = click.unwrap_or_default();
                     self.pointer = Some(pos);

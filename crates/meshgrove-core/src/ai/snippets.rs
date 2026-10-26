@@ -1,5 +1,5 @@
-//! What users paste into their AI client so it starts `meshgrove-mcp`. Meshgrove only shows
-//! these; it never writes another program's settings.
+//! What users paste into their AI client so it starts `meshgrove-mcp`, for setting one up by
+//! hand. Meshgrove connects the assistants it finds by itself ([`super::agent_setup`]).
 
 use std::path::{Path, PathBuf};
 
@@ -65,19 +65,9 @@ impl Client {
 /// The program and arguments that start the server. An AppImage (`appimage`) starts it as
 /// `<AppImage> mcp …`, since the binary inside has another path on every run.
 pub fn command(exe: &Path, appimage: Option<&Path>, class: AccessClass, client: Client) -> (String, Vec<String>) {
-    let mut args = Vec::new();
-    let program = match appimage {
-        Some(image) => {
-            args.push("mcp".to_owned());
-            image.display().to_string()
-        }
-        None => exe.display().to_string(),
-    };
-    if class == AccessClass::Local {
-        args.push("--local".into());
-    }
-    args.extend(["--client".to_owned(), client.id().to_owned()]);
-    (program, args)
+    let server = super::agent_setup::Server::new(exe, appimage);
+    let args = server.args(client.id(), class == AccessClass::Local);
+    (server.program, args)
 }
 
 /// What to paste: JSON for the clients' config files, a command for Claude Code.

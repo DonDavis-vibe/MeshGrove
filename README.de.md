@@ -667,9 +667,11 @@ annimmst**, und Angenommenes lässt sich rückgängig machen.
    wählen, und ob Vorschaubilder mitgehen dürfen. Neue Bibliotheken sind erst einmal versteckt.
    *Nur lokale KI* passt für Kundendateien, wenn dein Assistent ein Modell auf deinem Rechner oder
    im eigenen Netz nutzt (LM Studio, Ollama) – so ein Assistent wird mit `--local` eingerichtet.
-3. *Assistent einrichten:* ihn auswählen, angeben, wo sein Modell läuft, den Eintrag kopieren und
-   dort einfügen, wo die Seite es sagt (bei Claude Code ist es ein Befehl). Den Assistenten neu
-   starten.
+3. *Meshgrove den KI-Apps auf diesem Rechner bereitstellen* (von Haus aus an): Meshgrove trägt
+   sich bei den Assistenten ein, die es findet – Claude Desktop, Claude Code, LM Studio, Cursor,
+   VS Code, Codex, Gemini CLI, Copilot CLI, Windsurf, Zed, OpenCode – und listet sie dort auf. Nur
+   sein eigener Eintrag ändert sich; jede Datei wird vorher als `.bak` gesichert. Den Assistenten
+   neu starten. Jeder andere Assistent: *Von Hand einrichten* zeigt den Eintrag zum Kopieren.
 
 Der Assistent startet `meshgrove-mcp` selbst; Meshgrove muss dafür nicht laufen. Er sieht nur die
 Bibliotheken, die du ihm freigibst, bekommt Kennungen wie `Garten/Rankhilfe/rose.stl` statt deiner
@@ -721,9 +723,10 @@ nichts wird neu berechnet. Im Verlauf lässt es sich zurücknehmen, solange die 
 sind; eigens angelegte Ordner verschwinden dann wieder, wenn sie leer sind. Dateien in Archiven
 bleiben, wo sie sind.
 
+Auf der Kommandozeile macht `meshgrove-mcp setup` dasselbe (`--dry-run` zeigt es vorher,
+`--client NAME` wählt einen aus), `meshgrove-mcp remove` nimmt die Einträge wieder heraus, und
 `meshgrove-mcp --print-config claude-desktop` (oder `claude-code`, `lm-studio`, `cursor`, `vscode`,
-bei Bedarf mit `--local`) gibt den Eintrag auch auf der Kommandozeile aus. Beim AppImage lautet der
-Befehl `Meshgrove.AppImage mcp`.
+bei Bedarf mit `--local`) gibt einen aus. Beim AppImage lautet der Befehl `Meshgrove.AppImage mcp`.
 
 ### Zusammenarbeit mit Slicer und anderen Programmen
 
@@ -1273,8 +1276,9 @@ Es baut auf großartiger Open-Source-Arbeit auf: [egui/eframe](https://github.co
 [BLAKE3](https://github.com/BLAKE3-team/BLAKE3), [trash](https://github.com/Byron/trash-rs),
 [wl-clipboard-rs](https://github.com/YaLTeR/wl-clipboard-rs),
 [clipboard-rs](https://github.com/ChurchTao/clipboard-rs) und
-[rust-i18n](https://github.com/longbridge/rust-i18n) und vielen mehr. Logo und Banner sind mit
-dem Bildmodell Krea 2 entstanden.
+[rust-i18n](https://github.com/longbridge/rust-i18n) und vielen mehr. Das Finden und Verbinden
+der KI-Assistenten ist von [SolidCraft](https://github.com/tangency-labs/solidcraft) übernommen
+(MIT). Logo und Banner sind mit dem Bildmodell Krea 2 entstanden.
 
 Alle Modelle auf den Screenshots sind eigene Designs von German Redneck Engineering.
 

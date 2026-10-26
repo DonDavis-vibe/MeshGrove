@@ -498,6 +498,9 @@ pub struct AiConfig {
     pub endpoint: Option<EndpointConfig>,
     /// Whether the chat's changes wait for review or apply at once (and can be undone).
     pub chat_mode: ChatMode,
+    /// While AI is on, Meshgrove adds itself to the AI assistants installed on this computer
+    /// (and takes itself out again when this or AI is turned off).
+    pub connect_apps: bool,
 }
 
 impl Default for AiConfig {
@@ -509,6 +512,7 @@ impl Default for AiConfig {
             expire_days: 30,
             endpoint: None,
             chat_mode: ChatMode::Review,
+            connect_apps: true,
         }
     }
 }

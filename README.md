@@ -632,8 +632,11 @@ changes can be undone.
    whether thumbnails may be sent. New libraries start hidden. Pick *local AI only* for
    customer files when your assistant uses a model on your computer or network (LM Studio,
    Ollama) – that assistant is set up with `--local`.
-3. *Set up your assistant:* choose it, choose where its model runs, copy the entry and paste it
-   where the page says (for Claude Code it is a command to run). Restart the assistant.
+3. *Make Meshgrove available to the AI apps on this computer* (on by default): Meshgrove adds
+   itself to the assistants it finds – Claude Desktop, Claude Code, LM Studio, Cursor, VS Code,
+   Codex, Gemini CLI, Copilot CLI, Windsurf, Zed, OpenCode – and lists them there. Only its own
+   entry changes; each file is kept as `.bak` first. Restart the assistant. Any other assistant:
+   *Set up by hand* gives the entry to copy.
 
 The assistant starts `meshgrove-mcp` itself; Meshgrove need not be running. It sees only the
 libraries you opened to it, gets ids like `Garten/Rankhilfe/rose.stl` instead of your folder
@@ -680,9 +683,10 @@ without ever overwriting anything – a place taken by then is skipped. Tags, no
 thumbnails go along, nothing is computed again. The history takes it back as long as the files
 are unchanged; folders made for it go again when empty. Files inside archives stay where they are.
 
+On the command line, `meshgrove-mcp setup` does the same (`--dry-run` shows it first,
+`--client NAME` picks one), `meshgrove-mcp remove` takes the entries out again, and
 `meshgrove-mcp --print-config claude-desktop` (or `claude-code`, `lm-studio`, `cursor`, `vscode`,
-with `--local` if needed) prints the entry on the command line too. With the AppImage the
-command is `Meshgrove.AppImage mcp`.
+with `--local` if needed) prints one. With the AppImage the command is `Meshgrove.AppImage mcp`.
 
 ### Working with your slicer and other apps
 
@@ -1215,8 +1219,9 @@ Built on excellent open-source work: [egui/eframe](https://github.com/emilk/egui
 [BLAKE3](https://github.com/BLAKE3-team/BLAKE3), [trash](https://github.com/Byron/trash-rs),
 [wl-clipboard-rs](https://github.com/YaLTeR/wl-clipboard-rs),
 [clipboard-rs](https://github.com/ChurchTao/clipboard-rs) and
-[rust-i18n](https://github.com/longbridge/rust-i18n), among others. Logo and banner were
-created with the Krea 2 image model.
+[rust-i18n](https://github.com/longbridge/rust-i18n), among others. Finding and connecting the
+AI assistants is adapted from [SolidCraft](https://github.com/tangency-labs/solidcraft) (MIT).
+Logo and banner were created with the Krea 2 image model.
 
 All models in the screenshots are our own designs (German Redneck Engineering).
 

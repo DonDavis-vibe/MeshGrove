@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
+use meshgrove_core::ai::agent_setup::{Change, Outcome};
 use meshgrove_core::ai::guess_local;
 use meshgrove_core::ai::proposals::{AccessEntry, ProposalStore};
 use meshgrove_core::ai::snippets::{self, Client};
@@ -13,6 +14,7 @@ use meshgrove_core::config::{AccessClass, AiAccess, Config, EndpointConfig};
 use meshgrove_core::listing;
 
 use super::settings::SettingsChange;
+use crate::assist::connect;
 use crate::i18n;
 
 /// The AI part of the settings window's state.
@@ -31,6 +33,8 @@ pub struct AiSettings {
     test: Option<Receiver<Result<Vec<String>, String>>>,
     models: Vec<String>,
     tested: Option<Result<String, String>>,
+    /// The assistants found and what connecting would do for each, read when the page shows.
+    assistants: Option<Vec<Outcome>>,
 }
 
 impl Default for AiSettings {
@@ -47,6 +51,7 @@ impl Default for AiSettings {
             test: None,
             models: Vec::new(),
             tested: None,
+            assistants: None,
         }
     }
 }
@@ -59,6 +64,7 @@ impl AiSettings {
         self.form = None;
         self.key.clear();
         self.tested = None;
+        self.assistants = None;
     }
 
     fn load(&mut self) {
@@ -127,7 +133,15 @@ impl AiSettings {
         ui.weak(t!("settings.ai_libraries_hint"));
     }
 
-    pub fn mcp(&mut self, ui: &mut Ui, config: &Config) {
+    /// The AI assistants on this computer: Meshgrove adds itself to them (the idea and its rules
+    /// come from SolidCraft), and the entry to copy for setting one up by hand.
+    pub fn mcp(
+        &mut self,
+        ui: &mut Ui,
+        config: &Config,
+        (armed, busy): (bool, bool),
+        changes: &mut Vec<SettingsChange>,
+    ) {
         ui.label(RichText::new(t!("settings.mcp")).strong());
         ui.weak(t!("settings.mcp_hint"));
         if !config.ai.enabled {
@@ -143,35 +157,93 @@ impl AiSettings {
                 t!("settings.mcp_missing", path = exe.display().to_string()),
             ),
         };
-        ui.horizontal(|ui| {
-            ui.label(t!("settings.mcp_client"));
-            egui::ComboBox::from_id_salt("mcp_client").selected_text(self.client.name()).show_ui(ui, |ui| {
-                for client in Client::ALL {
-                    ui.selectable_value(&mut self.client, client, client.name());
+        let mut on = config.ai.connect_apps;
+        if ui.checkbox(&mut on, t!("settings.mcp_connect_apps")).changed() {
+            changes.push(SettingsChange::AiConnectApps(on));
+            self.assistants = None;
+        }
+        ui.weak(t!("settings.mcp_connect_hint"));
+        if !armed {
+            ui.weak(t!("settings.mcp_connect_off_here"));
+        }
+        // What is there, read again once a run has finished.
+        if busy {
+            self.assistants = None;
+        } else if self.assistants.is_none() {
+            self.assistants = Some(connect::status());
+        }
+        ui.add_space(4.0);
+        match &self.assistants {
+            None => {
+                ui.spinner();
+            }
+            Some(found) if found.is_empty() => {
+                ui.weak(t!("settings.mcp_none_found"));
+            }
+            Some(found) => {
+                egui::Grid::new("ai_assistants").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                    for o in found {
+                        ui.label(o.name()).on_hover_text(o.file.display().to_string());
+                        let (text, color) = match &o.result {
+                            Ok(Some(Change::Unchanged)) => {
+                                (t!("settings.mcp_state_connected"), Some(ui.visuals().strong_text_color()))
+                            }
+                            Ok(Some(Change::Updated)) => (t!("settings.mcp_state_stale"), None),
+                            Ok(Some(Change::Custom)) => (t!("settings.mcp_state_custom"), None),
+                            Err(_) => (t!("settings.mcp_state_unreadable"), Some(ui.visuals().warn_fg_color)),
+                            _ => (t!("settings.mcp_state_not_yet"), None),
+                        };
+                        let label = match color {
+                            Some(c) => ui.colored_label(c, text),
+                            None => ui.weak(text),
+                        };
+                        if let Err(e) = &o.result {
+                            label.on_hover_text(e.as_str());
+                        }
+                        ui.end_row();
+                    }
+                });
+                let missing = found.iter().any(|o| matches!(o.result, Ok(Some(Change::Added | Change::Updated))));
+                if ui
+                    .add_enabled(armed && !busy && missing, egui::Button::new(t!("settings.mcp_connect_now")))
+                    .clicked()
+                {
+                    changes.push(SettingsChange::AiConnectNow);
+                    self.assistants = None;
                 }
+            }
+        }
+        let none_found = self.assistants.as_ref().is_some_and(Vec::is_empty);
+        egui::CollapsingHeader::new(t!("settings.mcp_by_hand")).default_open(none_found).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(t!("settings.mcp_client"));
+                egui::ComboBox::from_id_salt("mcp_client").selected_text(self.client.name()).show_ui(ui, |ui| {
+                    for client in Client::ALL {
+                        ui.selectable_value(&mut self.client, client, client.name());
+                    }
+                });
             });
+            ui.radio_value(&mut self.local, false, t!("settings.mcp_cloud"));
+            ui.radio_value(&mut self.local, true, t!("settings.mcp_local"));
+            let class = if self.local { AccessClass::Local } else { AccessClass::Cloud };
+            let mut snippet = snippets::snippet(self.client, &exe, appimage.as_deref(), class);
+            ui.add(
+                egui::TextEdit::multiline(&mut snippet)
+                    .code_editor()
+                    .interactive(true)
+                    .desired_rows(if self.client.is_command() { 2 } else { 8 })
+                    .desired_width(f32::INFINITY),
+            );
+            if ui.button(t!("settings.mcp_copy")).clicked() {
+                ui.ctx().copy_text(snippet.clone());
+            }
+            // Below the button, not beside it: text in a row would not wrap and widen the window.
+            if self.client.is_command() {
+                ui.weak(t!("settings.mcp_paste_terminal"));
+            } else if let Some(file) = self.client.config_files().first() {
+                ui.weak(t!("settings.mcp_paste_file", path = file.display().to_string()));
+            }
         });
-        ui.radio_value(&mut self.local, false, t!("settings.mcp_cloud"));
-        ui.radio_value(&mut self.local, true, t!("settings.mcp_local"));
-        let class = if self.local { AccessClass::Local } else { AccessClass::Cloud };
-        let mut snippet = snippets::snippet(self.client, &exe, appimage.as_deref(), class);
-        ui.add(
-            egui::TextEdit::multiline(&mut snippet)
-                .code_editor()
-                .interactive(true)
-                .desired_rows(if self.client.is_command() { 2 } else { 8 })
-                .desired_width(f32::INFINITY),
-        );
-        if ui.button(t!("settings.mcp_copy")).clicked() {
-            ui.ctx().copy_text(snippet.clone());
-        }
-        // Below the button, not beside it: text in a row would not wrap and widen the window.
-        if self.client.is_command() {
-            ui.weak(t!("settings.mcp_paste_terminal"));
-        } else if let Some(file) = self.client.config_files().first() {
-            ui.weak(t!("settings.mcp_paste_file", path = file.display().to_string()));
-        }
-        ui.weak(t!("settings.mcp_never_written"));
     }
 
     /// The user's own OpenAI-compatible endpoint for the chat and the one-click actions.
@@ -369,7 +441,7 @@ fn access_name(access: AiAccess) -> String {
 }
 
 fn client_name(id: &str) -> String {
-    Client::ALL.into_iter().find(|c| c.id() == id).map_or_else(|| id.to_owned(), |c| c.name().to_owned())
+    meshgrove_core::ai::agent_setup::client_name(id).to_owned()
 }
 
 /// `meshgrove-mcp` next to this program, and the AppImage this runs from (if it does).
