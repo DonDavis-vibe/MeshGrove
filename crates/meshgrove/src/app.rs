@@ -147,6 +147,9 @@ pub struct App {
     last_selected: Option<usize>,
     search: String,
     scope: Scope,
+    /// The scope before a tag in the sidebar switched to searching the library; it comes back
+    /// when that search ends.
+    scope_before_tags: Option<Scope>,
     search_changed: Option<Instant>,
     focus_search: bool,
     flatten: bool,
@@ -335,6 +338,7 @@ impl App {
             last_selected: None,
             search: String::new(),
             scope: Scope::Folder,
+            scope_before_tags: None,
             search_changed: None,
             focus_search: false,
             flatten: false,
@@ -491,22 +495,19 @@ impl App {
             self.search.clear();
             self.search_changed = None;
             self.view = View::Folder;
+            if let Some(scope) = self.scope_before_tags.take() {
+                self.scope = scope;
+            }
         }
     }
 
     fn navigate(&mut self, path: PathBuf) {
+        // Search results, a list, the duplicates … rather than the folder itself.
+        let elsewhere = !matches!(self.view, View::Folder | View::Flatten { .. });
         self.leave_search();
-        if path == self.nav.current()
-            && matches!(
-                self.view,
-                View::Duplicates { .. }
-                    | View::List { .. }
-                    | View::Inbox { .. }
-                    | View::Review { .. }
-                    | View::History { .. }
-            )
-        {
-            // The folder is already read; going "there" means leaving the duplicates or the list.
+        if path == self.nav.current() && elsewhere {
+            // The folder is already read; going "there" means showing it again instead (the
+            // gallery still holds what was shown).
             self.view = View::Folder;
             self.on_listing_arrived();
             return;
@@ -1770,6 +1771,7 @@ impl App {
             return;
         }
         self.scope = scope;
+        self.scope_before_tags = None; // chosen now, it stays
         match scope {
             Scope::Library => self.search_changed = Some(Instant::now() - SEARCH_DEBOUNCE),
             Scope::Folder => {
@@ -2220,6 +2222,9 @@ impl App {
                 self.library.set_roots(self.config.library_roots.clone());
             }
             Some(SidebarAction::SearchTags(tags)) => {
+                if self.scope != Scope::Library {
+                    self.scope_before_tags = Some(self.scope);
+                }
                 self.scope = Scope::Library;
                 let terms: Vec<String> = tags
                     .iter()
