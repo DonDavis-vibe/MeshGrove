@@ -16,6 +16,7 @@ use meshgrove_render::{Framing, GpuMesh, Renderer, ViewParams};
 
 use super::offscreen::{OffscreenView, pixel_size};
 use super::settings::SettingsChange;
+use super::settings_kit::{hint, row};
 use crate::spacemouse::{Snapshot, Status};
 
 // ---- the picture ----
@@ -357,7 +358,6 @@ impl MouseSettings {
         changes: &mut Vec<SettingsChange>,
     ) {
         let mut c: SpaceMouseConfig = config.spacemouse.clone();
-        ui.label(RichText::new(t!("mouse.title")).strong());
         ui.checkbox(&mut c.enabled, t!("mouse.enabled"));
         match &mouse.status {
             Status::Connected(name) => ui.weak(t!("mouse.connected", name = name)),
@@ -399,23 +399,20 @@ impl MouseSettings {
             }
         });
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.label(t!("mouse.speed"));
+        row(ui, &t!("mouse.speed"), |ui| {
             ui.add(egui::Slider::new(&mut c.speed, SPEED_RANGE).custom_formatter(|v, _| format!("{v:.2}×")));
         });
-        ui.horizontal(|ui| {
-            ui.label(t!("mouse.deadzone"));
+        row(ui, &t!("mouse.deadzone"), |ui| {
             ui.add(
                 egui::Slider::new(&mut c.deadzone, DEADZONE_RANGE)
                     .custom_formatter(|v, _| format!("{:.0} %", v * 100.0)),
             );
         });
         ui.checkbox(&mut c.dominant, t!("mouse.dominant"));
-        ui.add_space(6.0);
+        ui.add_space(4.0);
 
-        ui.label(RichText::new(t!("mouse.mapping")).strong());
         let (twist, tilt) = (AxisMapping::twist_orbits(), AxisMapping::tilt_orbits());
-        ui.horizontal(|ui| {
+        row(ui, &t!("mouse.mapping"), |ui| {
             if ui.radio(c.mapping == twist, t!("mouse.preset_twist")).clicked() {
                 c.mapping = twist;
             }
@@ -446,7 +443,7 @@ impl MouseSettings {
                 }
             });
         });
-        ui.weak(t!("mouse.buttons_hint"));
+        hint(ui, t!("mouse.buttons_hint"));
         ui.add_space(6.0);
 
         ui.horizontal(|ui| {
@@ -462,7 +459,7 @@ impl MouseSettings {
                 ui.weak(t!("mouse.not_calibrated"));
             }
         });
-        ui.weak(t!("mouse.calibrate_hint"));
+        hint(ui, t!("mouse.calibrate_hint"));
         if c != config.spacemouse {
             changes.push(SettingsChange::SpaceMouse(c));
         }

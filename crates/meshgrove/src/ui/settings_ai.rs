@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use crossbeam_channel::{Receiver, bounded};
-use egui::{RichText, Ui};
+use egui::Ui;
 use meshgrove_core::ai::agent_setup::{Change, Outcome};
 use meshgrove_core::ai::guess_local;
 use meshgrove_core::ai::proposals::{AccessEntry, ProposalStore};
@@ -14,6 +14,7 @@ use meshgrove_core::config::{AccessClass, AiAccess, Config, EndpointConfig};
 use meshgrove_core::listing;
 
 use super::settings::SettingsChange;
+use super::settings_kit::{self as kit, check, hint, row};
 use crate::assist::connect;
 use crate::i18n;
 
@@ -79,12 +80,10 @@ impl AiSettings {
 
     pub fn main(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
         self.load();
-        ui.label(RichText::new(t!("settings.ai")).strong());
         let mut on = config.ai.enabled;
-        if ui.checkbox(&mut on, t!("settings.ai_enable")).changed() {
+        if check(ui, &mut on, t!("settings.ai_enable"), t!("settings.ai_hint")) {
             changes.push(SettingsChange::AiEnabled(on));
         }
-        ui.weak(t!("settings.ai_hint"));
         if config.ai.enabled {
             ui.horizontal(|ui| {
                 if ui.button(t!("settings.ai_review", count = self.pending)).clicked() {
@@ -98,14 +97,15 @@ impl AiSettings {
     }
 
     pub fn libraries(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
-        ui.label(RichText::new(t!("settings.ai_libraries")).strong());
-        if !config.ai.enabled {
-            ui.weak(t!("settings.ai_off"));
-            return;
-        }
         if config.library_roots.is_empty() {
-            ui.weak(t!("settings.ai_no_libraries"));
+            hint(ui, t!("settings.ai_no_libraries"));
+        } else {
+            self.library_grid(ui, config, changes);
         }
+        hint(ui, t!("settings.ai_libraries_hint"));
+    }
+
+    fn library_grid(&self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
         egui::Grid::new("ai_libraries").num_columns(3).spacing([12.0, 6.0]).show(ui, |ui| {
             for root in &config.library_roots {
                 let mut library = config.ai.library(root);
@@ -130,7 +130,6 @@ impl AiSettings {
                 }
             }
         });
-        ui.weak(t!("settings.ai_libraries_hint"));
     }
 
     /// The AI assistants on this computer: Meshgrove adds itself to them (the idea and its rules
@@ -142,29 +141,23 @@ impl AiSettings {
         (armed, busy): (bool, bool),
         changes: &mut Vec<SettingsChange>,
     ) {
-        ui.label(RichText::new(t!("settings.mcp")).strong());
-        ui.weak(t!("settings.mcp_hint"));
         if !config.ai.enabled {
-            ui.weak(t!("settings.ai_off"));
             return;
         }
+        hint(ui, t!("settings.mcp_hint"));
         let (exe, appimage) = mcp_binary();
-        match (&appimage, exe.exists()) {
-            (Some(image), _) => ui.weak(t!("settings.mcp_found", path = image.display().to_string())),
-            (None, true) => ui.weak(t!("settings.mcp_found", path = exe.display().to_string())),
-            (None, false) => ui.colored_label(
-                ui.visuals().warn_fg_color,
-                t!("settings.mcp_missing", path = exe.display().to_string()),
-            ),
-        };
+        let server = appimage.clone().unwrap_or_else(|| exe.clone());
+        if appimage.is_none() && !exe.exists() {
+            ui.colored_label(ui.visuals().warn_fg_color, t!("settings.mcp_missing", path = exe.display().to_string()));
+        }
+        ui.add_space(2.0);
         let mut on = config.ai.connect_apps;
-        if ui.checkbox(&mut on, t!("settings.mcp_connect_apps")).changed() {
+        if check(ui, &mut on, t!("settings.mcp_connect_apps"), t!("settings.mcp_connect_hint")) {
             changes.push(SettingsChange::AiConnectApps(on));
             self.assistants = None;
         }
-        ui.weak(t!("settings.mcp_connect_hint"));
         if !armed {
-            ui.weak(t!("settings.mcp_connect_off_here"));
+            hint(ui, t!("settings.mcp_connect_off_here"));
         }
         // What is there, read again once a run has finished.
         if busy {
@@ -177,33 +170,26 @@ impl AiSettings {
             None => {
                 ui.spinner();
             }
-            Some(found) if found.is_empty() => {
-                ui.weak(t!("settings.mcp_none_found"));
-            }
+            Some(found) if found.is_empty() => hint(ui, t!("settings.mcp_none_found")),
             Some(found) => {
-                egui::Grid::new("ai_assistants").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                    for o in found {
-                        ui.label(o.name()).on_hover_text(o.file.display().to_string());
-                        let (text, color) = match &o.result {
-                            Ok(Some(Change::Unchanged)) => {
-                                (t!("settings.mcp_state_connected"), Some(ui.visuals().strong_text_color()))
-                            }
-                            Ok(Some(Change::Updated)) => (t!("settings.mcp_state_stale"), None),
-                            Ok(Some(Change::Custom)) => (t!("settings.mcp_state_custom"), None),
-                            Err(_) => (t!("settings.mcp_state_unreadable"), Some(ui.visuals().warn_fg_color)),
-                            _ => (t!("settings.mcp_state_not_yet"), None),
+                for o in found {
+                    let (text, color) = match &o.result {
+                        Ok(Some(Change::Unchanged)) => (t!("settings.mcp_state_connected"), kit::GOOD),
+                        Ok(Some(Change::Updated)) => (t!("settings.mcp_state_stale"), ui.visuals().text_color()),
+                        Ok(Some(Change::Custom)) => (t!("settings.mcp_state_custom"), ui.visuals().text_color()),
+                        Err(_) => (t!("settings.mcp_state_unreadable"), ui.visuals().warn_fg_color),
+                        _ => (t!("settings.mcp_state_not_yet"), ui.visuals().weak_text_color()),
+                    };
+                    row(ui, o.name(), |ui| {
+                        let pill = kit::pill(ui, text, color);
+                        match &o.result {
+                            Err(e) => pill.on_hover_text(format!("{}\n{e}", o.file.display())),
+                            Ok(_) => pill.on_hover_text(o.file.display().to_string()),
                         };
-                        let label = match color {
-                            Some(c) => ui.colored_label(c, text),
-                            None => ui.weak(text),
-                        };
-                        if let Err(e) = &o.result {
-                            label.on_hover_text(e.as_str());
-                        }
-                        ui.end_row();
-                    }
-                });
+                    });
+                }
                 let missing = found.iter().any(|o| matches!(o.result, Ok(Some(Change::Added | Change::Updated))));
+                ui.add_space(2.0);
                 if ui
                     .add_enabled(armed && !busy && missing, egui::Button::new(t!("settings.mcp_connect_now")))
                     .clicked()
@@ -215,16 +201,18 @@ impl AiSettings {
         }
         let none_found = self.assistants.as_ref().is_some_and(Vec::is_empty);
         egui::CollapsingHeader::new(t!("settings.mcp_by_hand")).default_open(none_found).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(t!("settings.mcp_client"));
+            hint(ui, t!("settings.mcp_found", path = server.display().to_string()));
+            row(ui, &t!("settings.mcp_client"), |ui| {
                 egui::ComboBox::from_id_salt("mcp_client").selected_text(self.client.name()).show_ui(ui, |ui| {
                     for client in Client::ALL {
                         ui.selectable_value(&mut self.client, client, client.name());
                     }
                 });
             });
-            ui.radio_value(&mut self.local, false, t!("settings.mcp_cloud"));
-            ui.radio_value(&mut self.local, true, t!("settings.mcp_local"));
+            row(ui, &t!("settings.mcp_model_runs"), |ui| {
+                ui.radio_value(&mut self.local, false, t!("settings.mcp_cloud"));
+                ui.radio_value(&mut self.local, true, t!("settings.mcp_local"));
+            });
             let class = if self.local { AccessClass::Local } else { AccessClass::Cloud };
             let mut snippet = snippets::snippet(self.client, &exe, appimage.as_deref(), class);
             ui.add(
@@ -239,19 +227,17 @@ impl AiSettings {
             }
             // Below the button, not beside it: text in a row would not wrap and widen the window.
             if self.client.is_command() {
-                ui.weak(t!("settings.mcp_paste_terminal"));
+                hint(ui, t!("settings.mcp_paste_terminal"));
             } else if let Some(file) = self.client.config_files().first() {
-                ui.weak(t!("settings.mcp_paste_file", path = file.display().to_string()));
+                hint(ui, t!("settings.mcp_paste_file", path = file.display().to_string()));
             }
         });
     }
 
     /// The user's own OpenAI-compatible endpoint for the chat and the one-click actions.
     pub fn endpoint(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
-        ui.label(RichText::new(t!("endpoint.title")).strong());
-        ui.weak(t!("endpoint.hint"));
+        hint(ui, t!("endpoint.hint"));
         if !config.ai.enabled {
-            ui.weak(t!("settings.ai_off"));
             return;
         }
         if let Some(rx) = &self.test
@@ -279,8 +265,8 @@ impl AiSettings {
             }
         }
         let Some(form) = self.form.as_mut() else { return };
-        egui::Grid::new("endpoint").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-            ui.label(t!("endpoint.preset"));
+        ui.add_space(2.0);
+        row(ui, &t!("endpoint.preset"), |ui| {
             let name = PRESETS.iter().find(|p| p.0 == form.preset).map_or(form.preset.clone(), |p| preset_name(p.0));
             egui::ComboBox::from_id_salt("endpoint_preset").selected_text(name).show_ui(ui, |ui| {
                 for (id, url) in PRESETS {
@@ -293,13 +279,13 @@ impl AiSettings {
                     }
                 }
             });
-            ui.end_row();
-            ui.label(t!("endpoint.url"));
-            if ui.add(egui::TextEdit::singleline(&mut form.base_url).desired_width(340.0)).changed() {
+        });
+        row(ui, &t!("endpoint.url"), |ui| {
+            if ui.add(egui::TextEdit::singleline(&mut form.base_url).desired_width(300.0)).changed() {
                 form.local = guess_local(&form.base_url);
             }
-            ui.end_row();
-            ui.label(t!("endpoint.model"));
+        });
+        row(ui, &t!("endpoint.model"), |ui| {
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut form.model).hint_text("qwen3:8b").desired_width(220.0));
                 if !self.models.is_empty() {
@@ -312,8 +298,8 @@ impl AiSettings {
                     });
                 }
             });
-            ui.end_row();
-            ui.label(t!("endpoint.key"));
+        });
+        row(ui, &t!("endpoint.key"), |ui| {
             ui.horizontal(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.key)
@@ -333,10 +319,9 @@ impl AiSettings {
                     ui.weak(t!("endpoint.key_stored"));
                 }
             });
-            ui.end_row();
-            ui.label(t!("endpoint.key_env"));
+        });
+        row(ui, &t!("endpoint.key_env"), |ui| {
             ui.add(egui::TextEdit::singleline(&mut form.key_env).hint_text("OPENAI_API_KEY").desired_width(220.0));
-            ui.end_row();
         });
         ui.checkbox(&mut form.local, t!("endpoint.local")).on_hover_text(t!("endpoint.local_hint"));
         ui.checkbox(&mut form.vision, t!("endpoint.vision")).on_hover_text(t!("endpoint.vision_hint"));
@@ -389,9 +374,8 @@ impl AiSettings {
 
     pub fn log(&mut self, ui: &mut Ui, changes: &mut Vec<SettingsChange>) {
         self.load();
-        ui.label(RichText::new(t!("settings.ai_log")).strong());
         if self.log.is_empty() {
-            ui.weak(t!("settings.ai_log_empty"));
+            hint(ui, t!("settings.ai_log_empty"));
         } else {
             egui::Grid::new("ai_log").num_columns(5).striped(true).spacing([12.0, 4.0]).show(ui, |ui| {
                 for e in &self.log {

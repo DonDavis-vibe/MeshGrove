@@ -2,8 +2,7 @@
 //! of its picture (or out of sight), and how tags, filaments, the check and the name look.
 
 use egui::{
-    Color32, CursorIcon, Id, Key, LayerId, Order, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, Ui,
-    pos2, vec2,
+    Color32, CursorIcon, Id, Key, LayerId, Order, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle, Ui, pos2, vec2,
 };
 use meshgrove_core::config::{
     CheckStyle, Config, FilamentStyle, TILE_SIZE, TILE_TAG_COUNT, TileBadge, TileLayout, TileSlot, TileTags,
@@ -11,6 +10,7 @@ use meshgrove_core::config::{
 
 use super::gallery;
 use super::settings::SettingsChange;
+use super::settings_kit::{hint, row, segmented, segmented_where};
 use super::tags::{self, Group, TagStyle};
 use super::tile_overlay::{self, Check, Overlays, PrintMark};
 
@@ -112,11 +112,9 @@ pub(super) fn drop_target(
 impl TileSettings {
     /// The sample tile, the hidden marks below it, and the tile size.
     pub fn preview(&mut self, ui: &mut Ui, config: &Config, style: &TagStyle, changes: &mut Vec<SettingsChange>) {
-        ui.label(RichText::new(t!("settings.tiles_preview")).strong());
         let layout = &config.tile_layout;
         let mut size = config.tile_size;
-        ui.horizontal(|ui| {
-            ui.label(t!("gallery.tile_size"));
+        row(ui, &t!("gallery.tile_size"), |ui| {
             if ui.add(egui::Slider::new(&mut size, TILE_SIZE).show_value(false)).changed() {
                 changes.push(SettingsChange::TileSize(size));
             }
@@ -164,7 +162,7 @@ impl TileSettings {
         ui.add_space(6.0);
         ui.label(t!("settings.tiles_hidden"));
         let (tray, chips) = self.tray(ui, layout);
-        ui.weak(t!("settings.tiles_hint"));
+        hint(ui, t!("settings.tiles_hint"));
 
         let mut targets = placed.clone();
         targets.extend(chips);
@@ -279,61 +277,49 @@ impl TileSettings {
 
     /// How tags, filaments, the check and the name look; and back to the tiles as they came.
     pub fn look(&self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
-        ui.label(RichText::new(t!("settings.tiles_look")).strong());
         let mut layout = config.tile_layout.clone();
         let (mut count, mut style) = (config.tile_tag_count, config.tile_tags);
-        egui::Grid::new("tile_look").num_columns(2).spacing([16.0, 6.0]).show(ui, |ui| {
-            ui.label(t!("settings.tile_tags"));
-            ui.horizontal(|ui| {
-                ui.radio_value(&mut style, TileTags::Names, t!("settings.tags_names"));
-                ui.add_enabled_ui(config.colored_tags, |ui| {
-                    ui.radio_value(&mut style, TileTags::Dots, t!("settings.tags_dots"))
-                        .on_disabled_hover_text(t!("settings.tags_dots_need_colors"));
-                });
+        row(ui, &t!("settings.tile_tags"), |ui| {
+            let options = [
+                (TileTags::Names, t!("settings.tags_names").into_owned()),
+                (TileTags::Dots, t!("settings.tags_dots").into_owned()),
+            ];
+            let colored = config.colored_tags;
+            segmented_where(ui, &mut style, &options, |option| {
+                (option == TileTags::Dots && !colored).then(|| t!("settings.tags_dots_need_colors").into_owned())
             });
-            ui.end_row();
-            ui.label("");
             ui.horizontal(|ui| {
                 ui.label(t!("settings.tags_count"));
                 ui.add(egui::Slider::new(&mut count, TILE_TAG_COUNT));
             });
-            ui.end_row();
-            ui.label(t!("settings.tile_filaments"));
-            ui.horizontal(|ui| {
-                ui.radio_value(&mut layout.filaments, FilamentStyle::Dots, t!("settings.tiles_filament_dots"));
-                ui.radio_value(&mut layout.filaments, FilamentStyle::Stripe, t!("settings.tiles_filament_stripe"));
-            });
-            ui.end_row();
-            ui.label(t!("settings.tile_check"));
-            ui.horizontal(|ui| {
-                ui.radio_value(&mut layout.check, CheckStyle::Text, t!("settings.tiles_check_text"));
-                ui.radio_value(&mut layout.check, CheckStyle::Symbol, t!("settings.tiles_check_symbol"));
-            });
-            ui.end_row();
-            ui.label(t!("settings.tiles_name"));
-            ui.horizontal(|ui| {
-                for (lines, label) in [
-                    (0, t!("settings.tiles_name_none")),
-                    (1, t!("settings.tiles_name_one")),
-                    (2, t!("settings.tiles_name_two")),
-                ] {
-                    ui.radio_value(&mut layout.name_lines, lines, label);
-                }
-            });
-            ui.end_row();
-            ui.label("");
+        });
+        row(ui, &t!("settings.tile_filaments"), |ui| {
+            let options = [
+                (FilamentStyle::Dots, t!("settings.tiles_filament_dots").into_owned()),
+                (FilamentStyle::Stripe, t!("settings.tiles_filament_stripe").into_owned()),
+            ];
+            segmented(ui, &mut layout.filaments, &options);
+        });
+        row(ui, &t!("settings.tile_check"), |ui| {
+            let options = [
+                (CheckStyle::Text, t!("settings.tiles_check_text").into_owned()),
+                (CheckStyle::Symbol, t!("settings.tiles_check_symbol").into_owned()),
+            ];
+            segmented(ui, &mut layout.check, &options);
+        });
+        row(ui, &t!("settings.tiles_name"), |ui| {
+            let options = [
+                (0, t!("settings.tiles_name_none").into_owned()),
+                (1, t!("settings.tiles_name_one").into_owned()),
+                (2, t!("settings.tiles_name_two").into_owned()),
+            ];
+            segmented(ui, &mut layout.name_lines, &options);
             ui.add_enabled(
                 layout.name_lines > 0,
                 egui::Checkbox::new(&mut layout.name_extension, t!("settings.tiles_extension")),
             );
-            ui.end_row();
         });
-        ui.weak(t!("settings.tiles_look_hint"));
-        if ui.button(t!("settings.suggest_reset")).clicked() {
-            let standard = Config::default();
-            layout = standard.tile_layout;
-            (count, style) = (standard.tile_tag_count, standard.tile_tags);
-        }
+        hint(ui, t!("settings.tiles_look_hint"));
         if layout != config.tile_layout {
             changes.push(SettingsChange::TileLayout(layout));
         }

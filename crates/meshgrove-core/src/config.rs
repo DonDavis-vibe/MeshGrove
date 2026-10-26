@@ -701,6 +701,9 @@ pub struct Config {
     /// Sidebar sections and tag groups folded away: "lists", "tags", "devices", "tags:themes" …
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sidebar_collapsed: Vec<String>,
+    /// Settings sections folded away: "spacemouse", "ailog" …
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub settings_folded: Vec<String>,
     /// Existing tags stay listed below the tag field while nothing is typed.
     pub tag_chips_idle: bool,
     /// Names or colour dots on the tiles.
@@ -893,6 +896,7 @@ impl Default for Config {
             states: None,
             flat_tag_list: false,
             sidebar_collapsed: Vec::new(),
+            settings_folded: Vec::new(),
             tag_chips_idle: true,
             tile_tags: TileTags::Names,
             tile_tag_count: 3,

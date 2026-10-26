@@ -1408,6 +1408,12 @@ impl App {
                     self.gallery.tag_style = self.tag_style.clone();
                 }
                 SettingsChange::ResetLayout => self.layout.reset(),
+                SettingsChange::FoldSection { key, folded } => {
+                    self.config.settings_folded.retain(|k| *k != key);
+                    if folded {
+                        self.config.settings_folded.push(key);
+                    }
+                }
                 SettingsChange::DoubleClick(action) => self.config.double_click = action,
                 SettingsChange::PreviewQuality(quality) => {
                     self.config.preview_quality = quality;

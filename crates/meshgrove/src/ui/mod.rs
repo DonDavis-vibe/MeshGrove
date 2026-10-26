@@ -11,6 +11,7 @@ pub mod offscreen;
 pub mod review;
 pub mod settings;
 pub mod settings_ai;
+pub mod settings_kit;
 pub mod settings_tiles;
 pub mod sidebar;
 pub mod spacemouse;
