@@ -1,6 +1,7 @@
 <!-- Release notes template: the release workflow fills in the version and adds the checksums.
      Add this release's highlights below before publishing the draft. -->
 **Meshgrove @VERSION@**, a fast, native gallery for 3D-print files on Linux, Windows and macOS.
+Video, screenshots and every download at a glance: [meshgrove.redneck-design.de](https://meshgrove.redneck-design.de)
 
 ![Meshgrove](https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-hero.png)
 

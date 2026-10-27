@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">🇬🇧 English version</a>
+  <a href="https://meshgrove.redneck-design.de/de/">🌐 Website: meshgrove.redneck-design.de</a> · <a href="README.md">🇬🇧 English version</a>
 </p>
 
 ---
