@@ -18,7 +18,7 @@ use meshgrove_core::db::{self, Counts, Error, Library};
 use meshgrove_core::lists::{ListKind, PrintResult};
 use meshgrove_core::scan::{self, Force};
 use meshgrove_core::userdata;
-use meshgrove_core::{import, placement};
+use meshgrove_core::{copies, import, placement};
 use notify::{EventKind, RecursiveMode, Watcher};
 
 use crate::thumbs::Job;
@@ -50,6 +50,8 @@ pub enum LibEvent {
     /// Files were brought in from an import folder; `trash` are archives unpacked on the way,
     /// for the trash.
     Imported { title: String, report: ChangeReport, trash: Vec<PathBuf> },
+    /// Files from the clipboard were copied into `dir`; `skipped` sources were gone or links.
+    Copied { dir: PathBuf, report: ChangeReport, skipped: usize },
     /// Move suggestions by tag were made (or not): how many, how many files had none, and
     /// whether the user asked for them.
     Placed { proposed: usize, skipped: usize, explicit: bool },
@@ -124,6 +126,13 @@ enum Cmd {
         plan: import::Plan,
         title: String,
     },
+    /// Copies files from the clipboard into a folder, as planned; `index`: the folder is in a
+    /// library and is listed afterwards.
+    CopyFiles {
+        plan: copies::Plan,
+        title: String,
+        index: bool,
+    },
     /// Suggests moving these files into the folders of their tags.
     PlaceByTag(Vec<PathBuf>),
 }
@@ -182,6 +191,11 @@ impl ListOp {
 pub struct Applier(Sender<Cmd>);
 
 impl Applier {
+    /// Copies files into a folder, as planned; answered with [`LibEvent::Copied`].
+    pub fn copy_files(&self, plan: copies::Plan, title: String, index: bool) {
+        let _ = self.0.send(Cmd::CopyFiles { plan, title, index });
+    }
+
     pub fn apply(&self, origin: &str, title: &str, ops: Vec<ApplyOp>) -> Result<ChangeReport, String> {
         let (reply, answer) = crossbeam_channel::bounded(1);
         self.0
@@ -497,6 +511,20 @@ impl Worker {
                                 self.scan(&mut lib, &[(plan.root.clone(), plan.landing.clone())], Force::Start);
                             }
                             self.send(LibEvent::Imported { title, report, trash });
+                        }
+                        Err(e) => self.send(LibEvent::Applied(Applied::Failed(e.to_string()))),
+                    }
+                    self.send(LibEvent::UserDataChanged);
+                }
+                Ok(Cmd::CopyFiles { plan, title, index }) => {
+                    let skipped = plan.skipped.len();
+                    match lib.apply_change("copy", &title, &copies::to_ops(&plan)) {
+                        Ok(report) => {
+                            // The folder is listed now, so the copies get their index rows.
+                            if index && plan.dir.is_dir() {
+                                self.scan(&mut lib, &[(plan.root.clone(), plan.dir.clone())], Force::Start);
+                            }
+                            self.send(LibEvent::Copied { dir: plan.dir, report, skipped });
                         }
                         Err(e) => self.send(LibEvent::Applied(Applied::Failed(e.to_string()))),
                     }

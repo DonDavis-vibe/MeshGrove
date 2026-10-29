@@ -346,6 +346,103 @@ pub fn file_uri(path: &Path) -> String {
     uri
 }
 
+/// The files on the clipboard, for pasting into a folder: what a file manager (or Meshgrove)
+/// copied. `text` is the clipboard as text, the fallback where files cannot be read from it
+/// (X11, a chat): one path or `file://` URI per line.
+pub fn clipboard_files(text: Option<&str>) -> Vec<PathBuf> {
+    match files_from_clipboard() {
+        Ok(files) if !files.is_empty() => files,
+        Ok(_) => text.map(paths_from_text).unwrap_or_default(),
+        Err(e) => {
+            log::info!("reading files from the clipboard failed: {e}");
+            text.map(paths_from_text).unwrap_or_default()
+        }
+    }
+}
+
+/// Wayland: the `text/uri-list` a file manager (or Meshgrove) put there.
+#[cfg(target_os = "linux")]
+fn files_from_clipboard() -> Result<Vec<PathBuf>, String> {
+    use std::io::Read;
+    use wl_clipboard_rs::paste::{ClipboardType, MimeType, Seat, get_contents};
+    let uri_list = MimeType::Specific("text/uri-list");
+    let (mut pipe, _) = get_contents(ClipboardType::Regular, Seat::Unspecified, uri_list).map_err(|e| e.to_string())?;
+    let mut text = String::new();
+    pipe.read_to_string(&mut text).map_err(|e| e.to_string())?;
+    Ok(paths_from_text(&text))
+}
+
+/// Windows (Explorer's file drop list) and macOS (Finder's file URLs).
+#[cfg(any(windows, target_os = "macos"))]
+fn files_from_clipboard() -> Result<Vec<PathBuf>, String> {
+    use clipboard_rs::{Clipboard, ClipboardContext};
+    let clipboard = ClipboardContext::new().map_err(|e| e.to_string())?;
+    let files = clipboard.get_files().map_err(|e| e.to_string())?;
+    Ok(files.iter().flat_map(|f| paths_from_text(f)).collect())
+}
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+fn files_from_clipboard() -> Result<Vec<PathBuf>, String> {
+    Err("reading files from the clipboard is not supported on this system".into())
+}
+
+/// Paths from text, one per line: absolute paths or `file://` URIs (a `text/uri-list`, GNOME's
+/// `copy`/`cut` header included). Only what exists counts.
+pub fn paths_from_text(text: &str) -> Vec<PathBuf> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(path_from_line)
+        .filter(|p| p.is_absolute() && p.symlink_metadata().is_ok())
+        .collect()
+}
+
+/// A line of a `text/uri-list` (`file:///home/x` or `file://localhost/home/x`) or a plain path.
+fn path_from_line(line: &str) -> Option<PathBuf> {
+    let Some(rest) = line.strip_prefix("file://") else { return Some(PathBuf::from(line)) };
+    let path = match rest.find('/') {
+        Some(0) => rest,
+        Some(i) if &rest[..i] == "localhost" => &rest[i..],
+        _ => return None,
+    };
+    let bytes = percent_decode(path);
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        Some(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+    }
+    #[cfg(not(unix))]
+    {
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        // `/C:/…` from a `file:///C:/…` URI.
+        let text = match text.strip_prefix('/') {
+            Some(drive) if drive.as_bytes().get(1) == Some(&b':') => drive.to_owned(),
+            _ => text,
+        };
+        Some(PathBuf::from(text))
+    }
+}
+
+/// `%20` and the like back to bytes.
+fn percent_decode(s: &str) -> Vec<u8> {
+    let hex = |b: Option<&u8>| (*b? as char).to_digit(16).map(|d| d as u8);
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && let (Some(high), Some(low)) = (hex(bytes.get(i + 1)), hex(bytes.get(i + 2)))
+        {
+            out.push(high * 16 + low);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Why `paths` cannot be moved to the trash, as a message for the user.
 pub fn trash_blocked(paths: &[PathBuf]) -> Option<String> {
     if paths.is_empty() {
@@ -363,6 +460,19 @@ pub fn trash_blocked(paths: &[PathBuf]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn paths_come_from_uris_or_plain_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let rose = dir.path().join("rosé bush.stl");
+        std::fs::write(&rose, "r").unwrap();
+        let uri = file_uri(&rose);
+        assert!(uri.contains("ros%C3%A9%20bush.stl"), "{uri}");
+        let text = format!("copy\n{uri}\r\n# a comment\n{}\n/nowhere/x.stl\nfile://elsewhere/x.stl\n", rose.display());
+        assert_eq!(paths_from_text(&text), [rose.clone(), rose]);
+        assert_eq!(percent_decode("a%2Fb%zz"), b"a/b%zz");
+    }
 
     #[test]
     fn slicer_command_line_and_environment() {

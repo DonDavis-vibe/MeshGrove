@@ -6,6 +6,7 @@ pub mod cache;
 pub mod changes;
 pub mod checks;
 pub mod config;
+pub mod copies;
 pub mod db;
 pub mod dedupe;
 pub mod formats;

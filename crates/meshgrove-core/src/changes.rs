@@ -70,6 +70,15 @@ pub enum ApplyOp {
         archive: Target,
         into: PathBuf,
     },
+    /// A copy of a file or folder (from this library, another one or anywhere) at `to` below
+    /// `root`; folders that do not exist yet are made. Never onto anything that is there. The
+    /// caller lists the folder it landed in.
+    Copy {
+        root: PathBuf,
+        from: Target,
+        to: PathBuf,
+        folder: bool,
+    },
 }
 
 /// What takes a step back.
@@ -128,14 +137,21 @@ enum UndoOp {
         files: Vec<(PathBuf, u64, i64)>,
         made: Vec<PathBuf>,
     },
+    /// A copy at `at` (a file, or a folder with `files` below it), to delete where unchanged;
+    /// the folders `made` go when empty.
+    RemoveCopied {
+        at: PathBuf,
+        files: Vec<(PathBuf, u64, i64)>,
+        made: Vec<PathBuf>,
+    },
 }
 
 /// What a change did on disk, to do backwards when its journal cannot be written.
 enum Done {
     /// `from` went to `to`, making the folders `made`.
     Moved { from: PathBuf, to: PathBuf, made: Vec<PathBuf> },
-    /// Files written into `dir`, which was made along with `made`.
-    Extracted { dir: PathBuf, files: Vec<PathBuf>, made: Vec<PathBuf> },
+    /// Files written into `dir` (a folder made along with `made`, or the one file itself).
+    Written { dir: PathBuf, files: Vec<PathBuf>, made: Vec<PathBuf> },
 }
 
 type OnDisk = Vec<Done>;
@@ -147,7 +163,7 @@ fn roll_back(done: &OnDisk) {
                 let _ = crate::fsops::move_no_replace(to, from);
                 remove_empty(made);
             }
-            Done::Extracted { dir, files, made } => {
+            Done::Written { dir, files, made } => {
                 for f in files {
                     let _ = std::fs::remove_file(f);
                 }
@@ -157,6 +173,22 @@ fn roll_back(done: &OnDisk) {
             }
         }
     }
+}
+
+/// The files below `dir`, each with its size and time, as [`UndoOp::RemoveCopied`] wants them.
+fn files_below(dir: &Path) -> Vec<(PathBuf, u64, i64)> {
+    let mut out = Vec::new();
+    for folder in std::iter::once(dir.to_path_buf()).chain(folders_below(dir)) {
+        let Ok(entries) = std::fs::read_dir(&folder) else { continue };
+        for e in entries.flatten() {
+            if let Ok(m) = e.metadata()
+                && m.is_file()
+            {
+                out.push((e.path(), m.len(), nanos(m.modified().ok())));
+            }
+        }
+    }
+    out
 }
 
 /// The folders below `dir` (not `dir` itself), outermost first.
@@ -532,7 +564,7 @@ impl Library {
                     } else {
                         match extract_into(&archive.path, into) {
                             Ok(files) => {
-                                on_disk.push(Done::Extracted {
+                                on_disk.push(Done::Written {
                                     dir: into.clone(),
                                     files: files.iter().map(|(p, _, _)| p.clone()).collect(),
                                     made: made.clone(),
@@ -545,6 +577,28 @@ impl Library {
                                 false
                             }
                         }
+                    }
+                }
+                ApplyOp::Copy { root, from, to, folder } => {
+                    let made = crate::moves::missing_folders(root, to.parent().unwrap_or(root));
+                    if crate::moves::check_move(from, to, *folder).is_err() || !make_folders(&made) {
+                        false
+                    } else if crate::fsops::copy_no_replace(&from.path, to).is_err() {
+                        remove_empty(&made);
+                        false
+                    } else {
+                        let files =
+                            if *folder { files_below(to) } else { vec![(to.clone(), from.size, mtime_ns_of(to))] };
+                        on_disk.push(Done::Written {
+                            dir: to.clone(),
+                            files: files.iter().map(|(p, _, _)| p.clone()).collect(),
+                            made: made.clone(),
+                        });
+                        if !*folder {
+                            self.copy_thumb(&from.path, from.mtime_ns, to, mtime_ns_of(to), from.size);
+                        }
+                        undo.push(UndoOp::RemoveCopied { at: to.clone(), files, made });
+                        true
                     }
                 }
             };
@@ -706,27 +760,36 @@ impl Library {
                     true
                 }
             }
-            UndoOp::RemoveExtracted { dir, files, made } => {
-                // Only the files as they were written; what the user changed since stays.
-                let mut all = true;
-                for (path, size, mtime_ns) in files {
-                    match path.symlink_metadata() {
-                        Ok(m) if m.len() == *size && nanos(m.modified().ok()) == *mtime_ns => {
-                            all &= std::fs::remove_file(path).is_ok();
-                        }
-                        Ok(_) => all = false,
-                        Err(_) => {}
-                    }
-                }
-                remove_empty(&folders_below(dir));
-                let _ = std::fs::remove_dir(dir);
-                self.remove_tree(dir)?;
-                for d in remove_empty(made) {
-                    self.conn.execute("DELETE FROM dirs WHERE path = ?1", [d.to_string_lossy()])?;
-                }
+            UndoOp::RemoveExtracted { dir, files, made } => self.remove_written(dir, files, made)?,
+            UndoOp::RemoveCopied { at, files, made } => {
+                let all = self.remove_written(at, files, made)?;
+                self.forget_path(at)?;
                 all
             }
         })
+    }
+
+    /// Deletes the files written into `dir` (or the one file `dir` is) as they were written;
+    /// what the user changed since stays. Folders left empty go, `made` included. Whether all
+    /// of them went.
+    fn remove_written(&mut self, dir: &Path, files: &[(PathBuf, u64, i64)], made: &[PathBuf]) -> Result<bool, Error> {
+        let mut all = true;
+        for (path, size, mtime_ns) in files {
+            match path.symlink_metadata() {
+                Ok(m) if m.len() == *size && nanos(m.modified().ok()) == *mtime_ns => {
+                    all &= std::fs::remove_file(path).is_ok();
+                }
+                Ok(_) => all = false,
+                Err(_) => {}
+            }
+        }
+        remove_empty(&folders_below(dir));
+        let _ = std::fs::remove_dir(dir);
+        self.remove_tree(dir)?;
+        for d in remove_empty(made) {
+            self.conn.execute("DELETE FROM dirs WHERE path = ?1", [d.to_string_lossy()])?;
+        }
+        Ok(all)
     }
 
     /// Forgets the index rows of a file, archive or folder that left the library.
@@ -750,6 +813,15 @@ impl Library {
         }
         if Kind::from_path(to) == Kind::Step && from_mtime_ns == to_mtime_ns {
             crate::loaders::step::rekey(from, to, size, from_mtime_ns.max(0) as u128);
+        }
+    }
+
+    /// The thumbnail of `from` serves its copy `to` as well: the same bytes and time.
+    fn copy_thumb(&self, from: &Path, from_mtime_ns: i64, to: &Path, to_mtime_ns: i64, size: u64) {
+        if let Some(cache) = &self.thumbs {
+            let old_key = ThumbCache::key(from, size, system_time(from_mtime_ns), None);
+            let new_key = ThumbCache::key(to, size, system_time(to_mtime_ns), None);
+            cache.copy_key(&old_key, &new_key);
         }
     }
 
@@ -906,6 +978,50 @@ mod tests {
 
     fn png(thumbs: &Path, key: &str) -> PathBuf {
         thumbs.join(&key[..2]).join(format!("{key}.png"))
+    }
+
+    #[test]
+    fn copies_are_journalled() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, root, from, rose) = downloads(dir.path());
+        let thumbs = dir.path().join("thumbs");
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.finish_baseline(&root).unwrap();
+        lib.set_thumb_cache(ThumbCache::new(&thumbs));
+        let old_key = ThumbCache::key(&rose, from.size, system_time(from.mtime_ns), None);
+        std::fs::create_dir_all(png(&thumbs, &old_key).parent().unwrap()).unwrap();
+        std::fs::write(png(&thumbs, &old_key), "png").unwrap();
+        let to = root.join("Garten").join("rose.stl");
+        let ops = [ApplyOp::Copy { root: root.clone(), from: from.clone(), to: to.clone(), folder: false }];
+        let report = lib.apply_change("copy", "Garten", &ops).unwrap();
+        assert_eq!((report.applied, report.skipped), (1, 0));
+        assert!(to.is_file() && rose.is_file(), "copied into the folder, which was made; the source stays");
+        assert_eq!(nanos(to.metadata().unwrap().modified().ok()), from.mtime_ns, "the time came along");
+        let new_key = ThumbCache::key(&to, from.size, to.metadata().unwrap().modified().ok(), None);
+        assert!(png(&thumbs, &new_key).exists() && png(&thumbs, &old_key).exists(), "the thumbnail serves both");
+        assert_eq!(lib.apply_change("copy", "Garten", &ops).unwrap().skipped, 1, "the name is taken now");
+        // A folder with a subfolder, and a copy the user changed since: that one stays.
+        let pack = dir.path().join("pack");
+        std::fs::create_dir_all(pack.join("sub")).unwrap();
+        std::fs::write(pack.join("sub").join("b.stl"), "b").unwrap();
+        let pack_to = root.join("pack");
+        let pack_target = Target { path: pack.clone(), hash: None, size: 0, mtime_ns: 0 };
+        let ops2 = [ApplyOp::Copy { root: root.clone(), from: pack_target, to: pack_to.clone(), folder: true }];
+        let report2 = lib.apply_change("copy", "pack", &ops2).unwrap();
+        assert_eq!(report2.applied, 1);
+        assert!(pack_to.join("sub").join("b.stl").is_file());
+        std::fs::write(pack_to.join("sub").join("b.stl"), "changed").unwrap();
+        let undo = lib.undo_change(report2.id).unwrap();
+        assert_eq!((undo.undone, undo.kept), (0, 1));
+        assert!(pack_to.join("sub").join("b.stl").is_file(), "a changed copy is not deleted");
+
+        let undo = lib.undo_change(report.id).unwrap();
+        assert_eq!((undo.undone, undo.kept), (1, 0));
+        assert!(!to.exists() && !root.join("Garten").exists() && rose.is_file(), "the copy and its folder are gone");
+        assert!(png(&thumbs, &old_key).exists(), "the source keeps its thumbnail");
+        let redo = lib.redo_change(report.id).unwrap();
+        assert_eq!(redo.applied, 1);
+        assert!(to.is_file());
     }
 
     #[test]

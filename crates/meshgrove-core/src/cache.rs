@@ -116,6 +116,19 @@ impl ThumbCache {
         }
     }
 
+    /// The thumbnail (or failure) stored under `old` also under `new`: for copied files.
+    pub fn copy_key(&self, old: &str, new: &str) {
+        for ext in ["png", "fail"] {
+            let (from, to) = (self.file(old, ext), self.file(new, ext));
+            if from.exists() {
+                if let Some(dir) = to.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = std::fs::copy(&from, &to);
+            }
+        }
+    }
+
     pub fn store_failure(&self, key: &str, message: &str) -> io::Result<()> {
         write_atomic(&self.file(key, "fail"), message.as_bytes())
     }

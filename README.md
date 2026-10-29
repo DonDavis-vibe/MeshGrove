@@ -115,7 +115,7 @@ What makes it different from other model managers:
 | **AI (optional)** | Meshgrove brings no AI, but your own assistant (Claude, LM Studio, Cursor …) can search the libraries you open to it over MCP and suggest tags, notes, lists and moves; with an endpoint of your own (Ollama, LM Studio, OpenAI-compatible) there is an AI chat with `@` references and one-click actions too. Nothing changes until you accept it, and everything can be undone |
 | **Import and placement** | Name a downloads folder and Meshgrove offers its new models, G-code and archives for import into the library's landing folder (moved, numbered when a name is taken, archives whole or unpacked; undoable). A file in the landing folder that gets a theme tag is placed into that tag's folder, by a rule you set or by your assistant, with your okay or – out of the landing folder only – by itself |
 | **Duplicates** | Finds exact copies and the same model saved differently (ASCII vs binary STL, STL vs 3MF, rotated or moved copies), suggests which copy to keep and can move the others to the trash |
-| **Slicer and apps** | "Open in slicer" for one or many models (finds over 30 common filament and resin slicers, among them Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer, Cura, Creality Print, QIDI Studio, FlashPrint, Lychee, ChiTuBox and UVtools, whether installed as a package, Flatpak, Snap or AppImage; add the ones you use with a ＋ in the settings, pick a default, the others sit in a submenu), into the slicer window that is already open where the slicer allows it; "open in" your **mesh editors or CAD programs** (finds over 20 programs, among them Blender, FreeCAD, Autodesk Fusion, MeshLab, SolidCraft, OpenSCAD, SolveSpace, Rhino, SketchUp, SolidWorks and fstl, again in every install variant; add and choose a default in the settings); **Ctrl+C copies the files** for pasting into the file manager or slicer; "show in file manager"; open with the default app |
+| **Slicer and apps** | "Open in slicer" for one or many models (finds over 30 common filament and resin slicers, among them Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer, Cura, Creality Print, QIDI Studio, FlashPrint, Lychee, ChiTuBox and UVtools, whether installed as a package, Flatpak, Snap or AppImage; add the ones you use with a ＋ in the settings, pick a default, the others sit in a submenu), into the slicer window that is already open where the slicer allows it; "open in" your **mesh editors or CAD programs** (finds over 20 programs, among them Blender, FreeCAD, Autodesk Fusion, MeshLab, SolidCraft, OpenSCAD, SolveSpace, Rhino, SketchUp, SolidWorks and fstl, again in every install variant; add and choose a default in the settings); **Ctrl+C copies the files** for pasting into the file manager or slicer, **Ctrl+V pastes** files from the clipboard into the folder; "show in file manager"; open with the default app |
 | **Desktop integration** | Menu entry, icon, file associations; on Linux the same renderer also provides **thumbnails in Dolphin and file dialogs** |
 | **Languages** | English and German, following the system language (switchable in the settings) |
 
@@ -732,6 +732,10 @@ with `--local` if needed) prints one. With the AppImage the command is `Meshgrov
 - **Copy (Ctrl+C):** puts the selected files on the clipboard as real files. Paste them into
   Dolphin, Explorer or Finder, into many slicers, or into a chat. Archive members are
   extracted first. *Copy path* puts the paths as text instead.
+- **Paste (Ctrl+V):** copies the files on the clipboard – from Meshgrove, the file manager or
+  as paths – into the folder shown, or by right-click into a folder tile. Nothing is replaced
+  (a taken name gets a number), the copies keep their tags and notes, and the history undoes
+  it.
 - **Show in file manager:** opens Dolphin/Nautilus, Explorer or Finder with the files selected.
 - **Open with default app** (context menu): opens a model in the system's default application,
   for example the slicer registered for STL files; other files open there with a double-click.
@@ -795,6 +799,7 @@ Ctrl means ⌘ Cmd on macOS.
 | Ctrl+A | Select all shown files |
 | Ctrl+click, Shift+click | Toggle a file, select a range |
 | Ctrl+C | Copy the selected files to the clipboard |
+| Ctrl+V | Paste the files on the clipboard into the folder shown |
 | Delete | Move the selection to the trash (with confirmation) |
 | Ctrl+F | Filter the current folder |
 | Ctrl+Shift+F | Search the whole library |
@@ -980,6 +985,7 @@ Meshgrove is built for collections of thousands of files on ordinary hard drives
 | PDF previews | ✔ with poppler | ✔ with poppler | ✔ with poppler |
 | STEP previews | ✔ all packages; source build with OpenCascade | ✔ | ✔ |
 | Copy files to the clipboard | ✔ Wayland (X11: paths as text) | ✔ | ✔ |
+| Paste files from the clipboard | ✔ Wayland (X11: paths as text) | ✔ | ✔ |
 | Show in file manager | ✔ D-Bus (Dolphin, Nautilus, …) | ✔ Explorer | ✔ Finder |
 | Slicer detection | ✔ | ✔ | ✔ |
 | Read-only drive detection | ✔ | – | – |

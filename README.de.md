@@ -117,7 +117,7 @@ Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 | **KI (freiwillig)** | Meshgrove bringt keine KI mit, aber dein eigener Assistent (Claude, LM Studio, Cursor …) kann über MCP in den freigegebenen Bibliotheken suchen und Tags, Notizen, Listen und Verschiebungen vorschlagen; mit einem eigenen Endpunkt (Ollama, LM Studio, OpenAI-kompatibel) gibt es dazu einen KI-Chat mit `@`-Verweisen und Ein-Klick-Aktionen. Nichts ändert sich, bevor du es annimmst, und alles lässt sich rückgängig machen |
 | **Import und Ablage** | Nenne deinen Download-Ordner, und Meshgrove bietet dessen neue Modelle, G-Codes und Archive zum Import in den Landeordner der Bibliothek an (verschoben, nummeriert, wenn der Name vergeben ist, Archive ganz oder entpackt; rückgängig machbar). Eine Datei im Landeordner, die einen Themen-Tag bekommt, wird in den Ordner des Tags abgelegt – nach einer Regel von dir oder durch deinen Assistenten, mit deinem Okay oder, nur aus dem Landeordner, von selbst |
 | **Duplikate** | Findet exakte Kopien und dasselbe Modell in anderer Form (ASCII- statt Binär-STL, STL statt 3MF, gedrehte oder verschobene Kopien), schlägt vor, welche Kopie bleiben soll, und kann die anderen in den Papierkorb legen |
-| **Slicer und Programme** | „In Slicer öffnen“ für ein oder viele Modelle (erkennt Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer), ins schon offene Slicer-Fenster, wo der Slicer das erlaubt; „In … öffnen“ für deinen **Mesh-Editor oder dein CAD-Programm** (erkennt Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer); **Strg+C kopiert die Dateien** zum Einfügen im Dateimanager oder Slicer; „Im Dateimanager zeigen“; Öffnen mit dem Standardprogramm |
+| **Slicer und Programme** | „In Slicer öffnen“ für ein oder viele Modelle (erkennt Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer), ins schon offene Slicer-Fenster, wo der Slicer das erlaubt; „In … öffnen“ für deinen **Mesh-Editor oder dein CAD-Programm** (erkennt Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer); **Strg+C kopiert die Dateien** zum Einfügen im Dateimanager oder Slicer, **Strg+V fügt** Dateien aus der Zwischenablage in den Ordner ein; „Im Dateimanager zeigen“; Öffnen mit dem Standardprogramm |
 | **Desktop-Einbindung** | Menüeintrag, Symbol, Dateizuordnungen; unter Linux liefert derselbe Renderer auch **Vorschauen in Dolphin und Dateidialogen** |
 | **Sprachen** | Deutsch und Englisch, folgt der Systemsprache (in den Einstellungen umstellbar) |
 
@@ -774,6 +774,10 @@ bei Bedarf mit `--local`) gibt einen aus. Beim AppImage lautet der Befehl `Meshg
   Zwischenablage. Du kannst sie in Dolphin, im Explorer oder Finder, in vielen Slicern oder in
   einem Chat einfügen. Dateien aus Archiven werden vorher entpackt. *Pfad kopieren* legt
   stattdessen die Pfade als Text ab.
+- **Einfügen (Strg+V):** kopiert die Dateien aus der Zwischenablage – aus Meshgrove, dem
+  Dateimanager oder als Pfade – in den gezeigten Ordner, per Rechtsklick auch in eine
+  Ordnerkachel. Nichts wird ersetzt (ein vergebener Name bekommt eine Nummer), die Kopien
+  behalten Tags und Notizen, und der Verlauf nimmt es zurück.
 - **Im Dateimanager zeigen:** öffnet Dolphin/Nautilus, den Explorer oder den Finder mit den
   Dateien markiert.
 - **Mit Standardprogramm öffnen** (Kontextmenü): öffnet ein Modell im Standardprogramm des
@@ -841,6 +845,7 @@ Strg heißt auf macOS ⌘ Cmd.
 | Strg+A | Alle angezeigten Dateien auswählen |
 | Strg+Klick, Umschalt+Klick | Datei umschalten, Bereich auswählen |
 | Strg+C | Ausgewählte Dateien in die Zwischenablage kopieren |
+| Strg+V | Dateien aus der Zwischenablage in den gezeigten Ordner einfügen |
 | Entf | Auswahl in den Papierkorb (mit Rückfrage) |
 | Strg+F | Aktuellen Ordner filtern |
 | Strg+Umschalt+F | Ganze Bibliothek durchsuchen |
@@ -1030,6 +1035,7 @@ Meshgrove ist für Sammlungen mit Tausenden Dateien auf ganz normalen Festplatte
 | PDF-Vorschauen | ✔ mit poppler | ✔ mit poppler | ✔ mit poppler |
 | STEP-Vorschauen | ✔ alle Pakete; Eigenbau mit OpenCascade | ✔ | ✔ |
 | Dateien in die Zwischenablage kopieren | ✔ Wayland (X11: Pfade als Text) | ✔ | ✔ |
+| Dateien aus der Zwischenablage einfügen | ✔ Wayland (X11: Pfade als Text) | ✔ | ✔ |
 | Im Dateimanager zeigen | ✔ D-Bus (Dolphin, Nautilus, …) | ✔ Explorer | ✔ Finder |
 | Slicer-Erkennung | ✔ | ✔ | ✔ |
 | Schreibgeschützte Laufwerke erkennen | ✔ | – | – |

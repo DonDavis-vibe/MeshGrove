@@ -7,7 +7,8 @@
 //! `MESHGROVE_CLICKS=x,y;x,y;…` clicks those points one after the other, from 3 s on, every 0.8 s
 //! (`x,y*2` double-clicks, `x,y*r` right-clicks), and `MESHGROVE_TYPE=text` types the text after the last click; steps
 //! separated by `|` follow half a second apart, `{enter}`, `{down}` and `{esc}` press those keys,
-//! `{click x,y}` clicks there (to click after typing), `{wheel dy}` turns the wheel at the pointer.
+//! `{click x,y}` clicks there (to click after typing), `{rclick x,y}` right-clicks, `{wheel dy}` turns
+//! the wheel at the pointer, `{copy}` and `{paste}` are Ctrl+C and Ctrl+V.
 //! `MESHGROVE_MEASURE=fx,fy;fx,fy` measures between those points (fractions of the view) in the
 //! first model window that opens, which the hook's input cannot reach; `MESHGROVE_WINDOW_VIEW=top`
 //! (or `front`, `left` …) starts that window in a standard view.
@@ -122,7 +123,7 @@ impl ScreenshotHook {
 impl ScreenshotHook {
     /// Replaces real pointer input with the scripted one.
     pub fn inject(&mut self, raw: &mut egui::RawInput) {
-        if self.pointer.is_none() && self.clicks.is_empty() {
+        if self.pointer.is_none() && self.clicks.is_empty() && self.typing.is_empty() && self.release.is_none() {
             return;
         }
         raw.events.retain(|e| {
@@ -171,10 +172,12 @@ impl ScreenshotHook {
                 "{esc}" => Some(egui::Key::Escape),
                 _ => None,
             };
-            let click = step.strip_prefix("{click ").and_then(|s| s.strip_suffix('}')).and_then(|s| {
-                let (x, y) = s.split_once(',')?;
+            let point = |s: &str| {
+                let (x, y) = s.strip_suffix('}')?.split_once(',')?;
                 Some(egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?))
-            });
+            };
+            let click = step.strip_prefix("{click ").and_then(point);
+            let right_click = step.strip_prefix("{rclick ").and_then(point);
             let wheel =
                 step.strip_prefix("{wheel ").and_then(|s| s.strip_suffix('}')).and_then(|s| s.trim().parse().ok());
             match key {
@@ -185,13 +188,17 @@ impl ScreenshotHook {
                     source: egui::MouseWheelSource::Wheel,
                     modifiers: egui::Modifiers::NONE,
                 }),
-                _ if click.is_some() => {
-                    let pos = click.unwrap_or_default();
+                _ if click.is_some() || right_click.is_some() => {
+                    let pos = click.or(right_click).unwrap_or_default();
+                    let which =
+                        if click.is_some() { egui::PointerButton::Primary } else { egui::PointerButton::Secondary };
                     self.pointer = Some(pos);
                     raw.events.push(egui::Event::PointerMoved(pos));
-                    raw.events.push(button(pos, true));
-                    self.release = Some((pos, egui::PointerButton::Primary));
+                    raw.events.push(press(pos, which, true));
+                    self.release = Some((pos, which));
                 }
+                _ if step == "{copy}" => raw.events.push(egui::Event::Copy),
+                _ if step == "{paste}" => raw.events.push(egui::Event::Paste(String::new())),
                 Some(key) => {
                     for pressed in [true, false] {
                         raw.events.push(egui::Event::Key {

@@ -17,7 +17,7 @@ use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::lists::{ListInfo, ListKind, PrintResult, PrintStatus};
 use meshgrove_core::printer::{self, Printer};
 use meshgrove_core::programs;
-use meshgrove_core::{Kind, query};
+use meshgrove_core::{Kind, copies, query};
 use meshgrove_render::Renderer;
 
 use crate::actions;
@@ -927,6 +927,18 @@ impl App {
                     }
                     self.start_import_scan(); // what is left there
                 }
+                LibEvent::Copied { dir, report, skipped } => {
+                    let (to, skipped) = (listing::file_name(&dir), skipped + report.skipped);
+                    let message = if skipped > 0 {
+                        t!("toast.pasted_skipped", count = report.applied, to = to, skipped = skipped)
+                    } else {
+                        t!("toast.pasted", count = report.applied, to = to)
+                    };
+                    self.toast(message.into_owned());
+                    if matches!(self.view, View::Folder | View::Flatten { .. }) {
+                        self.reload();
+                    }
+                }
                 LibEvent::Placed { proposed, skipped, explicit } => {
                     if proposed > 0 {
                         self.toast(t!("placement.proposed", count = proposed).into_owned());
@@ -979,6 +991,7 @@ impl App {
                 rescan: self.index.is_some()
                     && matches!(paths.as_slice(), [p] if self.in_library(p)
                         && (p.is_dir() || Kind::from_file_name(&listing::file_name(p)) == Kind::Archive)),
+                can_paste: self.can_paste(),
                 ai_chat: self.chat_available() && self.chat_sees(&paths),
                 ai_refs: self.config.ai.enabled && self.ai_sees_any(&paths),
             };
@@ -1315,7 +1328,53 @@ impl App {
             Action::PlaceByTag => self.library.place_by_tag(self.selected_paths()),
             Action::MentionInChat => self.mention_in_chat(self.selected_paths()),
             Action::CopyReference => self.copy_references(&self.selected_paths(), ctx),
+            Action::PasteFiles(into) => self.paste_files(ctx, into),
         }
+    }
+
+    /// Pasted files go into the folder shown: a real folder, not an archive and not a list.
+    fn can_paste(&self) -> bool {
+        let current = self.nav.current();
+        matches!(self.view, View::Folder | View::Flatten { .. })
+            && meshgrove_core::archive::split(current).is_none()
+            && !meshgrove_core::archive::is_archive_file(current)
+            && current.is_dir()
+    }
+
+    /// Copies the files on the clipboard into `into` (a folder entry) or the folder shown, as a
+    /// change of the history. The clipboard is read on a thread: another program answers it.
+    fn paste_files(&mut self, ctx: &egui::Context, into: Option<usize>) {
+        let dir = match into.and_then(|i| self.entries().get(i)).map(|e| e.path.clone()) {
+            Some(path) if path.is_dir() => path,
+            _ if self.can_paste() => self.nav.current().to_path_buf(),
+            _ => return,
+        };
+        if meshgrove_core::fsinfo::is_read_only(&dir) {
+            self.toast(t!("toast.paste_read_only").into_owned());
+            return;
+        }
+        let root = self.config.library_roots.iter().find(|r| dir.starts_with(r)).cloned();
+        // The clipboard as text (the paste event): the fallback where its files cannot be read.
+        let text = ctx.input(|i| {
+            i.events.iter().find_map(|e| if let egui::Event::Paste(t) = e { Some(t.clone()) } else { None })
+        });
+        let (applier, messages, ctx) = (self.library.applier(), self.messages.0.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let files = actions::clipboard_files(text.as_deref());
+            let plan = copies::plan(&files, root.as_deref().unwrap_or(&dir), &dir);
+            if plan.items.is_empty() {
+                let message = if files.is_empty() {
+                    t!("toast.paste_nothing")
+                } else {
+                    t!("toast.paste_nothing_done", skipped = plan.skipped.len())
+                };
+                let _ = messages.send(message.into_owned());
+                ctx.request_repaint();
+                return;
+            }
+            let title = t!("copy.journal_title", to = listing::file_name(&dir), count = plan.items.len());
+            applier.copy_files(plan, title.into_owned(), root.is_some());
+        });
     }
 
     fn request_trash(&mut self, paths: Vec<PathBuf>) {
@@ -2302,6 +2361,8 @@ impl App {
             }
             return;
         }
+        // Whether pasting is on follows the view, not only the selection.
+        self.menu.can_paste = self.can_paste();
         let entries = view_entries(&self.view, &self.nav);
         let output = match self.config.gallery_view {
             GalleryView::Grid => self.gallery.show(ui, entries, self.config.tile_size, &self.thumbs, &self.menu),

@@ -66,6 +66,8 @@ pub enum Action {
     CopyPaths,
     /// Copy the files themselves (Ctrl+C), for pasting in Dolphin or the slicer.
     CopyFiles,
+    /// Paste the files on the clipboard into the folder entry, or the folder shown (Ctrl+V).
+    PasteFiles(Option<usize>),
     EditTags,
     /// Favourite on, or off when every selected file is one already.
     ToggleFavorite,
@@ -108,6 +110,8 @@ pub struct MenuContext {
     pub current_list: Option<(i64, String)>,
     /// The selection is one folder or archive of the library, which can be indexed again.
     pub rescan: bool,
+    /// The folder shown takes pasted files (a real folder, not an archive or a list).
+    pub can_paste: bool,
     /// The chat's AI may see the selection: it can suggest tags and be told about it.
     pub ai_chat: bool,
     /// AI may see some of the selection: references to it can be copied.
@@ -384,6 +388,18 @@ impl Gallery {
         let zoom_offset = self.zoom_scroll(ui, cols, tile_h, !settled);
 
         let mut action = self.keyboard(ui, cols);
+        // Right-clicking the empty part of the gallery: paste into the folder shown. Registered
+        // before the tiles, which therefore win where they are.
+        if menu.can_paste {
+            let background =
+                ui.interact(ui.available_rect_before_wrap(), ui.scope_id().with("gallery_bg"), Sense::click());
+            super::context_menu_with_field(&background, |ui| {
+                if ui.button(t!("menu.paste_files")).clicked() {
+                    action = Some(Action::PasteFiles(None));
+                    ui.close();
+                }
+            });
+        }
 
         // (Mouse drags do not scroll by default, so they stay free for turning previews.)
         let wheel_scrolls = !self.tile_dragged;
@@ -475,7 +491,14 @@ impl Gallery {
     }
 
     fn keyboard(&mut self, ui: &Ui, cols: usize) -> Option<Action> {
-        if ui.ctx().egui_wants_keyboard_input() || self.shown.is_empty() {
+        if ui.ctx().egui_wants_keyboard_input() {
+            return None;
+        }
+        // Ctrl+V arrives as a paste event; an empty folder takes files too.
+        if ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))) {
+            return Some(Action::PasteFiles(None));
+        }
+        if self.shown.is_empty() {
             return None;
         }
         let pos = self.selected.and_then(|s| self.shown.iter().position(|&i| i == s));
@@ -798,6 +821,11 @@ fn entry_menu(
         }
         item(ui, t!("menu.copy_files"), Action::CopyFiles);
         item(ui, t!("menu.copy_path"), Action::CopyPaths);
+        if menu.can_paste {
+            // Into the folder under the pointer, otherwise into the one shown.
+            let into = (e.kind == Kind::Folder).then_some(entry);
+            item(ui, t!("menu.paste_files"), Action::PasteFiles(into));
+        }
         if menu.can_tag {
             item(ui, t!("menu.edit_tags"), Action::EditTags);
             if menu.can_place {
