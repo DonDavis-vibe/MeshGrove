@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
 use meshgrove_core::config::{
-    self, ArchiveImport, Config, DisplayUnits, DoubleClick, FOLDER_PREVIEW_DEPTH, FolderPreviews, GltfUnit,
+    self, ArchiveImport, Config, DisplayUnits, DoubleClick, FOLDER_PREVIEW_DEPTH, FolderPreviews, FolderRule, GltfUnit,
     ImportAtStart, ModelUnits, PreviewQuality, Program, Slicer, SuggestedTag, TileLayout, TileTags, default_properties,
     default_states, default_themes,
 };
@@ -65,6 +65,10 @@ pub enum SettingsChange {
     },
     ImportAtStart(ImportAtStart),
     ImportArchives(ArchiveImport),
+    /// Placing files into folders by their tags.
+    Placement(bool),
+    /// The folder each tag maps to, where it differs from the themes' own names.
+    FolderRules(Vec<FolderRule>),
     AiEnabled(bool),
     /// Make Meshgrove available to the AI apps on this computer.
     AiConnectApps(bool),
@@ -279,6 +283,8 @@ pub struct AppInfo<'a> {
     pub tag_style: &'a TagStyle,
     /// Connecting the AI apps: allowed in this launch, and going on now.
     pub ai_connect: (bool, bool),
+    /// The library's tags with their counts, for the placement rules.
+    pub tags: &'a [(String, usize)],
 }
 
 #[derive(Default)]
@@ -290,6 +296,9 @@ pub struct SettingsDialog {
     import_folder_input: String,
     import_folder_error: Option<String>,
     landing_input: String,
+    /// The placement rules as typed: (tag, folder), the themes first.
+    rule_inputs: Vec<(String, String)>,
+    rule_themes: usize,
     /// Name, program and working folder of a slicer being added by hand.
     slicer_form: (String, String, String),
     /// The slicers found on this computer, and the scan that looks for them.
@@ -375,6 +384,7 @@ enum Section {
     TilePreview,
     TileLook,
     Tags,
+    Placement,
     Themes,
     Properties,
     States,
@@ -408,6 +418,7 @@ impl Section {
             Section::TilePreview => t!("settings.tiles_preview"),
             Section::TileLook => t!("settings.tiles_look"),
             Section::Tags => t!("settings.tags_display"),
+            Section::Placement => t!("settings.placement"),
             Section::Themes => return Group::Themes.title(),
             Section::Properties => return Group::Properties.title(),
             Section::States => return Group::State.title(),
@@ -544,6 +555,8 @@ impl Category {
                 put(config.themes.is_some(), SettingsChange::Suggestions(Group::Themes, None));
                 put(config.properties.is_some(), SettingsChange::Suggestions(Group::Properties, None));
                 put(config.states.is_some(), SettingsChange::Suggestions(Group::State, None));
+                put(config.placement.enabled != d.placement.enabled, SettingsChange::Placement(d.placement.enabled));
+                put(!config.placement.rules.is_empty(), SettingsChange::FolderRules(Vec::new()));
             }
             Category::Tiles => {
                 put(config.tile_layout != d.tile_layout, SettingsChange::TileLayout(d.tile_layout));
@@ -653,6 +666,7 @@ impl SettingsDialog {
         self.found_printers = printer::detect_all();
         self.ai.reset();
         self.landing_input.clear();
+        self.rule_inputs.clear();
         if self.import_input.is_empty() {
             self.import_input = export_path().display().to_string();
         }
@@ -787,7 +801,9 @@ impl SettingsDialog {
         let sections: &[Section] = match self.category {
             Category::General => &[Section::Language, Section::DoubleClick, Section::Panes],
             Category::Library => &[Section::Library, Section::Inbox, Section::Import],
-            Category::Tags => &[Section::Tags, Section::Themes, Section::Properties, Section::States],
+            Category::Tags => {
+                &[Section::Tags, Section::Placement, Section::Themes, Section::Properties, Section::States]
+            }
             Category::Tiles => &[Section::TilePreview, Section::TileLook, Section::FolderPreviews],
             Category::View => &[Section::Preview, Section::SpaceMouse],
             Category::ModelsUnits => &[Section::Models, Section::Units],
@@ -815,6 +831,7 @@ impl SettingsDialog {
                     Section::TilePreview => self.tiles.preview(ui, config, info.tag_style, changes),
                     Section::TileLook => self.tiles.look(ui, config, changes),
                     Section::Tags => tags(ui, config, changes),
+                    Section::Placement => self.placement(ui, config, info.tags, changes),
                     Section::Themes => self.suggestions(ui, config, Group::Themes, changes),
                     Section::Properties => self.suggestions(ui, config, Group::Properties, changes),
                     Section::States => self.suggestions(ui, config, Group::State, changes),
@@ -1016,6 +1033,89 @@ impl SettingsDialog {
         });
         if let Some(e) = &self.root_error {
             ui.colored_label(ui.visuals().error_fg_color, e);
+        }
+    }
+
+    /// Placing files by tag: the switch, and the folder each theme (and any other tag of the
+    /// library) goes to.
+    fn placement(&mut self, ui: &mut Ui, config: &Config, tags: &[(String, usize)], changes: &mut Vec<SettingsChange>) {
+        let mut on = config.placement.enabled;
+        if check(ui, &mut on, t!("settings.placement_enable"), t!("settings.placement_hint")) {
+            changes.push(SettingsChange::Placement(on));
+        }
+        if !on {
+            return;
+        }
+        let themes = config.themes();
+        let (properties, states) = (config.properties(), config.states());
+        let german = config.german();
+        let theme_name = |t: &SuggestedTag| if german { t.de.clone() } else { t.en.clone() };
+        if self.rule_inputs.is_empty() || self.rule_themes != themes.len() {
+            self.rule_inputs = themes
+                .iter()
+                .map(|t| {
+                    let name = theme_name(t);
+                    let folder = config.folder_for_tag(&name).unwrap_or_default();
+                    (name, folder)
+                })
+                .collect();
+            let known = |tag: &str| themes.iter().chain(&properties).chain(&states).any(|t| t.matches(tag));
+            self.rule_inputs.extend(
+                tags.iter()
+                    .filter(|(t, _)| !known(t))
+                    .map(|(t, _)| (t.clone(), config.folder_for_tag(t).unwrap_or_default())),
+            );
+            self.rule_themes = themes.len();
+        }
+        hint(ui, t!("settings.placement_rules_hint"));
+        let (mut edited, mut bad) = (false, false);
+        let valid = |folder: &str| {
+            folder
+                .split('/')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .all(|s| meshgrove_core::fsops::check_name(s).is_ok())
+        };
+        egui::Grid::new("placement_rules").num_columns(3).spacing([12.0, 4.0]).show(ui, |ui| {
+            for (i, (tag, folder)) in self.rule_inputs.iter_mut().enumerate() {
+                if i == themes.len() {
+                    ui.label(RichText::new(t!("settings.placement_other_tags")).weak());
+                    ui.end_row();
+                }
+                ui.label(tag.as_str());
+                let field = ui.add(
+                    egui::TextEdit::singleline(folder).hint_text(t!("settings.placement_none")).desired_width(220.0),
+                );
+                let ok = valid(folder);
+                bad |= !ok;
+                edited |= field.lost_focus() && ok;
+                if !folder.trim().is_empty()
+                    && ui.small_button("✕").on_hover_text(t!("settings.placement_clear")).clicked()
+                {
+                    folder.clear();
+                    edited = true;
+                }
+                ui.end_row();
+            }
+        });
+        if bad {
+            ui.colored_label(ui.visuals().error_fg_color, t!("settings.placement_bad_folder"));
+        }
+        if edited {
+            // Rules only where a tag's folder differs from the theme's own name.
+            let mut rules = Vec::new();
+            for (i, (tag, folder)) in self.rule_inputs.iter().enumerate() {
+                let folder = folder.trim();
+                match themes.get(i).map(theme_name) {
+                    Some(own) if folder == own => {}
+                    Some(_) => rules.push(FolderRule { tag: tag.clone(), folder: folder.to_owned() }),
+                    None if !folder.is_empty() => {
+                        rules.push(FolderRule { tag: tag.clone(), folder: folder.to_owned() })
+                    }
+                    None => {}
+                }
+            }
+            changes.push(SettingsChange::FolderRules(rules));
         }
     }
 

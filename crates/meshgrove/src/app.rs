@@ -1456,6 +1456,8 @@ impl App {
                 }
                 SettingsChange::ImportAtStart(choice) => self.config.import.at_start = choice,
                 SettingsChange::ImportArchives(choice) => self.config.import.archives = choice,
+                SettingsChange::Placement(on) => self.config.placement.enabled = on,
+                SettingsChange::FolderRules(rules) => self.config.placement.rules = rules,
                 SettingsChange::SpaceMouse(config) => self.config.spacemouse = config,
                 SettingsChange::FreeOrbit(on) => self.config.free_orbit = on,
                 SettingsChange::ColoredTags(colored) => {
@@ -2849,6 +2851,7 @@ impl eframe::App for App {
             render: (&rs, &self.renderer),
             tag_style: &self.tag_style,
             ai_connect: (self.ai_connect.armed(), self.ai_connect.busy()),
+            tags: &self.all_tags,
         };
         let changes = self.settings.show(
             &ctx,
