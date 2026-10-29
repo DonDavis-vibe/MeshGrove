@@ -279,7 +279,8 @@ impl Library {
         })
     }
 
-    fn paths_with_hash(&self, hash: &str) -> Result<Vec<PathBuf>, Error> {
+    /// Every file with content `hash`, by path.
+    pub fn paths_with_hash(&self, hash: &str) -> Result<Vec<PathBuf>, Error> {
         let mut stmt = self.conn.prepare(
             "SELECT d.path, f.name FROM files f JOIN dirs d ON d.id = f.dir_id WHERE f.content_hash = ?1 ORDER BY d.path, f.name",
         )?;

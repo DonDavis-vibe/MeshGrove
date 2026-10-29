@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{OptionalExtension, params};
 
-use crate::ai::proposals::Target;
+use crate::ai::proposals::{MovePayload, Target};
 use crate::cache::ThumbCache;
 use crate::db::{Error, Library, entry_from_row, nanos};
 use crate::formats::Kind;
@@ -45,6 +45,52 @@ pub fn missing_folders(root: &Path, dir: &Path) -> Vec<PathBuf> {
         .collect();
     out.reverse();
     out
+}
+
+/// One move within library `root`, checked as far as paths go: what it is and where it goes,
+/// or why it cannot (worded for the assistant that suggested it). Nothing moves.
+pub fn plan_move(lib: &Library, root: &Path, from: &Path, to: &Path) -> Result<(Target, MovePayload), String> {
+    if from == root {
+        return Err("a library itself cannot be moved".into());
+    }
+    if crate::archive::split(from).is_some() {
+        return Err("files inside an archive cannot be moved; move the whole archive".into());
+    }
+    let meta = from.symlink_metadata().map_err(|_| "it is not there any more".to_string())?;
+    let folder = meta.is_dir();
+    if !to.starts_with(root) {
+        return Err("moves stay within one library".into());
+    }
+    if to == from {
+        return Err("that is where it is already".into());
+    }
+    if to.starts_with(from) {
+        return Err("a folder cannot go into itself".into());
+    }
+    let name = to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    crate::fsops::check_name(&name)?;
+    for dir in missing_folders(root, to.parent().unwrap_or(root)) {
+        crate::fsops::check_name(&dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())?;
+    }
+    if to.ancestors().skip(1).take_while(|a| *a != root).any(Path::is_file) {
+        return Err("the new place is inside a file or an archive".into());
+    }
+    if to.symlink_metadata().is_ok() && !crate::fsops::case_only(from, to) {
+        return Err("something of that name is there already; nothing is ever replaced".into());
+    }
+    let (size, mtime_ns) =
+        if folder { (0, nanos(meta.modified().ok())) } else { (meta.len(), nanos(meta.modified().ok())) };
+    // The content, when the index knows the file as it is.
+    let hash = lib
+        .ai_row_of(from)
+        .ok()
+        .flatten()
+        .filter(|r| !folder && r.entry.size == size && nanos(r.entry.modified) == mtime_ns)
+        .and_then(|r| r.hash);
+    Ok((
+        Target { path: from.to_path_buf(), hash, size, mtime_ns },
+        MovePayload { root: root.to_path_buf(), to: to.to_path_buf(), folder },
+    ))
 }
 
 fn text(p: &Path) -> String {
