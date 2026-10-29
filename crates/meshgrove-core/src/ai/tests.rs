@@ -277,6 +277,24 @@ fn suggestions_wait_and_leave_the_library_alone() {
 }
 
 #[test]
+fn tags_name_their_folder_and_the_overview_the_import_folder() {
+    let lib = library();
+    let mut config = config();
+    let cx = Context::new(&lib, &config, AccessClass::Local, None).unwrap();
+    let tags = list_tags(&cx).unwrap();
+    assert!(tags.placement.is_some());
+    let garten = tags.suggested.iter().find(|t| t.de == "Garten").unwrap();
+    assert_eq!(garten.folder.as_deref(), Some("Garten"));
+    assert!(tags.suggested.iter().find(|t| t.de == "PLA").unwrap().folder.is_none(), "properties have none");
+    let overview = library_overview(&cx).unwrap();
+    assert!(overview.libraries.iter().all(|l| l.import_folder.is_none()), "no landing folder on disk");
+    config.placement.enabled = false;
+    let cx = Context::new(&lib, &config, AccessClass::Local, None).unwrap();
+    let tags = list_tags(&cx).unwrap();
+    assert!(tags.placement.is_none() && tags.suggested.iter().all(|t| t.folder.is_none()));
+}
+
+#[test]
 fn assistants_are_told_when_meshgrove_accepts_by_itself() {
     let lib = library();
     let mut config = config();

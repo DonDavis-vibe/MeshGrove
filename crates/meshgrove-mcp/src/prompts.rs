@@ -61,7 +61,9 @@ impl Meshgrove {
                  3. Suggest 2–6 tags per file with propose_tags (one call per drop, mark_inbox_done: true): \
                  tags in use first, then suggested ones; a new tag only when nothing fits. Point out printability \
                  problems and files too big for my printers.\n\
-                 4. Sum up per drop what you suggested; it waits for my review in Meshgrove."
+                 4. For files in the import folder (library_overview: import_folder): propose_moves them into the \
+                 folder of their theme tag (list_tags: folder), one call per drop; other files stay where they are.\n\
+                 5. Sum up per drop what you suggested; it waits for my review in Meshgrove."
             )
         } else {
             format!(
@@ -71,7 +73,10 @@ impl Meshgrove {
                  3. Schlage je Datei 2–6 Tags mit propose_tags vor (ein Aufruf je Gruppe, mark_inbox_done: true): \
                  vorhandene Tags zuerst, dann Vorschläge; neue Tags nur, wenn nichts passt. Weise auf \
                  Druckbarkeitsprobleme hin und auf Dateien, die auf keinen meiner Drucker passen.\n\
-                 4. Fasse je Gruppe zusammen, was du vorgeschlagen hast; es wartet in Meshgrove auf meine Prüfung."
+                 4. Dateien im Import-Ordner (library_overview: import_folder): schlage mit propose_moves vor, sie \
+                 in den Ordner ihres Themen-Tags zu verschieben (list_tags: folder), ein Aufruf je Gruppe; andere \
+                 Dateien bleiben, wo sie sind.\n\
+                 5. Fasse je Gruppe zusammen, was du vorgeschlagen hast; es wartet in Meshgrove auf meine Prüfung."
             )
         })
     }

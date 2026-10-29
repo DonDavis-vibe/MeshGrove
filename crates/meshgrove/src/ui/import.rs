@@ -150,7 +150,8 @@ pub fn show(
     action
 }
 
-/// One candidate: its tick (or why it has none) over the tile.
+/// One candidate: its tick (or why it has none) over the tile. Allocated at its size, so the
+/// wrapping row knows when to wrap.
 fn item(
     ui: &mut Ui,
     entry: &Entry,
@@ -159,7 +160,9 @@ fn item(
     gallery: &Gallery,
     action: &mut Option<ImportAction>,
 ) {
-    ui.vertical(|ui| {
+    let spacing = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+    let size = egui::vec2(TILE_WIDTH, TILE_WIDTH + 64.0 + spacing);
+    ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
         ui.set_width(TILE_WIDTH);
         ui.horizontal(|ui| {
             let mut on = info.picked;

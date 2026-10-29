@@ -210,6 +210,9 @@ pub struct LibraryOut {
     pub files: usize,
     pub models: usize,
     pub thumbnails_allowed: bool,
+    /// The folder imported files land in and wait to be placed by tag (an id), when it exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import_folder: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -269,6 +272,9 @@ pub struct TagVocabulary {
     pub suggested: Vec<SuggestedOut>,
     pub language: String,
     pub rules: String,
+    /// How files are placed by tag, when the user switched that on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placement: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -276,6 +282,9 @@ pub struct TagInUse {
     pub name: String,
     pub count: usize,
     pub group: String,
+    /// The folder (below the library root) files with this tag are placed in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -283,6 +292,8 @@ pub struct SuggestedOut {
     pub de: String,
     pub en: String,
     pub group: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

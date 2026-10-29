@@ -82,8 +82,9 @@ Drucklisten, ein Protokoll deiner Drucke, eine Duplikatsuche, ein Druckbett-Chec
 Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 
 - **Deine Ordner bleiben, wie sie sind.** Meshgrove zeigt und indiziert die Dateien dort, wo
-  sie liegen. Es importiert, kopiert, benennt und sortiert nichts um, und es funktioniert auch
-  auf schreibgeschützten Laufwerken.
+  sie liegen, und räumt nie von selbst um; es funktioniert auch auf schreibgeschützten
+  Laufwerken. Der Import aus einem Download-Ordner und die Ablage nach Tag sind freiwillig,
+  werden vorher gezeigt, stehen im Verlauf und lassen sich rückgängig machen.
 - **Nativ und schnell.** Meshgrove ist in Rust geschrieben und rendert auf der Grafikkarte
   (Vulkan, Metal oder DirectX 12 über [wgpu](https://wgpu.rs)). Es gibt kein Electron, keine
   Web-Ansicht und keinen Server. Tausende Dateien und Modelle mit Millionen Dreiecken laufen
@@ -114,6 +115,7 @@ Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 | **Druckbarkeits-Check** | Jedes Modell wird auf Löcher (offene Kanten), Kanten an mehr als zwei Flächen, Dreiecke ohne Fläche, getrennte Teile und Volumen geprüft, dazu auf verdächtige Größen (in Zoll gezeichnet?); ⚠ auf der Kachel, Einzelheiten im Bereich *Info*, `is:problem` in der Suche |
 | **Eingang** | Neue Dateien landen im Eingang, gruppiert nach dem Ordner oder Archiv, mit dem sie kamen (das ZIP eines Kunden, ein neuer Download); Kopien bekannter Modelle werden getrennt gezählt; abhaken, wenn eingeordnet |
 | **KI (freiwillig)** | Meshgrove bringt keine KI mit, aber dein eigener Assistent (Claude, LM Studio, Cursor …) kann über MCP in den freigegebenen Bibliotheken suchen und Tags, Notizen, Listen und Verschiebungen vorschlagen; mit einem eigenen Endpunkt (Ollama, LM Studio, OpenAI-kompatibel) gibt es dazu einen KI-Chat mit `@`-Verweisen und Ein-Klick-Aktionen. Nichts ändert sich, bevor du es annimmst, und alles lässt sich rückgängig machen |
+| **Import und Ablage** | Nenne deinen Download-Ordner, und Meshgrove bietet dessen neue Modelle, G-Codes und Archive zum Import in den Landeordner der Bibliothek an (verschoben, nummeriert, wenn der Name vergeben ist, Archive ganz oder entpackt; rückgängig machbar). Eine Datei im Landeordner, die einen Themen-Tag bekommt, wird in den Ordner des Tags abgelegt – nach einer Regel von dir oder durch deinen Assistenten, mit deinem Okay oder, nur aus dem Landeordner, von selbst |
 | **Duplikate** | Findet exakte Kopien und dasselbe Modell in anderer Form (ASCII- statt Binär-STL, STL statt 3MF, gedrehte oder verschobene Kopien), schlägt vor, welche Kopie bleiben soll, und kann die anderen in den Papierkorb legen |
 | **Slicer und Programme** | „In Slicer öffnen“ für ein oder viele Modelle (erkennt Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer), ins schon offene Slicer-Fenster, wo der Slicer das erlaubt; „In … öffnen“ für deinen **Mesh-Editor oder dein CAD-Programm** (erkennt Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer); **Strg+C kopiert die Dateien** zum Einfügen im Dateimanager oder Slicer; „Im Dateimanager zeigen“; Öffnen mit dem Standardprogramm |
 | **Desktop-Einbindung** | Menüeintrag, Symbol, Dateizuordnungen; unter Linux liefert derselbe Renderer auch **Vorschauen in Dolphin und Dateidialogen** |
@@ -991,10 +993,12 @@ Namen lassen sich weiter importieren.
   weitergibt, ist eine Sache zwischen dir und diesem Anbieter; deshalb legst du pro Bibliothek
   fest, was er sehen darf, und Kundendateien können bei lokalen Modellen bleiben. Die
   Modelldateien verlassen den Rechner nie, und die KI kann nichts ändern, was du nicht annimmst.
-- **Grundsätzlich nur lesend.** Deine Modelldateien werden nur gelesen. Meshgrove schreibt in
-  seine eigenen Ordner für Einstellungen, Index und Cache, und sonst nur, wenn du ausdrücklich
-  Dateien in den Papierkorb legst, Tags und Notizen oder eine Druckliste exportierst oder ein Bild
-  speicherst.
+- **Nichts bewegt sich ohne dein Okay.** Deine Modelldateien werden nur gelesen und nie
+  verändert, Archive auch nicht. Meshgrove schreibt in seine eigenen Ordner für Einstellungen,
+  Index und Cache, und sonst nur, wenn du es willst: Dateien in den Papierkorb, ein Import aus dem
+  Download-Ordner, eine Verschiebung, die du angenommen hast, ein Export von Tags und Notizen oder
+  einer Druckliste, ein gespeichertes Bild. Jede Verschiebung steht im Verlauf und lässt sich
+  rückgängig machen.
 - **Absturzsichere Helfer.** STEP-Vernetzung und PDF-Darstellung laufen als eigene Prozesse mit
   Zeitlimit; eine kaputte Datei kann die App nicht mitreißen. Eine Datei, die nicht klappt,
   bekommt eine ⚠-Kachel mit dem Grund im Tooltip.
@@ -1084,7 +1088,8 @@ Rechner *Einstellungen → Tags, Notizen & Listen sichern → Exportieren* nutze
 *Importieren*.
 
 **Verändert Meshgrove meine 3MF-/STL-Dateien?**
-Nein. Modelldateien und Archive werden nie beschrieben.
+Nein. Es schreibt nie in Modelldateien oder Archive. Mit Import oder Ablage nach Tag verschiebt
+es Dateien (nie ihren Inhalt), und der Verlauf nimmt jede Verschiebung zurück.
 
 ## Aus dem Quellcode bauen
 
@@ -1175,7 +1180,8 @@ Ein paar Entscheidungen dahinter:
   Oberfläche werden erkannt und übersprungen.
 - **Kein WebKit.** WebKitGTK hat unter NVIDIA und Wayland noch Darstellungsprobleme. Eine native
   egui-Oberfläche auf wgpu umgeht sie ganz.
-- **Die KI schlägt vor, du entscheidest.** `meshgrove-mcp` schreibt nie in die Bibliothek:
+- **Die KI schlägt vor, du entscheidest.** Meshgroves eigene Ablage-Regeln gehen denselben Weg:
+  Vorschlag, Prüfliste, Verlauf. `meshgrove-mcp` schreibt nie in die Bibliothek:
   Vorschläge landen in einer eigenen Datenbank (`proposals.db`), und nur Meshgroves
   Bibliotheksdienst wendet an, was du annimmst – mit jedem Schritt im Journal, damit er sich
   rückgängig machen lässt.

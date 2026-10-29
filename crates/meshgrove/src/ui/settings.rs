@@ -1083,9 +1083,8 @@ impl SettingsDialog {
                     ui.end_row();
                 }
                 ui.label(tag.as_str());
-                let field = ui.add(
-                    egui::TextEdit::singleline(folder).hint_text(t!("settings.placement_none")).desired_width(220.0),
-                );
+                let edit = egui::TextEdit::singleline(folder).hint_text(t!("settings.placement_none"));
+                let field = ui.add_sized([220.0, ui.spacing().interact_size.y], edit);
                 let ok = valid(folder);
                 bad |= !ok;
                 edited |= field.lost_focus() && ok;

@@ -554,14 +554,26 @@ fn tags_in_scope(cx: &Context) -> ToolResult<Vec<(String, usize)>> {
 pub fn list_tags(cx: &Context) -> ToolResult<TagVocabulary> {
     let in_use = tags_in_scope(cx)?;
     let vocab = Vocabulary::new(cx.config, in_use.iter().map(|(t, _)| t.clone()).collect());
+    let placing = cx.config.placement.enabled;
+    let folder_of = |tag: &str| if placing { cx.config.folder_for_tag(tag) } else { None };
     let existing = in_use
         .iter()
-        .map(|(name, count)| TagInUse { name: name.clone(), count: *count, group: vocab.group_of(name).to_owned() })
+        .map(|(name, count)| TagInUse {
+            name: name.clone(),
+            count: *count,
+            group: vocab.group_of(name).to_owned(),
+            folder: folder_of(name),
+        })
         .collect();
     let suggested = vocab
         .suggested
         .iter()
-        .map(|(t, group)| SuggestedOut { de: t.de.clone(), en: t.en.clone(), group: (*group).to_owned() })
+        .map(|(t, group)| SuggestedOut {
+            de: t.de.clone(),
+            en: t.en.clone(),
+            group: (*group).to_owned(),
+            folder: folder_of(if vocab.german { &t.de } else { &t.en }),
+        })
         .collect();
     Ok(TagVocabulary {
         existing,
@@ -571,6 +583,12 @@ pub fn list_tags(cx: &Context) -> ToolResult<TagVocabulary> {
                 (the review marks it as new). At most 8 tags per file, short names. Themes say where or what for, \
                 properties how it prints, states where it stands."
             .to_owned(),
+        placement: placing.then(|| {
+            "Files in a library's import folder (library_overview: import_folder) are placed by tag: when you tag \
+             one with a theme that has a folder, also propose_moves it into that folder (or a better existing \
+             one). Files elsewhere stay where they are unless the user asks."
+                .to_owned()
+        }),
     })
 }
 
@@ -740,7 +758,15 @@ pub fn library_overview(cx: &Context) -> ToolResult<Overview> {
         within += &format!(" AND {}", cx.scope.sql("d.path", &mut args));
         let files = cx.lib.ai_count(&within, &args)?;
         let models = cx.lib.ai_count(&format!("{within} AND f.kind IN ({INBOX_KINDS})"), &args)?;
-        libraries.push(LibraryOut { alias: root.alias.clone(), files, models, thumbnails_allowed: root.images });
+        let landing = root.path.join(cx.config.landing_name());
+        let import_folder = (cx.config.placement.enabled && landing.is_dir()).then(|| cx.id_of(&landing));
+        libraries.push(LibraryOut {
+            alias: root.alias.clone(),
+            files,
+            models,
+            thumbnails_allowed: root.images,
+            import_folder,
+        });
     }
     let count = |f: ModelFilter| -> ToolResult<usize> {
         let mut args = Vec::new();

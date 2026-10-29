@@ -7,13 +7,28 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 
 ## Highlights
 
-**Your AI apps connect themselves** (new in 0.6)
+**From Downloads into the library** (new in 0.7)
+
+- Name a downloads folder in *Settings → Library → Import* (one click for your Downloads). At start, or with *⬇ Import* in the sidebar, Meshgrove shows the new models, G-code and archives with models in there; tick what should come in and it moves them into the library's landing folder (`Import`), across drives too, numbered when a name is taken. Archives come in whole or unpacked, as you choose. Files still downloading and content the library has already are left out.
+- Imported files land in the inbox like any new file; the history brings them back to where they were. Power users let the import run by itself at start.
+
+<p>
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-import.png" alt="The import view: new files in Downloads with a tick each, archives whole or unpacked, Import selected" width="60%">
+</p>
+
+**Placed by tag** (new in 0.7)
+
+- A file in the landing folder that gets a theme tag – from you, from the inbox's *✧ Sort in* or from your assistant – is placed into that tag's folder (`Garten/`), with missing folders made. *Settings → Tags → Placement by tag* holds the folder for each theme and for your own tags; a folder that exists already wins over the settings order.
+- Placement is a suggestion like an assistant's and waits in the review; with *Accept suggestions automatically* on, moves out of the landing folder are applied by themselves. Your own folders are never rearranged without you: *Place by tag* in the context menu asks, and every move can be undone.
+- Assistants over MCP learn the rules too (`list_tags` names each tag's folder, `library_overview` the landing folder) and the *eingang-einordnen* task places what it tags.
+
+**Your AI apps connect themselves** (since 0.6)
 
 - While AI is on, Meshgrove adds itself to the assistants it finds on your computer – Claude Desktop, Claude Code, LM Studio, Cursor, VS Code, Codex, Gemini CLI, Copilot CLI, Windsurf, Zed and OpenCode – and *Settings → AI & MCP* lists them with their state. No more copying entries; restart an app once and it can use Meshgrove.
 - Only Meshgrove's own entry changes in their settings, each file is kept as `.bak` before the first change, your own entries are left alone, and switching it off takes the entries out again. `meshgrove-mcp setup` (and `remove`) does the same from a terminal.
 - The idea and the code that finds and edits the apps' settings come from [SolidCraft](https://github.com/tangency-labs/solidcraft) – thank you.
 
-**Settings, rearranged** (new in 0.6)
+**Settings, rearranged** (since 0.6)
 
 - The pages are grouped (display, printing, extend), each says in a line what it holds, and its sections fold away with a click on their title.
 - Labels and controls sit in aligned columns, choices among a few are buttons side by side, and *Restore defaults* puts a page back to how Meshgrove comes (your library folders, programs, printers and AI permissions stay).
@@ -22,7 +37,7 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 <img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-settings.png" alt="The settings: pages in groups, folding sections, aligned rows and Restore defaults" width="60%">
 </p>
 
-**Reviewing suggestions** (new in 0.6)
+**Reviewing suggestions** (since 0.6)
 
 - A tick for each file and one for the whole batch: leave out what does not fit, then *Accept selected*.
 - New, for experienced users: *Accept suggestions automatically*. New suggestions of AI apps and one-click actions are applied without the review; moves still wait for you, and everything can be undone in the history.
@@ -117,7 +132,9 @@ If Meshgrove saves you time, you can leave a tip on [Ko-fi](https://ko-fi.com/do
 
 **Meshgrove @VERSION@**: eine schnelle, native Galerie für 3D-Druck-Dateien unter Linux, Windows und macOS, mit echten Vorschauen für STL, 3MF, STEP, OBJ, PLY, glTF, G-code, Modelle in ZIP/7z/RAR, PDFs und Readmes, dazu Favoriten, Drucklisten und einem Druckprotokoll.
 
-**Neu in 0.6:** Meshgrove trägt sich selbst bei deinen KI-Apps ein (Claude Desktop, Claude Code, LM Studio, Cursor, VS Code, Codex, Gemini CLI und weitere; Idee und Code von SolidCraft) – kein Eintrag muss mehr kopiert werden. Die Einstellungen sind neu geordnet: Seiten in Gruppen, einklappbare Abschnitte, ausgerichtete Zeilen und „Standard wiederherstellen“. In der Prüfliste gibt es Häkchen pro Datei und pro Block, und wer möchte, lässt neue Vorschläge automatisch annehmen (Verschiebungen warten immer). Behoben: Nach einem Tag oder einer Suche zeigte die Bibliothek ihre Ordner ohne Bilder, bis man F5 drückte.
+**Neu in 0.7:** Nenne unter *Einstellungen → Bibliothek → Import* deinen Download-Ordner, und Meshgrove zeigt beim Start oder über *⬇ Import* in der Seitenleiste, welche neuen Modelle, G-Codes und Archive dort liegen; ein Klick holt sie in den Landeordner der Bibliothek (verschoben, auch über Laufwerke hinweg, Archive ganz oder entpackt, rückgängig machbar). Bekommt eine Datei dort einen Themen-Tag, legt Meshgrove sie in den Ordner des Tags ab – nach den Regeln unter *Einstellungen → Tags → Ablage nach Tag*, als Vorschlag in der Prüfliste oder mit „automatisch annehmen“ von selbst. Deine eigenen Ordner werden nie ungefragt umgeräumt; „Nach Tag ablegen“ im Rechtsklick-Menü fragt immer. Dein KI-Assistent kennt die Regeln ebenfalls.
+
+**Seit 0.6:** Meshgrove trägt sich selbst bei deinen KI-Apps ein (Claude Desktop, Claude Code, LM Studio, Cursor, VS Code, Codex, Gemini CLI und weitere; Idee und Code von SolidCraft) – kein Eintrag muss mehr kopiert werden. Die Einstellungen sind neu geordnet: Seiten in Gruppen, einklappbare Abschnitte, ausgerichtete Zeilen und „Standard wiederherstellen“. In der Prüfliste gibt es Häkchen pro Datei und pro Block, und wer möchte, lässt neue Vorschläge automatisch annehmen (Verschiebungen warten immer). Behoben: Nach einem Tag oder einer Suche zeigte die Bibliothek ihre Ordner ohne Bilder, bis man F5 drückte.
 
 **Seit 0.5:** mehrere Drucker, ein Druckbarkeits-Check und ein Eingang für neue Dateien und Kundenlieferungen. Dazu, freiwillig und ab Werk aus, deine eigene KI: ein MCP-Server für Claude, LM Studio, Cursor & Co. und mit eigenem Endpunkt (Ollama, LM Studio, OpenAI-kompatibel) ein KI-Chat mit `@`-Verweisen und Ein-Klick-Aktionen. Die KI schlägt vor, du nimmst an, und alles lässt sich rückgängig machen. Außerdem lassen sich Listen, Tags und Tag-Gruppen in der Seitenleiste einklappen, und Kopieren und Einfügen in Textfeldern funktioniert.
 

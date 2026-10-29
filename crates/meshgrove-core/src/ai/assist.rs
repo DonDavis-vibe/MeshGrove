@@ -486,10 +486,16 @@ mod tests {
     #[test]
     fn prompts_name_the_files_and_the_vocabulary() {
         let vocab = TagVocabulary {
-            existing: vec![super::super::types::TagInUse { name: "Garten".into(), count: 3, group: "theme".into() }],
+            existing: vec![super::super::types::TagInUse {
+                name: "Garten".into(),
+                count: 3,
+                group: "theme".into(),
+                folder: None,
+            }],
             suggested: Vec::new(),
             language: "de".into(),
             rules: String::new(),
+            placement: None,
         };
         let file = ModelSummary {
             id: "L/rose.stl".into(),

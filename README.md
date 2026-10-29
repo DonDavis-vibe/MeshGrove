@@ -80,9 +80,10 @@ duplicate finder, a print-bed check, and a one-click hand-over to your slicer.
 
 What makes it different from other model managers:
 
-- **Your folders stay as they are.** Meshgrove browses and indexes files where they are. It
-  never imports, copies, renames or reorganises anything, and it works fine on read-only
-  drives.
+- **Your folders stay as they are.** Meshgrove browses and indexes files where they are and
+  never rearranges them on its own; it works fine on read-only drives. Importing from a
+  downloads folder and placing files by tag are opt-in, shown to you before they happen,
+  journalled and undoable.
 - **Native and fast.** It is written in Rust and renders with the GPU (Vulkan, Metal or
   DirectX 12 through [wgpu](https://wgpu.rs)). There is no Electron, no web view and no server.
   Thousands of files and models with millions of triangles stay fluid.
@@ -112,6 +113,7 @@ What makes it different from other model managers:
 | **Printability check** | Every model is checked for holes (open edges), edges shared by more than two faces, faces without area, separate parts and volume, and for suspicious sizes (drawn in inches?); ⚠ on the tile, details in the info pane, `is:problem` in the search |
 | **Inbox** | New files are collected in an inbox, grouped by the folder or archive they came in (a customer's ZIP, a new download), with copies of known models counted apart; tick them off when sorted |
 | **AI (optional)** | Meshgrove brings no AI, but your own assistant (Claude, LM Studio, Cursor …) can search the libraries you open to it over MCP and suggest tags, notes, lists and moves; with an endpoint of your own (Ollama, LM Studio, OpenAI-compatible) there is an AI chat with `@` references and one-click actions too. Nothing changes until you accept it, and everything can be undone |
+| **Import and placement** | Name a downloads folder and Meshgrove offers its new models, G-code and archives for import into the library's landing folder (moved, numbered when a name is taken, archives whole or unpacked; undoable). A file in the landing folder that gets a theme tag is placed into that tag's folder, by a rule you set or by your assistant, with your okay or – out of the landing folder only – by itself |
 | **Duplicates** | Finds exact copies and the same model saved differently (ASCII vs binary STL, STL vs 3MF, rotated or moved copies), suggests which copy to keep and can move the others to the trash |
 | **Slicer and apps** | "Open in slicer" for one or many models (finds over 30 common filament and resin slicers, among them Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer, Cura, Creality Print, QIDI Studio, FlashPrint, Lychee, ChiTuBox and UVtools, whether installed as a package, Flatpak, Snap or AppImage; add the ones you use with a ＋ in the settings, pick a default, the others sit in a submenu), into the slicer window that is already open where the slicer allows it; "open in" your **mesh editors or CAD programs** (finds over 20 programs, among them Blender, FreeCAD, Autodesk Fusion, MeshLab, SolidCraft, OpenSCAD, SolveSpace, Rhino, SketchUp, SolidWorks and fstl, again in every install variant; add and choose a default in the settings); **Ctrl+C copies the files** for pasting into the file manager or slicer; "show in file manager"; open with the default app |
 | **Desktop integration** | Menu entry, icon, file associations; on Linux the same renderer also provides **thumbnails in Dolphin and file dialogs** |
@@ -944,9 +946,11 @@ made under the old name.
   and that provider, so choose per library what it may see; customer files can stay with local
   models. The model files never leave the computer, and AI cannot change anything you did not
   accept.
-- **Read-only by design.** It only reads your model files. It writes to its own settings, index
-  and cache folders, and otherwise only when you explicitly move files to the trash, export
-  tags and notes or a print list, or save a picture.
+- **Nothing moves without your say-so.** It reads your model files and never modifies them or
+  archives. It writes to its own settings, index and cache folders, and otherwise only when you
+  ask: files to the trash, an import from a downloads folder, a move you accepted, an export of
+  tags and notes or a print list, a saved picture. Every move is in the history and can be
+  undone.
 - **Crash-safe helpers.** STEP tessellation and PDF rendering run as separate processes with
   timeouts, so a malformed file cannot take the app down. A file that fails gets a ⚠ tile with
   the reason in its tooltip.
@@ -1031,7 +1035,8 @@ Use *Settings → Back up tags, notes & lists → Export* before moving to anoth
 *Import* there.
 
 **Does Meshgrove change my 3MF/STL files?**
-No. It never writes to model files or archives.
+No. It never writes to model files or archives. With import or placement by tag switched on it
+moves files (never their contents), and the history takes every move back.
 
 ## Building from source
 
@@ -1121,7 +1126,8 @@ Some design decisions:
   skipped.
 - **No WebKit.** WebKitGTK still has rendering problems on NVIDIA + Wayland. A native egui UI on
   wgpu avoids them entirely.
-- **AI proposes, the user decides.** `meshgrove-mcp` never writes the library: suggestions go to a
+- **AI proposes, the user decides.** Meshgrove's own placement rules use the same path: a
+  suggestion, the review, the history. `meshgrove-mcp` never writes the library: suggestions go to a
   database of their own (`proposals.db`), and only Meshgrove's library service applies what the
   user accepts, journalling every step so it can be undone.
 
