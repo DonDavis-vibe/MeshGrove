@@ -3,18 +3,20 @@
 //! exactly those, written in the same savepoint as the change itself.
 //!
 //! Steps work on content (hashes), like tags and notes do, so a file moved since the suggestion
-//! is still found; a file whose content is gone or changed makes its step stale. Moves are the
-//! exception: they act on the disk, at the place suggested, and are done again backwards if the
-//! journal cannot be written.
+//! is still found; a file whose content is gone or changed makes its step stale. Moves, imports
+//! and extractions are the exception: they act on the disk, at the place named, and are done
+//! again backwards if the journal cannot be written.
 
-use std::path::PathBuf;
-use std::time::SystemTime;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::ai::proposals::Target;
+use crate::cache::ThumbCache;
 use crate::db::{Error, Library, nanos};
+use crate::formats::Kind;
 use crate::lists::ListKind;
 
 /// One step of an accepted suggestion.
@@ -51,6 +53,22 @@ pub enum ApplyOp {
         target: Target,
         to: PathBuf,
         folder: bool,
+    },
+    /// A file (or folder) from outside the library to `to` below `root`: the import from a
+    /// downloads folder. Like a move, but the index knows nothing of the source; the caller
+    /// lists the folder it landed in.
+    Import {
+        root: PathBuf,
+        from: Target,
+        to: PathBuf,
+        folder: bool,
+    },
+    /// An archive from outside the library unpacked into the new folder `into` below `root`.
+    /// The archive itself stays where it is (the app puts it in the trash).
+    Extract {
+        root: PathBuf,
+        archive: Target,
+        into: PathBuf,
     },
 }
 
@@ -92,16 +110,98 @@ enum UndoOp {
         folder: bool,
         made: Vec<PathBuf>,
     },
+    /// An import back out of the library: from `at` to `to` (outside), if still as it came;
+    /// its index rows go, and so do the folders `made`, when empty.
+    ImportBack {
+        root: PathBuf,
+        at: PathBuf,
+        to: PathBuf,
+        size: u64,
+        mtime_ns: i64,
+        folder: bool,
+        made: Vec<PathBuf>,
+    },
+    /// The files an extraction wrote into `dir` (with their size and time), to delete where
+    /// unchanged; the folders `made` go when empty.
+    RemoveExtracted {
+        dir: PathBuf,
+        files: Vec<(PathBuf, u64, i64)>,
+        made: Vec<PathBuf>,
+    },
 }
 
-/// Moves done on disk during a change: (from, to, folders made), to do backwards on failure.
-type Moved = Vec<(PathBuf, PathBuf, Vec<PathBuf>)>;
+/// What a change did on disk, to do backwards when its journal cannot be written.
+enum Done {
+    /// `from` went to `to`, making the folders `made`.
+    Moved { from: PathBuf, to: PathBuf, made: Vec<PathBuf> },
+    /// Files written into `dir`, which was made along with `made`.
+    Extracted { dir: PathBuf, files: Vec<PathBuf>, made: Vec<PathBuf> },
+}
 
-fn move_back(moved: &Moved) {
-    for (from, to, made) in moved.iter().rev() {
-        let _ = crate::fsops::rename_no_replace(to, from);
-        remove_empty(made);
+type OnDisk = Vec<Done>;
+
+fn roll_back(done: &OnDisk) {
+    for d in done.iter().rev() {
+        match d {
+            Done::Moved { from, to, made } => {
+                let _ = crate::fsops::move_no_replace(to, from);
+                remove_empty(made);
+            }
+            Done::Extracted { dir, files, made } => {
+                for f in files {
+                    let _ = std::fs::remove_file(f);
+                }
+                remove_empty(&folders_below(dir));
+                let _ = std::fs::remove_dir(dir);
+                remove_empty(made);
+            }
+        }
     }
+}
+
+/// The folders below `dir` (not `dir` itself), outermost first.
+fn folders_below(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    let mut stack = vec![dir.to_path_buf()];
+    while i < stack.len() {
+        if let Ok(entries) = std::fs::read_dir(&stack[i]) {
+            for e in entries.flatten() {
+                if e.file_type().is_ok_and(|t| t.is_dir()) {
+                    stack.push(e.path());
+                }
+            }
+        }
+        i += 1;
+    }
+    out.extend(stack.into_iter().skip(1));
+    out
+}
+
+/// The time of a file or folder as the file system keeps it now (what a check later compares).
+fn mtime_ns_of(path: &Path) -> i64 {
+    nanos(path.symlink_metadata().ok().and_then(|m| m.modified().ok()))
+}
+
+fn system_time(ns: i64) -> Option<SystemTime> {
+    (ns > 0).then(|| SystemTime::UNIX_EPOCH + Duration::from_nanos(ns as u64))
+}
+
+/// A member's name as a path below the folder it is unpacked into; `None` for names that would
+/// leave it or that Windows refuses.
+fn member_path(name: &str) -> Option<PathBuf> {
+    let name = name.replace('\\', "/");
+    if name.starts_with('/') || name.is_empty() {
+        return None;
+    }
+    let mut out = PathBuf::new();
+    for part in name.split('/') {
+        if part.is_empty() || part == "." || part == ".." || crate::fsops::check_name(part).is_err() {
+            return None;
+        }
+        out.push(part);
+    }
+    Some(out)
 }
 
 /// Removes these folders (innermost last in the list) where they are empty; those removed.
@@ -213,10 +313,10 @@ impl Library {
     /// (`proposal:<uid>`, `chat:<message>`).
     pub fn apply_change(&mut self, origin: &str, title: &str, ops: &[ApplyOp]) -> Result<ChangeReport, Error> {
         self.conn.execute_batch("SAVEPOINT apply_change")?;
-        let mut moved = Moved::new();
-        let result = self.apply_journalled(origin, title, ops, &mut moved);
+        let mut done = OnDisk::new();
+        let result = self.apply_journalled(origin, title, ops, &mut done);
         if result.is_err() {
-            move_back(&moved);
+            roll_back(&done);
         }
         result
     }
@@ -226,9 +326,9 @@ impl Library {
         origin: &str,
         title: &str,
         ops: &[ApplyOp],
-        moved: &mut Moved,
+        done: &mut OnDisk,
     ) -> Result<ChangeReport, Error> {
-        match self.apply_ops(ops, moved) {
+        match self.apply_ops(ops, done) {
             Ok((undo, report)) => {
                 let result = (|| {
                     if undo.is_empty() {
@@ -258,7 +358,7 @@ impl Library {
         }
     }
 
-    fn apply_ops(&mut self, ops: &[ApplyOp], moved: &mut Moved) -> Result<(Vec<UndoOp>, ChangeReport), Error> {
+    fn apply_ops(&mut self, ops: &[ApplyOp], on_disk: &mut OnDisk) -> Result<(Vec<UndoOp>, ChangeReport), Error> {
         let mut undo = Vec::new();
         let mut report = ChangeReport::default();
         let now = nanos(Some(SystemTime::now()));
@@ -380,22 +480,70 @@ impl Library {
                     let made = crate::moves::missing_folders(root, to.parent().unwrap_or(root));
                     if crate::moves::check_move(target, to, *folder).is_err() || !make_folders(&made) {
                         false
-                    } else if crate::fsops::rename_no_replace(&target.path, to).is_err() {
+                    } else if crate::fsops::move_no_replace(&target.path, to).is_err() {
                         remove_empty(&made);
                         false
                     } else {
-                        moved.push((target.path.clone(), to.clone(), made.clone()));
+                        on_disk.push(Done::Moved { from: target.path.clone(), to: to.clone(), made: made.clone() });
                         self.move_index(root, &target.path, to)?;
                         undo.push(UndoOp::MoveBack {
                             root: root.clone(),
                             at: to.clone(),
                             to: target.path.clone(),
                             size: target.size,
-                            mtime_ns: target.mtime_ns,
+                            // As the file system keeps it now (one that rounds times too).
+                            mtime_ns: mtime_ns_of(to),
                             folder: *folder,
                             made,
                         });
                         true
+                    }
+                }
+                ApplyOp::Import { root, from, to, folder } => {
+                    let made = crate::moves::missing_folders(root, to.parent().unwrap_or(root));
+                    if crate::moves::check_move(from, to, *folder).is_err() || !make_folders(&made) {
+                        false
+                    } else if crate::fsops::move_no_replace(&from.path, to).is_err() {
+                        remove_empty(&made);
+                        false
+                    } else {
+                        on_disk.push(Done::Moved { from: from.path.clone(), to: to.clone(), made: made.clone() });
+                        let mtime_ns = mtime_ns_of(to);
+                        if !*folder {
+                            self.rekey_outside(&from.path, from.mtime_ns, to, mtime_ns, from.size);
+                        }
+                        undo.push(UndoOp::ImportBack {
+                            root: root.clone(),
+                            at: to.clone(),
+                            to: from.path.clone(),
+                            size: from.size,
+                            mtime_ns,
+                            folder: *folder,
+                            made,
+                        });
+                        true
+                    }
+                }
+                ApplyOp::Extract { root, archive, into } => {
+                    let made = crate::moves::missing_folders(root, into);
+                    if crate::moves::check_move(archive, into, false).is_err() || !make_folders(&made) {
+                        false
+                    } else {
+                        match extract_into(&archive.path, into) {
+                            Ok(files) => {
+                                on_disk.push(Done::Extracted {
+                                    dir: into.clone(),
+                                    files: files.iter().map(|(p, _, _)| p.clone()).collect(),
+                                    made: made.clone(),
+                                });
+                                undo.push(UndoOp::RemoveExtracted { dir: into.clone(), files, made });
+                                true
+                            }
+                            Err(_) => {
+                                remove_empty(&made);
+                                false
+                            }
+                        }
                     }
                 }
             };
@@ -447,11 +595,11 @@ impl Library {
         let Some((undo, None)) = row else { return Ok(UndoReport::default()) };
         let steps: Vec<UndoOp> = serde_json::from_str(&undo).unwrap_or_default();
         let mut report = UndoReport::default();
-        let mut moved = Moved::new();
+        let mut done = OnDisk::new();
         self.conn.execute_batch("SAVEPOINT undo_change")?;
         let result = (|| {
             for step in steps.iter().rev() {
-                if self.undo_step(step, &mut moved)? {
+                if self.undo_step(step, &mut done)? {
                     report.undone += 1;
                 } else {
                     report.kept += 1;
@@ -470,13 +618,13 @@ impl Library {
             }
             Err(e) => {
                 self.conn.execute_batch("ROLLBACK TO undo_change; RELEASE undo_change")?;
-                move_back(&moved);
+                roll_back(&done);
                 Err(e)
             }
         }
     }
 
-    fn undo_step(&mut self, step: &UndoOp, moved: &mut Moved) -> Result<bool, Error> {
+    fn undo_step(&mut self, step: &UndoOp, on_disk: &mut OnDisk) -> Result<bool, Error> {
         Ok(match step {
             UndoOp::Untag { hash, tag } => {
                 let had = self.conn.query_row(
@@ -526,11 +674,11 @@ impl Library {
                 let missing = crate::moves::missing_folders(root, to.parent().unwrap_or(root));
                 if crate::moves::check_move(&now, to, *folder).is_err() || !make_folders(&missing) {
                     false
-                } else if crate::fsops::rename_no_replace(at, to).is_err() {
+                } else if crate::fsops::move_no_replace(at, to).is_err() {
                     remove_empty(&missing);
                     false
                 } else {
-                    moved.push((at.clone(), to.clone(), missing));
+                    on_disk.push(Done::Moved { from: at.clone(), to: to.clone(), made: missing });
                     self.move_index(root, at, to)?;
                     for dir in remove_empty(made) {
                         self.conn.execute("DELETE FROM dirs WHERE path = ?1", [dir.to_string_lossy()])?;
@@ -538,7 +686,70 @@ impl Library {
                     true
                 }
             }
+            UndoOp::ImportBack { root: _, at, to, size, mtime_ns, folder, made } => {
+                // Back where it came from, if that folder is still there and the file as imported.
+                let now = Target { path: at.clone(), hash: None, size: *size, mtime_ns: *mtime_ns };
+                let back_free =
+                    to.parent().is_some_and(Path::is_dir) && crate::moves::check_move(&now, to, *folder).is_ok();
+                if !back_free || crate::fsops::move_no_replace(at, to).is_err() {
+                    false
+                } else {
+                    on_disk.push(Done::Moved { from: at.clone(), to: to.clone(), made: Vec::new() });
+                    if !*folder {
+                        self.rekey_outside(at, *mtime_ns, to, mtime_ns_of(to), *size);
+                    }
+                    self.forget_path(at)?;
+                    for dir in remove_empty(made) {
+                        self.conn.execute("DELETE FROM dirs WHERE path = ?1", [dir.to_string_lossy()])?;
+                    }
+                    true
+                }
+            }
+            UndoOp::RemoveExtracted { dir, files, made } => {
+                // Only the files as they were written; what the user changed since stays.
+                let mut all = true;
+                for (path, size, mtime_ns) in files {
+                    match path.symlink_metadata() {
+                        Ok(m) if m.len() == *size && nanos(m.modified().ok()) == *mtime_ns => {
+                            all &= std::fs::remove_file(path).is_ok();
+                        }
+                        Ok(_) => all = false,
+                        Err(_) => {}
+                    }
+                }
+                remove_empty(&folders_below(dir));
+                let _ = std::fs::remove_dir(dir);
+                self.remove_tree(dir)?;
+                for d in remove_empty(made) {
+                    self.conn.execute("DELETE FROM dirs WHERE path = ?1", [d.to_string_lossy()])?;
+                }
+                all
+            }
         })
+    }
+
+    /// Forgets the index rows of a file, archive or folder that left the library.
+    pub fn forget_path(&mut self, path: &Path) -> Result<(), Error> {
+        if let (Some(dir), Some(name)) = (path.parent(), path.file_name()) {
+            self.conn.execute(
+                "DELETE FROM files WHERE name = ?2 AND dir_id = (SELECT id FROM dirs WHERE path = ?1)",
+                params![dir.to_string_lossy(), name.to_string_lossy()],
+            )?;
+        }
+        self.remove_tree(path)
+    }
+
+    /// A file that came from outside the library (or goes back out): its cached thumbnail and
+    /// STEP mesh under the new path, so nothing is rendered again.
+    fn rekey_outside(&self, from: &Path, from_mtime_ns: i64, to: &Path, to_mtime_ns: i64, size: u64) {
+        let old_key = ThumbCache::key(from, size, system_time(from_mtime_ns), None);
+        let new_key = ThumbCache::key(to, size, system_time(to_mtime_ns), None);
+        if let Some(cache) = &self.thumbs {
+            cache.rekey(&old_key, &new_key);
+        }
+        if Kind::from_path(to) == Kind::Step && from_mtime_ns == to_mtime_ns {
+            crate::loaders::step::rekey(from, to, size, from_mtime_ns.max(0) as u128);
+        }
     }
 
     /// Does an undone change again (its steps as they were accepted).
@@ -580,6 +791,39 @@ impl Library {
     pub fn changes_by_origin(&self, origin: &str) -> Result<Vec<i64>, Error> {
         let mut stmt = self.conn.prepare("SELECT id FROM changes WHERE origin = ?1 ORDER BY applied_ns, id")?;
         stmt.query_map([origin], |r| r.get(0))?.collect()
+    }
+}
+
+/// Unpacks every member of `archive` into `into` (made already), replacing nothing; the files
+/// written with their size and time. On failure what was written is removed.
+fn extract_into(archive: &Path, into: &Path) -> std::io::Result<Vec<(PathBuf, u64, i64)>> {
+    let mut written = Vec::new();
+    let result = (|| {
+        for member in crate::archive::list(archive)? {
+            let Some(rel) = member_path(&member.name) else { continue };
+            let path = into.join(rel);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let bytes = crate::archive::read_member(archive, &member.name)?;
+            let mut file = std::fs::File::create_new(&path)?;
+            written.push(path.clone());
+            std::io::Write::write_all(&mut file, &bytes)?;
+            file.sync_all()?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            Ok(written.into_iter().map(|p| (p.clone(), p.metadata().map_or(0, |m| m.len()), mtime_ns_of(&p))).collect())
+        }
+        Err(e) => {
+            for p in &written {
+                let _ = std::fs::remove_file(p);
+            }
+            remove_empty(&folders_below(into));
+            Err(e)
+        }
     }
 }
 
@@ -645,6 +889,98 @@ mod tests {
         assert_eq!(redo.applied, 2);
         assert_eq!(tags(&lib, "a.stl"), ["Rose"]);
         assert_eq!(lib.changes(9).unwrap().len(), 1, "the redo replaced the undone entry");
+    }
+
+    /// A file in a fake downloads folder, with a thumbnail cached under its path.
+    fn downloads(dir: &Path) -> (PathBuf, PathBuf, Target, PathBuf) {
+        let (downloads, root) = (dir.join("Downloads"), dir.join("lib"));
+        std::fs::create_dir_all(&downloads).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        let rose = downloads.join("rose.stl");
+        std::fs::write(&rose, "abc").unwrap();
+        let meta = rose.metadata().unwrap();
+        let from = Target { path: rose.clone(), hash: None, size: meta.len(), mtime_ns: nanos(meta.modified().ok()) };
+        (downloads, root, from, rose)
+    }
+
+    fn png(thumbs: &Path, key: &str) -> PathBuf {
+        thumbs.join(&key[..2]).join(format!("{key}.png"))
+    }
+
+    #[test]
+    fn imports_come_and_go_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, root, from, rose) = downloads(dir.path());
+        let thumbs = dir.path().join("thumbs");
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.finish_baseline(&root).unwrap();
+        lib.set_thumb_cache(ThumbCache::new(&thumbs));
+        let old_key = ThumbCache::key(&rose, from.size, system_time(from.mtime_ns), None);
+        std::fs::create_dir_all(png(&thumbs, &old_key).parent().unwrap()).unwrap();
+        std::fs::write(png(&thumbs, &old_key), "png").unwrap();
+        let landing = root.join("Import");
+        let to = landing.join("rose.stl");
+        let ops = [ApplyOp::Import { root: root.clone(), from: from.clone(), to: to.clone(), folder: false }];
+        let report = lib.apply_change("import", "Downloads", &ops).unwrap();
+        assert_eq!((report.applied, report.skipped), (1, 0));
+        assert!(to.is_file() && !rose.exists(), "moved into the landing folder, which was made");
+        let new_key = ThumbCache::key(&to, from.size, to.metadata().unwrap().modified().ok(), None);
+        assert!(png(&thumbs, &new_key).exists(), "the thumbnail followed");
+        let dirs: i64 = lib.conn.query_row("SELECT COUNT(*) FROM dirs", [], |r| r.get(0)).unwrap();
+        assert_eq!(dirs, 0, "the index learns of the file from the scan, not from the import");
+        // The scan lists the landing folder, as the app does right after an import.
+        let modified = to.metadata().unwrap().modified().ok();
+        let e = Entry { name: "rose.stl".into(), path: to.clone(), kind: Kind::Stl, size: 3, modified };
+        lib.update_dir(&root, &root, 1, &[], std::slice::from_ref(&landing)).unwrap();
+        lib.update_dir(&root, &landing, 1, &[e], &[]).unwrap();
+        assert!(lib.entry_of(&to).unwrap().is_some());
+        assert_eq!(lib.apply_change("import", "Downloads", &ops).unwrap().skipped, 1, "nothing there any more");
+
+        let undo = lib.undo_change(report.id).unwrap();
+        assert_eq!((undo.undone, undo.kept), (1, 0));
+        assert!(rose.is_file() && !to.exists() && !landing.exists(), "back in Downloads, the folder made is gone");
+        assert!(lib.entry_of(&to).unwrap().is_none(), "the index forgot it");
+        assert!(png(&thumbs, &old_key).exists(), "the thumbnail is back under the old key");
+        let redo = lib.redo_change(report.id).unwrap();
+        assert_eq!(redo.applied, 1);
+        assert!(to.is_file());
+        // Changed since: the undo keeps it.
+        std::fs::write(&to, "abcd").unwrap();
+        let undo = lib.undo_change(redo.id).unwrap();
+        assert_eq!((undo.undone, undo.kept), (0, 1));
+        assert!(to.is_file() && !rose.exists());
+    }
+
+    #[test]
+    fn extracted_archives_are_journalled() {
+        let dir = tempfile::tempdir().unwrap();
+        let (downloads, root, _, _) = downloads(dir.path());
+        let zip = downloads.join("pack.zip");
+        let stl = crate::archive::tests::make_zip(&zip);
+        let meta = zip.metadata().unwrap();
+        let archive = Target { path: zip.clone(), hash: None, size: meta.len(), mtime_ns: nanos(meta.modified().ok()) };
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.finish_baseline(&root).unwrap();
+        let into = root.join("Import").join("pack");
+        let ops = [ApplyOp::Extract { root: root.clone(), archive: archive.clone(), into: into.clone() }];
+        let report = lib.apply_change("import", "pack.zip", &ops).unwrap();
+        assert_eq!((report.applied, report.skipped), (1, 0));
+        assert_eq!(std::fs::read(into.join("minis").join("orc.stl")).unwrap(), stl);
+        assert_eq!(std::fs::read_to_string(into.join("readme.txt")).unwrap(), "hello");
+        assert!(!into.join("__MACOSX").exists() && !into.join("empty").exists(), "clutter is left out");
+        assert!(zip.is_file(), "the archive stays for the app to trash");
+        assert_eq!(lib.apply_change("import", "pack.zip", &ops).unwrap().skipped, 1, "the folder is taken now");
+        // A file the user changed stays; the rest goes.
+        std::fs::write(into.join("readme.txt"), "my notes").unwrap();
+        let undo = lib.undo_change(report.id).unwrap();
+        assert_eq!((undo.undone, undo.kept), (0, 1));
+        assert!(!into.join("minis").exists() && into.join("readme.txt").is_file());
+        // Untouched: everything goes, with the folder made for it.
+        let into2 = root.join("Import").join("pack2");
+        let ops = [ApplyOp::Extract { root: root.clone(), archive, into: into2.clone() }];
+        let report = lib.apply_change("import", "pack.zip", &ops).unwrap();
+        assert_eq!(lib.undo_change(report.id).unwrap().undone, 1);
+        assert!(!into2.exists() && root.join("Import").is_dir(), "Import was there before and stays");
     }
 
     #[test]

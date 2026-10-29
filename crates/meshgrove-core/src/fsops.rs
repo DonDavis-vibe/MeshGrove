@@ -1,6 +1,7 @@
 //! Moving and renaming on disk without ever replacing anything: the target must not exist, or
-//! the move fails. Names are checked against what Windows and FAT accept, so a library on a
-//! shared drive stays usable everywhere.
+//! the move fails. Across file systems (a downloads folder on another drive than the library)
+//! a file is copied and the copy checked before the source goes. Names are checked against
+//! what Windows and FAT accept, so a library on a shared drive stays usable everywhere.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,58 @@ pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
         });
     }
     imp(from, to)
+}
+
+/// [`rename_no_replace`], and across file systems too: there the file is copied to a hidden
+/// name next to the target, synced, given the source's modification time, checked for size,
+/// renamed into place (replacing nothing) and the source removed; a folder goes member by
+/// member. Links are refused.
+pub fn move_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    match rename_no_replace(from, to) {
+        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => copy_then_remove(from, to),
+        other => other,
+    }
+}
+
+/// The copy half of [`move_no_replace`], on its own so it can be tested where everything is
+/// one file system. Either the whole file arrives at `to` and `from` goes, or `from` stays as
+/// it was and nothing is left at `to`.
+pub(crate) fn copy_then_remove(from: &Path, to: &Path) -> io::Result<()> {
+    let meta = from.symlink_metadata()?;
+    if meta.is_symlink() {
+        return Err(io::Error::new(io::ErrorKind::Unsupported, "a link is not moved across file systems"));
+    }
+    if to.symlink_metadata().is_ok() {
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "the target exists"));
+    }
+    if meta.is_dir() {
+        std::fs::create_dir(to)?;
+        let mut members: Vec<_> = std::fs::read_dir(from)?.collect::<io::Result<_>>()?;
+        members.sort_by_key(|e| e.file_name());
+        for member in members {
+            copy_then_remove(&member.path(), &to.join(member.file_name()))?;
+        }
+        return std::fs::remove_dir(from);
+    }
+    let tmp = free_name(to)?;
+    let copied = (|| {
+        std::fs::copy(from, &tmp)?;
+        let file = std::fs::File::options().write(true).open(&tmp)?;
+        file.set_modified(meta.modified()?)?;
+        file.sync_all()?;
+        if file.metadata()?.len() != meta.len() {
+            return Err(io::Error::other("the copy is incomplete"));
+        }
+        drop(file);
+        rename_no_replace(&tmp, to)
+    })();
+    if let Err(e) = copied {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    std::fs::remove_file(from).inspect_err(|_| {
+        let _ = std::fs::remove_file(to);
+    })
 }
 
 /// The same name in the same folder, but for upper and lower case.
@@ -162,6 +215,37 @@ mod tests {
         assert!(moved.join("c.stl").is_file());
         assert!(rename_no_replace(&moved, &b).is_err(), "not onto a file either");
         assert!(fallback(&b, &moved.join("c.stl")).is_err(), "the fallback does not replace");
+    }
+
+    #[test]
+    fn the_copy_fallback_keeps_bytes_and_time_and_replaces_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, to) = (dir.path().join("rose.stl"), dir.path().join("lib").join("rose.stl"));
+        std::fs::create_dir(to.parent().unwrap()).unwrap();
+        std::fs::write(&from, "solid rose").unwrap();
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        std::fs::File::options().write(true).open(&from).unwrap().set_modified(old).unwrap();
+        copy_then_remove(&from, &to).unwrap();
+        assert!(!from.exists(), "the source went");
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "solid rose");
+        assert_eq!(std::fs::metadata(&to).unwrap().modified().unwrap(), old, "the time came along");
+        let leftovers: Vec<_> =
+            std::fs::read_dir(to.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(leftovers.len(), 1, "no temporary file stays: {leftovers:?}");
+        // Onto something: refused, both untouched.
+        std::fs::write(&from, "another").unwrap();
+        let e = copy_then_remove(&from, &to).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::AlreadyExists);
+        assert!(from.exists() && std::fs::read_to_string(&to).unwrap() == "solid rose");
+        // A folder with a subfolder, member by member.
+        let pack = dir.path().join("pack");
+        std::fs::create_dir_all(pack.join("sub")).unwrap();
+        std::fs::write(pack.join("a.stl"), "a").unwrap();
+        std::fs::write(pack.join("sub").join("b.stl"), "b").unwrap();
+        let moved = dir.path().join("lib").join("pack");
+        copy_then_remove(&pack, &moved).unwrap();
+        assert!(!pack.exists() && moved.join("sub").join("b.stl").is_file() && moved.join("a.stl").is_file());
+        assert!(move_no_replace(&to, &moved).is_err(), "move_no_replace replaces nothing either");
     }
 
     #[test]

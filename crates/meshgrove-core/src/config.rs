@@ -687,6 +687,11 @@ pub struct Config {
     pub lock_panes: bool,
     /// The sidebar lists the inbox of new files.
     pub inbox: bool,
+    /// Folders outside the libraries (a downloads folder) whose new 3D-print files Meshgrove
+    /// offers to bring in, and where they land.
+    pub import: ImportConfig,
+    /// Placing files into a folder by their tags.
+    pub placement: PlacementConfig,
     /// Optional AI through the user's own assistant (MCP) or endpoint.
     pub ai: AiConfig,
     /// Mesh editors and CAD programs for "open in …"; `None`: take the ones found on this computer.
@@ -728,6 +733,159 @@ pub struct Config {
     /// Tiles or a table.
     pub gallery_view: GalleryView,
     pub list_columns: ListColumns,
+}
+
+/// Bringing new files from outside (a downloads folder) into a library.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImportConfig {
+    /// The folders looked at (their top level only); none: no import.
+    pub folders: Vec<PathBuf>,
+    /// The library the files go to; `None`: the first one.
+    pub library: Option<PathBuf>,
+    /// The folder below the library root they land in.
+    pub landing: String,
+    pub at_start: ImportAtStart,
+    pub archives: ArchiveImport,
+}
+
+impl Default for ImportConfig {
+    fn default() -> ImportConfig {
+        ImportConfig {
+            folders: Vec::new(),
+            library: None,
+            landing: Config::LANDING.to_owned(),
+            at_start: ImportAtStart::Ask,
+            archives: ArchiveImport::Whole,
+        }
+    }
+}
+
+/// What happens with new files in the import folders when Meshgrove starts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportAtStart {
+    Off,
+    /// Say how many there are; the user imports them from the import view.
+    #[default]
+    Ask,
+    /// Bring them in without asking.
+    Auto,
+}
+
+/// What an import does with an archive.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveImport {
+    /// Moved as it is; Meshgrove browses inside.
+    #[default]
+    Whole,
+    /// Unpacked into a folder of its name; the archive goes to the trash.
+    Extract,
+}
+
+/// Placing files into a folder by their tags: a theme's folder is one of its name below the
+/// library root unless a rule says otherwise; own tags need a rule.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlacementConfig {
+    pub enabled: bool,
+    pub rules: Vec<FolderRule>,
+}
+
+impl Default for PlacementConfig {
+    fn default() -> PlacementConfig {
+        PlacementConfig { enabled: true, rules: Vec::new() }
+    }
+}
+
+/// The folder (`/`-separated, below the library root) files with `tag` go to; empty: none,
+/// which switches a theme's own folder off.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderRule {
+    pub tag: String,
+    pub folder: String,
+}
+
+fn same_tag(a: &str, b: &str) -> bool {
+    a.trim().to_lowercase() == b.trim().to_lowercase()
+}
+
+impl Config {
+    /// The landing folder's name when the setting is empty or no file name.
+    pub const LANDING: &str = "Import";
+
+    /// Whether suggested tags (and their folders) are given in German.
+    pub fn german(&self) -> bool {
+        self.language.as_deref().is_none_or(|l| l.starts_with("de"))
+    }
+
+    /// The name of the folder imported files land in, below the library root.
+    pub fn landing_name(&self) -> &str {
+        let name = self.import.landing.trim();
+        if name.is_empty() || crate::fsops::check_name(name).is_err() { Config::LANDING } else { name }
+    }
+
+    /// The library imports go to.
+    pub fn import_root(&self) -> Option<&Path> {
+        match &self.import.library {
+            Some(l) if self.library_roots.contains(l) => Some(l.as_path()),
+            _ => self.library_roots.first().map(PathBuf::as_path),
+        }
+    }
+
+    /// Where imported files land.
+    pub fn landing_dir(&self) -> Option<PathBuf> {
+        self.import_root().map(|r| r.join(self.landing_name()))
+    }
+
+    /// The landing folder of every library (the files there wait to be placed).
+    pub fn landing_folders(&self) -> Vec<PathBuf> {
+        self.library_roots.iter().map(|r| r.join(self.landing_name())).collect()
+    }
+
+    /// Whether `path` lies in a landing folder (not the folder itself).
+    pub fn in_landing(&self, path: &Path) -> bool {
+        self.landing_folders().iter().any(|l| path != l && path.starts_with(l))
+    }
+
+    /// The folder (`/`-separated, below the library root) files with `tag` go to: by an
+    /// explicit rule (an empty one switches the tag off), else a theme's name in the user's
+    /// language. `None` for every other tag.
+    pub fn folder_for_tag(&self, tag: &str) -> Option<String> {
+        let themes = self.themes();
+        let theme = themes.iter().find(|t| t.matches(tag.trim()));
+        let rule = self
+            .placement
+            .rules
+            .iter()
+            .find(|r| same_tag(&r.tag, tag) || theme.is_some_and(|t| t.matches(r.tag.trim())));
+        if let Some(rule) = rule {
+            let folder = rule.folder.trim();
+            return (!folder.is_empty()).then(|| folder.to_owned());
+        }
+        theme.map(|t| if self.german() { t.de.clone() } else { t.en.clone() })
+    }
+
+    /// Every tag with a folder, in the order of the settings: the themes as listed, then the
+    /// rules for other tags.
+    pub fn folder_rules(&self) -> Vec<(String, String)> {
+        let themes = self.themes();
+        let mut out = Vec::new();
+        for t in &themes {
+            let name = if self.german() { &t.de } else { &t.en };
+            if let Some(folder) = self.folder_for_tag(name) {
+                out.push((name.clone(), folder));
+            }
+        }
+        for r in &self.placement.rules {
+            let folder = r.folder.trim();
+            if !folder.is_empty() && !themes.iter().any(|t| t.matches(r.tag.trim())) {
+                out.push((r.tag.trim().to_owned(), folder.to_owned()));
+            }
+        }
+        out
+    }
 }
 
 /// A tag the user can pick from the tag menu (a theme, a print property or a state): its name in
@@ -898,6 +1056,8 @@ impl Default for Config {
             folder_previews: FolderPreviews::default(),
             lock_panes: false,
             inbox: true,
+            import: ImportConfig::default(),
+            placement: PlacementConfig::default(),
             ai: AiConfig::default(),
             editors: None,
             default_editor: None,
@@ -1243,6 +1403,44 @@ mod tests {
         assert_eq!(Config::load_from(&path).unwrap(), config);
         std::fs::write(&path, "tags_on_tiles = true\n").unwrap();
         assert_eq!(Config::load_from(&path).unwrap().tile_layout, TileLayout::default());
+    }
+
+    #[test]
+    fn import_and_placement_follow_the_settings() {
+        let mut config = Config { library_roots: vec!["/lib".into(), "/lib2".into()], ..Default::default() };
+        assert_eq!(config.landing_dir(), Some(PathBuf::from("/lib/Import")));
+        assert!(config.in_landing(Path::new("/lib2/Import/rose.stl")));
+        assert!(!config.in_landing(Path::new("/lib/Import")) && !config.in_landing(Path::new("/lib/Garten/rose.stl")));
+        config.import.landing = "Neu?".into();
+        assert_eq!(config.landing_name(), "Import", "no file name: the usual one");
+        config.import.landing = " Eingang ".into();
+        config.import.library = Some("/lib2".into());
+        assert_eq!(config.landing_dir(), Some(PathBuf::from("/lib2/Eingang")));
+        config.import.library = Some("/nowhere".into());
+        assert_eq!(config.import_root(), Some(Path::new("/lib")), "an unknown library falls back to the first");
+        // Themes have a folder of their name in the user's language, whichever spelling the tag has.
+        assert_eq!(config.folder_for_tag("garten").as_deref(), Some("Garten"));
+        assert_eq!(config.folder_for_tag("Garden").as_deref(), Some("Garten"));
+        config.language = Some("en".into());
+        assert_eq!(config.folder_for_tag("Garten").as_deref(), Some("Garden"));
+        config.language = None;
+        assert_eq!(config.folder_for_tag("Kunde Müller"), None, "own tags need a rule");
+        config.placement.rules = vec![
+            FolderRule { tag: "Kunde Müller".into(), folder: "Kunden/Müller".into() },
+            FolderRule { tag: "Garden".into(), folder: String::new() },
+            FolderRule { tag: "werkstatt".into(), folder: "Werkstatt/Teile".into() },
+        ];
+        assert_eq!(config.folder_for_tag("kunde müller").as_deref(), Some("Kunden/Müller"));
+        assert_eq!(config.folder_for_tag("Garten"), None, "an empty rule switches a theme off");
+        assert_eq!(config.folder_for_tag("Werkstatt").as_deref(), Some("Werkstatt/Teile"));
+        let rules = config.folder_rules();
+        assert!(!rules.iter().any(|(t, _)| t == "Garten"));
+        assert_eq!(rules.iter().find(|(t, _)| t == "Werkstatt").map(|(_, f)| f.as_str()), Some("Werkstatt/Teile"));
+        assert_eq!(rules.last().map(|(t, f)| (t.as_str(), f.as_str())), Some(("Kunde Müller", "Kunden/Müller")));
+        let back: Config = toml::from_str(&toml::to_string_pretty(&config).unwrap()).unwrap();
+        assert_eq!(back, config);
+        let old: Config = toml::from_str("library_roots = []").unwrap();
+        assert!(old.import.folders.is_empty() && old.import.at_start == ImportAtStart::Ask && old.placement.enabled);
     }
 
     #[test]
