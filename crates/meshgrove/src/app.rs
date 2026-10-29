@@ -437,6 +437,7 @@ impl App {
             descending: self.config.sort_descending,
             print: self.config.print_filter,
             keep_order: matches!(self.view, View::List { id, .. } if recent(id)),
+            supported_first: self.config.supported_first,
         }
     }
 
@@ -1848,6 +1849,7 @@ impl App {
                 }
                 self.view_menu(ui);
                 self.search_field(ui);
+                self.sort_menu(ui);
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     egui::ScrollArea::horizontal().id_salt("breadcrumb").show(ui, |ui| self.breadcrumb(ui));
                 });
@@ -1855,7 +1857,38 @@ impl App {
         });
     }
 
-    /// "Ansicht" menu: sorting, "models only", "include subfolders", tile size.
+    /// The sort button next to the search scope: by what, which way, and the files Meshgrove
+    /// shows first. Its label says how the gallery is sorted now.
+    fn sort_menu(&mut self, ui: &mut Ui) {
+        let names = [
+            (SortKey::Name, t!("sort.name")),
+            (SortKey::Modified, t!("sort.modified")),
+            (SortKey::Size, t!("sort.size")),
+            (SortKey::Type, t!("sort.type")),
+        ];
+        let current = names.iter().find(|(k, _)| *k == self.config.sort_by).map(|(_, n)| n.clone()).unwrap_or_default();
+        let arrow = if self.config.sort_descending { "↓" } else { "↑" };
+        let mut changed = false;
+        ui.menu_button(format!("{arrow} {current} ▾"), |ui| {
+            ui.label(RichText::new(t!("gallery.sort")).weak());
+            for (key, name) in names {
+                changed |= ui.radio_value(&mut self.config.sort_by, key, name).changed();
+            }
+            changed |= ui.checkbox(&mut self.config.sort_descending, t!("gallery.descending")).changed();
+            ui.separator();
+            changed |= ui
+                .checkbox(&mut self.config.supported_first, t!("sort.supported_first"))
+                .on_hover_text(t!("sort.supported_first_hint"))
+                .changed();
+        })
+        .response
+        .on_hover_text(t!("sort.button_hint"));
+        if changed {
+            self.reapply_filter();
+        }
+    }
+
+    /// "Ansicht" menu: grid or list, "models only", "include subfolders", the print filter, tile size.
     fn view_menu(&mut self, ui: &mut Ui) {
         let mut changed = false;
         let models_only = self.config.only_models;
@@ -1863,18 +1896,6 @@ impl App {
         ui.menu_button(format!("{} ▾", t!("view.menu")), |ui| {
             ui.radio_value(&mut self.config.gallery_view, GalleryView::Grid, t!("view.grid"));
             ui.radio_value(&mut self.config.gallery_view, GalleryView::List, t!("view.list"));
-            ui.separator();
-            ui.label(RichText::new(t!("gallery.sort")).weak());
-            let names = [
-                (SortKey::Name, t!("sort.name")),
-                (SortKey::Modified, t!("sort.modified")),
-                (SortKey::Size, t!("sort.size")),
-                (SortKey::Type, t!("sort.type")),
-            ];
-            for (key, name) in names {
-                changed |= ui.radio_value(&mut self.config.sort_by, key, name).changed();
-            }
-            changed |= ui.checkbox(&mut self.config.sort_descending, t!("gallery.descending")).changed();
             ui.separator();
             changed |= ui.checkbox(&mut self.config.only_models, t!("gallery.only_models")).changed();
             ui.checkbox(&mut flatten, t!("gallery.flatten")).on_hover_text(t!("gallery.flatten_hint"));

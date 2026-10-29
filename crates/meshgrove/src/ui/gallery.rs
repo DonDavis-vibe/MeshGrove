@@ -128,6 +128,8 @@ pub struct Arrange {
     pub print: PrintFilter,
     /// The entries come in an order of their own (the last prints, newest first): no sorting.
     pub keep_order: bool,
+    /// Files Meshgrove shows before the others, whatever the sorting.
+    pub supported_first: bool,
 }
 
 #[derive(Default)]
@@ -954,9 +956,16 @@ fn arranged(
             SortKey::Type => icons::extension_label(&ex.name).cmp(&icons::extension_label(&ey.name)).then_with(by_name),
         };
         let order = if a.descending { order.reverse() } else { order };
-        // Folders stay on top whatever the direction; on a print list, finished entries sink.
+        // Folders stay on top whatever the direction, then (if wanted) the files Meshgrove shows;
+        // on a print list, finished entries sink.
         let finished = |e: &Entry| list_counts.get(&e.path).is_some_and(|&(wanted, done)| done >= wanted);
-        ey.is_dir().cmp(&ex.is_dir()).then(finished(ex).cmp(&finished(ey))).then(order).then(Ordering::Equal)
+        let unsupported = |e: &Entry| a.supported_first && e.kind == Kind::Other;
+        ey.is_dir()
+            .cmp(&ex.is_dir())
+            .then(unsupported(ex).cmp(&unsupported(ey)))
+            .then(finished(ex).cmp(&finished(ey)))
+            .then(order)
+            .then(Ordering::Equal)
     });
     shown
 }
@@ -983,7 +992,15 @@ mod tests {
     }
 
     fn arrange(filter: &str, only_models: bool, sort: SortKey, descending: bool) -> Arrange {
-        Arrange { filter: filter.into(), only_models, sort, descending, print: PrintFilter::All, keep_order: false }
+        Arrange {
+            filter: filter.into(),
+            only_models,
+            sort,
+            descending,
+            print: PrintFilter::All,
+            keep_order: false,
+            supported_first: false,
+        }
     }
 
     fn entries() -> [Entry; 5] {
@@ -1015,6 +1032,21 @@ mod tests {
             arranged(&e, &arrange(" dragon ", true, SortKey::Name, false), &HashMap::new(), &HashMap::new()),
             [1]
         );
+    }
+
+    #[test]
+    fn supported_files_come_before_the_others() {
+        let mut e = entries().to_vec();
+        e.push(entry("aa_setup.exe", Kind::Other, 5000, 2));
+        e.push(entry("zz_notes.svg", Kind::Other, 1, 3));
+        let order = |sort, descending, supported_first| {
+            let a = Arrange { supported_first, ..arrange("", false, sort, descending) };
+            arranged(&e, &a, &HashMap::new(), &HashMap::new())
+        };
+        assert_eq!(order(SortKey::Name, false, false), [4, 2, 5, 1, 0, 3, 6]);
+        assert_eq!(order(SortKey::Name, false, true), [4, 2, 1, 0, 3, 5, 6]);
+        // Whatever the sorting and its direction: folders, then the shown files, then the rest.
+        assert_eq!(order(SortKey::Size, true, true), [2, 4, 1, 0, 3, 5, 6]);
     }
 
     #[test]

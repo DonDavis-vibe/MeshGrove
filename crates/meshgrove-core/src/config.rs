@@ -646,6 +646,8 @@ pub struct Config {
     pub only_models: bool,
     pub sort_by: SortKey,
     pub sort_descending: bool,
+    /// Files Meshgrove shows (models, pictures, PDFs, archives, texts) before the others.
+    pub supported_first: bool,
     /// "de" / "en"; `None` follows the system language.
     pub language: Option<String>,
     /// The slicers models can be sent to; `None`: take the ones found on this computer at startup.
@@ -877,6 +879,7 @@ impl Default for Config {
             only_models: false,
             sort_by: SortKey::Name,
             sort_descending: false,
+            supported_first: true,
             language: None,
             slicers: None,
             default_slicer: None,
