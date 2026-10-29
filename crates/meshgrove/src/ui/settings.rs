@@ -87,6 +87,8 @@ pub enum SettingsChange {
     TileLayout(TileLayout),
     /// The tile edge length.
     TileSize(f32),
+    /// How many models sent to the slicer "Zuletzt gedruckt" keeps (0: none).
+    RecentPrints(u16),
     /// The sidebar lists tags alphabetically, not grouped.
     FlatTagList(bool),
     /// Existing tags stay listed below the tag field while nothing is typed.
@@ -137,6 +139,20 @@ fn tags(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
     if check(ui, &mut idle, t!("settings.tags_idle"), t!("settings.tags_idle_hint")) {
         changes.push(SettingsChange::IdleTagChips(idle));
     }
+}
+
+/// How many of the models sent to the slicer the sidebar keeps under "Zuletzt gedruckt".
+fn recent_prints(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+    row(ui, &t!("settings.recent_prints"), |ui| {
+        let mut keep = config.recent_prints;
+        let off = t!("settings.recent_prints_off").into_owned();
+        let slider = egui::Slider::new(&mut keep, 0..=50)
+            .custom_formatter(move |v, _| if v == 0.0 { off.clone() } else { format!("{v:.0}") });
+        if ui.add(slider).changed() {
+            changes.push(SettingsChange::RecentPrints(keep));
+        }
+        hint(ui, t!("settings.recent_prints_hint"));
+    });
 }
 
 /// Model pictures on folder tiles.
@@ -353,6 +369,7 @@ enum Section {
     Models,
     Units,
     Slicer,
+    RecentPrints,
     Editor,
     Printer,
     UserData,
@@ -384,6 +401,7 @@ impl Section {
             Section::Models => t!("settings.models"),
             Section::Units => t!("settings.units"),
             Section::Slicer => t!("settings.slicer"),
+            Section::RecentPrints => t!("lists.recent"),
             Section::Editor => t!("settings.editor"),
             Section::Printer => t!("settings.printer"),
             Section::UserData => t!("settings.user_data"),
@@ -749,7 +767,7 @@ impl SettingsDialog {
             Category::Tiles => &[Section::TilePreview, Section::TileLook, Section::FolderPreviews],
             Category::View => &[Section::Preview, Section::SpaceMouse],
             Category::ModelsUnits => &[Section::Models, Section::Units],
-            Category::Programs => &[Section::Slicer, Section::Editor],
+            Category::Programs => &[Section::Slicer, Section::RecentPrints, Section::Editor],
             Category::Printer => &[Section::Printer],
             // With AI off, only the switch: the rest would say "AI is off" four times.
             Category::Ai if !config.ai.enabled => &[Section::Ai],
@@ -780,6 +798,7 @@ impl SettingsDialog {
                     Section::Models => models(ui, config, changes),
                     Section::Units => units(ui, config, changes),
                     Section::Slicer => self.program_list(ui, false, slicers, default_slicer, changes),
+                    Section::RecentPrints => recent_prints(ui, config, changes),
                     Section::Editor => self.program_list(ui, true, editors, default_editor, changes),
                     Section::Printer => self.printers(ui, printers, default_printer, changes),
                     Section::Ai => self.ai.main(ui, config, changes),

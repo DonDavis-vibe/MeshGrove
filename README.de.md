@@ -515,6 +515,8 @@ ihren Listen.
 
 - **★ Favoriten:** Strg+D, das Kärtchen ☆ *Favorit* im Bereich *Info* oder das Kontextmenü
   markieren die Auswahl; ein goldener ★ auf der Kachel zeigt es.
+- **🕘 Zuletzt gedruckt:** die Modelle, die du zuletzt an den Slicer geschickt hast, das neueste
+  zuerst (von Haus aus 10; wie viele, steht unter *Einstellungen → Programme*).
 - **Sammlungen** (📁) fassen Dateien aus beliebigen Ordnern zusammen, für ein Projekt oder ein
   Thema. Eine Sammlung kann auch eine gespeicherte Suche sein: die Bibliothek durchsuchen (etwa
   `tag:garten ext:3mf`) und über den Treffern *Als Sammlung speichern* klicken. Sie zeigt dann

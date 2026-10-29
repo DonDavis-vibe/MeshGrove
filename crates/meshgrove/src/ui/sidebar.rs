@@ -62,6 +62,8 @@ pub struct LibraryInfo<'a> {
     pub flat_tags: bool,
     /// The user's AI can make a list from a description.
     pub ai_lists: bool,
+    /// The last prints are kept (Settings → Programs).
+    pub recent: bool,
 }
 
 pub struct Sidebar {
@@ -183,7 +185,7 @@ impl Sidebar {
         action
     }
 
-    /// Favourites, print lists and collections, and "new list".
+    /// Favourites, the last prints, print lists and collections, and "new list".
     fn lists(&mut self, ui: &mut Ui, library: &LibraryInfo, action: &mut Option<SidebarAction>) {
         let favorites = library.lists.iter().find(|l| l.kind == ListKind::Favorites);
         let label = format!("★  {}  ({})", t!("lists.favorites"), favorites.map_or(0, |l| l.count));
@@ -198,7 +200,24 @@ impl Sidebar {
                     .on_disabled_hover_text(t!("lists.favorites_empty"));
             }
         }
-        for list in library.lists.iter().filter(|l| l.kind != ListKind::Favorites && !l.archived) {
+        if library.recent {
+            let last = library.lists.iter().find(|l| l.kind == ListKind::Recent);
+            let label = format!("🕘  {}  ({})", t!("lists.recent"), last.map_or(0, |l| l.count));
+            match last {
+                Some(list) => {
+                    let response = ui.selectable_label(library.showing_list == Some(list.id), label);
+                    if response.on_hover_text(t!("lists.recent_hint")).clicked() {
+                        *action = Some(SidebarAction::OpenList(list.id));
+                    }
+                }
+                None => {
+                    ui.add_enabled(false, egui::Button::selectable(false, label))
+                        .on_disabled_hover_text(t!("lists.recent_empty"));
+                }
+            }
+        }
+        let own = |l: &&ListInfo| !matches!(l.kind, ListKind::Favorites | ListKind::Recent) && !l.archived;
+        for list in library.lists.iter().filter(own) {
             let icon = match (list.kind, &list.query) {
                 (ListKind::Print, _) => "🖨",
                 (_, Some(_)) => "🔍",

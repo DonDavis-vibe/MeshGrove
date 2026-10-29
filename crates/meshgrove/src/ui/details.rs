@@ -316,7 +316,7 @@ fn lists_row(ui: &mut Ui, lists: &ListsOfSelection, enabled: bool, count: usize,
         if ui.add(egui::Button::new(star.small()).corner_radius(9.0)).on_hover_text(hint).clicked() {
             out.toggle_favorite = true;
         }
-        for (list, n) in lists.lists.iter().filter(|(l, _)| l.kind != ListKind::Favorites) {
+        for (list, n) in lists.lists.iter().filter(|(l, _)| !matches!(l.kind, ListKind::Favorites | ListKind::Recent)) {
             let icon = if list.kind == ListKind::Print { "🖨" } else { "📁" };
             let label = if count > 1 && *n < count {
                 format!("{icon} {} ({n}/{count})", list.name)

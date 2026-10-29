@@ -490,6 +490,8 @@ lists.
 
 - **★ Favourites:** Ctrl+D, the ☆ *Favourite* chip in the *Info* pane or the context menu mark
   the selection; a gold ★ on the tile shows it.
+- **🕘 Last prints:** the models you last sent to the slicer, newest first (10 by default; how
+  many in *Settings → Programs*).
 - **Collections** (📁) gather files from any folders, for a project or a theme. A collection can
   also be a saved search: search the library (for example `tag:garden ext:3mf`) and click *Save as
   collection* above the results. It then always shows the current results.

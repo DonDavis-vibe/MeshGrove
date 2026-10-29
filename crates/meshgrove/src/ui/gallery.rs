@@ -126,6 +126,8 @@ pub struct Arrange {
     pub sort: SortKey,
     pub descending: bool,
     pub print: PrintFilter,
+    /// The entries come in an order of their own (the last prints, newest first): no sorting.
+    pub keep_order: bool,
 }
 
 #[derive(Default)]
@@ -939,6 +941,9 @@ fn arranged(
                 && by_print(e)
         })
         .collect();
+    if a.keep_order {
+        return shown;
+    }
     shown.sort_by(|&x, &y| {
         let (ex, ey) = (&entries[x], &entries[y]);
         let by_name = || listing::natural_cmp(&ex.name, &ey.name);
@@ -978,7 +983,7 @@ mod tests {
     }
 
     fn arrange(filter: &str, only_models: bool, sort: SortKey, descending: bool) -> Arrange {
-        Arrange { filter: filter.into(), only_models, sort, descending, print: PrintFilter::All }
+        Arrange { filter: filter.into(), only_models, sort, descending, print: PrintFilter::All, keep_order: false }
     }
 
     fn entries() -> [Entry; 5] {

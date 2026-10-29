@@ -429,12 +429,14 @@ impl App {
 
     fn arrange(&self) -> Arrange {
         let filter = if self.scope == Scope::Folder { self.search.clone() } else { String::new() };
+        let recent = |id: i64| self.lists.iter().any(|l| l.id == id && l.kind == ListKind::Recent);
         Arrange {
             filter,
             only_models: self.config.only_models,
             sort: self.config.sort_by,
             descending: self.config.sort_descending,
             print: self.config.print_filter,
+            keep_order: matches!(self.view, View::List { id, .. } if recent(id)),
         }
     }
 
@@ -593,9 +595,19 @@ impl App {
             return;
         }
         let message = match actions::open_in_slicer(slicer, &models) {
-            Ok(actions::SlicerOpened::Started) => t!("toast.slicer_started", name = slicer.name, count = models.len()),
-            Ok(actions::SlicerOpened::HandedOver) => {
-                t!("toast.slicer_handed_over", name = slicer.name, count = models.len())
+            Ok(opened) => {
+                let keep = usize::from(self.config.recent_prints);
+                if keep > 0 {
+                    self.library.list(ListOp::Sent(models.clone(), keep));
+                }
+                match opened {
+                    actions::SlicerOpened::Started => {
+                        t!("toast.slicer_started", name = slicer.name, count = models.len())
+                    }
+                    actions::SlicerOpened::HandedOver => {
+                        t!("toast.slicer_handed_over", name = slicer.name, count = models.len())
+                    }
+                }
             }
             Err(e) => t!("toast.slicer_failed", name = slicer.name, error = e.to_string()),
         };
@@ -1404,6 +1416,10 @@ impl App {
                     continue;
                 }
                 SettingsChange::FlatTagList(flat) => self.config.flat_tag_list = flat,
+                SettingsChange::RecentPrints(keep) => {
+                    self.config.recent_prints = keep;
+                    self.library.list(ListOp::KeepRecent(usize::from(keep)));
+                }
                 SettingsChange::IdleTagChips(on) => self.config.tag_chips_idle = on,
                 SettingsChange::Suggestions(group, list) => {
                     match group {
@@ -2109,8 +2125,15 @@ impl App {
             }
             (View::Duplicates { .. } | View::Inbox { .. } | View::Review { .. } | View::History { .. }, _) => None,
             (View::List { id, entries }, _) if entries.is_empty() => {
-                let favorites = self.lists.iter().any(|l| l.id == *id && l.kind == ListKind::Favorites);
-                Some(if favorites { t!("lists.favorites_empty") } else { t!("lists.empty") }.into_owned())
+                let kind = self.lists.iter().find(|l| l.id == *id).map(|l| l.kind);
+                Some(
+                    match kind {
+                        Some(ListKind::Favorites) => t!("lists.favorites_empty"),
+                        Some(ListKind::Recent) => t!("lists.recent_empty"),
+                        _ => t!("lists.empty"),
+                    }
+                    .into_owned(),
+                )
             }
             _ if self.entries().is_empty() => Some(t!("gallery.empty").into_owned()),
             _ => None,
@@ -2204,6 +2227,7 @@ impl App {
             tag_style: &self.tag_style,
             flat_tags: self.config.flat_tag_list,
             ai_lists: self.chat_available() && self.index.is_some(),
+            recent: self.config.recent_prints > 0,
         };
         match self.sidebar.show(ui, &self.config, self.nav.current(), info) {
             Some(SidebarAction::Navigate(path)) => self.navigate(path),
@@ -2735,11 +2759,12 @@ fn view_entries<'a>(view: &'a View, nav: &'a Navigator) -> &'a [Entry] {
     }
 }
 
-/// Lists files can be put on from the menus: hand-made, not archived, not the favourites.
+/// Lists files can be put on from the menus: hand-made, not archived, not the favourites or
+/// the last prints.
 fn menu_lists(lists: &[ListInfo]) -> Vec<(i64, ListKind, String)> {
     lists
         .iter()
-        .filter(|l| l.kind != ListKind::Favorites && l.query.is_none() && !l.archived)
+        .filter(|l| !matches!(l.kind, ListKind::Favorites | ListKind::Recent) && l.query.is_none() && !l.archived)
         .map(|l| (l.id, l.kind, l.name.clone()))
         .collect()
 }
@@ -2748,16 +2773,18 @@ fn menu_lists(lists: &[ListInfo]) -> Vec<(i64, ListKind, String)> {
 fn list_icon(list: &ListInfo) -> &'static str {
     match list.kind {
         ListKind::Favorites => "★",
+        ListKind::Recent => "🕘",
         ListKind::Print => "🖨",
         ListKind::Collection if list.query.is_some() => "🔍",
         ListKind::Collection => "📁",
     }
 }
 
-/// A list's name as shown (the favourites have a translated one).
+/// A list's name as shown (the favourites and the last prints have a translated one).
 fn list_title(list: &ListInfo) -> String {
     match list.kind {
         ListKind::Favorites => t!("lists.favorites").into_owned(),
+        ListKind::Recent => t!("lists.recent").into_owned(),
         _ => list.name.clone(),
     }
 }

@@ -640,6 +640,9 @@ pub struct Config {
     pub last_folder: Option<PathBuf>,
     /// Tile edge length in logical pixels.
     pub tile_size: f32,
+    /// How many of the models last sent to the slicer the sidebar lists ("Zuletzt gedruckt");
+    /// 0: none.
+    pub recent_prints: u16,
     pub only_models: bool,
     pub sort_by: SortKey,
     pub sort_descending: bool,
@@ -870,6 +873,7 @@ impl Default for Config {
             library_roots: Vec::new(),
             last_folder: None,
             tile_size: 160.0,
+            recent_prints: 10,
             only_models: false,
             sort_by: SortKey::Name,
             sort_descending: false,

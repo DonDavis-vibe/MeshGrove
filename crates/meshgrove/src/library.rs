@@ -130,6 +130,10 @@ pub enum ListOp {
     /// Takes back the newest logged print of each file.
     UndoPrint(Vec<PathBuf>),
     Archive(i64, bool),
+    /// Files went to the slicer: on top of the last prints, which keep this many.
+    Sent(Vec<PathBuf>, usize),
+    /// The last prints keep this many (none: the list goes).
+    KeepRecent(usize),
 }
 
 impl ListOp {
@@ -150,6 +154,8 @@ impl ListOp {
             ListOp::Print(paths, result, list) => lib.record_print(&paths, result, list),
             ListOp::UndoPrint(paths) => lib.undo_print(&paths),
             ListOp::Archive(id, archived) => lib.set_list_archived(id, archived),
+            ListOp::Sent(paths, keep) => lib.record_sent(&paths, keep),
+            ListOp::KeepRecent(keep) => lib.keep_recent(keep),
         }
     }
 }

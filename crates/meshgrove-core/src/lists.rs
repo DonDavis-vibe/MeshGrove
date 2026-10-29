@@ -1,5 +1,5 @@
-//! Lists of library files – favourites, print lists and collections – plus the print log and
-//! the colours chosen for tags. Like tags and notes they hang on file content, so they survive
+//! Lists of library files – favourites, the models last sent to the slicer, print lists and
+//! collections – plus the print log and the colours chosen for tags. Like tags and notes they hang on file content, so they survive
 //! renames and moves and are shared by identical copies.
 
 use std::collections::{BTreeMap, HashMap};
@@ -78,11 +78,15 @@ pub(crate) struct ExportedLists {
 
 /// The one favourites list's internal name (the UI shows its own label).
 const FAVORITES: &str = "favorites";
+/// The one list of the models last sent to the slicer ("Zuletzt gedruckt"), likewise.
+const RECENT: &str = "recent";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ListKind {
     Favorites,
+    /// The models last sent to the slicer, newest first; Meshgrove keeps it, not the user.
+    Recent,
     Print,
     Collection,
 }
@@ -91,13 +95,16 @@ impl ListKind {
     pub fn as_str(self) -> &'static str {
         match self {
             ListKind::Favorites => "favorites",
+            ListKind::Recent => "recent",
             ListKind::Print => "print",
             ListKind::Collection => "collection",
         }
     }
 
     pub fn parse(s: &str) -> Option<ListKind> {
-        [ListKind::Favorites, ListKind::Print, ListKind::Collection].into_iter().find(|k| k.as_str() == s)
+        [ListKind::Favorites, ListKind::Recent, ListKind::Print, ListKind::Collection]
+            .into_iter()
+            .find(|k| k.as_str() == s)
     }
 }
 
@@ -168,7 +175,8 @@ pub struct Marks {
 }
 
 impl Library {
-    /// Every list, favourites first, then print lists and collections in sidebar order.
+    /// Every list, favourites first, then the models last sent to the slicer, print lists and
+    /// collections in sidebar order.
     pub fn lists(&self) -> Result<Vec<ListInfo>, Error> {
         let mut stmt = self.conn.prepare(
             "SELECT l.id, l.kind, l.name, l.archived, l.query,
@@ -178,7 +186,8 @@ impl Library {
              LEFT JOIN list_items li ON li.list_id = l.id
              LEFT JOIN files f ON f.content_hash = li.content_hash
              GROUP BY l.id
-             ORDER BY CASE l.kind WHEN 'favorites' THEN 0 WHEN 'print' THEN 1 ELSE 2 END, l.position, l.id",
+             ORDER BY CASE l.kind WHEN 'favorites' THEN 0 WHEN 'recent' THEN 1 WHEN 'print' THEN 2 ELSE 3 END,
+                      l.position, l.id",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok((
@@ -212,7 +221,11 @@ impl Library {
 
     /// A new list at the end of its kind, or the existing one of that kind and name.
     pub fn create_list(&mut self, kind: ListKind, name: &str) -> Result<i64, Error> {
-        let name = if kind == ListKind::Favorites { FAVORITES } else { name.trim() };
+        let name = match kind {
+            ListKind::Favorites => FAVORITES,
+            ListKind::Recent => RECENT,
+            _ => name.trim(),
+        };
         if name.is_empty() {
             return Err(Error::InvalidParameterName("empty list name".into()));
         }
@@ -238,7 +251,8 @@ impl Library {
         if name.is_empty() {
             return Ok(false);
         }
-        match self.conn.execute("UPDATE lists SET name = ?2 WHERE id = ?1 AND kind != 'favorites'", params![id, name]) {
+        let sql = "UPDATE lists SET name = ?2 WHERE id = ?1 AND kind NOT IN ('favorites', 'recent')";
+        match self.conn.execute(sql, params![id, name]) {
             Ok(_) => Ok(true),
             Err(Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::ConstraintViolation => Ok(false),
             Err(e) => Err(e),
@@ -288,6 +302,46 @@ impl Library {
         Ok(())
     }
 
+    /// Notes that the files at `paths` went to the slicer: they move to the top of the "last
+    /// prints" list, which keeps the newest `keep` (none: the list goes).
+    pub fn record_sent(&mut self, paths: &[PathBuf], keep: usize) -> Result<(), Error> {
+        if keep == 0 {
+            return self.keep_recent(0);
+        }
+        let id = self.create_list(ListKind::Recent, RECENT)?;
+        // Newer than anything on the list, even within the same second; the first file sent
+        // counts as the newest.
+        let newest: Option<i64> =
+            self.conn.query_row("SELECT MAX(added_ns) FROM list_items WHERE list_id = ?1", [id], |r| r.get(0))?;
+        let base = nanos(Some(SystemTime::now())).max(newest.map_or(0, |n| n + 1));
+        for (i, path) in paths.iter().enumerate() {
+            if let Some(hash) = self.ensure_content_hash(path)? {
+                self.conn.execute(
+                    "INSERT INTO list_items (list_id, content_hash, added_ns) VALUES (?1, ?2, ?3)
+                     ON CONFLICT (list_id, content_hash) DO UPDATE SET added_ns = excluded.added_ns",
+                    params![id, hash, base + (paths.len() - 1 - i) as i64],
+                )?;
+            }
+        }
+        self.keep_recent(keep)
+    }
+
+    /// Keeps the newest `keep` models of the "last prints" list (none: the list goes).
+    pub fn keep_recent(&mut self, keep: usize) -> Result<(), Error> {
+        if keep == 0 {
+            self.conn.execute("DELETE FROM lists WHERE kind = 'recent'", [])?;
+            return Ok(());
+        }
+        self.conn.execute(
+            "DELETE FROM list_items WHERE list_id IN (SELECT id FROM lists WHERE kind = 'recent')
+             AND content_hash NOT IN (
+                 SELECT li.content_hash FROM list_items li JOIN lists l ON l.id = li.list_id
+                 WHERE l.kind = 'recent' ORDER BY li.added_ns DESC LIMIT ?1)",
+            [keep as i64],
+        )?;
+        Ok(())
+    }
+
     /// Copies wanted on a print list (at least one); copies done never exceed them.
     pub fn set_quantity(&mut self, id: i64, paths: &[PathBuf], quantity: u32) -> Result<(), Error> {
         let quantity = quantity.max(1);
@@ -301,7 +355,7 @@ impl Library {
     }
 
     /// The list's files, one per content (the first copy by path). Print lists put entries
-    /// with copies left to print first.
+    /// with copies left to print first, the last prints the newest first.
     pub fn list_entries(&self, id: i64) -> Result<Vec<ListEntry>, Error> {
         let saved: Option<String> =
             self.conn.query_row("SELECT query FROM lists WHERE id = ?1", [id], |r| r.get(0)).optional()?.flatten();
@@ -318,7 +372,8 @@ impl Library {
                  WHERE f2.content_hash = li.content_hash ORDER BY d2.path, f2.name LIMIT 1)
              JOIN dirs d ON d.id = f.dir_id
              WHERE li.list_id = ?1
-             ORDER BY CASE WHEN l.kind = 'print' THEN li.done >= li.quantity ELSE 0 END, f.name COLLATE NOCASE",
+             ORDER BY CASE WHEN l.kind = 'print' THEN li.done >= li.quantity ELSE 0 END,
+                      CASE WHEN l.kind = 'recent' THEN -li.added_ns ELSE 0 END, f.name COLLATE NOCASE",
         )?;
         stmt.query_map([id], |r| Ok(ListEntry { entry: entry_from_row(r)?, quantity: r.get(5)?, done: r.get(6)? }))?
             .collect()
@@ -700,6 +755,31 @@ mod tests {
         assert_eq!(lib.lists().unwrap().len(), 3);
         let left: i64 = lib.conn.query_row("SELECT COUNT(*) FROM list_items", [], |r| r.get(0)).unwrap();
         assert_eq!(left, 0, "entries went with the list");
+    }
+
+    #[test]
+    fn the_last_prints_keep_the_newest_sent_first() {
+        fn recent(lib: &Library) -> Option<ListInfo> {
+            lib.lists().unwrap().into_iter().find(|l| l.kind == ListKind::Recent)
+        }
+        let mut lib = library();
+        lib.record_sent(&[path("Knight.stl"), path("Lid.stl")], 2).unwrap();
+        let id = recent(&lib).expect("made on first use").id;
+        assert_eq!(names(&lib.list_entries(id).unwrap()), ["Knight.stl", "Lid.stl"], "the first sent counts as newest");
+        lib.rename_list(id, "Mine").unwrap();
+        assert_eq!(recent(&lib).unwrap().name, "recent", "not renamed");
+        // Sent again, a file moves up; a new one pushes the oldest out.
+        lib.record_sent(&[path("Lid.stl")], 2).unwrap();
+        lib.record_sent(&[path("Dragon.3mf")], 2).unwrap();
+        assert_eq!(names(&lib.list_entries(id).unwrap()), ["Dragon.3mf", "Lid.stl"]);
+        lib.record_sent(&[path("Knight_copy.stl")], 2).unwrap();
+        assert_eq!(names(&lib.list_entries(id).unwrap()), ["Knight.stl", "Dragon.3mf"], "one entry per content");
+        lib.keep_recent(1).unwrap();
+        assert_eq!(recent(&lib).unwrap().count, 1);
+        lib.keep_recent(0).unwrap();
+        assert!(recent(&lib).is_none(), "0: no list at all");
+        lib.record_sent(&[path("Lid.stl")], 0).unwrap();
+        assert!(recent(&lib).is_none());
     }
 
     #[test]
