@@ -22,6 +22,11 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 - Placement is a suggestion like an assistant's and waits in the review; with *Accept suggestions automatically* on, moves out of the landing folder are applied by themselves – but only when exactly one folder fits; otherwise the file waits for your choice. Your own folders are never rearranged without you: *Place by tag* in the context menu asks, and every move can be undone.
 - Assistants over MCP learn the rules too (`list_tags` names each tag's folder, `library_overview` the landing folder) and the *eingang-einordnen* task places what it tags.
 
+<p>
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-placement-review.png" alt="The review with a placement batch: a coaster tagged Craft fair, Kitchen and Living room, with a menu to choose its folder" width="49%">
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-placement.png" alt="Settings → Tags → Placement by tag: the folder for each tag in order of precedence, one row being dragged by its handle" width="49%">
+</p>
+
 **Duplicates cleaned up at once** (new in 0.7)
 
 - After looking through the duplicates, tick the groups whose ★ copy is the right one – or *All suggestions are fine* – and *Clean up selected* moves the extra copies of all of them to the trash with one confirmation. Rather keep another copy? Point at it and click ☆ *Keep*.
