@@ -276,11 +276,32 @@ fn move_row(ui: &mut Ui, item: &mut ReviewItem) {
         let what = if rename { t!("review.rename") } else { t!("review.move") };
         ui.label(RichText::new(format!("{icon} {what}")).strong());
     });
+    let chosen = item.picked.to.clone().unwrap_or_else(|| m.to.clone());
     let (old, new) =
-        if rename { (listing::file_name(&from), listing::file_name(&m.to)) } else { (rel(&from), rel(&m.to)) };
+        if rename { (listing::file_name(&from), listing::file_name(&chosen)) } else { (rel(&from), rel(&chosen)) };
     ui.label(RichText::new(old).weak().strikethrough());
     ui.label(RichText::new(format!("→ {new}")).strong());
-    let made = meshgrove_core::moves::missing_folders(&m.root, m.to.parent().unwrap_or(&m.root));
+    if !m.alternatives.is_empty() {
+        // Several folders fit the file's tags: the suggested one first, the others to pick.
+        let folder_label = |p: &std::path::Path| {
+            let dir = p.parent().unwrap_or(p);
+            if dir.is_dir() { format!("{} ({})", rel(dir), t!("review.folder_exists")) } else { rel(dir) }
+        };
+        ui.horizontal(|ui| {
+            ui.weak(t!("review.also_fits"));
+            egui::ComboBox::from_id_salt(("move_to", item.proposal.id)).selected_text(folder_label(&chosen)).show_ui(
+                ui,
+                |ui| {
+                    for option in std::iter::once(&m.to).chain(&m.alternatives) {
+                        if ui.selectable_label(*option == chosen, folder_label(option)).clicked() {
+                            item.picked.to = (*option != m.to).then(|| option.clone());
+                        }
+                    }
+                },
+            );
+        });
+    }
+    let made = meshgrove_core::moves::missing_folders(&m.root, chosen.parent().unwrap_or(&m.root));
     if let Some(last) = made.last() {
         ui.weak(t!("review.new_folder", path = rel(last)));
     }

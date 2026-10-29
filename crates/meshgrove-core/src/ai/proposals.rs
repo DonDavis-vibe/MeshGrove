@@ -177,6 +177,9 @@ pub struct MovePayload {
     pub root: PathBuf,
     pub to: PathBuf,
     pub folder: bool,
+    /// Other places that fit as well (placed by tag, with several tags): the review offers them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -644,6 +647,8 @@ pub struct Picked {
     pub remove: Vec<String>,
     /// The note, the list (or the move) as suggested.
     pub whole: bool,
+    /// A move: the place chosen in the review instead of the suggested one.
+    pub to: Option<PathBuf>,
 }
 
 impl Picked {
@@ -653,7 +658,7 @@ impl Picked {
             ProposalKind::Tags => {
                 let tags: Option<TagsPayload> = serde_json::from_value(p.payload.clone()).ok();
                 let tags = tags.unwrap_or(TagsPayload { add: Vec::new(), remove: Vec::new() });
-                Picked { add: tags.add.into_iter().map(|t| t.name).collect(), remove: tags.remove, whole: false }
+                Picked { add: tags.add.into_iter().map(|t| t.name).collect(), ..Picked::default() }
             }
             _ => Picked { whole: true, ..Picked::default() },
         }
@@ -681,7 +686,8 @@ pub fn to_ops(p: &Proposal, picked: &Picked, inbox_done: bool) -> Vec<crate::cha
         }
         (ProposalKind::Move, Some(t)) if picked.whole => {
             if let Ok(m) = serde_json::from_value::<MovePayload>(p.payload.clone()) {
-                ops.push(ApplyOp::Move { root: m.root, target: t.clone(), to: m.to, folder: m.folder });
+                let to = picked.to.clone().unwrap_or(m.to);
+                ops.push(ApplyOp::Move { root: m.root, target: t.clone(), to, folder: m.folder });
             }
         }
         (ProposalKind::List, _) if picked.whole => {

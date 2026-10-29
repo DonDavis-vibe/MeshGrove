@@ -15,30 +15,33 @@ use crate::db::{Error, Library};
 /// The source Meshgrove's own suggestions carry in the store.
 pub const SOURCE: &str = "meshgrove";
 
-/// The tag that decides and the folder (relative to `root`) files with `tags` go to: among the
-/// tags that have a folder, one whose folder exists under `root` already wins (the user's own
-/// structure first); then the first in the order of the settings.
-pub fn pick(tags: &[String], config: &Config, root: &Path) -> Option<(String, PathBuf)> {
+/// The folders (relative to the library root) files with `tags` could go to, each with the tag
+/// that gives it, in order of precedence (Settings → Tags): the first is the one suggested, the
+/// others are offered in the review. More than one means the choice is not clear-cut.
+pub fn candidates(tags: &[String], config: &Config) -> Vec<(String, PathBuf)> {
     if !config.placement.enabled {
-        return None;
+        return Vec::new();
     }
-    let mut found: Vec<(String, String)> = Vec::new();
-    for (name, folder) in config.folder_rules() {
-        if let Some(tag) = tags.iter().find(|t| config.folder_for_tag(t).as_deref() == Some(folder.as_str()))
-            && !found.iter().any(|(_, f)| *f == folder)
-        {
-            found.push((tag.clone(), folder.clone()));
-            let _ = name;
+    let mut found: Vec<(String, PathBuf)> = Vec::new();
+    for (_, folder) in config.folder_rules() {
+        if let Some(tag) = tags.iter().find(|t| config.folder_for_tag(t).as_deref() == Some(folder.as_str())) {
+            let rel = relative(&folder);
+            if !found.iter().any(|(_, f)| *f == rel) {
+                found.push((tag.clone(), rel));
+            }
         }
     }
-    let existing = found.iter().find(|(_, f)| root.join(relative(f)).is_dir());
-    let (tag, folder) = existing.or(found.first())?;
-    Some((tag.clone(), relative(folder)))
+    found
 }
 
-/// The folder (relative to `root`) files with `tags` go to.
-pub fn folder_for(tags: &[String], config: &Config, root: &Path) -> Option<PathBuf> {
-    pick(tags, config, root).map(|(_, folder)| folder)
+/// The tag that decides and the folder (relative to the library root) files with `tags` go to.
+pub fn pick(tags: &[String], config: &Config) -> Option<(String, PathBuf)> {
+    candidates(tags, config).into_iter().next()
+}
+
+/// The folder (relative to the library root) files with `tags` go to.
+pub fn folder_for(tags: &[String], config: &Config) -> Option<PathBuf> {
+    pick(tags, config).map(|(_, folder)| folder)
 }
 
 /// A `/`-separated folder setting as a relative path.
@@ -70,7 +73,8 @@ pub fn proposals_for(
             continue;
         };
         let tags: Vec<String> = lib.tags_of(std::slice::from_ref(path))?.into_iter().map(|(t, _)| t).collect();
-        let Some((tag, folder)) = pick(&tags, config, root) else {
+        let found = candidates(&tags, config);
+        let Some((tag, folder)) = found.first().cloned() else {
             skip(path, "no_rule");
             continue;
         };
@@ -91,7 +95,10 @@ pub fn proposals_for(
             continue;
         }
         match crate::moves::plan_move(lib, root, path, &to) {
-            Ok((target, payload)) => {
+            Ok((target, mut payload)) => {
+                // The other folders that fit, for the review to choose from.
+                payload.alternatives =
+                    found.iter().skip(1).map(|(_, f)| root.join(f).join(name)).filter(|a| *a != to).collect();
                 targets.push(to);
                 out.push(NewProposal {
                     kind: ProposalKind::Move,
@@ -153,37 +160,46 @@ mod tests {
     }
 
     #[test]
-    fn the_folder_follows_existing_folders_then_the_settings_order() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        let mut config = Config { library_roots: vec![root.to_path_buf()], ..Default::default() };
+    fn the_folder_follows_the_precedence_of_the_settings() {
+        let mut config = Config::default();
         let tags = |list: &[&str]| list.iter().map(|t| (*t).to_owned()).collect::<Vec<_>>();
-        // Garten comes before Deko in the settings; neither exists yet.
-        assert_eq!(folder_for(&tags(&["Deko", "Garten"]), &config, root), Some(PathBuf::from("Garten")));
-        assert_eq!(pick(&tags(&["Deko", "Garten"]), &config, root).unwrap().0, "Garten");
-        std::fs::create_dir(root.join("Deko")).unwrap();
+        // Garten comes before Deko among the themes, whatever the order of the file's tags.
+        assert_eq!(folder_for(&tags(&["Deko", "Garten"]), &config), Some(PathBuf::from("Garten")));
+        assert_eq!(pick(&tags(&["Garten", "Deko"]), &config).unwrap().0, "Garten");
         assert_eq!(
-            folder_for(&tags(&["Garten", "Deko"]), &config, root),
-            Some(PathBuf::from("Deko")),
-            "exists already"
+            candidates(&tags(&["Deko", "Garten"]), &config),
+            [("Garten".to_owned(), PathBuf::from("Garten")), ("Deko".to_owned(), PathBuf::from("Deko"))],
+            "both offered, in order"
         );
         assert_eq!(
-            folder_for(&tags(&["PLA", "eigenes Design"]), &config, root),
+            folder_for(&tags(&["PLA", "eigenes Design"]), &config),
             None,
             "properties and states have no folder"
         );
         config.placement.rules = vec![
             FolderRule { tag: "Deko".into(), folder: String::new() },
             FolderRule { tag: "Kunde Müller".into(), folder: " Kunden / Müller ".into() },
+            FolderRule { tag: "Projekt X".into(), folder: "Projekte".into() },
         ];
+        assert_eq!(folder_for(&tags(&["Deko", "Garten"]), &config), Some(PathBuf::from("Garten")), "Deko switched off");
+        let muller = Path::new("Kunden").join("Müller");
+        assert_eq!(folder_for(&tags(&["Kunde Müller"]), &config), Some(muller.clone()));
         assert_eq!(
-            folder_for(&tags(&["Deko", "Garten"]), &config, root),
-            Some(PathBuf::from("Garten")),
-            "Deko switched off"
+            folder_for(&tags(&["Garten", "Kunde Müller"]), &config),
+            Some(muller.clone()),
+            "an own tag beats a theme"
         );
-        assert_eq!(folder_for(&tags(&["Kunde Müller"]), &config, root), Some(Path::new("Kunden").join("Müller")));
+        assert_eq!(
+            folder_for(&tags(&["Projekt X", "Kunde Müller"]), &config),
+            Some(muller.clone()),
+            "the deeper folder is the more specific"
+        );
+        config.placement.order = vec!["Garten".into()];
+        assert_eq!(folder_for(&tags(&["Garten", "Kunde Müller"]), &config), Some(PathBuf::from("Garten")), "ordered");
+        assert_eq!(candidates(&tags(&["Garten", "Kunde Müller"]), &config)[1].1, muller);
         config.placement.enabled = false;
-        assert_eq!(folder_for(&tags(&["Garten"]), &config, root), None);
+        assert_eq!(folder_for(&tags(&["Garten"]), &config), None);
+        assert!(candidates(&tags(&["Garten"]), &config).is_empty());
     }
 
     #[test]
@@ -215,7 +231,11 @@ mod tests {
         let paths: Vec<PathBuf> = in_landing.iter().map(|e| e.path.clone()).collect();
         let (items, skipped) = proposals_for(&lib, &config, &paths).unwrap();
         assert_eq!(items.len(), 2, "{skipped:?}");
-        assert_eq!(items[0].reason.as_deref(), Some("Tag: Garten"), "Garten exists, Deko does not");
+        assert_eq!(items[0].reason.as_deref(), Some("Tag: Garten"), "Garten comes before Deko");
+        let alternatives =
+            |i: usize| serde_json::from_value::<MovePayload>(items[i].payload.clone()).unwrap().alternatives;
+        assert_eq!(alternatives(0), [root.join("Deko").join("rose.stl")], "Deko offered as well");
+        assert!(alternatives(1).is_empty(), "zaun has one tag");
         assert_eq!(
             skipped,
             [

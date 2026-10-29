@@ -1458,6 +1458,7 @@ impl App {
                 SettingsChange::ImportArchives(choice) => self.config.import.archives = choice,
                 SettingsChange::Placement(on) => self.config.placement.enabled = on,
                 SettingsChange::FolderRules(rules) => self.config.placement.rules = rules,
+                SettingsChange::PlacementOrder(order) => self.config.placement.order = order,
                 SettingsChange::SpaceMouse(config) => self.config.spacemouse = config,
                 SettingsChange::FreeOrbit(on) => self.config.free_orbit = on,
                 SettingsChange::ColoredTags(colored) => {

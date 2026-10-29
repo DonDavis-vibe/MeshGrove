@@ -791,11 +791,14 @@ pub enum ArchiveImport {
 pub struct PlacementConfig {
     pub enabled: bool,
     pub rules: Vec<FolderRule>,
+    /// Tags in order of precedence (Settings → Tags) where the user changed it; tags not listed
+    /// come after: rules for own tags (the most specific), then the themes as listed.
+    pub order: Vec<String>,
 }
 
 impl Default for PlacementConfig {
     fn default() -> PlacementConfig {
-        PlacementConfig { enabled: true, rules: Vec::new() }
+        PlacementConfig { enabled: true, rules: Vec::new(), order: Vec::new() }
     }
 }
 
@@ -867,24 +870,40 @@ impl Config {
         theme.map(|t| if self.german() { t.de.clone() } else { t.en.clone() })
     }
 
-    /// Every tag with a folder, in the order of the settings: the themes as listed, then the
-    /// rules for other tags.
-    pub fn folder_rules(&self) -> Vec<(String, String)> {
+    /// Every tag that can place files, in order of precedence: as the user ordered them, then
+    /// the rules for own tags (a deeper folder first: the more specific), then the themes as
+    /// listed. Themes come with or without a folder (they can get one), own tags only with one.
+    pub fn placement_tags(&self) -> Vec<String> {
         let themes = self.themes();
-        let mut out = Vec::new();
-        for t in &themes {
-            let name = if self.german() { &t.de } else { &t.en };
-            if let Some(folder) = self.folder_for_tag(name) {
-                out.push((name.clone(), folder));
+        let depth = |folder: &str| folder.split('/').filter(|s| !s.trim().is_empty()).count();
+        let mut own: Vec<&FolderRule> = self
+            .placement
+            .rules
+            .iter()
+            .filter(|r| !r.folder.trim().is_empty() && !themes.iter().any(|t| t.matches(r.tag.trim())))
+            .collect();
+        own.sort_by_key(|r| std::cmp::Reverse(depth(&r.folder)));
+        let mut all: Vec<String> = own.iter().map(|r| r.tag.trim().to_owned()).collect();
+        all.extend(themes.iter().map(|t| if self.german() { t.de.clone() } else { t.en.clone() }));
+        let mut out: Vec<String> = Vec::new();
+        for wanted in &self.placement.order {
+            if let Some(t) = all.iter().find(|t| same_tag(t, wanted))
+                && !out.iter().any(|o| same_tag(o, t))
+            {
+                out.push(t.clone());
             }
         }
-        for r in &self.placement.rules {
-            let folder = r.folder.trim();
-            if !folder.is_empty() && !themes.iter().any(|t| t.matches(r.tag.trim())) {
-                out.push((r.tag.trim().to_owned(), folder.to_owned()));
+        for t in all {
+            if !out.iter().any(|o| same_tag(o, &t)) {
+                out.push(t);
             }
         }
         out
+    }
+
+    /// Every tag with a folder, in order of precedence ([`Config::placement_tags`]).
+    pub fn folder_rules(&self) -> Vec<(String, String)> {
+        self.placement_tags().into_iter().filter_map(|t| self.folder_for_tag(&t).map(|f| (t, f))).collect()
     }
 }
 
@@ -1436,7 +1455,10 @@ mod tests {
         let rules = config.folder_rules();
         assert!(!rules.iter().any(|(t, _)| t == "Garten"));
         assert_eq!(rules.iter().find(|(t, _)| t == "Werkstatt").map(|(_, f)| f.as_str()), Some("Werkstatt/Teile"));
-        assert_eq!(rules.last().map(|(t, f)| (t.as_str(), f.as_str())), Some(("Kunde Müller", "Kunden/Müller")));
+        assert_eq!(rules[0], ("Kunde Müller".to_owned(), "Kunden/Müller".to_owned()), "own tags come first");
+        config.placement.order = vec!["werkstatt".into(), "Haushalt".into()];
+        let tags = config.placement_tags();
+        assert_eq!(&tags[..3], ["Werkstatt", "Haushalt", "Kunde Müller"], "the user's order first: {tags:?}");
         let back: Config = toml::from_str(&toml::to_string_pretty(&config).unwrap()).unwrap();
         assert_eq!(back, config);
         let old: Config = toml::from_str("library_roots = []").unwrap();

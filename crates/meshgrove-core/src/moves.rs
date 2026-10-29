@@ -89,7 +89,7 @@ pub fn plan_move(lib: &Library, root: &Path, from: &Path, to: &Path) -> Result<(
         .and_then(|r| r.hash);
     Ok((
         Target { path: from.to_path_buf(), hash, size, mtime_ns },
-        MovePayload { root: root.to_path_buf(), to: to.to_path_buf(), folder },
+        MovePayload { root: root.to_path_buf(), to: to.to_path_buf(), folder, alternatives: Vec::new() },
     ))
 }
 

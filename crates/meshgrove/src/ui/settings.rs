@@ -69,6 +69,8 @@ pub enum SettingsChange {
     Placement(bool),
     /// The folder each tag maps to, where it differs from the themes' own names.
     FolderRules(Vec<FolderRule>),
+    /// The tags in order of precedence for placing.
+    PlacementOrder(Vec<String>),
     AiEnabled(bool),
     /// Make Meshgrove available to the AI apps on this computer.
     AiConnectApps(bool),
@@ -296,9 +298,11 @@ pub struct SettingsDialog {
     import_folder_input: String,
     import_folder_error: Option<String>,
     landing_input: String,
-    /// The placement rules as typed: (tag, folder), the themes first.
-    rule_inputs: Vec<(String, String)>,
-    rule_themes: usize,
+    /// The placement rules as typed, in order of precedence, then the library's own tags
+    /// without a rule.
+    rule_inputs: Vec<RuleRow>,
+    /// How many of them can be ordered (the rest have no folder yet).
+    rule_ordered: usize,
     /// Name, program and working folder of a slicer being added by hand.
     slicer_form: (String, String, String),
     /// The slicers found on this computer, and the scan that looks for them.
@@ -333,6 +337,15 @@ pub struct SettingsDialog {
 }
 
 const CATEGORY_WIDTH: f32 = 190.0;
+
+/// One row of the placement rules: a tag, the folder typed for it, and the theme's own name when
+/// the tag is a theme (its folder unless changed).
+#[derive(Default)]
+struct RuleRow {
+    tag: String,
+    folder: String,
+    own: Option<String>,
+}
 
 /// The slicers, mesh editors and printers, each with the index of the default one.
 type Lists<'a> = ((&'a [Slicer], usize), (&'a [Program], usize), (&'a [Printer], usize));
@@ -557,6 +570,7 @@ impl Category {
                 put(config.states.is_some(), SettingsChange::Suggestions(Group::State, None));
                 put(config.placement.enabled != d.placement.enabled, SettingsChange::Placement(d.placement.enabled));
                 put(!config.placement.rules.is_empty(), SettingsChange::FolderRules(Vec::new()));
+                put(!config.placement.order.is_empty(), SettingsChange::PlacementOrder(Vec::new()));
             }
             Category::Tiles => {
                 put(config.tile_layout != d.tile_layout, SettingsChange::TileLayout(d.tile_layout));
@@ -1050,25 +1064,23 @@ impl SettingsDialog {
         let (properties, states) = (config.properties(), config.states());
         let german = config.german();
         let theme_name = |t: &SuggestedTag| if german { t.de.clone() } else { t.en.clone() };
-        if self.rule_inputs.is_empty() || self.rule_themes != themes.len() {
-            self.rule_inputs = themes
-                .iter()
-                .map(|t| {
-                    let name = theme_name(t);
-                    let folder = config.folder_for_tag(&name).unwrap_or_default();
-                    (name, folder)
-                })
-                .collect();
-            let known = |tag: &str| themes.iter().chain(&properties).chain(&states).any(|t| t.matches(tag));
-            self.rule_inputs.extend(
-                tags.iter()
-                    .filter(|(t, _)| !known(t))
-                    .map(|(t, _)| (t.clone(), config.folder_for_tag(t).unwrap_or_default())),
-            );
-            self.rule_themes = themes.len();
+        let ordered = config.placement_tags();
+        if self.rule_inputs.is_empty() || self.rule_ordered != ordered.len() {
+            let row = |tag: &str| RuleRow {
+                tag: tag.to_owned(),
+                folder: config.folder_for_tag(tag).unwrap_or_default(),
+                own: themes.iter().find(|t| t.matches(tag)).map(theme_name),
+            };
+            self.rule_inputs = ordered.iter().map(|t| row(t)).collect();
+            let known = |tag: &str| {
+                ordered.iter().any(|o| o.eq_ignore_ascii_case(tag))
+                    || themes.iter().chain(&properties).chain(&states).any(|t| t.matches(tag))
+            };
+            self.rule_inputs.extend(tags.iter().filter(|(t, _)| !known(t)).map(|(t, _)| row(t)));
+            self.rule_ordered = ordered.len();
         }
         hint(ui, t!("settings.placement_rules_hint"));
-        let (mut edited, mut bad) = (false, false);
+        let (mut edited, mut bad, mut moved) = (false, false, None);
         let valid = |folder: &str| {
             folder
                 .split('/')
@@ -1076,40 +1088,64 @@ impl SettingsDialog {
                 .filter(|s| !s.is_empty())
                 .all(|s| meshgrove_core::fsops::check_name(s).is_ok())
         };
-        egui::Grid::new("placement_rules").num_columns(3).spacing([12.0, 4.0]).show(ui, |ui| {
-            for (i, (tag, folder)) in self.rule_inputs.iter_mut().enumerate() {
-                if i == themes.len() {
+        let ordered_rows = self.rule_ordered;
+        egui::Grid::new("placement_rules").num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
+            for (i, row) in self.rule_inputs.iter_mut().enumerate() {
+                if i == ordered_rows {
                     ui.label(RichText::new(t!("settings.placement_other_tags")).weak());
                     ui.end_row();
                 }
-                ui.label(tag.as_str());
-                let edit = egui::TextEdit::singleline(folder).hint_text(t!("settings.placement_none"));
+                ui.label(row.tag.as_str());
+                let edit = egui::TextEdit::singleline(&mut row.folder).hint_text(t!("settings.placement_none"));
                 let field = ui.add_sized([220.0, ui.spacing().interact_size.y], edit);
-                let ok = valid(folder);
+                let ok = valid(&row.folder);
                 bad |= !ok;
                 edited |= field.lost_focus() && ok;
-                if !folder.trim().is_empty()
-                    && ui.small_button("✕").on_hover_text(t!("settings.placement_clear")).clicked()
-                {
-                    folder.clear();
-                    edited = true;
-                }
+                ui.horizontal(|ui| {
+                    if i < ordered_rows {
+                        if ui
+                            .add_enabled(i > 0, egui::Button::new("▲").small())
+                            .on_hover_text(t!("settings.placement_up"))
+                            .clicked()
+                        {
+                            moved = Some((i, i - 1));
+                        }
+                        if ui
+                            .add_enabled(i + 1 < ordered_rows, egui::Button::new("▼").small())
+                            .on_hover_text(t!("settings.placement_down"))
+                            .clicked()
+                        {
+                            moved = Some((i, i + 1));
+                        }
+                    }
+                    if !row.folder.trim().is_empty()
+                        && ui.small_button("✕").on_hover_text(t!("settings.placement_clear")).clicked()
+                    {
+                        row.folder.clear();
+                        edited = true;
+                    }
+                });
                 ui.end_row();
             }
         });
         if bad {
             ui.colored_label(ui.visuals().error_fg_color, t!("settings.placement_bad_folder"));
         }
+        if let Some((from, to)) = moved {
+            self.rule_inputs.swap(from, to);
+            let order = self.rule_inputs[..ordered_rows].iter().map(|r| r.tag.clone()).collect();
+            changes.push(SettingsChange::PlacementOrder(order));
+        }
         if edited {
             // Rules only where a tag's folder differs from the theme's own name.
             let mut rules = Vec::new();
-            for (i, (tag, folder)) in self.rule_inputs.iter().enumerate() {
-                let folder = folder.trim();
-                match themes.get(i).map(theme_name) {
+            for row in &self.rule_inputs {
+                let folder = row.folder.trim();
+                match &row.own {
                     Some(own) if folder == own => {}
-                    Some(_) => rules.push(FolderRule { tag: tag.clone(), folder: folder.to_owned() }),
+                    Some(_) => rules.push(FolderRule { tag: row.tag.clone(), folder: folder.to_owned() }),
                     None if !folder.is_empty() => {
-                        rules.push(FolderRule { tag: tag.clone(), folder: folder.to_owned() })
+                        rules.push(FolderRule { tag: row.tag.clone(), folder: folder.to_owned() })
                     }
                     None => {}
                 }

@@ -251,10 +251,16 @@ impl App {
 }
 
 /// What may be accepted without the review: everything but a move, and a move that takes a file
-/// out of the landing folder (the user's own folders are never rearranged by themselves).
+/// out of the landing folder when one place fits (the user's own folders are never rearranged
+/// by themselves, and nothing is guessed when several folders would do).
 pub(super) fn auto_acceptable(item: &ReviewItem, config: &Config) -> bool {
-    item.proposal.kind != ProposalKind::Move
-        || item.proposal.target.as_ref().is_some_and(|t| config.in_landing(&t.path))
+    if item.proposal.kind != ProposalKind::Move {
+        return true;
+    }
+    let out_of_landing = item.proposal.target.as_ref().is_some_and(|t| config.in_landing(&t.path));
+    let clear =
+        serde_json::from_value::<MovePayload>(item.proposal.payload.clone()).is_ok_and(|m| m.alternatives.is_empty());
+    out_of_landing && clear
 }
 
 /// "Claude Desktop · lokal", "Chat · Cloud", "Meshgrove"
@@ -291,13 +297,23 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     fn item(kind: ProposalKind, path: &str) -> ReviewItem {
+        item_with(kind, path, Vec::new())
+    }
+
+    fn item_with(kind: ProposalKind, path: &str, alternatives: Vec<PathBuf>) -> ReviewItem {
         let target = Target { path: PathBuf::from(path), hash: None, size: 1, mtime_ns: 1 };
+        let payload = MovePayload {
+            root: PathBuf::from("/lib"),
+            to: PathBuf::from("/lib/Garten/rose.stl"),
+            folder: false,
+            alternatives,
+        };
         let proposal = Proposal {
             id: 1,
             batch_id: 1,
             kind,
             target: Some(target),
-            payload: serde_json::Value::Null,
+            payload: serde_json::to_value(payload).unwrap(),
             reason: None,
             confidence: None,
             state: "pending".into(),
@@ -321,6 +337,8 @@ mod tests {
         assert!(auto_acceptable(&item(ProposalKind::Move, "/lib/Import/rose.stl"), &config));
         assert!(!auto_acceptable(&item(ProposalKind::Move, "/lib/Garten/rose.stl"), &config));
         assert!(!auto_acceptable(&item(ProposalKind::Move, "/lib/Import"), &config), "not the folder itself");
+        let several = item_with(ProposalKind::Move, "/lib/Import/rose.stl", vec![PathBuf::from("/lib/Deko/rose.stl")]);
+        assert!(!auto_acceptable(&several, &config), "several folders fit: the user chooses");
         assert!(Path::new("/lib/Import/rose.stl").starts_with("/lib/Import"));
     }
 }
