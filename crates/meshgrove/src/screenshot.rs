@@ -8,7 +8,7 @@
 //! (`x,y*2` double-clicks, `x,y*r` right-clicks), and `MESHGROVE_TYPE=text` types the text after the last click; steps
 //! separated by `|` follow half a second apart, `{enter}`, `{down}` and `{esc}` press those keys,
 //! `{click x,y}` clicks there (to click after typing), `{rclick x,y}` right-clicks, `{wheel dy}` turns
-//! the wheel at the pointer, `{copy}` and `{paste}` are Ctrl+C and Ctrl+V.
+//! the wheel at the pointer, `{copy}`, `{cut}` and `{paste}` are Ctrl+C, Ctrl+X and Ctrl+V.
 //! `MESHGROVE_MEASURE=fx,fy;fx,fy` measures between those points (fractions of the view) in the
 //! first model window that opens, which the hook's input cannot reach; `MESHGROVE_WINDOW_VIEW=top`
 //! (or `front`, `left` …) starts that window in a standard view.
@@ -198,6 +198,7 @@ impl ScreenshotHook {
                     self.release = Some((pos, which));
                 }
                 _ if step == "{copy}" => raw.events.push(egui::Event::Copy),
+                _ if step == "{cut}" => raw.events.push(egui::Event::Cut),
                 _ if step == "{paste}" => raw.events.push(egui::Event::Paste(String::new())),
                 Some(key) => {
                     for pressed in [true, false] {

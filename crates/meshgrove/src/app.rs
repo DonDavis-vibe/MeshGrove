@@ -174,6 +174,8 @@ pub struct App {
     /// Context-menu facts for `menu_for` (recomputed when the selection changes).
     menu: MenuContext,
     menu_for: Vec<PathBuf>,
+    /// Files cut (Ctrl+X): the next paste moves them.
+    cut: Vec<PathBuf>,
     selection_tags: Vec<(String, usize)>,
     all_tags: Vec<(String, usize)>,
     tags_dirty: bool,
@@ -369,6 +371,7 @@ impl App {
             default_editor,
             menu: MenuContext::default(),
             menu_for: Vec::new(),
+            cut: Vec::new(),
             selection_tags: Vec::new(),
             all_tags: Vec::new(),
             tags_dirty: true,
@@ -927,14 +930,18 @@ impl App {
                     }
                     self.start_import_scan(); // what is left there
                 }
-                LibEvent::Copied { dir, report, skipped } => {
-                    let (to, skipped) = (listing::file_name(&dir), skipped + report.skipped);
-                    let message = if skipped > 0 {
-                        t!("toast.pasted_skipped", count = report.applied, to = to, skipped = skipped)
-                    } else {
-                        t!("toast.pasted", count = report.applied, to = to)
+                LibEvent::Copied { dir, report, skipped, moved } => {
+                    let (to, skipped, n) = (listing::file_name(&dir), skipped + report.skipped, report.applied);
+                    let message = match (moved, skipped > 0) {
+                        (true, true) => t!("toast.moved_skipped", count = n, to = to, skipped = skipped),
+                        (true, false) => t!("toast.moved", count = n, to = to),
+                        (false, true) => t!("toast.pasted_skipped", count = n, to = to, skipped = skipped),
+                        (false, false) => t!("toast.pasted", count = n, to = to),
                     };
                     self.toast(message.into_owned());
+                    if moved {
+                        self.set_cut(Vec::new());
+                    }
                     if matches!(self.view, View::Folder | View::Flatten { .. }) {
                         self.reload();
                     }
@@ -992,6 +999,7 @@ impl App {
                     && matches!(paths.as_slice(), [p] if self.in_library(p)
                         && (p.is_dir() || Kind::from_file_name(&listing::file_name(p)) == Kind::Archive)),
                 can_paste: self.can_paste(),
+                can_cut: !paths.is_empty() && actions::trash_blocked(&paths).is_none(),
                 ai_chat: self.chat_available() && self.chat_sees(&paths),
                 ai_refs: self.config.ai.enabled && self.ai_sees_any(&paths),
             };
@@ -1305,10 +1313,11 @@ impl App {
                 self.toast(t!("toast.copied", count = paths.len()).into_owned());
             }
             Action::CopyFiles => {
+                self.set_cut(Vec::new());
                 let paths = self.selected_paths();
                 let (tx, ctx) = (self.messages.0.clone(), ctx.clone());
                 std::thread::spawn(move || {
-                    let message = match actions::copy_files(&paths) {
+                    let message = match actions::copy_files(&paths, false) {
                         Ok(n) => t!("toast.files_copied", count = n),
                         Err(e) => {
                             // No Wayland data-control support: at least the paths as text.
@@ -1329,7 +1338,35 @@ impl App {
             Action::MentionInChat => self.mention_in_chat(self.selected_paths()),
             Action::CopyReference => self.copy_references(&self.selected_paths(), ctx),
             Action::PasteFiles(into) => self.paste_files(ctx, into),
+            Action::CutFiles => self.cut_files(ctx),
         }
+    }
+
+    /// Ctrl+X: the selection goes on the clipboard like a copy, and the next paste moves it.
+    fn cut_files(&mut self, ctx: &egui::Context) {
+        let paths = self.selected_paths();
+        if let Some(why) = actions::trash_blocked(&paths) {
+            if !why.is_empty() {
+                self.toast(why);
+            }
+            return;
+        }
+        self.set_cut(paths.clone());
+        let (tx, ctx) = (self.messages.0.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            if let Err(e) = actions::copy_files(&paths, true) {
+                log::warn!("cutting files to the clipboard failed: {e}");
+                let text: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+                ctx.copy_text(text.join("\n"));
+            }
+            let _ = tx.send(t!("toast.files_cut", count = paths.len()).into_owned());
+            ctx.request_repaint();
+        });
+    }
+
+    fn set_cut(&mut self, paths: Vec<PathBuf>) {
+        self.gallery.cut = paths.clone();
+        self.cut = paths;
     }
 
     /// Pasted files go into the folder shown: a real folder, not an archive and not a list.
@@ -1359,9 +1396,16 @@ impl App {
             i.events.iter().find_map(|e| if let egui::Event::Paste(t) = e { Some(t.clone()) } else { None })
         });
         let (applier, messages, ctx) = (self.library.applier(), self.messages.0.clone(), ctx.clone());
+        let cut = self.cut.clone();
         std::thread::spawn(move || {
-            let files = actions::clipboard_files(text.as_deref());
-            let plan = copies::plan(&files, root.as_deref().unwrap_or(&dir), &dir);
+            let (mut files, mut moving) = actions::clipboard_files(text.as_deref());
+            if files.is_empty() && !cut.is_empty() {
+                // Nothing readable on the clipboard (X11, a menu paste): what was cut here.
+                files = cut.clone();
+            }
+            // Cut in Meshgrove, and nothing else copied since: the paste moves.
+            moving |= !cut.is_empty() && files.len() == cut.len() && cut.iter().all(|c| files.contains(c));
+            let plan = copies::plan(&files, root.as_deref().unwrap_or(&dir), &dir, moving);
             if plan.items.is_empty() {
                 let message = if files.is_empty() {
                     t!("toast.paste_nothing")
@@ -1372,7 +1416,12 @@ impl App {
                 ctx.request_repaint();
                 return;
             }
-            let title = t!("copy.journal_title", to = listing::file_name(&dir), count = plan.items.len());
+            let (to, count) = (listing::file_name(&dir), plan.items.len());
+            let title = if moving {
+                t!("cut.journal_title", to = to, count = count)
+            } else {
+                t!("copy.journal_title", to = to, count = count)
+            };
             applier.copy_files(plan, title.into_owned(), root.is_some());
         });
     }

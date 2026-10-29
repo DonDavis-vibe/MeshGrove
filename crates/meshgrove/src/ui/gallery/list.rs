@@ -275,7 +275,11 @@ impl Gallery {
         match column {
             Column::Preview => self.mini_preview(ui, e, index, row_h),
             Column::Name => {
-                ui.add(egui::Label::new(listing::file_name(&e.path)).truncate().selectable(false));
+                let mut name = RichText::new(listing::file_name(&e.path));
+                if self.is_cut(e) {
+                    name = name.color(weak);
+                }
+                ui.add(egui::Label::new(name).truncate().selectable(false));
             }
             Column::Folder => {
                 let folder = e.path.parent().map(listing::file_name).unwrap_or_default();

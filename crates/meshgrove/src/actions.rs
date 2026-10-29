@@ -292,42 +292,55 @@ pub fn open_with_default_app(path: &Path) -> io::Result<()> {
 }
 
 /// Puts the files on the clipboard so they can be pasted into the file manager, a slicer or a
-/// chat. Archive members are extracted first. Blocks while extracting, so call it off the UI
-/// thread.
-pub fn copy_files(paths: &[PathBuf]) -> Result<usize, String> {
+/// chat; `cut` marks them for file managers that move a cut selection (Dolphin, Nautilus).
+/// Archive members are extracted first. Blocks while extracting, so call it off the UI thread.
+pub fn copy_files(paths: &[PathBuf], cut: bool) -> Result<usize, String> {
     let files: Vec<PathBuf> =
         paths.iter().map(|p| archive::materialize(p)).collect::<io::Result<_>>().map_err(|e| e.to_string())?;
-    files_to_clipboard(&files)?;
+    files_to_clipboard(&files, cut)?;
     Ok(files.len())
 }
 
-/// Wayland: `text/uri-list` plus GNOME's variant, and the plain paths as text.
+/// Wayland: `text/uri-list` plus GNOME's variant (which says copy or cut, as KDE's own type
+/// does), and the plain paths as text.
 #[cfg(target_os = "linux")]
-fn files_to_clipboard(files: &[PathBuf]) -> Result<(), String> {
+fn files_to_clipboard(files: &[PathBuf], cut: bool) -> Result<(), String> {
     use wl_clipboard_rs::copy::{MimeSource, MimeType, Options, Source};
     let uris: Vec<String> = files.iter().map(|p| file_uri(p)).collect();
     let text: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     let source =
         |data: String, mime: MimeType| MimeSource { source: Source::Bytes(data.into_bytes().into()), mime_type: mime };
+    let how = if cut { "cut" } else { "copy" };
     // Plain text first: the extra text types the library adds fall back to the first text source.
-    let sources = vec![
+    let mut sources = vec![
         source(text.join("\n"), MimeType::Text),
         source(uris.iter().map(|u| format!("{u}\r\n")).collect(), MimeType::Specific("text/uri-list".into())),
-        source(format!("copy\n{}", uris.join("\n")), MimeType::Specific("x-special/gnome-copied-files".into())),
+        source(format!("{how}\n{}", uris.join("\n")), MimeType::Specific(GNOME_FILES.into())),
     ];
+    if cut {
+        sources.push(source("1".into(), MimeType::Specific(KDE_CUT.into())));
+    }
     Options::new().copy_multi(sources).map_err(|e| e.to_string())
 }
 
-/// Windows (file drop list, as Explorer's copy) and macOS (file URLs, as Finder's copy).
+/// GNOME's clipboard type for files: `copy` or `cut`, then the URIs.
+#[cfg(target_os = "linux")]
+const GNOME_FILES: &str = "x-special/gnome-copied-files";
+/// KDE's marker for a cut selection ("1").
+#[cfg(target_os = "linux")]
+const KDE_CUT: &str = "application/x-kde-cutselection";
+
+/// Windows (file drop list, as Explorer's copy) and macOS (file URLs, as Finder's copy). A cut
+/// is Meshgrove's own affair there.
 #[cfg(any(windows, target_os = "macos"))]
-fn files_to_clipboard(files: &[PathBuf]) -> Result<(), String> {
+fn files_to_clipboard(files: &[PathBuf], _cut: bool) -> Result<(), String> {
     use clipboard_rs::{Clipboard, ClipboardContext};
     let clipboard = ClipboardContext::new().map_err(|e| e.to_string())?;
     clipboard.set_files(files.iter().map(|p| p.display().to_string()).collect()).map_err(|e| e.to_string())
 }
 
 #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
-fn files_to_clipboard(_files: &[PathBuf]) -> Result<(), String> {
+fn files_to_clipboard(_files: &[PathBuf], _cut: bool) -> Result<(), String> {
     Err("copying files is not supported on this system".into())
 }
 
@@ -347,43 +360,55 @@ pub fn file_uri(path: &Path) -> String {
 }
 
 /// The files on the clipboard, for pasting into a folder: what a file manager (or Meshgrove)
-/// copied. `text` is the clipboard as text, the fallback where files cannot be read from it
-/// (X11, a chat): one path or `file://` URI per line.
-pub fn clipboard_files(text: Option<&str>) -> Vec<PathBuf> {
+/// copied, and whether they were cut (a paste moves them then). `text` is the clipboard as
+/// text, the fallback where files cannot be read from it (X11, a chat): one path or `file://`
+/// URI per line.
+pub fn clipboard_files(text: Option<&str>) -> (Vec<PathBuf>, bool) {
     match files_from_clipboard() {
-        Ok(files) if !files.is_empty() => files,
-        Ok(_) => text.map(paths_from_text).unwrap_or_default(),
+        Ok((files, cut)) if !files.is_empty() => (files, cut),
+        Ok(_) => (text.map(paths_from_text).unwrap_or_default(), text.is_some_and(cut_header)),
         Err(e) => {
             log::info!("reading files from the clipboard failed: {e}");
-            text.map(paths_from_text).unwrap_or_default()
+            (text.map(paths_from_text).unwrap_or_default(), text.is_some_and(cut_header))
         }
     }
 }
 
-/// Wayland: the `text/uri-list` a file manager (or Meshgrove) put there.
+/// Wayland: the `text/uri-list` a file manager (or Meshgrove) put there, and KDE's or GNOME's
+/// word on whether it was cut.
 #[cfg(target_os = "linux")]
-fn files_from_clipboard() -> Result<Vec<PathBuf>, String> {
-    use std::io::Read;
+fn files_from_clipboard() -> Result<(Vec<PathBuf>, bool), String> {
     use wl_clipboard_rs::paste::{ClipboardType, MimeType, Seat, get_contents};
-    let uri_list = MimeType::Specific("text/uri-list");
-    let (mut pipe, _) = get_contents(ClipboardType::Regular, Seat::Unspecified, uri_list).map_err(|e| e.to_string())?;
-    let mut text = String::new();
-    pipe.read_to_string(&mut text).map_err(|e| e.to_string())?;
-    Ok(paths_from_text(&text))
+    let read = |mime: &str| -> Result<String, String> {
+        use std::io::Read;
+        let (mut pipe, _) = get_contents(ClipboardType::Regular, Seat::Unspecified, MimeType::Specific(mime))
+            .map_err(|e| e.to_string())?;
+        let mut text = String::new();
+        pipe.read_to_string(&mut text).map_err(|e| e.to_string())?;
+        Ok(text)
+    };
+    let files = paths_from_text(&read("text/uri-list")?);
+    let cut = read(KDE_CUT).is_ok_and(|s| s.trim() == "1") || read(GNOME_FILES).is_ok_and(|s| cut_header(&s));
+    Ok((files, cut))
 }
 
 /// Windows (Explorer's file drop list) and macOS (Finder's file URLs).
 #[cfg(any(windows, target_os = "macos"))]
-fn files_from_clipboard() -> Result<Vec<PathBuf>, String> {
+fn files_from_clipboard() -> Result<(Vec<PathBuf>, bool), String> {
     use clipboard_rs::{Clipboard, ClipboardContext};
     let clipboard = ClipboardContext::new().map_err(|e| e.to_string())?;
     let files = clipboard.get_files().map_err(|e| e.to_string())?;
-    Ok(files.iter().flat_map(|f| paths_from_text(f)).collect())
+    Ok((files.iter().flat_map(|f| paths_from_text(f)).collect(), false))
 }
 
 #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
-fn files_from_clipboard() -> Result<Vec<PathBuf>, String> {
+fn files_from_clipboard() -> Result<(Vec<PathBuf>, bool), String> {
     Err("reading files from the clipboard is not supported on this system".into())
+}
+
+/// GNOME's `cut` header on the first line.
+fn cut_header(text: &str) -> bool {
+    text.lines().next().is_some_and(|l| l.trim() == "cut")
 }
 
 /// Paths from text, one per line: absolute paths or `file://` URIs (a `text/uri-list`, GNOME's
@@ -472,6 +497,7 @@ mod tests {
         let text = format!("copy\n{uri}\r\n# a comment\n{}\n/nowhere/x.stl\nfile://elsewhere/x.stl\n", rose.display());
         assert_eq!(paths_from_text(&text), [rose.clone(), rose]);
         assert_eq!(percent_decode("a%2Fb%zz"), b"a/b%zz");
+        assert!(!cut_header(&text) && cut_header("cut\nfile:///x") && !cut_header("/cut/x.stl"));
     }
 
     #[test]

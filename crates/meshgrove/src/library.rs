@@ -50,8 +50,9 @@ pub enum LibEvent {
     /// Files were brought in from an import folder; `trash` are archives unpacked on the way,
     /// for the trash.
     Imported { title: String, report: ChangeReport, trash: Vec<PathBuf> },
-    /// Files from the clipboard were copied into `dir`; `skipped` sources were gone or links.
-    Copied { dir: PathBuf, report: ChangeReport, skipped: usize },
+    /// Files from the clipboard were copied (or, after a cut, `moved`) into `dir`; `skipped`
+    /// sources were gone, links or there already.
+    Copied { dir: PathBuf, report: ChangeReport, skipped: usize, moved: bool },
     /// Move suggestions by tag were made (or not): how many, how many files had none, and
     /// whether the user asked for them.
     Placed { proposed: usize, skipped: usize, explicit: bool },
@@ -517,14 +518,15 @@ impl Worker {
                     self.send(LibEvent::UserDataChanged);
                 }
                 Ok(Cmd::CopyFiles { plan, title, index }) => {
-                    let skipped = plan.skipped.len();
-                    match lib.apply_change("copy", &title, &copies::to_ops(&plan)) {
+                    let (skipped, moved) = (plan.skipped.len(), plan.moving);
+                    let origin = if moved { "cut" } else { "copy" };
+                    match lib.apply_change(origin, &title, &copies::to_ops(&plan)) {
                         Ok(report) => {
                             // The folder is listed now, so the copies get their index rows.
                             if index && plan.dir.is_dir() {
                                 self.scan(&mut lib, &[(plan.root.clone(), plan.dir.clone())], Force::Start);
                             }
-                            self.send(LibEvent::Copied { dir: plan.dir, report, skipped });
+                            self.send(LibEvent::Copied { dir: plan.dir, report, skipped, moved });
                         }
                         Err(e) => self.send(LibEvent::Applied(Applied::Failed(e.to_string()))),
                     }

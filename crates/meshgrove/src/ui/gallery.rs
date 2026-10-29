@@ -68,6 +68,8 @@ pub enum Action {
     CopyFiles,
     /// Paste the files on the clipboard into the folder entry, or the folder shown (Ctrl+V).
     PasteFiles(Option<usize>),
+    /// Cut the files (Ctrl+X): on the clipboard like a copy, and the next paste moves them.
+    CutFiles,
     EditTags,
     /// Favourite on, or off when every selected file is one already.
     ToggleFavorite,
@@ -112,6 +114,8 @@ pub struct MenuContext {
     pub rescan: bool,
     /// The folder shown takes pasted files (a real folder, not an archive or a list).
     pub can_paste: bool,
+    /// The selection can be cut: files that could be moved (not read-only, not in an archive).
+    pub can_cut: bool,
     /// The chat's AI may see the selection: it can suggest tags and be told about it.
     pub ai_chat: bool,
     /// AI may see some of the selection: references to it can be copied.
@@ -142,6 +146,8 @@ pub struct Arrange {
 
 #[derive(Default)]
 pub struct Gallery {
+    /// Files cut (Ctrl+X) and not pasted yet: shown faded.
+    pub cut: Vec<PathBuf>,
     keys: Vec<Option<String>>,
     /// Folder entry index → thumbnail keys of the files previewed in its mosaic.
     mosaics: HashMap<usize, Vec<String>>,
@@ -308,6 +314,11 @@ impl Gallery {
         self.list_counts = counts;
     }
 
+    /// Cut and waiting to be pasted elsewhere.
+    pub(super) fn is_cut(&self, e: &Entry) -> bool {
+        self.cut.contains(&e.path)
+    }
+
     pub fn list_counts_of(&self, path: &Path) -> Option<(u32, u32)> {
         self.list_counts.get(path).copied()
     }
@@ -433,7 +444,15 @@ impl Gallery {
                     for entry in row_entries {
                         visible.extend(self.keys.get(entry).cloned().flatten());
                         visible.extend(self.mosaics.get(&entry).into_iter().flatten().cloned());
-                        let response = self.tile(ui, &entries[entry], entry, tile_w, tile_h);
+                        let response = if self.is_cut(&entries[entry]) {
+                            ui.scope(|ui| {
+                                ui.multiply_opacity(0.45);
+                                self.tile(ui, &entries[entry], entry, tile_w, tile_h)
+                            })
+                            .inner
+                        } else {
+                            self.tile(ui, &entries[entry], entry, tile_w, tile_h)
+                        };
                         if response.clicked() {
                             let modifiers = ui.input(|i| i.modifiers);
                             self.click(entry, modifiers);
@@ -532,9 +551,12 @@ impl Gallery {
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::A)) {
             self.marked = self.shown.iter().copied().collect();
         }
-        // Ctrl+C arrives as a copy event, not as a key press.
+        // Ctrl+C and Ctrl+X arrive as copy and cut events, not as key presses.
         if self.selected.is_some() && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy))) {
             return Some(Action::CopyFiles);
+        }
+        if self.selected.is_some() && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Cut))) {
+            return Some(Action::CutFiles);
         }
         if ui.input(|i| i.key_pressed(Key::Enter)) {
             return self.selected.map(Action::Open);
@@ -820,6 +842,9 @@ fn entry_menu(
             item(ui, t!("menu.rescan"), Action::Rescan);
         }
         item(ui, t!("menu.copy_files"), Action::CopyFiles);
+        if menu.can_cut {
+            item(ui, t!("menu.cut_files"), Action::CutFiles);
+        }
         item(ui, t!("menu.copy_path"), Action::CopyPaths);
         if menu.can_paste {
             // Into the folder under the pointer, otherwise into the one shown.
