@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime};
 use meshgrove_core::ai::proposals::{self, BatchInfo, Decision, MovePayload, Picked, ProposalKind, ProposalStore};
 use meshgrove_core::ai::snippets::Client;
 use meshgrove_core::changes::TargetState;
+use meshgrove_core::config::Config;
 use meshgrove_core::moves::MoveProblem;
 
 use super::{App, View};
@@ -14,9 +15,9 @@ use crate::proposals::ProposalWatcher;
 use crate::ui::review::{HistoryAction, ReviewAction, ReviewBatch, ReviewItem};
 
 impl App {
-    /// Starts or stops watching for suggestions as AI is switched on or off.
+    /// Starts or stops watching for suggestions as AI (or placement by tag) is switched on or off.
     pub(super) fn watch_proposals(&mut self, ctx: &egui::Context) {
-        let on = self.config.ai.enabled;
+        let on = self.reviews();
         if on && self.proposals.is_none() {
             if let Some(path) = ProposalStore::default_location() {
                 let ai = &self.config.ai;
@@ -38,9 +39,15 @@ impl App {
         }
     }
 
+    /// Suggestions can arrive: from AI, or from placing files by tag.
+    pub(super) fn reviews(&self) -> bool {
+        self.config.ai.enabled || self.config.placement.enabled
+    }
+
     /// Accepts the suggestions made since the user let Meshgrove do so (Settings → AI): all but
-    /// moves, which always wait, and not the chat's, which has its own switch. Each batch once:
-    /// the decisions are recorded only after the library applied them.
+    /// moves of files outside the landing folder, which always wait, and not the chat's, which
+    /// has its own switch. Each batch once: the decisions are recorded only after the library
+    /// applied them.
     fn auto_accept(&mut self) {
         let Some(since) = self.config.ai.auto_accept_since else { return };
         let since = SystemTime::UNIX_EPOCH + Duration::from_secs(since);
@@ -51,7 +58,7 @@ impl App {
             }
             let mut ops = Vec::new();
             let mut decisions = Vec::new();
-            for item in b.items.iter().filter(|i| i.proposal.kind != ProposalKind::Move) {
+            for item in b.items.iter().filter(|i| auto_acceptable(i, &self.config)) {
                 let decision = if item.stale {
                     Decision::Stale
                 } else {
@@ -242,13 +249,21 @@ impl App {
     }
 }
 
-/// "Claude Desktop · lokal", "Chat · Cloud"
+/// What may be accepted without the review: everything but a move, and a move that takes a file
+/// out of the landing folder (the user's own folders are never rearranged by themselves).
+pub(super) fn auto_acceptable(item: &ReviewItem, config: &Config) -> bool {
+    item.proposal.kind != ProposalKind::Move
+        || item.proposal.target.as_ref().is_some_and(|t| config.in_landing(&t.path))
+}
+
+/// "Claude Desktop · lokal", "Chat · Cloud", "Meshgrove"
 fn source_label(b: &BatchInfo) -> String {
     let who = match (b.source.as_str(), b.client.as_deref()) {
         (_, Some(id)) => {
             Client::ALL.into_iter().find(|c| c.id() == id).map_or_else(|| id.to_owned(), |c| c.name().to_owned())
         }
         ("chat", None) => t!("review.source_chat").into_owned(),
+        (meshgrove_core::placement::SOURCE, None) => return t!("review.source_meshgrove").into_owned(),
         _ => t!("review.source_assistant").into_owned(),
     };
     let class = if b.access_class == "local" { t!("review.local") } else { t!("review.cloud") };
@@ -265,5 +280,46 @@ fn review_batch(b: &BatchInfo, items: Vec<ReviewItem>) -> ReviewBatch {
         inbox_done: b.inbox_done,
         chat: b.source == "chat",
         items,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use meshgrove_core::ai::proposals::{Proposal, Target};
+    use std::path::{Path, PathBuf};
+
+    fn item(kind: ProposalKind, path: &str) -> ReviewItem {
+        let target = Target { path: PathBuf::from(path), hash: None, size: 1, mtime_ns: 1 };
+        let proposal = Proposal {
+            id: 1,
+            batch_id: 1,
+            kind,
+            target: Some(target),
+            payload: serde_json::Value::Null,
+            reason: None,
+            confidence: None,
+            state: "pending".into(),
+        };
+        ReviewItem {
+            proposal,
+            entry: None,
+            moved_to: None,
+            stale: false,
+            copies: 0,
+            picked: Picked::default(),
+            note_before: None,
+            taken: false,
+        }
+    }
+
+    #[test]
+    fn only_moves_out_of_the_landing_folder_are_accepted_by_themselves() {
+        let config = Config { library_roots: vec![PathBuf::from("/lib")], ..Default::default() };
+        assert!(auto_acceptable(&item(ProposalKind::Tags, "/lib/Garten/rose.stl"), &config));
+        assert!(auto_acceptable(&item(ProposalKind::Move, "/lib/Import/rose.stl"), &config));
+        assert!(!auto_acceptable(&item(ProposalKind::Move, "/lib/Garten/rose.stl"), &config));
+        assert!(!auto_acceptable(&item(ProposalKind::Move, "/lib/Import"), &config), "not the folder itself");
+        assert!(Path::new("/lib/Import/rose.stl").starts_with("/lib/Import"));
     }
 }

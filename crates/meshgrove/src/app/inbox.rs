@@ -48,6 +48,19 @@ impl App {
                 self.library.inbox_done(Some(paths));
             }
             Some(InboxAction::AllDone) => self.library.inbox_done(None),
+            Some(InboxAction::Place(which)) => {
+                let picked: Vec<&InboxGroupInfo> = match which {
+                    Some(n) => groups.get(n).into_iter().collect(),
+                    None => groups.iter().collect(),
+                };
+                let paths: Vec<PathBuf> = picked
+                    .iter()
+                    .flat_map(|g| g.range.clone())
+                    .filter_map(|i| entries.get(i))
+                    .map(|e| e.path.clone())
+                    .collect();
+                self.library.place_by_tag(paths);
+            }
             Some(InboxAction::Classify(which)) => {
                 let picked: Vec<&InboxGroupInfo> = match which {
                     Some(n) => groups.get(n).into_iter().collect(),

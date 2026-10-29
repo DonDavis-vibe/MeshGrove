@@ -33,15 +33,18 @@ pub enum InboxAction {
     AllDone,
     /// Ask the AI for tags: for this group, or for all.
     Classify(Option<usize>),
+    /// Suggest moving the files into the folders of their tags: this group, or all.
+    Place(Option<usize>),
 }
 
-/// `ai`: the user's AI can be asked for tags.
+/// `ai`: the user's AI can be asked for tags; `placement`: files can be placed by their tags.
 pub fn show(
     ui: &mut Ui,
     entries: &[Entry],
     groups: &[InboxGroupInfo],
     gallery: &Gallery,
     ai: bool,
+    placement: bool,
 ) -> Option<InboxAction> {
     let mut action = None;
     if groups.is_empty() {
@@ -63,6 +66,10 @@ pub fn show(
                 if ai && ui.button(t!("actions.classify_all")).on_hover_text(t!("actions.classify_hint")).clicked() {
                     action = Some(InboxAction::Classify(None));
                 }
+                if placement && ui.button(t!("placement.inbox_all")).on_hover_text(t!("placement.inbox_hint")).clicked()
+                {
+                    action = Some(InboxAction::Place(None));
+                }
             });
         });
         ui.weak(t!("inbox.explain"));
@@ -81,6 +88,14 @@ pub fn show(
                         if ai && ui.button(t!("actions.classify")).on_hover_text(t!("actions.classify_hint")).clicked()
                         {
                             action = Some(InboxAction::Classify(Some(n)));
+                        }
+                        if placement
+                            && ui
+                                .button(t!("placement.inbox_button"))
+                                .on_hover_text(t!("placement.inbox_hint"))
+                                .clicked()
+                        {
+                            action = Some(InboxAction::Place(Some(n)));
                         }
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             let icon = if group.archive { "📦" } else { "📁" };

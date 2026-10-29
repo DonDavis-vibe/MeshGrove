@@ -311,7 +311,7 @@ impl App {
         let mut msg = ChatMsg { user: true, text, pills, llm: llm.clone(), ..Default::default() };
         msg.id = s.add_message(chat, "user", &serde_json::to_value(&msg).unwrap_or_default()).unwrap_or(0);
         // The conversation so far, then this message (with its pictures).
-        let mut messages = vec![json!({"role": "system", "content": system_prompt(self.config.ai.chat_mode)})];
+        let mut messages = vec![json!({"role": "system", "content": system_prompt(&self.config)})];
         let start = self.chat.messages.len().saturating_sub(HISTORY);
         for m in &self.chat.messages[start..] {
             if m.user {

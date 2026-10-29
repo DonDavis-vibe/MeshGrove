@@ -11,12 +11,14 @@ use std::time::{Duration, Instant, SystemTime};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
 use meshgrove_core::ai::proposals::{Decision, ProposalStore};
 use meshgrove_core::cache::ThumbMeta;
-use meshgrove_core::changes::{ApplyOp, ChangeReport, UndoReport};
+use meshgrove_core::changes::{ApplyOp, ChangeReport, TargetState, UndoReport};
 use meshgrove_core::checks::MeshChecks;
+use meshgrove_core::config::Config;
 use meshgrove_core::db::{self, Counts, Error, Library};
 use meshgrove_core::lists::{ListKind, PrintResult};
 use meshgrove_core::scan::{self, Force};
 use meshgrove_core::userdata;
+use meshgrove_core::{import, placement};
 use notify::{EventKind, RecursiveMode, Watcher};
 
 use crate::thumbs::Job;
@@ -45,6 +47,12 @@ pub enum LibEvent {
     Applied(Applied),
     /// Result of an export or import, for a message.
     Transfer(Result<Transfer, String>),
+    /// Files were brought in from an import folder; `trash` are archives unpacked on the way,
+    /// for the trash.
+    Imported { title: String, report: ChangeReport, trash: Vec<PathBuf> },
+    /// Move suggestions by tag were made (or not): how many, how many files had none, and
+    /// whether the user asked for them.
+    Placed { proposed: usize, skipped: usize, explicit: bool },
 }
 
 /// What became of accepting suggestions, an undo or a redo.
@@ -109,6 +117,16 @@ enum Cmd {
     Import(PathBuf),
     /// Answered once everything sent before is stored (and backed up).
     Flush(Sender<()>),
+    /// The settings as they are now (the landing folder, the placement rules).
+    Configure(Box<Config>),
+    /// Brings files in from an import folder, as planned.
+    #[allow(dead_code)] // sent once the import view is there
+    ImportFiles {
+        plan: import::Plan,
+        title: String,
+    },
+    /// Suggests moving these files into the folders of their tags.
+    PlaceByTag(Vec<PathBuf>),
 }
 
 /// Changes to favourites, lists and tag colours.
@@ -190,7 +208,7 @@ impl LibraryService {
         std::thread::Builder::new()
             .name("library".into())
             .spawn(move || {
-                let worker = Worker { status: shared, events: event_tx, ctx, roots: Vec::new() };
+                let worker = Worker { status: shared, events: event_tx, ctx, roots: Vec::new(), config: None };
                 worker.run(&db_path, rx, watch_tx);
             })
             .expect("spawning library thread");
@@ -263,6 +281,22 @@ impl LibraryService {
         let _ = self.tx.send(Cmd::Import(path));
     }
 
+    /// Hands the service the settings (again): the import and placement rules live there.
+    pub fn configure(&self, config: Config) {
+        let _ = self.tx.send(Cmd::Configure(Box::new(config)));
+    }
+
+    /// Brings files in from an import folder; answered with [`LibEvent::Imported`].
+    #[allow(dead_code)] // used once the import view is there
+    pub fn import_files(&self, plan: import::Plan, title: String) {
+        let _ = self.tx.send(Cmd::ImportFiles { plan, title });
+    }
+
+    /// Suggests moving these library files into the folders of their tags ([`LibEvent::Placed`]).
+    pub fn place_by_tag(&self, paths: Vec<PathBuf>) {
+        let _ = self.tx.send(Cmd::PlaceByTag(paths));
+    }
+
     /// Waits (at most `timeout`) until earlier commands are done — before the app quits.
     pub fn flush(&self, timeout: Duration) {
         let (done, wait) = crossbeam_channel::bounded(1);
@@ -296,6 +330,8 @@ struct Worker {
     events: Sender<LibEvent>,
     ctx: egui::Context,
     roots: Vec<PathBuf>,
+    /// The settings, once the app handed them over.
+    config: Option<Config>,
 }
 
 impl Worker {
@@ -368,8 +404,9 @@ impl Worker {
                     }
                 }
                 Ok(Cmd::Tag(paths, tag)) => {
-                    if let Err(e) = lib.tag(&paths, &tag) {
-                        log::warn!("tagging failed: {e}");
+                    match lib.tag(&paths, &tag) {
+                        Ok(()) => self.place(&lib, &mut proposals, &paths, true),
+                        Err(e) => log::warn!("tagging failed: {e}"),
                     }
                     self.send(LibEvent::UserDataChanged);
                 }
@@ -434,6 +471,7 @@ impl Worker {
                             {
                                 log::warn!("recording the decisions failed: {e}");
                             }
+                            self.place(&lib, &mut proposals, &tagged_paths(&lib, &ops), true);
                             Applied::Accepted { title, report }
                         }
                         Err(e) => Applied::Failed(e.to_string()),
@@ -442,7 +480,28 @@ impl Worker {
                     self.send(LibEvent::UserDataChanged);
                 }
                 Ok(Cmd::ApplyNow { origin, title, ops, reply }) => {
-                    let _ = reply.send(lib.apply_change(&origin, &title, &ops).map_err(|e| e.to_string()));
+                    let result = lib.apply_change(&origin, &title, &ops);
+                    if result.is_ok() {
+                        self.place(&lib, &mut proposals, &tagged_paths(&lib, &ops), true);
+                    }
+                    let _ = reply.send(result.map_err(|e| e.to_string()));
+                    self.send(LibEvent::UserDataChanged);
+                }
+                Ok(Cmd::Configure(config)) => self.config = Some(*config),
+                Ok(Cmd::PlaceByTag(paths)) => self.place(&lib, &mut proposals, &paths, false),
+                Ok(Cmd::ImportFiles { plan, title }) => {
+                    let trash = plan.trash.clone();
+                    match lib.apply_change("import", &title, &import::to_ops(&plan)) {
+                        Ok(report) => {
+                            // The landing folder is listed now, whatever its time says: the files
+                            // get their index rows (and, being new, land in the inbox).
+                            if plan.landing.is_dir() {
+                                self.scan(&mut lib, &[(plan.root.clone(), plan.landing.clone())], Force::Start);
+                            }
+                            self.send(LibEvent::Imported { title, report, trash });
+                        }
+                        Err(e) => self.send(LibEvent::Applied(Applied::Failed(e.to_string()))),
+                    }
                     self.send(LibEvent::UserDataChanged);
                 }
                 Ok(Cmd::Decide { batch, decisions }) => {
@@ -577,6 +636,38 @@ impl Worker {
         self.ctx.request_repaint();
     }
 
+    /// Suggests moving `paths` into the folders of their tags (Settings → Tags): all of them when
+    /// the user asked (`only_landing` false), else only those still in a landing folder, right
+    /// after they were tagged.
+    fn place(&self, lib: &Library, proposals: &mut Proposals, paths: &[PathBuf], only_landing: bool) {
+        let Some(config) = &self.config else { return };
+        if !config.placement.enabled {
+            return;
+        }
+        let paths: Vec<PathBuf> = paths.iter().filter(|p| !only_landing || config.in_landing(p)).cloned().collect();
+        if paths.is_empty() {
+            return;
+        }
+        let (items, skipped) = match placement::proposals_for(lib, config, &paths) {
+            Ok(found) => found,
+            Err(e) => {
+                log::warn!("placing by tag failed: {e}");
+                return;
+            }
+        };
+        let proposed = match (items.is_empty(), proposals.open_or_create()) {
+            (false, Some(store)) => match placement::propose(store, &t!("placement.title"), items) {
+                Ok(n) => n,
+                Err(e) => {
+                    log::warn!("suggesting the moves failed: {e}");
+                    0
+                }
+            },
+            _ => 0,
+        };
+        self.send(LibEvent::Placed { proposed, skipped: skipped.len(), explicit: !only_landing });
+    }
+
     fn refresh_counts(&self, lib: &Library) {
         if let Ok(counts) = lib.counts() {
             self.status.lock().unwrap().counts = counts;
@@ -634,6 +725,16 @@ impl Proposals {
         self.store.as_mut()
     }
 
+    /// The store, made when there is none yet (Meshgrove's own suggestions need one too).
+    fn open_or_create(&mut self) -> Option<&mut ProposalStore> {
+        if self.store.is_none() {
+            let path = ProposalStore::default_location();
+            self.store =
+                path.and_then(|p| ProposalStore::open(&p).map_err(|e| log::warn!("suggestion store: {e}")).ok());
+        }
+        self.store.as_mut()
+    }
+
     /// Batches still pending that the journal shows applied (Meshgrove stopped in between).
     fn reconcile(&mut self, lib: &Library) {
         let Some(store) = self.get() else { return };
@@ -643,6 +744,23 @@ impl Proposals {
             }
         }
     }
+}
+
+/// The files the tag steps of `ops` were about, where they are now.
+fn tagged_paths(lib: &Library, ops: &[ApplyOp]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for op in ops {
+        if let ApplyOp::AddTag { target, .. } = op {
+            match lib.resolve_target(target) {
+                Ok(TargetState::Here) => out.push(target.path.clone()),
+                Ok(TargetState::Moved(p)) => out.push(p),
+                _ => {}
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn change_title(lib: &Library, id: i64) -> String {

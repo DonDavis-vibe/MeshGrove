@@ -108,22 +108,23 @@ pub fn proposals_for(
 }
 
 /// Suggests `items` as batches of Meshgrove's own, at most [`MAX_ITEMS`] each, leaving out
-/// files that already have such a move waiting and stopping at [`MAX_PENDING`] batches. The
-/// uids of the batches made.
-pub fn propose(store: &mut ProposalStore, title: &str, items: Vec<NewProposal>) -> ToolResult<Vec<String>> {
+/// files that already have such a move waiting and stopping at [`MAX_PENDING`] batches. How
+/// many suggestions were made.
+pub fn propose(store: &mut ProposalStore, title: &str, items: Vec<NewProposal>) -> ToolResult<usize> {
     let waiting = store.pending_move_sources(SOURCE)?;
     let items: Vec<NewProposal> =
         items.into_iter().filter(|p| p.target.as_ref().is_none_or(|t| !waiting.contains(&t.path))).collect();
     let origin = Origin { source: SOURCE.into(), client: None, class: AccessClass::Local };
-    let mut uids = Vec::new();
+    let mut made = 0;
     for chunk in items.chunks(MAX_ITEMS) {
         if store.pending_of(&origin)? >= MAX_PENDING {
             break;
         }
         let batch = NewBatch { origin: &origin, kind: "move", title, summary: None, inbox_done: false };
-        uids.push(store.insert_batch(&batch, chunk)?.1);
+        store.insert_batch(&batch, chunk)?;
+        made += chunk.len();
     }
-    Ok(uids)
+    Ok(made)
 }
 
 /// The move payload of a suggestion, for whoever shows it.
@@ -223,13 +224,12 @@ mod tests {
             ]
         );
         let mut store = ProposalStore::open_in_memory().unwrap();
-        let uids = propose(&mut store, "Ablage", items).unwrap();
-        assert_eq!(uids.len(), 1);
+        assert_eq!(propose(&mut store, "Ablage", items).unwrap(), 2);
         let batches = store.batches(Some(SOURCE), None, &["pending"], 9).unwrap();
         assert_eq!((batches.len(), batches[0].kind.as_str(), batches[0].items), (1, "move", 2));
         // Suggested again while that waits: nothing new.
         let (items, _) = proposals_for(&lib, &config, &paths).unwrap();
-        assert!(propose(&mut store, "Ablage", items).unwrap().is_empty());
+        assert_eq!(propose(&mut store, "Ablage", items).unwrap(), 0);
         // Accepted, the files are in Garten with their tags.
         let ops: Vec<_> =
             store.proposals(batches[0].id).unwrap().iter().flat_map(|p| to_ops(p, &Picked::all(p), false)).collect();

@@ -225,6 +225,8 @@ pub struct App {
     /// A switch to inches waiting for the answer to the question about imperial units.
     units_confirm: Option<PendingUnits>,
     trash_rx: Option<Receiver<TrashResult>>,
+    /// Waiting for the trash while a batch is on its way there.
+    trash_queue: Vec<PathBuf>,
     /// Short message in the status bar (result of an action) and when it was set.
     toast: Option<(String, Instant)>,
     /// Messages from actions that finish on a thread (e.g. copying files).
@@ -289,6 +291,7 @@ impl App {
         let cache = ThumbCache::new(ThumbCache::default_location().context("no cache directory")?);
         let db_path = Library::default_location().context("no data directory")?;
         let library = LibraryService::start(db_path.clone(), config.library_roots.clone(), cc.egui_ctx.clone());
+        library.configure(config.clone());
         let (start_dir, select) = match start {
             // A file opens its folder with the file selected; an archive opens like a folder.
             Some(p) if p.is_file() && !meshgrove_core::archive::is_archive_file(&p) => {
@@ -403,6 +406,7 @@ impl App {
             trash_confirm: None,
             units_confirm: None,
             trash_rx: None,
+            trash_queue: Vec::new(),
             toast: None,
             messages: unbounded(),
             settings: SettingsDialog::default(),
@@ -416,6 +420,7 @@ impl App {
         if let Err(e) = self.config.save() {
             log::warn!("could not save settings: {e}");
         }
+        self.library.configure(self.config.clone());
     }
 
     /// The entries the gallery currently shows.
@@ -898,6 +903,27 @@ impl App {
                     };
                     self.toast(message.into_owned());
                 }
+                LibEvent::Imported { title, report, trash } => {
+                    let message = if report.skipped > 0 {
+                        t!("import.done_skipped", count = report.applied, skipped = report.skipped, title = title)
+                    } else {
+                        t!("import.done", count = report.applied, title = title)
+                    };
+                    self.toast(message.into_owned());
+                    if !trash.is_empty() {
+                        self.trash_later(trash);
+                    }
+                }
+                LibEvent::Placed { proposed, skipped, explicit } => {
+                    if proposed > 0 {
+                        self.toast(t!("placement.proposed", count = proposed).into_owned());
+                        if explicit {
+                            self.show_review();
+                        }
+                    } else if explicit {
+                        self.toast(t!("placement.nothing", count = skipped).into_owned());
+                    }
+                }
             }
         }
     }
@@ -930,6 +956,10 @@ impl App {
                 },
                 trash_blocked: actions::trash_blocked(&paths),
                 can_tag: self.index.is_some() && !paths.is_empty() && paths.iter().all(|p| self.in_library(p)),
+                can_place: self.config.placement.enabled
+                    && self.index.is_some()
+                    && !paths.is_empty()
+                    && paths.iter().all(|p| self.in_library(p)),
                 lists: menu_lists(&self.lists),
                 favorite: self.all_favorite(&paths),
                 current_list: self.current_list(),
@@ -1269,6 +1299,7 @@ impl App {
             Action::EditTags => self.focus_tags = true,
             Action::Trash => self.request_trash(self.selected_paths()),
             Action::SuggestTags => self.suggest_tags(self.selected_paths()),
+            Action::PlaceByTag => self.library.place_by_tag(self.selected_paths()),
             Action::MentionInChat => self.mention_in_chat(self.selected_paths()),
             Action::CopyReference => self.copy_references(&self.selected_paths(), ctx),
         }
@@ -1522,18 +1553,32 @@ impl App {
         match decision {
             Some(true) => {
                 let paths = self.trash_confirm.take().unwrap_or_default();
-                let (tx, rx) = bounded(1);
-                let ctx = ctx.clone();
-                std::thread::spawn(move || {
-                    let result = trash::delete_all(&paths).map_err(|e| e.to_string());
-                    let _ = tx.send((paths, result));
-                    ctx.request_repaint();
-                });
-                self.trash_rx = Some(rx);
+                self.trash_later(paths);
             }
             Some(false) => self.trash_confirm = None,
             None => {}
         }
+    }
+
+    /// Puts `paths` in the trash on a thread, after whatever is on its way there already.
+    fn trash_later(&mut self, paths: Vec<PathBuf>) {
+        self.trash_queue.extend(paths);
+        self.start_trash();
+    }
+
+    fn start_trash(&mut self) {
+        if self.trash_rx.is_some() || self.trash_queue.is_empty() {
+            return;
+        }
+        let paths = std::mem::take(&mut self.trash_queue);
+        let (tx, rx) = bounded(1);
+        let ctx = self.egui_ctx.clone();
+        std::thread::spawn(move || {
+            let result = trash::delete_all(&paths).map_err(|e| e.to_string());
+            let _ = tx.send((paths, result));
+            ctx.request_repaint();
+        });
+        self.trash_rx = Some(rx);
     }
 
     /// Takes what the 3D mouse did since the last frame and moves the camera of the viewer that
@@ -1629,6 +1674,7 @@ impl App {
         let Some(rx) = &self.trash_rx else { return };
         let Ok((paths, result)) = rx.try_recv() else { return };
         self.trash_rx = None;
+        self.start_trash(); // what came in the meantime
         let message = match &result {
             Ok(()) => t!("toast.trashed", count = paths.len()),
             Err(e) => t!("toast.trash_failed", error = e),
@@ -1840,7 +1886,7 @@ impl App {
                 // Only with AI on and something to review (or the review open).
                 let pending = self.pending_proposals();
                 let reviewing = matches!(self.view, View::Review { .. } | View::History { .. });
-                if self.config.ai.enabled && (pending > 0 || reviewing) {
+                if self.reviews() && (pending > 0 || reviewing) {
                     let label = if pending > 0 { format!("✧ {pending}") } else { "✧".to_owned() };
                     let button = Button::new(RichText::new(label).size(15.0)).selected(reviewing);
                     if ui.add(button).on_hover_text(t!("review.open_hint")).clicked() {
@@ -2169,7 +2215,8 @@ impl App {
         }
         if let View::Inbox { entries, groups } = &self.view {
             let ai = self.chat_available();
-            let action = inbox_view::show(ui, entries, groups, &self.gallery, ai);
+            let placement = self.config.placement.enabled;
+            let action = inbox_view::show(ui, entries, groups, &self.gallery, ai, placement);
             self.inbox_action(action);
             return;
         }

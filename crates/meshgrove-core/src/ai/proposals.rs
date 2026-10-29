@@ -826,10 +826,21 @@ const WAITING: &str = "Nothing has changed yet: the suggestions wait in Meshgrov
 const ACCEPTED: &str = "The user lets Meshgrove accept suggestions by itself: these are applied once Meshgrove runs, \
 and can be undone in its history.";
 
+const ACCEPTED_LANDING: &str = "The user lets Meshgrove accept suggestions by itself, and these moves take files \
+out of the import folder: they are applied once Meshgrove runs, and can be undone in its history.";
+
 /// What happens to new suggestions: they wait for the review, or (when the user turned that on)
-/// Meshgrove accepts them by itself; never moves, nor the chat's, which has its own switch.
+/// Meshgrove accepts them by itself; not the chat's, which has its own switch, and moves only out
+/// of the import folder ([`next_step_moves`]).
 fn next_step(cx: &Context, origin: &Origin) -> &'static str {
     if cx.config.ai.auto_accept_since.is_some() && origin.source != "chat" { ACCEPTED } else { WAITING }
+}
+
+/// Moves wait for the review, unless every one of them takes a file out of the import folder
+/// and the user lets Meshgrove accept by itself.
+fn next_step_moves(cx: &Context, origin: &Origin, proposals: &[NewProposal]) -> &'static str {
+    let landing = proposals.iter().all(|p| p.target.as_ref().is_some_and(|t| cx.config.in_landing(&t.path)));
+    if landing && next_step(cx, origin) == ACCEPTED { ACCEPTED_LANDING } else { WAITING }
 }
 
 fn target(cx: &Context, id: &str) -> ToolResult<Target> {
@@ -1058,9 +1069,10 @@ pub fn propose_moves(
         return Err(ToolError::Invalid(format!("no usable move ({why})")));
     }
     let title = summary_line(Some(&req.title)).unwrap_or_else(|| "Verschieben".into());
+    let message = next_step_moves(cx, origin, &proposals).to_owned();
     let batch = NewBatch { origin, kind: "move", title: &title, summary: None, inbox_done: false };
     let (_, uid) = store.insert_batch(&batch, &proposals)?;
-    Ok(Receipt { batch: uid, items: proposals.len(), rejected, tags: Vec::new(), message: WAITING.into() })
+    Ok(Receipt { batch: uid, items: proposals.len(), rejected, tags: Vec::new(), message })
 }
 
 /// One move, checked; `targets` and `sources` are those of the batch so far.

@@ -78,6 +78,8 @@ pub enum Action {
     Trash,
     /// Ask the user's AI for tags for the selection (suggested in the review).
     SuggestTags,
+    /// Suggest moving the selection into the folders of its tags (Settings → Tags).
+    PlaceByTag,
     /// Put the selection into the chat's message field.
     MentionInChat,
     /// `meshgrove:<id>` of the selection, for an assistant using the MCP server.
@@ -96,6 +98,8 @@ pub struct MenuContext {
     /// Why the selection cannot go to the trash (read-only drive, inside an archive).
     pub trash_blocked: Option<String>,
     pub can_tag: bool,
+    /// Placing by tag is on, and the selection is in the library.
+    pub can_place: bool,
     /// Lists files can be put on: (id, kind, name).
     pub lists: Vec<(i64, ListKind, String)>,
     /// Every selected file is a favourite.
@@ -796,6 +800,9 @@ fn entry_menu(
         item(ui, t!("menu.copy_path"), Action::CopyPaths);
         if menu.can_tag {
             item(ui, t!("menu.edit_tags"), Action::EditTags);
+            if menu.can_place {
+                item(ui, t!("menu.place_by_tag"), Action::PlaceByTag);
+            }
             let star = if menu.favorite { t!("menu.unfavorite") } else { t!("menu.favorite") };
             item(ui, star, Action::ToggleFavorite);
             if printable {

@@ -52,8 +52,8 @@ slicer or a printer server.";
 const REVIEW: &str = "Nothing changes in the library until the user accepts your suggestions in Meshgrove: \
 propose_* tools only queue suggestions, so explain what you suggested and that it waits for review.";
 const AUTO_ACCEPT: &str = "The user lets Meshgrove accept your suggestions by itself: what propose_* tools queue is \
-applied once Meshgrove runs (moves excepted, they wait for review) and can be undone in its history, so suggest \
-only what the user asked for and say what you changed.";
+applied once Meshgrove runs and can be undone in its history (moves wait for review, unless they take files out of \
+the library's import folder), so suggest only what the user asked for and say what you changed.";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct IdParam {
