@@ -8,7 +8,8 @@
 //! (`x,y*2` double-clicks, `x,y*r` right-clicks), and `MESHGROVE_TYPE=text` types the text after the last click; steps
 //! separated by `|` follow half a second apart, `{enter}`, `{down}` and `{esc}` press those keys,
 //! `{click x,y}` clicks there (to click after typing), `{rclick x,y}` right-clicks, `{wheel dy}` turns
-//! the wheel at the pointer, `{copy}`, `{cut}` and `{paste}` are Ctrl+C, Ctrl+X and Ctrl+V.
+//! the wheel at the pointer, `{copy}`, `{cut}` and `{paste}` are Ctrl+C, Ctrl+X and Ctrl+V;
+//! `{press x,y}`, `{move x,y}` and `{release}` drag with the left button.
 //! `MESHGROVE_MEASURE=fx,fy;fx,fy` measures between those points (fractions of the view) in the
 //! first model window that opens, which the hook's input cannot reach; `MESHGROVE_WINDOW_VIEW=top`
 //! (or `front`, `left` …) starts that window in a standard view.
@@ -25,6 +26,8 @@ pub struct ScreenshotHook {
     /// Steps to type after the clicks, half a second apart: text, `{enter}`, `{down}`, `{esc}`.
     typing: std::collections::VecDeque<String>,
     typed_at: f32,
+    /// Where a `{move x,y}` step takes the pointer, a few points per frame.
+    glide: Option<egui::Pos2>,
     release: Option<(egui::Pos2, egui::PointerButton)>,
     started: Instant,
     pressed: bool,
@@ -78,6 +81,7 @@ impl ScreenshotHook {
                 .map(|s| s.split('|').map(str::to_owned).collect())
                 .unwrap_or_default(),
             typed_at: 0.0,
+            glide: None,
             started: Instant::now(),
             pressed: false,
             search,
@@ -178,6 +182,8 @@ impl ScreenshotHook {
             };
             let click = step.strip_prefix("{click ").and_then(point);
             let right_click = step.strip_prefix("{rclick ").and_then(point);
+            let press_at = step.strip_prefix("{press ").and_then(point);
+            let move_to = step.strip_prefix("{move ").and_then(point);
             let wheel =
                 step.strip_prefix("{wheel ").and_then(|s| s.strip_suffix('}')).and_then(|s| s.trim().parse().ok());
             match key {
@@ -197,6 +203,19 @@ impl ScreenshotHook {
                     raw.events.push(press(pos, which, true));
                     self.release = Some((pos, which));
                 }
+                _ if press_at.is_some() => {
+                    let pos = press_at.unwrap_or_default();
+                    self.pointer = Some(pos);
+                    raw.events.push(egui::Event::PointerMoved(pos));
+                    raw.events.push(button(pos, true));
+                }
+                // The pointer goes there in steps, as a hand would move it.
+                _ if move_to.is_some() => self.glide = move_to,
+                _ if step == "{release}" => {
+                    if let Some(pos) = self.pointer {
+                        raw.events.push(button(pos, false));
+                    }
+                }
                 _ if step == "{copy}" => raw.events.push(egui::Event::Copy),
                 _ if step == "{cut}" => raw.events.push(egui::Event::Cut),
                 _ if step == "{paste}" => raw.events.push(egui::Event::Paste(String::new())),
@@ -212,6 +231,14 @@ impl ScreenshotHook {
                     }
                 }
                 None => raw.events.push(egui::Event::Text(step)),
+            }
+        }
+        if let (Some(target), Some(pos)) = (self.glide, self.pointer) {
+            let step = target - pos;
+            let next = if step.length() < 8.0 { target } else { pos + step.normalized() * 8.0 };
+            self.pointer = Some(next);
+            if next == target {
+                self.glide = None;
             }
         }
         let Some(pos) = self.pointer else { return };

@@ -18,7 +18,7 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 
 **Placed by tag** (new in 0.7)
 
-- A file in the landing folder that gets a theme tag – from you, from the inbox's *✧ Sort in* or from your assistant – is placed into that tag's folder (`Garten/`), with missing folders made. *Settings → Tags → Placement by tag* holds the folder for each theme and for your own tags, in order of precedence: with several tags, the topmost wins (your own tags before the themes, a deeper folder before a flat one; ▲▼ reorders). The review shows the other folders that fit, to choose instead.
+- A file in the landing folder that gets a theme tag – from you, from the inbox's *✧ Sort in* or from your assistant – is placed into that tag's folder (`Garten/`), with missing folders made. *Settings → Tags → Placement by tag* holds the folder for each theme and for your own tags, in order of precedence: with several tags, the topmost wins (your own tags before the themes, a deeper folder before a flat one; drag a row by its handle or use ▲▼ to reorder). The review shows the other folders that fit, to choose instead.
 - Placement is a suggestion like an assistant's and waits in the review; with *Accept suggestions automatically* on, moves out of the landing folder are applied by themselves – but only when exactly one folder fits; otherwise the file waits for your choice. Your own folders are never rearranged without you: *Place by tag* in the context menu asks, and every move can be undone.
 - Assistants over MCP learn the rules too (`list_tags` names each tag's folder, `library_overview` the landing folder) and the *eingang-einordnen* task places what it tags.
 

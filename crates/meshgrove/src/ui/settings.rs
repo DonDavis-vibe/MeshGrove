@@ -303,6 +303,8 @@ pub struct SettingsDialog {
     rule_inputs: Vec<RuleRow>,
     /// How many of them can be ordered (the rest have no folder yet).
     rule_ordered: usize,
+    /// The rule being dragged by its handle, to a new place in the order.
+    rule_drag: Option<usize>,
     /// Name, program and working folder of a slicer being added by hand.
     slicer_form: (String, String, String),
     /// The slicers found on this computer, and the scan that looks for them.
@@ -345,6 +347,19 @@ struct RuleRow {
     tag: String,
     folder: String,
     own: Option<String>,
+}
+
+/// Six dots to grab a row by; `held` while it is being dragged.
+fn drag_handle(ui: &mut Ui, held: bool) -> egui::Response {
+    let size = egui::vec2(12.0, ui.spacing().interact_size.y);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::drag());
+    let response = response.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text(t!("settings.placement_drag"));
+    let visuals = ui.visuals();
+    let color = if held || response.hovered() { visuals.strong_text_color() } else { visuals.weak_text_color() };
+    for (dx, dy) in [(-2.5, -5.0), (2.5, -5.0), (-2.5, 0.0), (2.5, 0.0), (-2.5, 5.0), (2.5, 5.0)] {
+        ui.painter().circle_filled(rect.center() + egui::vec2(dx, dy), 1.4, color);
+    }
+    response
 }
 
 /// The slicers, mesh editors and printers, each with the index of the default one.
@@ -681,6 +696,7 @@ impl SettingsDialog {
         self.ai.reset();
         self.landing_input.clear();
         self.rule_inputs.clear();
+        self.rule_drag = None;
         if self.import_input.is_empty() {
             self.import_input = export_path().display().to_string();
         }
@@ -1089,50 +1105,110 @@ impl SettingsDialog {
                 .all(|s| meshgrove_core::fsops::check_name(s).is_ok())
         };
         let ordered_rows = self.rule_ordered;
-        egui::Grid::new("placement_rules").num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
-            for (i, row) in self.rule_inputs.iter_mut().enumerate() {
-                if i == ordered_rows {
-                    ui.label(RichText::new(t!("settings.placement_other_tags")).weak());
+        // Rows of the order can be dragged by their handle only, so typing in a folder field or
+        // clicking a button never moves anything.
+        let dragging = self.rule_drag;
+        let (mut row_rects, mut drag_start, mut dropped) = (Vec::new(), None, false);
+        let grid =
+            egui::Grid::new("placement_rules").num_columns(5).min_col_width(12.0).spacing([12.0, 4.0]).show(ui, |ui| {
+                for (i, row) in self.rule_inputs.iter_mut().enumerate() {
+                    if i == ordered_rows {
+                        ui.label("");
+                        ui.label(RichText::new(t!("settings.placement_other_tags")).weak());
+                        ui.end_row();
+                    }
+                    if i < ordered_rows {
+                        let handle = drag_handle(ui, dragging == Some(i));
+                        if handle.drag_started() {
+                            drag_start = Some(i);
+                        }
+                        dropped |= handle.drag_stopped();
+                        row_rects.push(handle.rect);
+                    } else {
+                        ui.label("");
+                    }
+                    ui.label(row.tag.as_str());
+                    let edit = egui::TextEdit::singleline(&mut row.folder).hint_text(t!("settings.placement_none"));
+                    let field = ui.add_sized([220.0, ui.spacing().interact_size.y], edit);
+                    let ok = valid(&row.folder);
+                    bad |= !ok;
+                    edited |= field.lost_focus() && ok;
+                    ui.horizontal(|ui| {
+                        if i < ordered_rows {
+                            if ui
+                                .add_enabled(i > 0, egui::Button::new("▲").small())
+                                .on_hover_text(t!("settings.placement_up"))
+                                .clicked()
+                            {
+                                moved = Some((i, i - 1));
+                            }
+                            if ui
+                                .add_enabled(i + 1 < ordered_rows, egui::Button::new("▼").small())
+                                .on_hover_text(t!("settings.placement_down"))
+                                .clicked()
+                            {
+                                moved = Some((i, i + 1));
+                            }
+                        }
+                        if !row.folder.trim().is_empty()
+                            && ui.small_button("✕").on_hover_text(t!("settings.placement_clear")).clicked()
+                        {
+                            row.folder.clear();
+                            edited = true;
+                        }
+                    });
                     ui.end_row();
                 }
-                ui.label(row.tag.as_str());
-                let edit = egui::TextEdit::singleline(&mut row.folder).hint_text(t!("settings.placement_none"));
-                let field = ui.add_sized([220.0, ui.spacing().interact_size.y], edit);
-                let ok = valid(&row.folder);
-                bad |= !ok;
-                edited |= field.lost_focus() && ok;
-                ui.horizontal(|ui| {
-                    if i < ordered_rows {
-                        if ui
-                            .add_enabled(i > 0, egui::Button::new("▲").small())
-                            .on_hover_text(t!("settings.placement_up"))
-                            .clicked()
-                        {
-                            moved = Some((i, i - 1));
-                        }
-                        if ui
-                            .add_enabled(i + 1 < ordered_rows, egui::Button::new("▼").small())
-                            .on_hover_text(t!("settings.placement_down"))
-                            .clicked()
-                        {
-                            moved = Some((i, i + 1));
-                        }
-                    }
-                    if !row.folder.trim().is_empty()
-                        && ui.small_button("✕").on_hover_text(t!("settings.placement_clear")).clicked()
-                    {
-                        row.folder.clear();
-                        edited = true;
-                    }
-                });
-                ui.end_row();
-            }
-        });
+            });
         if bad {
             ui.colored_label(ui.visuals().error_fg_color, t!("settings.placement_bad_folder"));
         }
+        if drag_start.is_some() {
+            self.rule_drag = drag_start;
+        }
+        if let Some(from) = self.rule_drag {
+            // Where the row would land: before the first row whose middle is below the pointer.
+            let pointer = ui.ctx().pointer_interact_pos();
+            let slot = pointer.map_or(from, |p| row_rects.iter().filter(|r| r.center().y < p.y).count());
+            let width = grid.response.rect.x_range();
+            let y = match row_rects.get(slot) {
+                Some(r) => r.top() - 2.0,
+                None => row_rects.last().map_or(grid.response.rect.top(), |r| r.bottom() + 2.0),
+            };
+            if let Some(r) = row_rects.get(from) {
+                let band = egui::Rect::from_x_y_ranges(width, r.y_range());
+                ui.painter().rect_filled(band, 3.0, ui.visuals().selection.bg_fill.gamma_multiply(0.25));
+            }
+            ui.painter().hline(width, y, egui::Stroke::new(2.0, ui.visuals().selection.stroke.color));
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            // Near the edge of the page, the page scrolls along.
+            let clip = ui.clip_rect();
+            if let Some(p) = pointer {
+                let edge = 40.0;
+                let speed = if p.y < clip.top() + edge {
+                    (clip.top() + edge - p.y).min(edge) * 0.4
+                } else if p.y > clip.bottom() - edge {
+                    -(p.y - (clip.bottom() - edge)).min(edge) * 0.4
+                } else {
+                    0.0
+                };
+                if speed != 0.0 {
+                    ui.scroll_with_delta(egui::vec2(0.0, speed));
+                }
+            }
+            ui.ctx().request_repaint();
+            if dropped || !ui.input(|i| i.pointer.any_down()) {
+                self.rule_drag = None;
+                // Taken out above its slot, everything below moves up by one.
+                let to = if slot > from { slot - 1 } else { slot };
+                if to != from && from < ordered_rows {
+                    moved = Some((from, to));
+                }
+            }
+        }
         if let Some((from, to)) = moved {
-            self.rule_inputs.swap(from, to);
+            let row = self.rule_inputs.remove(from);
+            self.rule_inputs.insert(to, row);
             let order = self.rule_inputs[..ordered_rows].iter().map(|r| r.tag.clone()).collect();
             changes.push(SettingsChange::PlacementOrder(order));
         }
