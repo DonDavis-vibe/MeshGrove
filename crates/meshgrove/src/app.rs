@@ -228,6 +228,10 @@ pub struct App {
     /// Duplicate groups in the library (for the sidebar) and when to recount them.
     duplicate_groups: usize,
     duplicates_due: Option<Instant>,
+    /// Duplicate groups ticked as fine (by every file of theirs) and the copies the user chose
+    /// to keep: they outlive the view being built again after a cleanup.
+    dupes_picked: HashSet<PathBuf>,
+    dupes_keep: HashSet<PathBuf>,
     last_processed: usize,
     trash_confirm: Option<Vec<PathBuf>>,
     /// A switch to inches waiting for the answer to the question about imperial units.
@@ -412,6 +416,8 @@ impl App {
             printers,
             duplicate_groups: 0,
             duplicates_due: Some(Instant::now()),
+            dupes_picked: HashSet::new(),
+            dupes_keep: HashSet::new(),
             last_processed: 0,
             trash_confirm: None,
             units_confirm: None,
@@ -1240,23 +1246,65 @@ impl App {
                 continue;
             }
             let start = entries.len();
-            let keep = start + duplicates::suggest_keep(&g.files);
-            let others: Vec<PathBuf> =
-                g.files.iter().enumerate().filter(|(i, _)| start + i != keep).map(|(_, f)| f.path.clone()).collect();
+            let chosen = g.files.iter().position(|f| self.dupes_keep.contains(&f.path));
+            let keep = start + chosen.unwrap_or_else(|| duplicates::suggest_keep(&g.files));
+            let picked = g.files.iter().any(|f| self.dupes_picked.contains(&f.path));
             let (wasted, exact) = (g.wasted(), g.exact);
             entries.extend(g.files);
-            groups.push(GroupInfo {
-                range: start..entries.len(),
-                exact,
-                keep,
-                wasted,
-                blocked: actions::trash_blocked(&others),
-            });
+            let mut group = GroupInfo { range: start..entries.len(), exact, keep, wasted, blocked: None, picked };
+            group.blocked = actions::trash_blocked(&dupe_others(&group, &entries));
+            group.picked &= group.blocked.is_none();
+            groups.push(group);
         }
         self.leave_search();
         self.flatten = false;
         self.view = View::Duplicates { entries, groups };
         self.refresh_gallery(true);
+    }
+
+    fn dupes_action(&mut self, action: Option<DupAction>) {
+        let View::Duplicates { entries, groups } = &mut self.view else { return };
+        match action {
+            Some(DupAction::Select(i)) => self.gallery.select(Some(i)),
+            Some(DupAction::Open(i)) => self.open_entry(i),
+            Some(DupAction::TrashOthers(g)) => {
+                let paths = groups.get(g).map(|g| dupe_others(g, entries)).unwrap_or_default();
+                self.request_trash(paths);
+            }
+            Some(DupAction::Keep(i)) => {
+                let Some(group) = groups.iter_mut().find(|g| g.range.contains(&i)) else { return };
+                for j in group.range.clone() {
+                    self.dupes_keep.remove(&entries[j].path);
+                }
+                self.dupes_keep.insert(entries[i].path.clone());
+                group.keep = i;
+                group.blocked = actions::trash_blocked(&dupe_others(group, entries));
+                if group.blocked.is_some() {
+                    group.picked = false;
+                }
+            }
+            Some(DupAction::Pick(g, on)) => {
+                if let Some(group) = groups.get_mut(g) {
+                    pick_dupes(&mut self.dupes_picked, group, entries, on);
+                }
+            }
+            Some(DupAction::PickAll(on)) => {
+                for group in groups.iter_mut().filter(|g| g.blocked.is_none()) {
+                    pick_dupes(&mut self.dupes_picked, group, entries, on);
+                }
+            }
+            Some(DupAction::TrashPicked) => {
+                let paths: Vec<PathBuf> = groups
+                    .iter()
+                    .filter(|g| g.picked && g.blocked.is_none())
+                    .flat_map(|g| dupe_others(g, entries))
+                    .collect();
+                if !paths.is_empty() {
+                    self.request_trash(paths);
+                }
+            }
+            None => {}
+        }
     }
 
     fn handle_action(&mut self, ctx: &egui::Context, action: Action) {
@@ -2394,20 +2442,8 @@ impl App {
             return;
         }
         if let View::Duplicates { entries, groups } = &self.view {
-            match duplicates::show(ui, entries, groups, &self.gallery) {
-                Some(DupAction::Select(i)) => self.gallery.select(Some(i)),
-                Some(DupAction::Open(i)) => self.open_entry(i),
-                Some(DupAction::TrashOthers(g)) => {
-                    let paths: Vec<PathBuf> = groups[g]
-                        .range
-                        .clone()
-                        .filter(|&i| i != groups[g].keep)
-                        .map(|i| entries[i].path.clone())
-                        .collect();
-                    self.request_trash(paths);
-                }
-                None => {}
-            }
+            let action = duplicates::show(ui, entries, groups, &self.gallery);
+            self.dupes_action(action);
             return;
         }
         // Whether pasting is on follows the view, not only the selection.
@@ -3007,6 +3043,23 @@ fn view_entries<'a>(view: &'a View, nav: &'a Navigator) -> &'a [Entry] {
 
 /// Lists files can be put on from the menus: hand-made, not archived, not the favourites or
 /// the last prints.
+/// The files of a duplicate group that are not kept.
+fn dupe_others(group: &GroupInfo, entries: &[Entry]) -> Vec<PathBuf> {
+    group.range.clone().filter(|&i| i != group.keep).map(|i| entries[i].path.clone()).collect()
+}
+
+/// Ticks a duplicate group as fine (or not), remembered by all of its files.
+fn pick_dupes(picked: &mut HashSet<PathBuf>, group: &mut GroupInfo, entries: &[Entry], on: bool) {
+    group.picked = on;
+    for i in group.range.clone() {
+        if on {
+            picked.insert(entries[i].path.clone());
+        } else {
+            picked.remove(&entries[i].path);
+        }
+    }
+}
+
 fn menu_lists(lists: &[ListInfo]) -> Vec<(i64, ListKind, String)> {
     lists
         .iter()

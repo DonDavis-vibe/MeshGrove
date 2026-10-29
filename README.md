@@ -616,9 +616,11 @@ Click **Duplicates (n)** in the sidebar. Meshgrove groups:
   mesh (triangle count, surface area, volume, moments of inertia).
 
 Groups are sorted by wasted space. The ★ *Keep* badge marks the suggested copy: one that is
-not inside an archive, then the oldest, then the one with the shortest path. *Move all but ★
-to the trash* cleans up a group after a confirmation. Tiles everywhere in the gallery show a
-`2×` / `3×` badge for files that have duplicates.
+not inside an archive, then the oldest, then the one with the shortest path; to keep another
+copy, point at it and click ☆ *Keep*. *Move all but ★ to the trash* cleans up a group after a
+confirmation. Once you have looked through them, tick the groups where the choice is right (or
+*All suggestions are fine*) and *Clean up selected* clears them all with one confirmation.
+Tiles everywhere in the gallery show a `2×` / `3×` badge for files that have duplicates.
 
 ### AI assistant and MCP (optional)
 

@@ -125,10 +125,11 @@ pub fn paint_badge(p: &Painter, rect: Rect, galley: Arc<Galley>, bg: Color32, fg
 }
 
 /// Small badge in the upper-right corner (e.g. "2×" for duplicates).
-pub fn corner_badge(p: &Painter, r: Rect, label: &str, bg: Color32, fg: Color32) {
+pub fn corner_badge(p: &Painter, r: Rect, label: &str, bg: Color32, fg: Color32) -> Rect {
     let (galley, size) = badge_galley(p, label, fg);
     let rect = Rect::from_min_size(pos2(r.max.x - size.x - 4.0, r.min.y + 4.0), size);
     paint_badge(p, rect, galley, bg, fg);
+    rect
 }
 
 /// Small badge in the lower-right corner (e.g. the print bed check). Returns its rectangle.

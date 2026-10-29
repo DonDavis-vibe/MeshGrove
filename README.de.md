@@ -652,8 +652,11 @@ In der Seitenleiste auf **Duplikate (n)** klicken. Meshgrove gruppiert:
 
 Die Gruppen sind nach verschwendetem Platz sortiert. Die Markierung ★ *Behalten* zeigt den
 Vorschlag: eine Kopie außerhalb eines Archivs, dann die älteste, dann die mit dem kürzesten
-Pfad. *Alle außer ★ in den Papierkorb* räumt eine Gruppe nach Rückfrage auf. Überall in der
-Galerie tragen Dateien mit Duplikaten eine `2×`/`3×`-Markierung.
+Pfad; lieber eine andere Kopie behalten: auf sie zeigen und ☆ *Behalten* klicken. *Alle außer ★
+in den Papierkorb* räumt eine Gruppe nach Rückfrage auf. Nach der Sichtung hakst du die Gruppen
+ab, bei denen es passt (oder *Alle Vorschläge passen*), und *Ausgewählte bereinigen* räumt sie
+alle mit einer Rückfrage auf. Überall in der Galerie tragen Dateien mit Duplikaten eine
+`2×`/`3×`-Markierung.
 
 ### KI-Assistent und MCP (freiwillig)
 
