@@ -9,8 +9,8 @@ use meshgrove_core::cache::{ThumbCache, ThumbMeta};
 use meshgrove_core::changes::ChangeInfo;
 use meshgrove_core::checks::MeshChecks;
 use meshgrove_core::config::{
-    Config, DisplayUnits, DoubleClick, GalleryView, ModelUnits, PrintFilter, Program, Slicer, SortKey, TILE_SIZE,
-    TileTags,
+    Config, DisplayUnits, DoubleClick, GalleryView, ImportAtStart, ModelUnits, PrintFilter, Program, Slicer, SortKey,
+    TILE_SIZE, TileTags,
 };
 use meshgrove_core::db::Library;
 use meshgrove_core::listing::{self, Entry};
@@ -36,6 +36,7 @@ use crate::ui::details::{
 };
 use crate::ui::duplicates::{self, DupAction, GroupInfo};
 use crate::ui::gallery::{Action, Arrange, Gallery, ListSettings, MenuContext};
+use crate::ui::import::{self as import_view, ImportGroupInfo};
 use crate::ui::inbox::{self as inbox_view, InboxGroupInfo};
 use crate::ui::layout::{Layout, Pane};
 use crate::ui::model_window::{self, ModelWindow, WindowAction, WindowContext};
@@ -78,6 +79,8 @@ enum View {
     List { id: i64, entries: Vec<Entry> },
     /// New files waiting to be sorted, by the drop they came with.
     Inbox { entries: Vec<Entry>, groups: Vec<InboxGroupInfo> },
+    /// What the import folders hold, to bring into the library.
+    Import { entries: Vec<Entry>, groups: Vec<ImportGroupInfo> },
     /// AI suggestions waiting for the user (the files they are about as entries).
     Review { entries: Vec<Entry>, batches: Vec<ReviewBatch> },
     /// Accepted changes, to undo or redo.
@@ -93,6 +96,7 @@ enum Scope {
 mod ai_actions;
 mod chat;
 mod checks;
+mod import;
 mod inbox;
 mod review;
 
@@ -203,6 +207,8 @@ pub struct App {
     /// Files waiting in the inbox, and when to count them again (new files were processed).
     inbox_count: usize,
     inbox_due: Option<Instant>,
+    /// The import folders (a downloads folder) and what they hold.
+    import: import::ImportState,
     /// How tags are drawn (coloured or not, chosen colours).
     tag_style: TagStyle,
     /// Name typed for a new automatic collection (saving a search).
@@ -384,6 +390,7 @@ impl App {
             egui_ctx: cc.egui_ctx.clone(),
             inbox_count: 0,
             inbox_due: None,
+            import: import::ImportState::default(),
             tag_style: TagStyle {
                 colored: config.colored_tags,
                 themes: config.themes(),
@@ -712,6 +719,7 @@ impl App {
             View::Duplicates { .. }
                 | View::List { .. }
                 | View::Inbox { .. }
+                | View::Import { .. }
                 | View::Review { .. }
                 | View::History { .. }
         ) {
@@ -731,6 +739,7 @@ impl App {
                 View::Duplicates { .. }
                     | View::List { .. }
                     | View::Inbox { .. }
+                    | View::Import { .. }
                     | View::Review { .. }
                     | View::History { .. }
             )
@@ -844,6 +853,9 @@ impl App {
                         self.menu_for.clear(); // re-evaluate what the selection allows (tags need the index)
                         self.duplicates_due = Some(Instant::now());
                         self.marks_dirty = true;
+                        if self.config.import.at_start != ImportAtStart::Off {
+                            self.start_import_scan();
+                        }
                     }
                     if changed.is_empty() && !first {
                         continue; // periodic safety-net scan found nothing new
@@ -913,6 +925,7 @@ impl App {
                     if !trash.is_empty() {
                         self.trash_later(trash);
                     }
+                    self.start_import_scan(); // what is left there
                 }
                 LibEvent::Placed { proposed, skipped, explicit } => {
                     if proposed > 0 {
@@ -1430,6 +1443,19 @@ impl App {
                         self.on_listing_arrived();
                     }
                 }
+                SettingsChange::ImportFolders(folders) => {
+                    self.config.import.folders = folders;
+                    self.import.scans.clear();
+                    self.start_import_scan();
+                }
+                SettingsChange::ImportTarget { library, landing } => {
+                    self.config.import.library = library;
+                    self.config.import.landing = landing;
+                    self.import.scans.clear(); // whose names are taken depends on the landing folder
+                    self.start_import_scan();
+                }
+                SettingsChange::ImportAtStart(choice) => self.config.import.at_start = choice,
+                SettingsChange::ImportArchives(choice) => self.config.import.archives = choice,
                 SettingsChange::SpaceMouse(config) => self.config.spacemouse = config,
                 SettingsChange::FreeOrbit(on) => self.config.free_orbit = on,
                 SettingsChange::ColoredTags(colored) => {
@@ -1687,6 +1713,7 @@ impl App {
         match self.view {
             View::Duplicates { .. } => self.show_duplicates_without(&gone),
             View::Inbox { .. } => self.show_inbox(),
+            View::Import { .. } => self.start_import_scan(),
             View::Review { .. } => self.show_review(),
             _ => self.reload(),
         }
@@ -1808,6 +1835,7 @@ impl App {
                 View::Duplicates { .. } => self.show_duplicates(),
                 View::List { id, .. } => self.show_list(id, false),
                 View::Inbox { .. } => self.show_inbox(),
+                View::Import { .. } => self.start_import_scan(),
                 View::Review { .. } => self.show_review(),
                 View::History { .. } => self.show_history(),
                 _ => {}
@@ -2074,6 +2102,15 @@ impl App {
                 }
                 return;
             }
+            View::Import { .. } => {
+                let count = self.import.importable();
+                ui.label(RichText::new(format!("⬇ {}", t!("import.title", count = count))).strong());
+                if ui.button(t!("view.close")).clicked() {
+                    self.view = View::Folder;
+                    self.on_listing_arrived();
+                }
+                return;
+            }
             View::Review { .. } | View::History { .. } => {
                 let title =
                     if matches!(self.view, View::Review { .. }) { t!("review.title") } else { t!("history.title") };
@@ -2190,7 +2227,14 @@ impl App {
             (View::Search(results), _) if results.is_empty() => {
                 Some(if self.index.is_none() { t!("search.unavailable") } else { t!("search.none") }.into_owned())
             }
-            (View::Duplicates { .. } | View::Inbox { .. } | View::Review { .. } | View::History { .. }, _) => None,
+            (
+                View::Duplicates { .. }
+                | View::Inbox { .. }
+                | View::Import { .. }
+                | View::Review { .. }
+                | View::History { .. },
+                _,
+            ) => None,
             (View::List { id, entries }, _) if entries.is_empty() => {
                 let kind = self.lists.iter().find(|l| l.id == *id).map(|l| l.kind);
                 Some(
@@ -2212,6 +2256,14 @@ impl App {
         let zoom = ui.input(|i| i.zoom_delta());
         if zoom != 1.0 && ui.rect_contains_pointer(ui.max_rect()) {
             self.config.tile_size = (self.config.tile_size * zoom).clamp(*TILE_SIZE.start(), *TILE_SIZE.end());
+        }
+        if let View::Import { entries, groups } = &self.view {
+            let target = self.import_target();
+            let archives = self.config.import.archives;
+            let action =
+                import_view::show(ui, entries, groups, &self.gallery, &target, archives, self.import.scanning());
+            self.import_action(action);
+            return;
         }
         if let View::Inbox { entries, groups } = &self.view {
             let ai = self.chat_available();
@@ -2285,6 +2337,8 @@ impl App {
             showing_duplicates: matches!(self.view, View::Duplicates { .. }),
             inbox: self.config.inbox.then_some(self.inbox_count),
             showing_inbox: matches!(self.view, View::Inbox { .. }),
+            import: (!self.config.import.folders.is_empty()).then(|| self.import.importable()),
+            showing_import: matches!(self.view, View::Import { .. }),
             lists: &self.lists,
             showing_list: match self.view {
                 View::List { id, .. } => Some(id),
@@ -2335,6 +2389,10 @@ impl App {
             }
             Some(SidebarAction::ShowDuplicates) => self.show_duplicates(),
             Some(SidebarAction::ShowInbox) => self.show_inbox(),
+            Some(SidebarAction::ShowImport) => {
+                self.show_import();
+                self.start_import_scan();
+            }
             Some(SidebarAction::OpenList(id)) => self.show_list(id, true),
             Some(SidebarAction::CreateList(kind, name)) => {
                 self.toast(t!("toast.list_created", list = name).into_owned());
@@ -2645,6 +2703,7 @@ impl eframe::App for App {
             self.on_listing_arrived();
         }
         self.poll_flatten();
+        self.poll_import_scan();
         self.poll_trash();
         while let Ok(message) = self.messages.1.try_recv() {
             self.toast(message);
@@ -2728,6 +2787,10 @@ impl eframe::App for App {
                 ("inbox", _) if self.index.is_some() && self.inbox_count > 0 => {
                     hook.view = None;
                     self.show_inbox();
+                }
+                ("import", _) if !self.import.scans.is_empty() => {
+                    hook.view = None;
+                    self.show_import();
                 }
                 ("review", _) if self.index.is_some() && pending_proposals > 0 => {
                     hook.view = None;
@@ -2822,6 +2885,7 @@ fn view_entries<'a>(view: &'a View, nav: &'a Navigator) -> &'a [Entry] {
         View::Duplicates { entries, .. } => entries,
         View::List { entries, .. } => entries,
         View::Inbox { entries, .. } => entries,
+        View::Import { entries, .. } => entries,
         View::Review { entries, .. } => entries,
         View::History { .. } => &[],
     }

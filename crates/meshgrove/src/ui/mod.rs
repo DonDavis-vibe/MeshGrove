@@ -4,6 +4,7 @@ pub mod details;
 pub mod duplicates;
 pub mod gallery;
 pub mod icons;
+pub mod import;
 pub mod inbox;
 pub mod layout;
 pub mod model_window;

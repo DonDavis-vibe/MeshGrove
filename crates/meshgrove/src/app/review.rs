@@ -244,6 +244,7 @@ impl App {
         match self.view {
             View::Review { .. } => self.show_review(),
             View::History { .. } => self.show_history(),
+            View::Import { .. } => self.start_import_scan(),
             _ => {}
         }
     }

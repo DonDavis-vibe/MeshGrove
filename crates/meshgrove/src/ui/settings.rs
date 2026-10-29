@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
 use meshgrove_core::config::{
-    self, Config, DisplayUnits, DoubleClick, FOLDER_PREVIEW_DEPTH, FolderPreviews, GltfUnit, ModelUnits,
-    PreviewQuality, Program, Slicer, SuggestedTag, TileLayout, TileTags, default_properties, default_states,
-    default_themes,
+    self, ArchiveImport, Config, DisplayUnits, DoubleClick, FOLDER_PREVIEW_DEPTH, FolderPreviews, GltfUnit,
+    ImportAtStart, ModelUnits, PreviewQuality, Program, Slicer, SuggestedTag, TileLayout, TileTags, default_properties,
+    default_states, default_themes,
 };
 use meshgrove_core::printer::{self, DetectedPrinter, Printer};
 use meshgrove_core::programs::{Detected, ProgramKind, detect_editors, detect_slicers};
@@ -56,6 +56,15 @@ pub enum SettingsChange {
     LockPanes(bool),
     /// The inbox of new files in the sidebar.
     Inbox(bool),
+    /// The folders looked at for new files to import.
+    ImportFolders(Vec<PathBuf>),
+    /// The library imported files go to, and the folder in it.
+    ImportTarget {
+        library: Option<PathBuf>,
+        landing: String,
+    },
+    ImportAtStart(ImportAtStart),
+    ImportArchives(ArchiveImport),
     AiEnabled(bool),
     /// Make Meshgrove available to the AI apps on this computer.
     AiConnectApps(bool),
@@ -277,6 +286,10 @@ pub struct SettingsDialog {
     pub open: bool,
     root_input: String,
     root_error: Option<String>,
+    /// An import folder being added, and the landing folder's name as typed.
+    import_folder_input: String,
+    import_folder_error: Option<String>,
+    landing_input: String,
     /// Name, program and working folder of a slicer being added by hand.
     slicer_form: (String, String, String),
     /// The slicers found on this computer, and the scan that looks for them.
@@ -357,6 +370,7 @@ enum Section {
     Panes,
     Library,
     Inbox,
+    Import,
     FolderPreviews,
     TilePreview,
     TileLook,
@@ -389,6 +403,7 @@ impl Section {
             Section::Panes => t!("settings.panes"),
             Section::Library => t!("settings.library"),
             Section::Inbox => t!("settings.inbox"),
+            Section::Import => t!("settings.import_section"),
             Section::FolderPreviews => t!("settings.folder_previews"),
             Section::TilePreview => t!("settings.tiles_preview"),
             Section::TileLook => t!("settings.tiles_look"),
@@ -513,7 +528,15 @@ impl Category {
                 put(config.double_click != d.double_click, SettingsChange::DoubleClick(d.double_click));
                 put(config.lock_panes != d.lock_panes, SettingsChange::LockPanes(d.lock_panes));
             }
-            Category::Library => put(config.inbox != d.inbox, SettingsChange::Inbox(d.inbox)),
+            Category::Library => {
+                put(config.inbox != d.inbox, SettingsChange::Inbox(d.inbox));
+                put(config.import.at_start != d.import.at_start, SettingsChange::ImportAtStart(d.import.at_start));
+                put(config.import.archives != d.import.archives, SettingsChange::ImportArchives(d.import.archives));
+                put(
+                    config.import.landing != d.import.landing,
+                    SettingsChange::ImportTarget { library: config.import.library.clone(), landing: d.import.landing },
+                );
+            }
             Category::Tags => {
                 put(config.colored_tags != d.colored_tags, SettingsChange::ColoredTags(d.colored_tags));
                 put(config.flat_tag_list != d.flat_tag_list, SettingsChange::FlatTagList(d.flat_tag_list));
@@ -629,6 +652,7 @@ impl SettingsDialog {
         self.printer_editing = None;
         self.found_printers = printer::detect_all();
         self.ai.reset();
+        self.landing_input.clear();
         if self.import_input.is_empty() {
             self.import_input = export_path().display().to_string();
         }
@@ -762,7 +786,7 @@ impl SettingsDialog {
     ) {
         let sections: &[Section] = match self.category {
             Category::General => &[Section::Language, Section::DoubleClick, Section::Panes],
-            Category::Library => &[Section::Library, Section::Inbox],
+            Category::Library => &[Section::Library, Section::Inbox, Section::Import],
             Category::Tags => &[Section::Tags, Section::Themes, Section::Properties, Section::States],
             Category::Tiles => &[Section::TilePreview, Section::TileLook, Section::FolderPreviews],
             Category::View => &[Section::Preview, Section::SpaceMouse],
@@ -786,6 +810,7 @@ impl SettingsDialog {
                     Section::Panes => panes(ui, config, changes),
                     Section::Library => self.library(ui, config, changes),
                     Section::Inbox => inbox(ui, config, changes),
+                    Section::Import => self.import(ui, config, changes),
                     Section::FolderPreviews => folder_previews(ui, config, changes),
                     Section::TilePreview => self.tiles.preview(ui, config, info.tag_style, changes),
                     Section::TileLook => self.tiles.look(ui, config, changes),
@@ -992,6 +1017,115 @@ impl SettingsDialog {
         if let Some(e) = &self.root_error {
             ui.colored_label(ui.visuals().error_fg_color, e);
         }
+    }
+
+    /// The import folders, where their files go, and when they are looked at.
+    fn import(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+        hint(ui, t!("settings.import_folders_hint"));
+        let folders = &config.import.folders;
+        for folder in folders {
+            ui.horizontal(|ui| {
+                if ui.small_button("✕").on_hover_text(t!("settings.import_remove")).clicked() {
+                    let kept: Vec<PathBuf> = folders.iter().filter(|f| *f != folder).cloned().collect();
+                    changes.push(SettingsChange::ImportFolders(kept));
+                }
+                ui.label(folder.display().to_string());
+            });
+        }
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.import_folder_input)
+                    .hint_text(t!("settings.folder_hint"))
+                    .desired_width(320.0),
+            );
+            if ui.button(t!("settings.add")).clicked() {
+                let path = PathBuf::from(self.import_folder_input.trim());
+                if path.is_dir() {
+                    let mut all = folders.clone();
+                    if !all.contains(&path) {
+                        all.push(path);
+                    }
+                    changes.push(SettingsChange::ImportFolders(all));
+                    self.import_folder_input.clear();
+                    self.import_folder_error = None;
+                } else {
+                    self.import_folder_error = Some(t!("settings.not_a_folder").into_owned());
+                }
+            }
+            if let Some(downloads) = dirs::download_dir().filter(|d| !folders.contains(d) && d.is_dir())
+                && ui
+                    .button(t!("settings.import_add_downloads"))
+                    .on_hover_text(downloads.display().to_string())
+                    .clicked()
+            {
+                let mut all = folders.clone();
+                all.push(downloads);
+                changes.push(SettingsChange::ImportFolders(all));
+            }
+        });
+        if let Some(e) = &self.import_folder_error {
+            ui.colored_label(ui.visuals().error_fg_color, e);
+        }
+        if config.library_roots.is_empty() {
+            hint(ui, t!("settings.import_no_library"));
+            return;
+        }
+        ui.add_space(4.0);
+        row(ui, &t!("settings.import_library"), |ui| {
+            let current = config.import_root().map(|r| r.to_path_buf());
+            let shown = current.as_deref().map(listing_name).unwrap_or_default();
+            egui::ComboBox::from_id_salt("import_library").selected_text(shown).show_ui(ui, |ui| {
+                for root in &config.library_roots {
+                    if ui.selectable_label(current.as_deref() == Some(root), listing_name(root)).clicked() {
+                        changes.push(SettingsChange::ImportTarget {
+                            library: Some(root.clone()),
+                            landing: config.import.landing.clone(),
+                        });
+                    }
+                }
+            });
+        });
+        row(ui, &t!("settings.import_landing"), |ui| {
+            if self.landing_input.is_empty() {
+                self.landing_input = config.import.landing.clone();
+            }
+            let field = ui.add(egui::TextEdit::singleline(&mut self.landing_input).desired_width(200.0));
+            let name = self.landing_input.trim();
+            let valid = !name.is_empty() && meshgrove_core::fsops::check_name(name).is_ok();
+            if field.lost_focus() && valid && name != config.import.landing {
+                changes.push(SettingsChange::ImportTarget {
+                    library: config.import.library.clone(),
+                    landing: name.to_owned(),
+                });
+            }
+            if !valid {
+                ui.colored_label(ui.visuals().error_fg_color, t!("settings.import_bad_name"));
+            }
+            hint(ui, t!("settings.import_landing_hint"));
+        });
+        row(ui, &t!("settings.import_at_start"), |ui| {
+            let mut choice = config.import.at_start;
+            let options = [
+                (ImportAtStart::Off, t!("settings.import_at_start_off").into_owned()),
+                (ImportAtStart::Ask, t!("settings.import_at_start_ask").into_owned()),
+                (ImportAtStart::Auto, t!("settings.import_at_start_auto").into_owned()),
+            ];
+            if segmented(ui, &mut choice, &options) {
+                changes.push(SettingsChange::ImportAtStart(choice));
+            }
+            hint(ui, t!("settings.import_at_start_hint"));
+        });
+        row(ui, &t!("settings.import_archives"), |ui| {
+            let mut choice = config.import.archives;
+            let options = [
+                (ArchiveImport::Whole, t!("import.archives_whole").into_owned()),
+                (ArchiveImport::Extract, t!("import.archives_extract").into_owned()),
+            ];
+            if segmented(ui, &mut choice, &options) {
+                changes.push(SettingsChange::ImportArchives(choice));
+            }
+            hint(ui, t!("settings.import_archives_hint"));
+        });
     }
 
     /// The slicers (or, with `editors`, the mesh editors) models are sent to: the added ones (one
@@ -1322,6 +1456,11 @@ impl SettingsDialog {
             });
         });
     }
+}
+
+/// A library root as the sidebar names it.
+fn listing_name(root: &Path) -> String {
+    meshgrove_core::listing::file_name(root)
 }
 
 fn printer_form(printer: Option<&Printer>) -> [String; 6] {

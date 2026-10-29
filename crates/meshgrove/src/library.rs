@@ -120,7 +120,6 @@ enum Cmd {
     /// The settings as they are now (the landing folder, the placement rules).
     Configure(Box<Config>),
     /// Brings files in from an import folder, as planned.
-    #[allow(dead_code)] // sent once the import view is there
     ImportFiles {
         plan: import::Plan,
         title: String,
@@ -287,7 +286,6 @@ impl LibraryService {
     }
 
     /// Brings files in from an import folder; answered with [`LibEvent::Imported`].
-    #[allow(dead_code)] // used once the import view is there
     pub fn import_files(&self, plan: import::Plan, title: String) {
         let _ = self.tx.send(Cmd::ImportFiles { plan, title });
     }

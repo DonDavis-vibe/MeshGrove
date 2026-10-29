@@ -21,6 +21,7 @@ pub enum SidebarAction {
     SearchTags(Vec<String>),
     ShowDuplicates,
     ShowInbox,
+    ShowImport,
     OpenList(i64),
     CreateList(ListKind, String),
     /// Ask the user's AI for a list (a print list with `true`) from this description.
@@ -51,6 +52,9 @@ pub struct LibraryInfo<'a> {
     /// Files waiting in the inbox; `None` when the inbox is switched off.
     pub inbox: Option<usize>,
     pub showing_inbox: bool,
+    /// Files waiting in the import folders; `None` when none is set up.
+    pub import: Option<usize>,
+    pub showing_import: bool,
     pub lists: &'a [ListInfo],
     pub showing_list: Option<i64>,
     /// Tags the current search asks for (lower-case), highlighted.
@@ -137,6 +141,14 @@ impl Sidebar {
                 let label = format!("📥  {}", t!("sidebar.inbox", count = count));
                 if ui.selectable_label(library.showing_inbox, label).on_hover_text(t!("sidebar.inbox_hint")).clicked() {
                     action = Some(SidebarAction::ShowInbox);
+                }
+            }
+            if let Some(count) = library.import {
+                let title = t!("sidebar.import");
+                let label = if count > 0 { format!("⬇  {title}  ({count})") } else { format!("⬇  {title}") };
+                if ui.selectable_label(library.showing_import, label).on_hover_text(t!("sidebar.import_hint")).clicked()
+                {
+                    action = Some(SidebarAction::ShowImport);
                 }
             }
             if !config.library_roots.iter().any(|r| current.starts_with(r)) {
