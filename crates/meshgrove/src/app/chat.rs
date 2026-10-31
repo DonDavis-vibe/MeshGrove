@@ -332,6 +332,7 @@ impl App {
         };
         messages.push(json!({"role": "user", "content": content}));
         let key = secret::load(&endpoint.base_url, endpoint.key_in_keyring, &endpoint.key_env);
+        let plugins = self.plugin_tools();
         let service = self.chat.service.get_or_insert_with(|| {
             ChatService::start(self.db_path.clone(), self.library.applier(), self.egui_ctx.clone())
         });
@@ -341,7 +342,7 @@ impl App {
             config: self.config.clone(),
             key,
             mode: self.config.ai.chat_mode,
-            plugins: None,
+            plugins,
         });
         self.chat.answering = msg.id;
         self.chat.messages.push(msg);

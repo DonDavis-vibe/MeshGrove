@@ -16,6 +16,8 @@ mod library;
 mod logging;
 mod meshes;
 mod nav;
+#[cfg(feature = "plugins")]
+mod plugins;
 mod print_export;
 mod proposals;
 mod screenshot;

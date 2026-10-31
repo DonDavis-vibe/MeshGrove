@@ -98,6 +98,8 @@ mod chat;
 mod checks;
 mod import;
 mod inbox;
+#[cfg(feature = "plugins")]
+mod plugins;
 mod review;
 
 /// Which switch to inches the question is about.
@@ -244,6 +246,12 @@ pub struct App {
     /// Messages from actions that finish on a thread (e.g. copying files).
     messages: (Sender<String>, Receiver<String>),
     settings: SettingsDialog,
+    /// The user's plugins: their panels, jobs and tools.
+    #[cfg(feature = "plugins")]
+    plugins: crate::plugins::PluginHost,
+    /// A path asked for a plugin (a file to open or where to save one).
+    #[cfg(feature = "plugins")]
+    plugin_prompt: Option<plugins::PathPrompt>,
 }
 
 impl App {
@@ -321,7 +329,8 @@ impl App {
                 None,
             ),
         };
-        Ok(App {
+        #[allow(unused_mut)]
+        let mut app = App {
             nav: Navigator::new(cc.egui_ctx.clone(), start_dir),
             view: View::Folder,
             sidebar: Sidebar::new(),
@@ -426,9 +435,24 @@ impl App {
             toast: None,
             messages: unbounded(),
             settings: SettingsDialog::default(),
+            #[cfg(feature = "plugins")]
+            plugins: crate::plugins::PluginHost::new(cc.egui_ctx.clone()),
+            #[cfg(feature = "plugins")]
+            plugin_prompt: None,
             config,
             config_error,
-        })
+        };
+        #[cfg(feature = "plugins")]
+        app.reload_plugins();
+        Ok(app)
+    }
+
+    /// The tools of the user's plugins, for the chat.
+    fn plugin_tools(&self) -> Option<std::sync::Arc<dyn meshgrove_core::ai::dispatch::ToolProvider>> {
+        #[cfg(feature = "plugins")]
+        return self.plugins.tools();
+        #[cfg(not(feature = "plugins"))]
+        None
     }
 
     fn save_config(&mut self) {
@@ -1007,6 +1031,10 @@ impl App {
                 can_paste: self.can_paste(),
                 can_cut: !paths.is_empty() && actions::trash_blocked(&paths).is_none(),
                 ai_chat: self.chat_available() && self.chat_sees(&paths),
+                #[cfg(feature = "plugins")]
+                plugin_openers: self.plugin_openers(&paths),
+                #[cfg(not(feature = "plugins"))]
+                plugin_openers: Vec::new(),
                 ai_refs: self.config.ai.enabled && self.ai_sees_any(&paths),
             };
             self.menu_for = paths;
@@ -1331,6 +1359,14 @@ impl App {
                 }
             }
             Action::Preview => self.open_preview(),
+            Action::OpenWithPlugin(id) => {
+                #[cfg(feature = "plugins")]
+                if let [path] = self.selected_paths().as_slice() {
+                    self.open_with_plugin(&id, path);
+                }
+                #[cfg(not(feature = "plugins"))]
+                let _ = id;
+            }
             Action::SortBy(key) => {
                 if self.config.sort_by == key {
                     self.config.sort_descending = !self.config.sort_descending;
@@ -1485,6 +1521,17 @@ impl App {
     fn apply_settings(&mut self, changes: Vec<SettingsChange>) {
         for change in changes {
             match change {
+                change @ (SettingsChange::InstallPlugin(_)
+                | SettingsChange::PluginEnabled { .. }
+                | SettingsChange::PluginGrants { .. }
+                | SettingsChange::RemovePlugin(_)) => {
+                    #[cfg(feature = "plugins")]
+                    if self.plugin_setting(change) {
+                        self.reload_plugins();
+                    }
+                    #[cfg(not(feature = "plugins"))]
+                    let _ = change;
+                }
                 SettingsChange::Language(lang) => {
                     i18n::init(lang.as_deref());
                     self.config.language = lang;
@@ -1916,7 +1963,7 @@ impl App {
             }
             MeshState::Ready(loaded) => {
                 let loaded = loaded.clone();
-                let source = MeshSource { path: path.clone(), kind, plate: self.viewer_plate };
+                let source = MeshSource::File { path: path.clone(), kind, plate: self.viewer_plate };
                 self.set_viewer_mesh(Some((loaded.mesh, source)));
                 if self.plates.as_ref().is_none_or(|(p, _)| *p != path) {
                     let textures = loaded
@@ -2081,6 +2128,8 @@ impl App {
                     }
                 }
                 self.view_menu(ui);
+                #[cfg(feature = "plugins")]
+                self.plugins_menu(ui);
                 self.search_field(ui);
                 self.sort_menu(ui);
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -2795,6 +2844,12 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
                 self.app.apply_details_output(out);
             }
             Pane::Chat => self.app.chat_pane(ui),
+            #[cfg(feature = "plugins")]
+            Pane::Plugin { plugin, panel } => self.app.plugin_pane(ui, rs, plugin, panel),
+            #[cfg(not(feature = "plugins"))]
+            Pane::Plugin { .. } => {
+                ui.weak(t!("plugins.not_in_build"));
+            }
         });
         if grip { egui_tiles::UiResponse::DragStarted } else { egui_tiles::UiResponse::None }
     }
@@ -2808,11 +2863,29 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
     }
 
     fn tab_title_for_pane(&mut self, pane: &Pane) -> egui::WidgetText {
+        #[cfg(feature = "plugins")]
+        if let Pane::Plugin { plugin, panel } = pane
+            && let Some(open) = self.app.plugins.find(plugin, panel)
+        {
+            let busy = if open.busy || !open.jobs.is_empty() { " ⏳" } else { "" };
+            return format!("{}{busy}", open.title).into();
+        }
         pane.title().into()
     }
 
-    fn is_tab_closable(&self, _tiles: &egui_tiles::Tiles<Pane>, _tile_id: egui_tiles::TileId) -> bool {
-        false
+    /// Plugin panels close with their tab (their state is kept for the next time).
+    fn is_tab_closable(&self, tiles: &egui_tiles::Tiles<Pane>, tile_id: egui_tiles::TileId) -> bool {
+        matches!(tiles.get(tile_id), Some(egui_tiles::Tile::Pane(Pane::Plugin { .. })))
+    }
+
+    fn on_tab_close(&mut self, tiles: &mut egui_tiles::Tiles<Pane>, tile_id: egui_tiles::TileId) -> bool {
+        #[cfg(feature = "plugins")]
+        if let Some(egui_tiles::Tile::Pane(Pane::Plugin { plugin, panel })) = tiles.get(tile_id) {
+            self.app.plugins.close(plugin, panel);
+        }
+        #[cfg(not(feature = "plugins"))]
+        let _ = (tiles, tile_id);
+        true
     }
 
     fn is_tile_draggable(&self, _tiles: &egui_tiles::Tiles<Pane>, _tile_id: egui_tiles::TileId) -> bool {
@@ -2884,6 +2957,11 @@ impl eframe::App for App {
         self.poll_chat();
         self.poll_tag_candidates();
         self.chat_confirm_modal(&ctx);
+        #[cfg(feature = "plugins")]
+        {
+            self.poll_plugins();
+            self.plugin_prompt_modal(&ctx);
+        }
         let chat = self.chat_available();
         self.layout.show_chat(chat);
         self.shortcuts(&ctx);
@@ -2973,6 +3051,7 @@ impl eframe::App for App {
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
 
         let fill = ui.visuals().panel_fill;
+        self.layout.apply_focus();
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
             let mut tree = std::mem::replace(&mut self.layout.tree, Tree::empty(egui::Id::unique("layout")));
             let locked = self.config.lock_panes;
@@ -2999,6 +3078,10 @@ impl eframe::App for App {
             tag_style: &self.tag_style,
             ai_connect: (self.ai_connect.armed(), self.ai_connect.busy()),
             tags: &self.all_tags,
+            #[cfg(feature = "plugins")]
+            plugins: self.plugins.rows(),
+            #[cfg(not(feature = "plugins"))]
+            plugins: &[],
         };
         let changes = self.settings.show(
             &ctx,
@@ -3019,6 +3102,8 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        #[cfg(feature = "plugins")]
+        self.plugins.save_all();
         self.layout.save();
         self.save_note();
         self.library.flush(Duration::from_secs(3));

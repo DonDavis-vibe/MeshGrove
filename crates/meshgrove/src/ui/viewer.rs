@@ -20,10 +20,18 @@ const PICTURE_SIZE: f32 = 2048.0;
 
 /// Where the shown mesh comes from (to load its triangles for measuring).
 #[derive(Clone, PartialEq)]
-pub struct MeshSource {
-    pub path: PathBuf,
-    pub kind: Kind,
-    pub plate: Option<usize>,
+pub enum MeshSource {
+    File {
+        path: PathBuf,
+        kind: Kind,
+        plate: Option<usize>,
+    },
+    /// Triangles a plugin made, centred like the uploaded mesh; `name` names exported pictures.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    Memory {
+        name: String,
+        soup: Arc<Vec<[f32; 3]>>,
+    },
 }
 
 /// Point-to-point measuring on the model's surface.
@@ -118,6 +126,21 @@ impl ModelViewer {
     pub fn script_measure(&mut self, picks: Vec<egui::Vec2>) {
         self.measure = Some(Measure::default());
         self.scripted_picks = picks;
+    }
+
+    /// Shows `mesh` in place of the one shown, keeping the camera (a model that changes while it
+    /// is being edited, as in a plugin's panel).
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    pub fn update_mesh(&mut self, mesh: Arc<GpuMesh>, source: MeshSource) {
+        if self.mesh.is_none() {
+            return self.set_mesh(Some((mesh, source)));
+        }
+        self.mesh = Some(mesh);
+        self.source = Some(source);
+        self.dirty = true;
+        if self.measure.is_some() {
+            self.measure = Some(Measure::default());
+        }
     }
 
     /// Shows `mesh`; the camera is reset only when it is a different model.
@@ -336,11 +359,12 @@ impl ModelViewer {
         let image = renderer
             .render_image(&rs.device, &rs.queue, mesh, &self.view, w.round() as u32, h.round() as u32)
             .map_err(|e| t!("toast.picture_failed", error = e.to_string()).into_owned())?;
-        let name = self
-            .source
-            .as_ref()
-            .and_then(|s| s.path.file_stem())
-            .map_or_else(|| "model".to_owned(), |s| s.to_string_lossy().into_owned());
+        let name = match &self.source {
+            Some(MeshSource::File { path, .. }) => path.file_stem().map(|s| s.to_string_lossy().into_owned()),
+            Some(MeshSource::Memory { name, .. }) => Some(name.clone()),
+            None => None,
+        }
+        .unwrap_or_else(|| "model".to_owned());
         let dir = dirs::picture_dir().or_else(dirs::home_dir).unwrap_or_default().join("Meshgrove");
         let stamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
         let path = dir.join(format!("{name}_{stamp}.png"));
@@ -381,10 +405,17 @@ impl ModelViewer {
         if measure.triangles.is_some() || measure.error.is_some() {
             return;
         }
-        let Some(source) = self.source.clone() else { return };
+        let (path, kind, plate) = match self.source.clone() {
+            Some(MeshSource::File { path, kind, plate }) => (path, kind, plate),
+            Some(MeshSource::Memory { soup, .. }) => {
+                measure.triangles = Some(soup);
+                return;
+            }
+            None => return,
+        };
         let (tx, rx) = bounded(1);
         std::thread::spawn(move || {
-            let _ = tx.send(crate::meshes::load_triangles(&source.path, source.kind, source.plate));
+            let _ = tx.send(crate::meshes::load_triangles(&path, kind, plate));
         });
         measure.loading = Some(rx);
     }

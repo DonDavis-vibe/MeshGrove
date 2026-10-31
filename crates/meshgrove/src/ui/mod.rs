@@ -9,10 +9,13 @@ pub mod inbox;
 pub mod layout;
 pub mod model_window;
 pub mod offscreen;
+#[cfg(feature = "plugins")]
+pub mod plugin_view;
 pub mod review;
 pub mod settings;
 pub mod settings_ai;
 pub mod settings_kit;
+pub mod settings_plugins;
 pub mod settings_tiles;
 pub mod sidebar;
 pub mod spacemouse;

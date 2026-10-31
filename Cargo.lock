@@ -3301,6 +3301,7 @@ dependencies = [
  "krilla",
  "log",
  "meshgrove-core",
+ "meshgrove-plugin-api",
  "meshgrove-plugins",
  "meshgrove-render",
  "notify",

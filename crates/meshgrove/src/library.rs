@@ -60,9 +60,23 @@ pub enum LibEvent {
 
 /// What became of accepting suggestions, an undo or a redo.
 pub enum Applied {
-    Accepted { title: String, report: ChangeReport },
-    Undone { title: String, report: UndoReport },
-    Redone { title: String, report: ChangeReport },
+    Accepted {
+        title: String,
+        report: ChangeReport,
+    },
+    /// A plugin's files went into the library.
+    Bundle {
+        title: String,
+        report: ChangeReport,
+    },
+    Undone {
+        title: String,
+        report: UndoReport,
+    },
+    Redone {
+        title: String,
+        report: ChangeReport,
+    },
     Failed(String),
 }
 
@@ -105,6 +119,13 @@ enum Cmd {
     },
     Undo(i64),
     Redo(i64),
+    /// Puts a plugin's files into the library at once (the user clicked for it in its panel).
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    ApplyBundle {
+        origin: String,
+        title: String,
+        ops: Vec<ApplyOp>,
+    },
     /// Applies changes at once (the chat in automatic mode) and answers how it went.
     ApplyNow {
         origin: String,
@@ -245,6 +266,12 @@ impl LibraryService {
 
     pub fn accept(&self, batch: i64, uid: String, title: String, ops: Vec<ApplyOp>, decisions: Vec<(i64, Decision)>) {
         let _ = self.tx.send(Cmd::Accept { batch, uid, title, ops, decisions });
+    }
+
+    /// Puts a plugin's files into the library (one change, undone in the history).
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    pub fn apply_bundle(&self, origin: String, title: String, ops: Vec<ApplyOp>) {
+        let _ = self.tx.send(Cmd::ApplyBundle { origin, title, ops });
     }
 
     pub fn decide(&self, batch: i64, decisions: Vec<(i64, Decision)>) {
@@ -487,6 +514,14 @@ impl Worker {
                             self.place(&lib, &mut proposals, &tagged_paths(&lib, &ops), true);
                             Applied::Accepted { title, report }
                         }
+                        Err(e) => Applied::Failed(e.to_string()),
+                    };
+                    self.send(LibEvent::Applied(applied));
+                    self.send(LibEvent::UserDataChanged);
+                }
+                Ok(Cmd::ApplyBundle { origin, title, ops }) => {
+                    let applied = match lib.apply_change(&origin, &title, &ops) {
+                        Ok(report) => Applied::Bundle { title, report },
                         Err(e) => Applied::Failed(e.to_string()),
                     };
                     self.send(LibEvent::Applied(applied));

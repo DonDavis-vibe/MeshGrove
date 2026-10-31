@@ -101,6 +101,10 @@ impl App {
     }
 
     pub(super) fn show_review(&mut self) {
+        // Opened (not shown anew): its tab comes to the front.
+        if !matches!(self.view, View::Review { .. }) {
+            self.layout.focus_files();
+        }
         let (entries, batches) = self.pending_batches();
         self.leave_search();
         self.flatten = false;
@@ -204,6 +208,9 @@ impl App {
     }
 
     pub(super) fn show_history(&mut self) {
+        if !matches!(self.view, View::History { .. }) {
+            self.layout.focus_files();
+        }
         let changes = self.index.as_ref().and_then(|i| i.changes(200).ok()).unwrap_or_default();
         self.leave_search();
         self.flatten = false;
@@ -227,6 +234,7 @@ impl App {
                 t!("review.accepted_skipped", title = title, count = report.applied, skipped = report.skipped)
             }
             Applied::Accepted { title, report } => t!("review.accepted", title = title, count = report.applied),
+            Applied::Bundle { title, report } => t!("plugins.bundle_applied", title = title, count = report.applied),
             Applied::Undone { title, report } if report.kept > 0 => {
                 t!("history.undone_kept", title = title, kept = report.kept)
             }

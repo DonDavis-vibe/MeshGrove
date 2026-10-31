@@ -40,6 +40,8 @@ ureq.workspace = true
 rustls.workspace = true
 keyring.workspace = true
 base64.workspace = true
+# The widget trees, events and effects of plugin panels (serde types only).
+meshgrove-plugin-api.workspace = true
 # Runtime plugins (WebAssembly components); feature "plugins".
 meshgrove-plugins = { workspace = true, optional = true }
 
