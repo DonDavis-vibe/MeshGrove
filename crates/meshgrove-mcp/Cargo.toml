@@ -20,6 +20,12 @@ serde_json.workspace = true
 base64.workspace = true
 log.workspace = true
 env_logger.workspace = true
+# The tools of the user's plugins; feature "plugins".
+meshgrove-plugins = { workspace = true, optional = true }
+
+[features]
+default = ["plugins"]
+plugins = ["dep:meshgrove-plugins"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -40,6 +40,12 @@ ureq.workspace = true
 rustls.workspace = true
 keyring.workspace = true
 base64.workspace = true
+# Runtime plugins (WebAssembly components); feature "plugins".
+meshgrove-plugins = { workspace = true, optional = true }
+
+[features]
+default = ["plugins"]
+plugins = ["dep:meshgrove-plugins"]
 
 [dev-dependencies]
 tempfile = "3"
