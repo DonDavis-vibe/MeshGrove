@@ -16,6 +16,7 @@ pub mod jobs;
 pub mod library;
 pub mod panel;
 mod plugin;
+pub mod registry;
 pub mod staging;
 mod state;
 
@@ -24,6 +25,7 @@ use std::time::Duration;
 pub use library::LibraryAccess;
 pub use meshgrove_core::config::{LibraryRead, PluginGrants};
 pub use plugin::{Image, Plugin, Settings, StagedBundle, ToolOutcome};
+pub use registry::Registry;
 pub use staging::Staging;
 pub use state::{CancelToken, Progress};
 

@@ -7,9 +7,9 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, SystemTime};
 
 use image::RgbaImage;
-use meshgrove_core::ai::proposals::ProposalStore;
+use meshgrove_core::ai::proposals::{ProposalKind, ProposalStore};
 use meshgrove_core::cache::{ThumbCache, ThumbMeta, Thumbnail};
-use meshgrove_core::config::{AiAccess, Config, LibraryAi};
+use meshgrove_core::config::{AiAccess, Config, LibraryAi, PluginConfig, PluginGrants};
 use meshgrove_core::db::Library;
 use meshgrove_core::listing::Entry;
 use meshgrove_core::{Kind, Mesh};
@@ -262,4 +262,77 @@ fn says_what_is_wrong_instead_of_failing() {
 /// Sets the index's layout version as another Meshgrove would have.
 fn rusqlite_version(db: &Path, version: i32) {
     rusqlite::Connection::open(db).unwrap().pragma_update(None, "user_version", version).unwrap();
+}
+
+/// The example plugin (`scripts/build-plugins.sh --test-hooks`, or MESHGROVE_TEST_PLUGIN); without
+/// it the test passes with a note, unless MESHGROVE_REQUIRE_PLUGIN=1 (as in CI).
+fn test_plugin() -> Option<PathBuf> {
+    let path = std::env::var_os("MESHGROVE_TEST_PLUGIN").map(PathBuf::from).unwrap_or_else(|| {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/plugins-test/wasm32-wasip2/release/hello_box.wasm")
+    });
+    if path.is_file() {
+        return Some(path);
+    }
+    assert_ne!(std::env::var("MESHGROVE_REQUIRE_PLUGIN").as_deref(), Ok("1"), "{} is missing", path.display());
+    eprintln!("skipped: no {} (scripts/build-plugins.sh --test-hooks)", path.display());
+    None
+}
+
+/// Sets the plugin up in the fixture's config.toml, newer than before (the server loads
+/// plugins again when the file changed).
+fn set_plugin(f: &Fixture, wasm: &Path, enabled: bool) {
+    let mut config = Config::load_from(&f.config).unwrap();
+    config.plugins = vec![PluginConfig {
+        id: "hello-box".into(),
+        file: wasm.to_path_buf(),
+        blake3: blake3::hash(&std::fs::read(wasm).unwrap()).to_hex().to_string(),
+        enabled,
+        grants: PluginGrants { ai_tools: true, bundles: true, ..PluginGrants::default() },
+        memory_mb: None,
+    }];
+    config.save_to(&f.config).unwrap();
+    let later = SystemTime::now() + Duration::from_secs(if enabled { 1 } else { 2 });
+    std::fs::File::options().write(true).open(&f.config).unwrap().set_modified(later).unwrap();
+}
+
+#[test]
+fn plugin_tools_are_offered_and_their_files_wait_as_a_suggestion() {
+    let Some(wasm) = test_plugin() else { return };
+    let f = fixture(true);
+    set_plugin(&f, &wasm, true);
+    let plugins = f.config.parent().unwrap().join("plugins");
+    let mut s = Server::start(&f, &["--local", "--plugins", plugins.to_str().unwrap()]);
+    let tools = s.request("tools/list", json!({}));
+    let tools = tools["tools"].as_array().unwrap();
+    let make = tools.iter().find(|t| t["name"] == "hello-box_make_box").expect("the plugin's tool is listed");
+    assert_eq!(make["annotations"]["readOnlyHint"], false, "it makes files");
+    assert!(make["inputSchema"]["properties"]["width"].is_object());
+    let measure = tools.iter().find(|t| t["name"] == "hello-box_measure").unwrap();
+    assert_eq!(measure["annotations"]["readOnlyHint"], true);
+
+    let r = s.call("hello-box_make_box", json!({"width": 30, "depth": 20, "height": 10, "name": "Kiste", "copies": 2}));
+    assert_ne!(r["isError"], true, "{r}");
+    let answer = &r["structuredContent"];
+    assert_eq!(answer["plugin"], "hello-box");
+    let batch = answer["batch"].as_str().expect("a suggestion");
+    let lib = Library::open_reader(&f.db).unwrap();
+    assert_eq!(lib.all_tags().unwrap(), [("Garten".to_owned(), 1)], "the library is unchanged");
+    let store = ProposalStore::open(&f.proposals).unwrap();
+    let id = store.batch_by_uid(batch).unwrap().unwrap();
+    let b = store.batches(None, None, &["pending"], 10).unwrap().into_iter().find(|b| b.id == id).unwrap();
+    assert_eq!((b.kind.as_str(), b.source.as_str()), ("bundle", "mcp"));
+    let proposals = store.proposals(id).unwrap();
+    assert_eq!(proposals.len(), 1);
+    assert_eq!(proposals[0].kind, ProposalKind::Bundle);
+    assert_eq!(proposals[0].payload["plugin"], "hello-box");
+    let files = proposals[0].payload["files"].as_array().unwrap();
+    assert!(files.iter().any(|f| f["rel"].as_str().unwrap().ends_with(".stl")), "{files:?}");
+    assert!(store.access_log(10).unwrap().iter().any(|e| e.tool == "hello-box_make_box"));
+
+    // Switched off in Meshgrove: the tool is gone at once.
+    set_plugin(&f, &wasm, false);
+    let tools = s.request("tools/list", json!({}));
+    assert!(!tools["tools"].as_array().unwrap().iter().any(|t| t["name"] == "hello-box_make_box"), "{tools}");
+    let r = s.call("hello-box_make_box", json!({"width": 30, "depth": 20, "height": 10, "name": "Kiste"}));
+    assert_eq!(r["isError"], true);
 }

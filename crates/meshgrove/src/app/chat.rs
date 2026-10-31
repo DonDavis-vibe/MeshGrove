@@ -341,6 +341,7 @@ impl App {
             config: self.config.clone(),
             key,
             mode: self.config.ai.chat_mode,
+            plugins: None,
         });
         self.chat.answering = msg.id;
         self.chat.messages.push(msg);

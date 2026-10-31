@@ -1,5 +1,8 @@
 //! The tools for a chat model: their definitions in the OpenAI "tools" format, and calling one
 //! by name with the model's JSON arguments. The same functions `meshgrove-mcp` serves.
+//!
+//! Besides the fixed tools, a [`ToolProvider`] may bring more: the tools of the user's plugins,
+//! named `<plugin>_<tool>` ([`definitions_with`], [`writes_with`], [`call_with`]).
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -101,6 +104,78 @@ pub fn writes(name: &str) -> bool {
     TOOLS.iter().any(|(n, _, w)| *n == name && *w)
 }
 
+/// Whether `name` is one of the fixed tools (a provider's tool of that name is not offered).
+pub fn is_fixed(name: &str) -> bool {
+    TOOLS.iter().any(|(n, _, _)| *n == name)
+}
+
+/// More tools than the fixed ones: those of the user's plugins, named `<plugin>_<tool>`.
+pub trait ToolProvider: Send + Sync {
+    /// Its tools in the OpenAI "tools" format.
+    fn definitions(&self) -> Vec<Value>;
+    /// `None`: it has no tool `name`; else whether the tool changes something (or suggests a
+    /// change).
+    fn writes(&self, name: &str) -> Option<bool>;
+    /// Calls its tool `name`; suggestions go to `store` as coming from `origin`.
+    fn call(
+        &self,
+        cx: &Context,
+        store: &mut ProposalStore,
+        origin: &Origin,
+        name: &str,
+        arguments: Value,
+    ) -> ToolResult<Value>;
+    /// Whether what tool `name` suggests always waits for the review, also where suggestions
+    /// are otherwise applied at once (the user did not let this plugin's be accepted by
+    /// themselves).
+    fn needs_review(&self, _name: &str) -> bool {
+        false
+    }
+}
+
+#[cfg(feature = "schema")]
+fn tool_name(definition: &Value) -> &str {
+    definition["function"]["name"].as_str().unwrap_or_default()
+}
+
+/// The fixed tools and those of `provider`; a provider's tool named like a fixed one (or like
+/// one before it) is left out.
+#[cfg(feature = "schema")]
+pub fn definitions_with(provider: Option<&dyn ToolProvider>) -> Vec<Value> {
+    let mut defs = definitions();
+    for def in provider.map(ToolProvider::definitions).unwrap_or_default() {
+        let name = tool_name(&def);
+        // The plugin registry refuses such plugins already; this only keeps the list unambiguous.
+        if !name.is_empty() && !defs.iter().any(|d| tool_name(d) == name) {
+            defs.push(def);
+        }
+    }
+    defs
+}
+
+/// [`writes`] for the fixed tools and those of `provider`.
+pub fn writes_with(provider: Option<&dyn ToolProvider>, name: &str) -> bool {
+    if is_fixed(name) {
+        return writes(name);
+    }
+    provider.and_then(|p| p.writes(name)).unwrap_or(false)
+}
+
+/// [`call`] for the fixed tools and those of `provider`.
+pub fn call_with(
+    cx: &Context,
+    store: &mut ProposalStore,
+    origin: &Origin,
+    provider: Option<&dyn ToolProvider>,
+    name: &str,
+    arguments: Value,
+) -> ToolResult<Value> {
+    match provider {
+        Some(p) if !is_fixed(name) && p.writes(name).is_some() => p.call(cx, store, origin, name, arguments),
+        _ => call(cx, store, origin, name, arguments),
+    }
+}
+
 #[cfg(feature = "schema")]
 fn schema<T: schemars::JsonSchema>() -> Value {
     let mut v = serde_json::to_value(schemars::schema_for!(T)).unwrap_or_default();
@@ -184,6 +259,8 @@ pub fn call(
 
 #[cfg(all(test, feature = "schema"))]
 mod tests {
+    use super::*;
+
     #[test]
     fn every_tool_has_a_definition_with_parameters() {
         let defs = super::definitions();
@@ -191,5 +268,62 @@ mod tests {
         let search = defs.iter().find(|d| d["function"]["name"] == "search_models").unwrap();
         assert!(search["function"]["parameters"]["properties"]["fits_printer"].is_object());
         assert!(super::writes("propose_tags") && !super::writes("search_models"));
+    }
+
+    /// A plugin with a reading and a writing tool, and one named like a fixed tool.
+    struct Plugin;
+
+    impl ToolProvider for Plugin {
+        fn definitions(&self) -> Vec<Value> {
+            ["hello-box_measure", "hello-box_make_box", "library_overview"]
+                .iter()
+                .map(|n| json!({"type": "function", "function": {"name": n, "description": "", "parameters": {}}}))
+                .collect()
+        }
+
+        fn writes(&self, name: &str) -> Option<bool> {
+            match name {
+                "hello-box_measure" => Some(false),
+                "hello-box_make_box" | "library_overview" => Some(true),
+                _ => None,
+            }
+        }
+
+        fn call(&self, _: &Context, _: &mut ProposalStore, _: &Origin, name: &str, _: Value) -> ToolResult<Value> {
+            Ok(json!({ "called": name }))
+        }
+    }
+
+    #[test]
+    fn provided_tools_come_after_the_fixed_ones_and_never_replace_them() {
+        let defs = definitions_with(Some(&Plugin));
+        let names: Vec<&str> = defs.iter().map(tool_name).collect();
+        assert_eq!(names.len(), TOOLS.len() + 2, "{names:?}");
+        assert_eq!(names[TOOLS.len()..], ["hello-box_measure", "hello-box_make_box"]);
+        assert_eq!(names.iter().filter(|n| **n == "library_overview").count(), 1);
+        assert_eq!(definitions_with(None).len(), TOOLS.len());
+
+        assert!(writes_with(Some(&Plugin), "hello-box_make_box"));
+        assert!(!writes_with(Some(&Plugin), "hello-box_measure"));
+        assert!(!writes_with(Some(&Plugin), "library_overview"), "the fixed tool counts");
+        assert!(writes_with(Some(&Plugin), "propose_tags"));
+        assert!(!writes_with(None, "hello-box_make_box") && !writes_with(Some(&Plugin), "nothing"));
+    }
+
+    #[test]
+    fn calls_go_to_the_provider_only_for_its_own_tools() {
+        let lib = crate::db::Library::open_in_memory().unwrap();
+        let config = crate::config::Config {
+            ai: crate::config::AiConfig { enabled: true, ..Default::default() },
+            ..Default::default()
+        };
+        let cx = Context::new(&lib, &config, crate::config::AccessClass::Local, None).unwrap();
+        let mut store = ProposalStore::open_in_memory().unwrap();
+        let origin = Origin { source: "chat".into(), client: None, class: crate::config::AccessClass::Local };
+        let call =
+            |name: &str, store: &mut ProposalStore| call_with(&cx, store, &origin, Some(&Plugin), name, json!({}));
+        assert_eq!(call("hello-box_make_box", &mut store).unwrap(), json!({"called": "hello-box_make_box"}));
+        assert!(call("library_overview", &mut store).unwrap().get("called").is_none(), "the fixed tool answers");
+        assert!(call("hello-box_nothing", &mut store).unwrap_err().to_string().contains("no tool called"));
     }
 }

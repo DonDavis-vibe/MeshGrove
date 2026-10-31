@@ -3353,6 +3353,7 @@ name = "meshgrove-mcp"
 version = "0.7.0"
 dependencies = [
  "base64 0.23.1",
+ "blake3",
  "env_logger",
  "image",
  "log",

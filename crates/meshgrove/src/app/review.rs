@@ -250,10 +250,15 @@ impl App {
     }
 }
 
-/// What may be accepted without the review: everything but a move, and a move that takes a file
-/// out of the landing folder when one place fits (the user's own folders are never rearranged
-/// by themselves, and nothing is guessed when several folders would do).
+/// What may be accepted without the review: everything but a move and a plugin's files, a move
+/// that takes a file out of the landing folder when one place fits (the user's own folders are
+/// never rearranged by themselves, and nothing is guessed when several folders would do), and
+/// files of a plugin the user lets them be accepted by themselves.
 pub(super) fn auto_acceptable(item: &ReviewItem, config: &Config) -> bool {
+    if item.proposal.kind == ProposalKind::Bundle {
+        let plugin = item.proposal.payload["plugin"].as_str().unwrap_or_default();
+        return config.plugin(plugin).is_some_and(|p| p.enabled && p.grants.bundles && p.grants.auto_accept);
+    }
     if item.proposal.kind != ProposalKind::Move {
         return true;
     }
@@ -270,6 +275,9 @@ fn source_label(b: &BatchInfo) -> String {
             Client::ALL.into_iter().find(|c| c.id() == id).map_or_else(|| id.to_owned(), |c| c.name().to_owned())
         }
         ("chat", None) => t!("review.source_chat").into_owned(),
+        (source, None) if source.starts_with("plugin:") => {
+            return t!("review.source_plugin", name = &source["plugin:".len()..]).into_owned();
+        }
         (meshgrove_core::placement::SOURCE, None) => return t!("review.source_meshgrove").into_owned(),
         _ => t!("review.source_assistant").into_owned(),
     };
@@ -285,7 +293,7 @@ fn review_batch(b: &BatchInfo, items: Vec<ReviewItem>) -> ReviewBatch {
         source: source_label(b),
         created: (b.created_ns > 0).then(|| SystemTime::UNIX_EPOCH + Duration::from_nanos(b.created_ns as u64)),
         inbox_done: b.inbox_done,
-        chat: b.source == "chat",
+        chat: b.source == "chat" || b.source.starts_with("plugin:"),
         items,
     }
 }
@@ -340,5 +348,30 @@ mod tests {
         let several = item_with(ProposalKind::Move, "/lib/Import/rose.stl", vec![PathBuf::from("/lib/Deko/rose.stl")]);
         assert!(!auto_acceptable(&several, &config), "several folders fit: the user chooses");
         assert!(Path::new("/lib/Import/rose.stl").starts_with("/lib/Import"));
+    }
+
+    #[test]
+    fn plugin_files_are_accepted_by_themselves_only_with_the_plugins_grant() {
+        use meshgrove_core::config::{PluginConfig, PluginGrants};
+        let mut bundle = item(ProposalKind::Bundle, "/lib/Import");
+        bundle.proposal.target = None;
+        bundle.proposal.payload = serde_json::json!({"plugin": "bingrove"});
+        let grants = PluginGrants { ai_tools: true, bundles: true, auto_accept: false, ..Default::default() };
+        let entry = PluginConfig {
+            id: "bingrove".into(),
+            file: PathBuf::from("/p/bingrove.wasm"),
+            blake3: "h".into(),
+            enabled: true,
+            grants,
+            memory_mb: None,
+        };
+        let mut config =
+            Config { library_roots: vec![PathBuf::from("/lib")], plugins: vec![entry], ..Default::default() };
+        assert!(!auto_acceptable(&bundle, &config), "waits for the review");
+        config.plugins[0].grants.auto_accept = true;
+        assert!(auto_acceptable(&bundle, &config));
+        config.plugins[0].enabled = false;
+        assert!(!auto_acceptable(&bundle, &config), "switched off");
+        assert!(!auto_acceptable(&bundle, &Config::default()), "unknown plugin");
     }
 }

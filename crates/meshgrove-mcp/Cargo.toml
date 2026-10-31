@@ -29,5 +29,6 @@ plugins = ["dep:meshgrove-plugins"]
 
 [dev-dependencies]
 tempfile = "3"
+blake3.workspace = true
 rusqlite.workspace = true
 image.workspace = true
