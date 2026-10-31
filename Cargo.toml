@@ -7,12 +7,15 @@ members = [
     "crates/meshgrove-step",
     "crates/meshgrove-thumbnailer",
     "crates/meshgrove-mcp",
+    "crates/meshgrove-plugin-api",
 ]
+# Plugins are built for wasm32-wasip2 on their own (scripts/build-plugins.sh).
+exclude = ["examples/plugins"]
 
 [workspace.package]
 version = "0.7.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.97"
 license = "GPL-3.0-or-later"
 authors = ["Davis (German Redneck Engineering)"]
 repository = "https://github.com/DonDavis-vibe/MeshGrove"
@@ -23,6 +26,7 @@ keywords = ["stl", "3mf", "3d-printing", "gallery", "egui"]
 [workspace.dependencies]
 meshgrove-core = { path = "crates/meshgrove-core" }
 meshgrove-render = { path = "crates/meshgrove-render" }
+meshgrove-plugin-api = { path = "crates/meshgrove-plugin-api" }
 
 anyhow = "1.0"
 thiserror = "2.0"

@@ -1,0 +1,113 @@
+// The plugin interface of Meshgrove: a WebAssembly component (wasm32-wasip2) that imports
+// `host` and `library` and exports `plugin`.
+//
+// Structured data crosses as JSON text where WIT has no recursive types (the UI tree) or where
+// the shape grows over time (manifest, tool arguments, bundles); bulk data (meshes, pictures,
+// files) is typed. The JSON shapes are the serde types of the `meshgrove-plugin-api` crate.
+//
+// The plugin sees three folders through WASI and nothing else (no network, no environment):
+// `/data` its own folder (writable for panels and jobs, read-only for tool calls), `/out` the
+// staging folder of the current call or job (what a bundle puts into the library) and `/tmp`.
+
+package meshgrove:plugin@0.1.0;
+
+interface types {
+    /// Triangles in millimetres: three coordinates per vertex, three indices per triangle.
+    record mesh-data {
+        positions: list<f32>,
+        indices: list<u32>,
+    }
+
+    /// A picture for the AI (a plan, a preview).
+    record image {
+        /// "image/png" or "image/jpeg".
+        mime: string,
+        data: list<u8>,
+    }
+
+    record tool-output {
+        /// JSON the AI reads.
+        %result: string,
+        images: list<image>,
+        /// JSON `Bundle`: files written below `/out` to put into the library as one change.
+        bundle: option<string>,
+    }
+
+    variant plugin-error {
+        /// The arguments are wrong; the text says how (the AI reads it).
+        invalid(string),
+        /// Something went wrong inside the plugin.
+        failed(string),
+        /// The host refused something the plugin needed (a permission the user did not grant).
+        denied(string),
+        /// The plugin noticed `host.cancelled()` and stopped.
+        cancelled,
+    }
+}
+
+/// Always there.
+interface host {
+    enum level {
+        error,
+        warn,
+        info,
+        debug,
+    }
+
+    log: func(level: level, message: string);
+    /// How far the current call or job is (0.0 to 1.0), with a short text.
+    progress: func(fraction: f32, message: string);
+    /// Whether the user cancelled what is running; long work should look now and then.
+    cancelled: func() -> bool;
+    /// JSON `HostInfo`: the user's language, dark mode, printers with their beds.
+    info: func() -> string;
+}
+
+/// The user's library, as far as they allowed (permission `library_read`). Checked on every
+/// call: without the permission each function returns an error. Never paths or raw bytes.
+interface library {
+    use types.{mesh-data};
+
+    /// JSON list of matches for a search as typed in Meshgrove ("rose tag:Garten").
+    search: func(query: string, limit: u32) -> result<string, string>;
+    /// JSON facts of one file (name, size in mm, tags, note) by its id.
+    describe: func(id: string) -> result<string, string>;
+    /// The model's triangles, simplified to at most `max-triangles`.
+    triangles: func(id: string, max-triangles: u32) -> result<mesh-data, string>;
+}
+
+interface plugin {
+    use types.{mesh-data, tool-output, plugin-error};
+
+    /// JSON `Manifest`.
+    manifest: func() -> string;
+    /// JSON list of `ToolDef`: the tools the AI may call.
+    list-tools: func() -> string;
+    /// One tool call, `args` as JSON.
+    call-tool: func(name: string, args: string) -> result<tool-output, plugin-error>;
+    /// A background job a panel started (`Effect::StartJobs`), `params` as JSON; it writes below
+    /// `/out` and returns JSON for the panel.
+    run-job: func(kind: string, params: string) -> result<string, plugin-error>;
+    /// A file of a type the manifest claims, opened with this plugin: JSON list of `Effect`.
+    open-file: func(name: string, bytes: list<u8>) -> result<string, plugin-error>;
+
+    /// One open panel; it lives as long as its tab.
+    resource panel {
+        /// `id` names one of the manifest's panels; `state` is a snapshot taken earlier.
+        constructor(id: string, state: option<string>);
+        /// JSON `View`: the widget tree.
+        render: func() -> string;
+        /// JSON `Event` in, JSON list of `Effect` out.
+        event: func(event: string) -> string;
+        /// The triangles of a `mesh-view` (by its key), when its revision changed.
+        mesh: func(key: string) -> option<mesh-data>;
+        /// JSON state to open the panel again as it is (after a restart).
+        snapshot: func() -> string;
+    }
+}
+
+world meshgrove-plugin {
+    import host;
+    import library;
+    export plugin;
+}
