@@ -206,6 +206,8 @@ fn panels_render_change_and_show_their_mesh() {
     assert_eq!(view.v, 1);
     assert_eq!((number(&view.root, "width"), revision(&view.root)), (20.0, 0));
 
+    let info = meshgrove_plugin_api::HostInfo { language: "de".into(), dark: true, ..Default::default() };
+    assert!(panel.event(&Event::HostChanged { info }).is_ok(), "the panel hears that the host changed");
     let effects = panel.event(&Event::Changed { id: "width".into(), value: json!(33.5) }).unwrap();
     assert!(effects.is_empty());
     let view = panel.render().unwrap();

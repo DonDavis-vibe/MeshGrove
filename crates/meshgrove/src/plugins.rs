@@ -150,6 +150,8 @@ pub struct PluginHost {
     loading: Option<Receiver<(Arc<Registry>, Vec<PluginRow>)>>,
     /// Loaded at least once: the panels of the saved layout can open.
     pub ready: bool,
+    /// What the plugins were last told about the host.
+    info: Option<HostInfo>,
     pub panels: Vec<OpenPanel>,
     jobs: Option<JobPool>,
     opened: (Sender<PanelAction>, Receiver<PanelAction>),
@@ -164,6 +166,7 @@ impl PluginHost {
             rows: Vec::new(),
             loading: None,
             ready: false,
+            info: None,
             panels: Vec::new(),
             jobs: None,
             opened: unbounded(),
@@ -178,6 +181,7 @@ impl PluginHost {
     /// Loads the plugins of `config` again, on a thread; they read the library in `db` (and the
     /// settings in the user's config.toml).
     pub fn reload(&mut self, config: &Config, info: HostInfo, db: &Path) {
+        self.info = Some(info.clone());
         let (tx, rx) = bounded(1);
         let (config, base, ctx) = (config.clone(), self.base.clone(), self.ctx.clone());
         let library: Arc<dyn meshgrove_plugins::LibraryAccess> =
@@ -192,6 +196,18 @@ impl PluginHost {
             })
             .expect("a thread for loading plugins");
         self.loading = Some(rx);
+    }
+
+    /// What the plugins were last told about the host.
+    pub fn info(&self) -> Option<&HostInfo> {
+        self.info.as_ref()
+    }
+
+    /// Tells the open panels that language, theme or printers changed.
+    pub fn host_changed(&mut self, info: &HostInfo) {
+        for p in &mut self.panels {
+            p.send(Event::HostChanged { info: info.clone() });
+        }
     }
 
     /// The plugins' tools for the chat.

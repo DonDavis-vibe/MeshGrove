@@ -26,6 +26,11 @@ impl CancelToken {
         CancelToken::default()
     }
 
+    /// A token set by whoever holds `flag` (the chat's stop button, a cancelled MCP request).
+    pub fn from_flag(flag: Arc<AtomicBool>) -> CancelToken {
+        CancelToken(flag)
+    }
+
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Relaxed);
     }

@@ -78,8 +78,23 @@ fn fixture(ai_enabled: bool) -> Fixture {
 struct Server {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    /// Lines from stdout, read on a thread of their own.
+    stdout: std::sync::mpsc::Receiver<String>,
     next_id: i64,
+}
+
+/// Every line of `stdout`, as it comes.
+fn lines(stdout: ChildStdout) -> std::sync::mpsc::Receiver<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    rx
 }
 
 impl Server {
@@ -99,7 +114,7 @@ impl Server {
             .spawn()
             .unwrap();
         let stdin = child.stdin.take().unwrap();
-        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let stdout = lines(child.stdout.take().unwrap());
         let mut server = Server { child, stdin, stdout, next_id: 1 };
         // What Claude Desktop and others send today: an older protocol version with a handshake.
         let init = server.request(
@@ -123,15 +138,31 @@ impl Server {
         self.next_id += 1;
         self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
         loop {
-            let mut line = String::new();
-            assert!(self.stdout.read_line(&mut line).unwrap() > 0, "server closed stdout");
-            let message: Value =
-                serde_json::from_str(&line).unwrap_or_else(|e| panic!("not JSON-RPC on stdout: {line:?} ({e})"));
+            let message = self.next_message(Duration::from_secs(60)).expect("server closed stdout or timed out");
             if message["id"] == id {
                 assert!(message.get("error").is_none(), "{method}: {message}");
                 return message["result"].clone();
             }
         }
+    }
+
+    /// The next JSON-RPC message (every line on stdout must be one).
+    fn next_message(&mut self, timeout: Duration) -> Option<Value> {
+        let line = self.stdout.recv_timeout(timeout).ok()?;
+        Some(serde_json::from_str(&line).unwrap_or_else(|e| panic!("not JSON-RPC on stdout: {line:?} ({e})")))
+    }
+
+    /// Waits up to `timeout` for a notification `method`.
+    fn notified(&mut self, method: &str, timeout: Duration) -> bool {
+        let until = std::time::Instant::now() + timeout;
+        while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
+            match self.next_message(left) {
+                Some(m) if m["method"] == method => return true,
+                Some(_) => {}
+                None => return false,
+            }
+        }
+        false
     }
 
     fn call(&mut self, tool: &str, arguments: Value) -> Value {
@@ -334,8 +365,9 @@ fn plugin_tools_are_offered_and_their_files_wait_as_a_suggestion() {
     assert!(files.iter().any(|f| f["rel"].as_str().unwrap().ends_with(".stl")), "{files:?}");
     assert!(store.access_log(10).unwrap().iter().any(|e| e.tool == "hello-box_make_box"));
 
-    // Switched off in Meshgrove: the tool is gone at once.
+    // Switched off in Meshgrove: the client is told, and the tool is gone.
     set_plugin(&f, &wasm, false);
+    assert!(s.notified("notifications/tools/list_changed", Duration::from_secs(10)), "no list_changed");
     let tools = s.request("tools/list", json!({}));
     assert!(!tools["tools"].as_array().unwrap().iter().any(|t| t["name"] == "hello-box_make_box"), "{tools}");
     let r = s.call("hello-box_make_box", json!({"width": 30, "depth": 20, "height": 10, "name": "Kiste"}));

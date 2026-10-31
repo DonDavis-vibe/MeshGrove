@@ -23,6 +23,8 @@ use crate::state::{self, CancelToken, State};
 type Reply<T> = Sender<Result<T, Error>>;
 
 enum Request {
+    /// What the host tells the plugin about itself changed (before `Event::HostChanged`).
+    Info(meshgrove_plugin_api::HostInfo, Reply<()>),
     Render(Reply<View>),
     Event(String, Reply<Vec<Effect>>),
     Mesh(String, Reply<Option<MeshData>>),
@@ -89,6 +91,10 @@ impl PanelHandle {
 
     /// The effects the plugin asks for in answer to `event`.
     pub fn event(&self, event: &Event) -> Result<Vec<Effect>, Error> {
+        // From now on `host.info()` answers the new facts too.
+        if let Event::HostChanged { info } = event {
+            self.ask(|reply| Request::Info(info.clone(), reply))?;
+        }
         let json = serde_json::to_string(event).map_err(|e| Error::Invalid(e.to_string()))?;
         self.ask(|reply| Request::Event(json, reply))
     }
@@ -176,6 +182,10 @@ fn run(
     let mut open = Open { store: &mut store, instance: &instance, resource, deadline, dead: None };
     for request in queue {
         match request {
+            Request::Info(info, reply) => {
+                open.store.data_mut().info = info;
+                let _ = reply.send(Ok(()));
+            }
             Request::Render(reply) => {
                 let view = open
                     .call(|s, p, r| p.call_render(s, r))

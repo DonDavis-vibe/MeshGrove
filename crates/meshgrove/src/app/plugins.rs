@@ -37,6 +37,12 @@ impl App {
 
     /// Takes in what the plugins did since the last frame.
     pub(super) fn poll_plugins(&mut self) {
+        // Language, theme or printers changed: the plugins hear of it (tools load anew with it).
+        let info = self.plugin_info();
+        if self.plugins.info().is_some_and(|known| *known != info) {
+            self.plugins.host_changed(&info);
+            self.plugins.reload(&self.config, info, &self.db_path);
+        }
         let (actions, reloaded) = self.plugins.poll();
         if reloaded {
             // The panels of the last run (kept in the layout) open again.
@@ -226,6 +232,7 @@ impl App {
                 });
                 return;
             };
+            m.viewer.set_bed(args.bed);
             ui.allocate_ui(size, |ui| {
                 ui.set_min_size(size);
                 if let Some(input) = space {

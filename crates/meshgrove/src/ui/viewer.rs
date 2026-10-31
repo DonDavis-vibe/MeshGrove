@@ -66,6 +66,8 @@ pub struct ModelViewer {
     preset: usize,
     /// Free orbit: also turn about the view axis and over the poles.
     free_orbit: bool,
+    /// A printer bed (x, y in mm) drawn under the model, centred.
+    bed: Option<[f32; 2]>,
 }
 
 /// What the 3D mouse did since the last frame, for the viewer that has the focus.
@@ -94,7 +96,14 @@ impl ModelViewer {
             preset: 0,
             free_orbit: false,
             tools: true,
+            bed: None,
         }
+    }
+
+    /// A printer bed (x, y in mm) under the model, centred on it; `None`: none.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    pub fn set_bed(&mut self, bed: Option<[f32; 2]>) {
+        self.bed = bed.filter(|b| b[0] > 0.0 && b[1] > 0.0);
     }
 
     /// Shows or hides the buttons over the view.
@@ -247,6 +256,7 @@ impl ModelViewer {
         if std::mem::take(&mut self.dirty) {
             self.offscreen.render(rs, renderer, &mesh, &self.view);
         }
+        self.paint_bed(ui, &mesh, rect);
         self.offscreen.paint(ui.painter(), rect);
 
         if response.clicked() && self.measure.is_some() {
@@ -434,6 +444,38 @@ impl ModelViewer {
             measure.points.clear();
         }
         measure.points.push(origin + dir * t);
+    }
+
+    /// The bed under the model (behind the picture of it), with a line every 50 mm.
+    fn paint_bed(&self, ui: &Ui, mesh: &GpuMesh, rect: Rect) {
+        let Some([bx, by]) = self.bed else { return };
+        let z = mesh.bounds.min.z;
+        let to_screen = |x: f32, y: f32| {
+            project_point(&mesh.bounds, &self.view, rect.aspect_ratio(), Vec3::new(x, y, z))
+                .map(|n| pos2(rect.center().x + n.x * rect.width() * 0.5, rect.center().y - n.y * rect.height() * 0.5))
+        };
+        let (hx, hy) = (bx / 2.0, by / 2.0);
+        let corners: Option<Vec<Pos2>> =
+            [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)].into_iter().map(|(x, y)| to_screen(x, y)).collect();
+        let Some(corners) = corners else { return };
+        let painter = ui.painter_at(rect);
+        let line = ui.visuals().widgets.noninteractive.bg_stroke.color;
+        painter.add(egui::Shape::convex_polygon(corners, line.gamma_multiply(0.25), Stroke::new(1.0, line)));
+        let fine = Stroke::new(0.5, line.gamma_multiply(0.6));
+        let mut x = -hx + 50.0;
+        while x < hx {
+            if let (Some(a), Some(b)) = (to_screen(x, -hy), to_screen(x, hy)) {
+                painter.line_segment([a, b], fine);
+            }
+            x += 50.0;
+        }
+        let mut y = -hy + 50.0;
+        while y < hy {
+            if let (Some(a), Some(b)) = (to_screen(-hx, y), to_screen(hx, y)) {
+                painter.line_segment([a, b], fine);
+            }
+            y += 50.0;
+        }
     }
 
     fn paint_measure(&self, ui: &Ui, mesh: &GpuMesh, rect: Rect) {

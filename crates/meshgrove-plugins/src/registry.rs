@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use meshgrove_core::ai::dispatch::{self, ToolProvider};
+use meshgrove_core::ai::dispatch::{self, Cancel, Picture, Reply, ToolProvider};
 use meshgrove_core::ai::proposals::{self, Origin, ProposalStore};
 use meshgrove_core::ai::{Context, ToolError, ToolResult};
 use meshgrove_core::config::Config;
@@ -94,7 +94,7 @@ impl Registry {
         Some((plugin, plugin.tools().iter().find(|t| t.name == tool)?))
     }
 
-    /// Calls tool `name` for the AI. Its files become a suggestion in `store` from `origin`;
+    /// Calls tool `name` for the AI (stopped by `cancel`). Its files become a suggestion in `store` from `origin`;
     /// the answer says which, beside the plugin's own (data, not instructions).
     pub fn call_ai(
         &self,
@@ -103,6 +103,7 @@ impl Registry {
         origin: &Origin,
         name: &str,
         arguments: Value,
+        cancel: &CancelToken,
     ) -> ToolResult<(Value, Vec<Image>)> {
         let (plugin, tool) = self.tool(name).ok_or_else(|| ToolError::Invalid(format!("no tool called {name}")))?;
         let arguments = match arguments {
@@ -110,8 +111,7 @@ impl Registry {
             Value::String(s) => serde_json::from_str(&s).unwrap_or_else(|_| json!({})),
             v => v,
         };
-        let outcome =
-            plugin.call_tool_as(&tool.name, &arguments, origin.class, &CancelToken::new()).map_err(invalid)?;
+        let outcome = plugin.call_tool_as(&tool.name, &arguments, origin.class, cancel).map_err(invalid)?;
         let mut answer = json!({});
         if let Some(staged) = outcome.bundle {
             let receipt = (|| {
@@ -173,8 +173,12 @@ impl ToolProvider for Registry {
         origin: &Origin,
         name: &str,
         arguments: Value,
-    ) -> ToolResult<Value> {
-        self.call_ai(cx, store, origin, name, arguments).map(|(value, _)| value)
+        cancel: &Cancel,
+    ) -> ToolResult<Reply> {
+        let cancel = CancelToken::from_flag(cancel.clone());
+        let (value, images) = self.call_ai(cx, store, origin, name, arguments, &cancel)?;
+        let pictures = images.into_iter().map(|i| Picture { mime: i.mime, data: i.data }).collect();
+        Ok(Reply { value, pictures })
     }
 
     fn needs_review(&self, name: &str) -> bool {

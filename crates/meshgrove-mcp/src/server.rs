@@ -23,7 +23,7 @@ use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation, ListToolsResult,
     PaginatedRequestParams, ResultType, ServerCapabilities, ServerConfig, Tool,
 };
-use rmcp::service::RequestContext;
+use rmcp::service::{NotificationContext, RequestContext};
 use rmcp::{ErrorData, RoleServer, ServerHandler, prompt_handler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -573,9 +573,20 @@ impl Meshgrove {
 #[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for Meshgrove {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_prompts().build())
+        let capabilities = ServerCapabilities::builder().enable_tools().enable_prompts();
+        // Plugins come and go: the client hears of it.
+        #[cfg(feature = "plugins")]
+        let capabilities = capabilities.enable_tool_list_changed();
+        ServerConfig::new(capabilities.build())
             .with_server_info(Implementation::new("meshgrove", env!("CARGO_PKG_VERSION")))
             .with_instructions(self.instructions())
+    }
+
+    async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
+        #[cfg(feature = "plugins")]
+        self.watch_plugins(context.peer);
+        #[cfg(not(feature = "plugins"))]
+        let _ = context;
     }
 
     async fn list_tools(
@@ -602,7 +613,8 @@ impl ServerHandler for Meshgrove {
         if self.tool_router.has_route(&request.name) {
             return self.tool_router.call(ToolCallContext::new(self, request, context)).await;
         }
-        Ok(self.call_plugin_tool(request).await.into())
+        // The client may cancel the request: a plugin still at work stops.
+        Ok(self.call_plugin_tool(request, context.ct.cancelled_owned()).await.into())
     }
 }
 
@@ -616,7 +628,11 @@ impl Meshgrove {
         None
     }
 
-    async fn call_plugin_tool(&self, request: CallToolRequestParams) -> CallToolResult {
+    async fn call_plugin_tool(
+        &self,
+        request: CallToolRequestParams,
+        _cancelled: impl std::future::Future<Output = ()>,
+    ) -> CallToolResult {
         failed(ToolError::Invalid(format!("no tool called {}", request.name)))
     }
 }
@@ -632,9 +648,13 @@ mod plugins {
     use meshgrove_core::ai::{Context, ToolError};
     use meshgrove_core::cache::ThumbCache;
     use meshgrove_core::config::Config;
-    use meshgrove_plugins::Registry;
     use meshgrove_plugins::registry::host_info;
+    use meshgrove_plugins::{CancelToken, Registry};
     use rmcp::model::{CallToolRequestParams, CallToolResult, Tool, ToolAnnotations};
+    use rmcp::{Peer, RoleServer};
+
+    /// How often config.toml is looked at for changed plugins.
+    const WATCH_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
     use serde_json::Value;
 
     use super::{Meshgrove, failed, with_images};
@@ -689,15 +709,59 @@ mod plugins {
             .unwrap_or_default()
         }
 
+        /// The plugins' tool names now (loading them again if config.toml changed).
+        async fn plugin_tool_names(&self) -> Vec<String> {
+            let this = self.clone();
+            tokio::task::spawn_blocking(move || {
+                let Ok(config) = this.load_config() else { return Vec::new() };
+                let mut names: Vec<String> = this.registry(&config).ai_tools().map(|(name, _, _)| name).collect();
+                names.sort();
+                names
+            })
+            .await
+            .unwrap_or_default()
+        }
+
+        /// Tells the client whenever the plugins' tools change (the user switched one on or off,
+        /// granted or removed it): it asks for the list anew.
+        pub(super) fn watch_plugins(&self, peer: Peer<RoleServer>) {
+            let this = self.clone();
+            tokio::spawn(async move {
+                let mut known = this.plugin_tool_names().await;
+                loop {
+                    tokio::time::sleep(WATCH_EVERY).await;
+                    let now = this.plugin_tool_names().await;
+                    if now != known {
+                        known = now;
+                        if peer.notify_tool_list_changed().await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+
         pub(super) fn cached_plugin_tool(&self, name: &str) -> Option<Tool> {
             let loaded = self.plugins.0.lock().unwrap_or_else(|e| e.into_inner());
             Self::tool_of(&loaded.as_ref()?.1, name)
         }
 
-        pub(super) async fn call_plugin_tool(&self, request: CallToolRequestParams) -> CallToolResult {
+        pub(super) async fn call_plugin_tool(
+            &self,
+            request: CallToolRequestParams,
+            cancelled: impl std::future::Future<Output = ()> + Send + 'static,
+        ) -> CallToolResult {
             let this = self.clone();
             let name = request.name.to_string();
             let arguments = Value::Object(request.arguments.unwrap_or_default());
+            let cancel = CancelToken::new();
+            let watcher = {
+                let cancel = cancel.clone();
+                tokio::spawn(async move {
+                    cancelled.await;
+                    cancel.cancel();
+                })
+            };
             let outcome = tokio::task::spawn_blocking(move || {
                 let config = this.load_config()?;
                 let registry = this.registry(&config);
@@ -709,7 +773,7 @@ mod plugins {
                 let thumbs = ThumbCache::new(this.paths.thumbs.clone());
                 let cx = Context::new(&lib, &config, this.class, Some(&thumbs))?;
                 let mut store = ProposalStore::open(&this.paths.proposals)?;
-                let (value, images) = registry.call_ai(&cx, &mut store, &this.origin(), &name, arguments)?;
+                let (value, images) = registry.call_ai(&cx, &mut store, &this.origin(), &name, arguments, &cancel)?;
                 let items = value["items"].as_u64().unwrap_or(0) as usize;
                 let libraries = cx.scope.roots().iter().map(|r| r.alias.clone()).collect();
                 this.log(&name, items, images.len(), libraries);
@@ -717,6 +781,7 @@ mod plugins {
             })
             .await
             .unwrap_or_else(|e| Err(ToolError::Invalid(e.to_string())));
+            watcher.abort();
             match outcome {
                 Ok((value, images)) => {
                     let pictures = images.into_iter().enumerate().map(|(i, image)| (format!("{}", i + 1), image));

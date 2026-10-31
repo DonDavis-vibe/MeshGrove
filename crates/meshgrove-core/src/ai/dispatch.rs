@@ -109,6 +109,29 @@ pub fn is_fixed(name: &str) -> bool {
     TOOLS.iter().any(|(n, _, _)| *n == name)
 }
 
+/// Set when the user stops the answer: a provider's tool still running gives up.
+pub type Cancel = std::sync::Arc<std::sync::atomic::AtomicBool>;
+
+/// A picture a provider's tool returned, for the user (PNG or JPEG).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Picture {
+    pub mime: String,
+    pub data: Vec<u8>,
+}
+
+/// What a tool answered: the value for the model, pictures for the user.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reply {
+    pub value: Value,
+    pub pictures: Vec<Picture>,
+}
+
+impl From<Value> for Reply {
+    fn from(value: Value) -> Reply {
+        Reply { value, pictures: Vec::new() }
+    }
+}
+
 /// More tools than the fixed ones: those of the user's plugins, named `<plugin>_<tool>`.
 pub trait ToolProvider: Send + Sync {
     /// Its tools in the OpenAI "tools" format.
@@ -116,7 +139,8 @@ pub trait ToolProvider: Send + Sync {
     /// `None`: it has no tool `name`; else whether the tool changes something (or suggests a
     /// change).
     fn writes(&self, name: &str) -> Option<bool>;
-    /// Calls its tool `name`; suggestions go to `store` as coming from `origin`.
+    /// Calls its tool `name`; suggestions go to `store` as coming from `origin`. It stops
+    /// when `cancel` is set.
     fn call(
         &self,
         cx: &Context,
@@ -124,7 +148,8 @@ pub trait ToolProvider: Send + Sync {
         origin: &Origin,
         name: &str,
         arguments: Value,
-    ) -> ToolResult<Value>;
+        cancel: &Cancel,
+    ) -> ToolResult<Reply>;
     /// Whether what tool `name` suggests always waits for the review, also where suggestions
     /// are otherwise applied at once (the user did not let this plugin's be accepted by
     /// themselves).
@@ -161,7 +186,7 @@ pub fn writes_with(provider: Option<&dyn ToolProvider>, name: &str) -> bool {
     provider.and_then(|p| p.writes(name)).unwrap_or(false)
 }
 
-/// [`call`] for the fixed tools and those of `provider`.
+/// [`call`] for the fixed tools and those of `provider` (whose tools stop when `cancel` is set).
 pub fn call_with(
     cx: &Context,
     store: &mut ProposalStore,
@@ -169,10 +194,11 @@ pub fn call_with(
     provider: Option<&dyn ToolProvider>,
     name: &str,
     arguments: Value,
-) -> ToolResult<Value> {
+    cancel: &Cancel,
+) -> ToolResult<Reply> {
     match provider {
-        Some(p) if !is_fixed(name) && p.writes(name).is_some() => p.call(cx, store, origin, name, arguments),
-        _ => call(cx, store, origin, name, arguments),
+        Some(p) if !is_fixed(name) && p.writes(name).is_some() => p.call(cx, store, origin, name, arguments, cancel),
+        _ => call(cx, store, origin, name, arguments).map(Reply::from),
     }
 }
 
@@ -289,8 +315,16 @@ mod tests {
             }
         }
 
-        fn call(&self, _: &Context, _: &mut ProposalStore, _: &Origin, name: &str, _: Value) -> ToolResult<Value> {
-            Ok(json!({ "called": name }))
+        fn call(
+            &self,
+            _: &Context,
+            _: &mut ProposalStore,
+            _: &Origin,
+            name: &str,
+            _: Value,
+            _: &Cancel,
+        ) -> ToolResult<Reply> {
+            Ok(json!({ "called": name }).into())
         }
     }
 
@@ -320,8 +354,10 @@ mod tests {
         let cx = Context::new(&lib, &config, crate::config::AccessClass::Local, None).unwrap();
         let mut store = ProposalStore::open_in_memory().unwrap();
         let origin = Origin { source: "chat".into(), client: None, class: crate::config::AccessClass::Local };
-        let call =
-            |name: &str, store: &mut ProposalStore| call_with(&cx, store, &origin, Some(&Plugin), name, json!({}));
+        let cancel = Cancel::default();
+        let call = |name: &str, store: &mut ProposalStore| {
+            call_with(&cx, store, &origin, Some(&Plugin), name, json!({}), &cancel).map(|r| r.value)
+        };
         assert_eq!(call("hello-box_make_box", &mut store).unwrap(), json!({"called": "hello-box_make_box"}));
         assert!(call("library_overview", &mut store).unwrap().get("called").is_none(), "the fixed tool answers");
         assert!(call("hello-box_nothing", &mut store).unwrap_err().to_string().contains("no tool called"));

@@ -371,6 +371,21 @@ impl App {
                     msg.cards.push(Card::Applied { change, title, applied });
                     self.chat.changes_stale = true;
                 }
+                ChatEvent::Pictures(pictures) => {
+                    for (mime, data) in pictures {
+                        match image::load_from_memory(&data) {
+                            Ok(img) => {
+                                let img = img.to_rgba8();
+                                let size = [img.width() as usize, img.height() as usize];
+                                let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+                                let name = format!("chat-picture-{}", msg.pictures.len());
+                                let texture = self.egui_ctx.load_texture(name, color, egui::TextureOptions::LINEAR);
+                                msg.pictures.push(crate::ui::chat::Picture(texture));
+                            }
+                            Err(e) => log::warn!("a {mime} picture from a plugin: {e}"),
+                        }
+                    }
+                }
                 ChatEvent::Notice(n) => msg.notices.push(n),
                 ChatEvent::Done(_) | ChatEvent::Failed(_) => {
                     let mut msg = self.chat.streaming.take().unwrap_or_default();

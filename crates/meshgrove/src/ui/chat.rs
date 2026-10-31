@@ -33,6 +33,19 @@ pub struct ChatMsg {
     pub notices: Vec<String>,
     #[serde(default)]
     pub failed: bool,
+    /// Pictures a plugin's tool returned; shown while the chat is open, not kept.
+    #[serde(skip)]
+    pub pictures: Vec<Picture>,
+}
+
+/// A picture in the chat.
+#[derive(Clone, PartialEq)]
+pub struct Picture(pub egui::TextureHandle);
+
+impl std::fmt::Debug for Picture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Picture").field(&self.0.size()).finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -213,6 +226,16 @@ fn message(ui: &mut Ui, m: &ChatMsg, view: &ChatView, md: &mut CommonMarkCache) 
                     });
                 }
             });
+    }
+    if !m.pictures.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            for p in &m.pictures {
+                let size = p.0.size_vec2();
+                let scale = (240.0 / size.x.max(size.y)).min(1.0);
+                let image = egui::Image::from_texture(egui::load::SizedTexture::new(p.0.id(), size * scale));
+                ui.add(image);
+            }
+        });
     }
     for card in &m.cards {
         egui::Frame::group(ui.style()).show(ui, |ui| {

@@ -56,6 +56,8 @@ pub enum ChatEvent {
         title: String,
         applied: usize,
     },
+    /// Pictures a plugin's tool returned, for the user: MIME type and bytes.
+    Pictures(Vec<(String, Vec<u8>)>),
     /// Something to tell, e.g. that the model cannot use tools.
     Notice(String),
     Done(String),
@@ -117,7 +119,7 @@ impl ChatService {
     }
 }
 
-fn run(db: &Path, applier: &Applier, turn: Turn, cancel: &AtomicBool, send: &dyn Fn(ChatEvent)) {
+fn run(db: &Path, applier: &Applier, turn: Turn, cancel: &dispatch::Cancel, send: &dyn Fn(ChatEvent)) {
     let Some(endpoint_cfg) = turn.config.ai.endpoint.clone() else {
         send(ChatEvent::Failed(t!("chat.no_endpoint").into_owned()));
         return;
@@ -162,7 +164,7 @@ fn run(db: &Path, applier: &Applier, turn: Turn, cancel: &AtomicBool, send: &dyn
                 return;
             }
             let args: Value = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
-            let result = tool(db, applier, &turn, &endpoint_cfg, &call.name, args, send);
+            let result = tool(db, applier, &turn, &endpoint_cfg, (&call.name, args), cancel, send);
             let mut text = result.to_string();
             if text.len() > MAX_RESULT {
                 text = format!(
@@ -182,14 +184,14 @@ fn floor_char(s: &str, mut i: usize) -> usize {
     i
 }
 
-/// Runs one tool for the model and says what came of it.
+/// Runs one tool for the model and says what came of it; the user's stop ends a plugin's tool.
 fn tool(
     db: &Path,
     applier: &Applier,
     turn: &Turn,
     endpoint: &EndpointConfig,
-    name: &str,
-    args: Value,
+    (name, args): (&str, Value),
+    cancel: &dispatch::Cancel,
     send: &dyn Fn(ChatEvent),
 ) -> Value {
     let class = if endpoint.local { AccessClass::Local } else { AccessClass::Cloud };
@@ -200,7 +202,12 @@ fn tool(
         let cx = Context::new(&lib, &turn.config, class, None).map_err(|e| e.to_string())?;
         let plugins = turn.plugins.as_deref();
         let call = |store: &mut ProposalStore, args: Value| {
-            dispatch::call_with(&cx, store, &origin, plugins, name, args).map_err(|e| e.to_string())
+            let reply =
+                dispatch::call_with(&cx, store, &origin, plugins, name, args, cancel).map_err(|e| e.to_string())?;
+            if !reply.pictures.is_empty() {
+                send(ChatEvent::Pictures(reply.pictures.into_iter().map(|p| (p.mime, p.data)).collect()));
+            }
+            Ok(reply.value)
         };
         if !dispatch::writes_with(plugins, name) {
             let mut scratch = ProposalStore::open_in_memory().map_err(|e| e.to_string())?;

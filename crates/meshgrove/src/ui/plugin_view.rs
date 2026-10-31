@@ -36,11 +36,12 @@ impl PanelUiState {
     }
 }
 
-/// A 3D view the panel wants: drawn by the caller, who has the meshes and the renderer. (The
-/// printer bed it may name is not drawn yet.)
+/// A 3D view the panel wants: drawn by the caller, who has the meshes and the renderer.
 pub struct MeshViewArgs<'a> {
     pub key: &'a str,
     pub height: f32,
+    /// A printer bed (x, y in mm) to show under the model.
+    pub bed: Option<[f32; 2]>,
 }
 
 /// Draws `view`; `meshes` draws the panel's 3D views. Returns what the user did.
@@ -254,9 +255,9 @@ impl Draw<'_> {
                 let changes = super::canvas::show(ui, canvas);
                 self.events.extend(changes.into_iter().map(|change| Event::Canvas { id: canvas.id.clone(), change }));
             }
-            Node::MeshView { key, height, .. } => {
+            Node::MeshView { key, height, bed, .. } => {
                 let height = height.unwrap_or_else(|| ui.available_height().max(200.0));
-                (self.meshes)(ui, MeshViewArgs { key, height });
+                (self.meshes)(ui, MeshViewArgs { key, height, bed: *bed });
             }
             Node::Unknown => {
                 ui.label(RichText::new(t!("plugins.unknown_widget")).weak().italics());

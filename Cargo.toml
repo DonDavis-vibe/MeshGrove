@@ -71,7 +71,7 @@ tobj = { version = "4.0", default-features = false }
 base64 = "0.23"
 # Only in meshgrove-mcp: the MCP server for the user's own AI assistant.
 rmcp = { version = "3.7", default-features = false, features = ["server", "macros", "transport-io", "schemars", "base64"] }
-tokio = { version = "1", features = ["rt", "macros", "io-std"] }
+tokio = { version = "1", features = ["rt", "macros", "io-std", "time"] }
 schemars = "1"
 # Only in the app: the user's own OpenAI-compatible endpoint (chat, one-click actions).
 # TLS through the platform's certificate store, so no bundled root list is needed.
