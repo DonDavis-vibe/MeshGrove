@@ -3032,6 +3032,7 @@ dependencies = [
  "gltf",
  "image",
  "libc",
+ "meshgrove-plugin-api",
  "percent-encoding",
  "png",
  "quick-xml 0.42.0",

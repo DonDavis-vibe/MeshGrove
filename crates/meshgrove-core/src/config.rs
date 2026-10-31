@@ -733,6 +733,60 @@ pub struct Config {
     /// Tiles or a table.
     pub gallery_view: GalleryView,
     pub list_columns: ListColumns,
+    /// Installed plugins (WebAssembly components) and what the user allowed them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<PluginConfig>,
+}
+
+/// One installed plugin. Its rights hold for the file with hash `blake3` only: a changed file
+/// stays off until the user looks at it again.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PluginConfig {
+    /// The plugin's id from its manifest.
+    pub id: String,
+    /// The `.wasm` file.
+    pub file: PathBuf,
+    /// blake3 of the file the user enabled.
+    pub blake3: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub grants: PluginGrants,
+    /// Memory limit in MiB; `None`: what the plugin asks for, else Meshgrove's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_mb: Option<u32>,
+}
+
+impl PluginConfig {
+    /// Whether the plugin may run as the file with hash `blake3` is now.
+    pub fn usable(&self, blake3: &str) -> bool {
+        self.enabled && self.blake3.eq_ignore_ascii_case(blake3)
+    }
+}
+
+/// What the user allowed a plugin; each only if its manifest asks for it too.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PluginGrants {
+    /// Its tools are offered to the AI (chat, `meshgrove-mcp`).
+    pub ai_tools: bool,
+    /// It may hand over files for the library.
+    pub bundles: bool,
+    /// Its bundles from the chat and AI apps follow the AI's auto-accept (otherwise they wait
+    /// in the review).
+    pub auto_accept: bool,
+    pub library_read: LibraryRead,
+}
+
+/// How much of the library a plugin may read (search, facts, triangles; never paths or bytes).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LibraryRead {
+    #[default]
+    None,
+    /// What local AI may see (Settings → AI & MCP).
+    AiScope,
+    All,
 }
 
 /// Bringing new files from outside (a downloads folder) into a library.
@@ -827,6 +881,11 @@ impl Config {
     pub fn landing_name(&self) -> &str {
         let name = self.import.landing.trim();
         if name.is_empty() || crate::fsops::check_name(name).is_err() { Config::LANDING } else { name }
+    }
+
+    /// The user's entry for plugin `id`.
+    pub fn plugin(&self, id: &str) -> Option<&PluginConfig> {
+        self.plugins.iter().find(|p| p.id == id)
     }
 
     /// The library imports go to.
@@ -1096,6 +1155,7 @@ impl Default for Config {
             print_filter: PrintFilter::All,
             gallery_view: GalleryView::Grid,
             list_columns: ListColumns::default(),
+            plugins: Vec::new(),
         }
     }
 }
@@ -1236,6 +1296,31 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("[[printers]]") && !text.contains("[printer]"), "{text}");
         assert_eq!(Config::load_from(&path).unwrap(), config);
+    }
+
+    #[test]
+    fn plugins_and_their_grants_survive_a_save() {
+        let text = r#"
+[[plugins]]
+id = "bingrove"
+file = "/home/u/.local/share/meshgrove/plugins/bingrove.wasm"
+blake3 = "ABC123"
+enabled = true
+memory_mb = 2048
+
+[plugins.grants]
+ai_tools = true
+bundles = true
+library_read = "ai-scope"
+"#;
+        let config: Config = toml::from_str(text).unwrap();
+        let p = &config.plugins[0];
+        assert_eq!((p.id.as_str(), p.memory_mb, p.grants.library_read), ("bingrove", Some(2048), LibraryRead::AiScope));
+        assert!(p.grants.ai_tools && p.grants.bundles && !p.grants.auto_accept);
+        assert!(p.usable("abc123") && !p.usable("def456"), "another file waits for the user");
+        let back: Config = toml::from_str(&toml::to_string_pretty(&config).unwrap()).unwrap();
+        assert_eq!(back, config);
+        assert!(!toml::to_string(&Config::default()).unwrap().contains("plugins"), "nothing written without plugins");
     }
 
     #[test]

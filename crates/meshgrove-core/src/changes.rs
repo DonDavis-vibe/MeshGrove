@@ -79,6 +79,14 @@ pub enum ApplyOp {
         to: PathBuf,
         folder: bool,
     },
+    /// The folder `dir` below `root` (what a copy just wrote) into the index right away, its
+    /// files hashed, so the steps after it find them. With `seen` their new content does not
+    /// come into the inbox (files Meshgrove's plugins made).
+    Index {
+        root: PathBuf,
+        dir: PathBuf,
+        seen: bool,
+    },
 }
 
 /// What takes a step back.
@@ -143,6 +151,10 @@ enum UndoOp {
         at: PathBuf,
         files: Vec<(PathBuf, u64, i64)>,
         made: Vec<PathBuf>,
+    },
+    /// The inbox rows an index step added, while still as it left them.
+    Unsee {
+        hashes: Vec<String>,
     },
 }
 
@@ -395,6 +407,9 @@ impl Library {
         let mut undo = Vec::new();
         let mut report = ChangeReport::default();
         let now = nanos(Some(SystemTime::now()));
+        // Places a step of this change should have written but did not: an index step leaves
+        // them alone (they belong to someone else).
+        let mut not_written: Vec<&Path> = Vec::new();
         for op in ops {
             let done = match op {
                 ApplyOp::AddTag { target, tag } => match self.target_hash(target)? {
@@ -601,14 +616,80 @@ impl Library {
                         true
                     }
                 }
+                ApplyOp::Index { dir, .. } if not_written.iter().any(|p| dir.starts_with(p)) => false,
+                ApplyOp::Index { root, dir, seen } => match self.index_now(root, dir, *seen, now)? {
+                    Some(hashes) => {
+                        if !hashes.is_empty() {
+                            undo.push(UndoOp::Unsee { hashes });
+                        }
+                        true
+                    }
+                    None => false,
+                },
             };
             if done {
                 report.applied += 1;
             } else {
                 report.skipped += 1;
+                if let ApplyOp::Copy { to, .. } | ApplyOp::Import { to, .. } | ApplyOp::Extract { into: to, .. } = op {
+                    not_written.push(to);
+                }
             }
         }
         Ok((undo, report))
+    }
+
+    /// Scans `dir` (from the nearest folder above it the index knows, which lists the new ones
+    /// in between) and hashes every file below it. Their contents not seen before go into the
+    /// inbox, as done when `seen`; those are returned. `None` when there is no such folder.
+    fn index_now(&mut self, root: &Path, dir: &Path, seen: bool, now: i64) -> Result<Option<Vec<String>>, Error> {
+        if !dir.starts_with(root) || !dir.is_dir() {
+            return Ok(None);
+        }
+        let start = dir
+            .ancestors()
+            .skip(1)
+            .take_while(|a| a.starts_with(root))
+            .find(|a| self.dir_mtime(a).is_some())
+            .unwrap_or(root)
+            .to_path_buf();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        if crate::scan::scan(self, root, &start, crate::scan::Force::Start, &cancel).is_err() {
+            return Ok(None);
+        }
+        let d = dir.to_string_lossy();
+        let files: Vec<(PathBuf, bool)> = {
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT d.path, f.name, f.kind IN ({}) FROM files f JOIN dirs d ON d.id = f.dir_id
+                 WHERE d.path = ?1 OR (d.path > ?2 AND d.path < ?3) ORDER BY d.path, f.name",
+                crate::inbox::INBOX_KINDS
+            ))?;
+            stmt.query_map(params![d, format!("{d}/"), format!("{d}0")], |r| {
+                Ok((Path::new(&r.get::<_, String>(0)?).join(r.get::<_, String>(1)?), r.get(2)?))
+            })?
+            .collect::<Result<_, _>>()?
+        };
+        let mut added = Vec::new();
+        for (path, inbox) in files {
+            let Some(hash) = self.ensure_content_hash(&path)? else { continue };
+            if !inbox || added.contains(&hash) {
+                continue;
+            }
+            let new = if seen {
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO inbox (content_hash, first_seen_ns, done_ns, done_by)
+                     VALUES (?1, ?2, ?2, 'generated')",
+                    params![hash, now],
+                )? > 0
+            } else {
+                crate::inbox::note_seen(&self.conn, &hash)?;
+                self.conn.changes() > 0
+            };
+            if new {
+                added.push(hash);
+            }
+        }
+        Ok(Some(added))
     }
 
     fn untag_hash(&mut self, hash: &str, tag: &str) -> Result<(), Error> {
@@ -765,6 +846,16 @@ impl Library {
                 let all = self.remove_written(at, files, made)?;
                 self.forget_path(at)?;
                 all
+            }
+            UndoOp::Unsee { hashes } => {
+                let mut any = false;
+                for hash in hashes {
+                    any |= self.conn.execute(
+                        "DELETE FROM inbox WHERE content_hash = ?1 AND (done_by = 'generated' OR done_ns IS NULL)",
+                        [hash],
+                    )? > 0;
+                }
+                any
             }
         })
     }

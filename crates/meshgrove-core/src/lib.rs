@@ -2,6 +2,7 @@
 
 pub mod ai;
 pub mod archive;
+pub mod bundle;
 pub mod cache;
 pub mod changes;
 pub mod checks;

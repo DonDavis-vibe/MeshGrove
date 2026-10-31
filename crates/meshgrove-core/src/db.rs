@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS inbox (
     first_seen_ns INTEGER NOT NULL,
     -- NULL while the file waits in the inbox
     done_ns INTEGER,
-    -- 'baseline', 'user' or 'proposal:<batch uid>'
+    -- 'baseline', 'user', 'proposal:<batch uid>' or 'generated' (made by a plugin)
     done_by TEXT
 );
 CREATE INDEX IF NOT EXISTS inbox_open ON inbox(first_seen_ns) WHERE done_ns IS NULL;
@@ -308,7 +308,8 @@ impl Library {
         let rel = dir.strip_prefix(root).unwrap_or(dir).to_string_lossy().to_lowercase();
         // When it was found: for the inbox; nothing in a baseline scan.
         let added = (!self.baseline_roots.contains(root)).then(|| nanos(Some(SystemTime::now())));
-        let tx = self.conn.transaction()?;
+        // A savepoint, not a transaction: a change's `ApplyOp::Index` runs it inside its own.
+        let tx = self.conn.savepoint()?;
         let mut changed = tx.query_row("SELECT 1 FROM dirs WHERE path = ?1", [dir_s], |_| Ok(())).optional()?.is_none();
         tx.execute(
             "INSERT INTO dirs (path, parent, mtime_ns, added_ns) VALUES (?1, ?2, ?3, ?4)
