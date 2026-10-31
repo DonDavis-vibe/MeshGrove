@@ -1,8 +1,12 @@
+#[cfg(feature = "plugins")]
+pub mod canvas;
 pub mod chat;
 pub mod chat_input;
 pub mod details;
 pub mod duplicates;
 pub mod gallery;
+#[cfg(feature = "plugins")]
+pub mod grid_editor;
 pub mod icons;
 pub mod import;
 pub mod inbox;

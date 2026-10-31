@@ -2,7 +2,8 @@
 //! comes back as [`Event`]s for the plugin, which answers with a new tree. What is being typed
 //! or dragged stays on screen until the plugin rendered anew; then the plugin's values count.
 //!
-//! The grid editor and the canvas are not here yet: they show as placeholders.
+//! The grid editor and the canvas are host widgets of their own ([`super::grid_editor`],
+//! [`super::canvas`]).
 
 use std::collections::HashMap;
 
@@ -239,8 +240,20 @@ impl Draw<'_> {
             Node::Table { id, columns, rows, selected, max_height } => {
                 self.table(ui, id, columns, rows, selected.as_deref(), *max_height);
             }
-            Node::GridEditor(grid) => placeholder(ui, &t!("plugins.grid_editor_coming"), grid.height.unwrap_or(200.0)),
-            Node::Canvas(_) => placeholder(ui, &t!("plugins.canvas_coming"), 160.0),
+            Node::GridEditor(grid) => {
+                // The selection made here, until the plugin renders it.
+                let mut selection =
+                    self.state.pending.get(&grid.id).and_then(|v| serde_json::from_value(v.clone()).ok());
+                let changes = super::grid_editor::show(ui, grid, &mut selection);
+                if let Some(selection) = selection {
+                    self.state.pending.insert(grid.id.clone(), json!(selection));
+                }
+                self.events.extend(changes.into_iter().map(|change| Event::Grid { id: grid.id.clone(), change }));
+            }
+            Node::Canvas(canvas) => {
+                let changes = super::canvas::show(ui, canvas);
+                self.events.extend(changes.into_iter().map(|change| Event::Canvas { id: canvas.id.clone(), change }));
+            }
             Node::MeshView { key, height, .. } => {
                 let height = height.unwrap_or_else(|| ui.available_height().max(200.0));
                 (self.meshes)(ui, MeshViewArgs { key, height });
@@ -523,18 +536,6 @@ impl Draw<'_> {
     }
 }
 
-fn placeholder(ui: &mut Ui, text: &str, height: f32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
-    ui.painter().rect_stroke(rect, 4.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        text,
-        egui::FontId::proportional(14.0),
-        ui.visuals().weak_text_color(),
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,7 +577,15 @@ mod tests {
             {"type": "radio", "id": "r", "selected": "a", "options": [{"value": "a", "label": "A"}, {"value": "b", "label": "B"}]},
             {"type": "slider", "id": "sl", "value": 1.0, "min": 0.0, "max": 2.0},
             {"type": "color", "id": "col", "value": "#ff0000"},
-            {"type": "grid_editor", "id": "g", "cols": 3, "rows": 2, "pitch": 42.0},
+            {"type": "grid_editor", "id": "g", "cols": 3, "rows": 2, "pitch": 42.0,
+             "zones": [{"id": "z", "x": -0.5, "y": 0.0, "w": 0.5, "h": 2.0, "label": "21 mm", "accepts_items": true}],
+             "items": [{"id": "0", "x": 0.0, "y": 0.0, "w": 2.0, "h": 1.0, "label": "Bin", "badges": ["6u"]}]},
+            {"type": "canvas", "id": "c", "width": 100.0, "height": 50.0, "interactive": true, "shapes": [
+                {"shape": "polygon", "points": [[0, 0], [40, 0], [40, 10], [10, 10], [10, 40], [0, 40]], "fill": "#80808080"},
+                {"shape": "rect", "x": 50, "y": 5, "w": 20, "h": 20, "id": "r"},
+                {"shape": "circle", "x": 80, "y": 30, "r": 8},
+                {"shape": "line", "points": [[0, 45], [100, 45]]},
+                {"shape": "text", "x": 50, "y": 45, "text": "Silhouette"}]},
             {"type": "something_new"},
             {"type": "button", "id": "b", "label": "Go", "primary": true}]},
           "second": {"type": "mesh_view", "id": "m", "key": "preview", "revision": 1}}});
