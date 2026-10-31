@@ -110,7 +110,8 @@ impl Registry {
             Value::String(s) => serde_json::from_str(&s).unwrap_or_else(|_| json!({})),
             v => v,
         };
-        let outcome = plugin.call_tool(&tool.name, &arguments, &CancelToken::new()).map_err(invalid)?;
+        let outcome =
+            plugin.call_tool_as(&tool.name, &arguments, origin.class, &CancelToken::new()).map_err(invalid)?;
         let mut answer = json!({});
         if let Some(staged) = outcome.bundle {
             let receipt = (|| {

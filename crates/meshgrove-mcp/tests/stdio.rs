@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 use image::RgbaImage;
 use meshgrove_core::ai::proposals::{ProposalKind, ProposalStore};
 use meshgrove_core::cache::{ThumbCache, ThumbMeta, Thumbnail};
-use meshgrove_core::config::{AiAccess, Config, LibraryAi, PluginConfig, PluginGrants};
+use meshgrove_core::config::{AiAccess, Config, LibraryAi, LibraryRead, PluginConfig, PluginGrants};
 use meshgrove_core::db::Library;
 use meshgrove_core::listing::Entry;
 use meshgrove_core::{Kind, Mesh};
@@ -281,17 +281,22 @@ fn test_plugin() -> Option<PathBuf> {
 /// Sets the plugin up in the fixture's config.toml, newer than before (the server loads
 /// plugins again when the file changed).
 fn set_plugin(f: &Fixture, wasm: &Path, enabled: bool) {
+    set_plugin_with(f, wasm, enabled, LibraryRead::None, if enabled { 1 } else { 2 });
+}
+
+/// [`set_plugin`] with what it may read of the library; `later` seconds newer than now.
+fn set_plugin_with(f: &Fixture, wasm: &Path, enabled: bool, library_read: LibraryRead, later: u64) {
     let mut config = Config::load_from(&f.config).unwrap();
     config.plugins = vec![PluginConfig {
         id: "hello-box".into(),
         file: wasm.to_path_buf(),
         blake3: blake3::hash(&std::fs::read(wasm).unwrap()).to_hex().to_string(),
         enabled,
-        grants: PluginGrants { ai_tools: true, bundles: true, ..PluginGrants::default() },
+        grants: PluginGrants { ai_tools: true, bundles: true, library_read, ..PluginGrants::default() },
         memory_mb: None,
     }];
     config.save_to(&f.config).unwrap();
-    let later = SystemTime::now() + Duration::from_secs(if enabled { 1 } else { 2 });
+    let later = SystemTime::now() + Duration::from_secs(later);
     std::fs::File::options().write(true).open(&f.config).unwrap().set_modified(later).unwrap();
 }
 
@@ -335,4 +340,64 @@ fn plugin_tools_are_offered_and_their_files_wait_as_a_suggestion() {
     assert!(!tools["tools"].as_array().unwrap().iter().any(|t| t["name"] == "hello-box_make_box"), "{tools}");
     let r = s.call("hello-box_make_box", json!({"width": 30, "depth": 20, "height": 10, "name": "Kiste"}));
     assert_eq!(r["isError"], true);
+}
+
+/// A tetrahedron 40 × 20 × 10 mm, as ASCII STL.
+const TETRA: &str = "solid t
+facet normal 0 0 0
+outer loop
+vertex 0 0 0
+vertex 40 0 0
+vertex 0 20 0
+endloop
+endfacet
+facet normal 0 0 0
+outer loop
+vertex 0 0 0
+vertex 0 20 0
+vertex 0 0 10
+endloop
+endfacet
+facet normal 0 0 0
+outer loop
+vertex 0 0 0
+vertex 0 0 10
+vertex 40 0 0
+endloop
+endfacet
+facet normal 0 0 0
+outer loop
+vertex 40 0 0
+vertex 0 0 10
+vertex 0 20 0
+endloop
+endfacet
+endsolid t
+";
+
+#[test]
+fn plugins_read_the_library_only_with_the_grant_and_within_the_scope() {
+    let Some(wasm) = test_plugin() else { return };
+    let f = fixture(true);
+    std::fs::create_dir_all(f.root.join("eigene")).unwrap();
+    std::fs::create_dir_all(f.root.join("kunden")).unwrap();
+    std::fs::write(f.root.join("eigene").join("rose.stl"), TETRA).unwrap();
+    std::fs::write(f.root.join("kunden").join("halter.stl"), TETRA).unwrap();
+    set_plugin_with(&f, &wasm, true, LibraryRead::AiScope, 1);
+    let plugins = f.config.parent().unwrap().join("plugins");
+    let mut cloud = Server::start(&f, &["--plugins", plugins.to_str().unwrap()]);
+    let r = cloud.call("hello-box_measure", json!({"id": "eigene/rose.stl"}));
+    assert_ne!(r["isError"], true, "{r}");
+    assert_eq!(r["structuredContent"]["result"], json!({"size_mm": [40.0, 20.0, 10.0], "triangles": 4}));
+    let hidden = cloud.call("hello-box_measure", json!({"id": "kunden/halter.stl"}));
+    assert_eq!(hidden["isError"], true, "customer files are local only: {hidden}");
+    assert!(hidden["content"][0]["text"].as_str().unwrap().contains("unknown id"), "{hidden}");
+    let mut local = Server::start(&f, &["--local", "--plugins", plugins.to_str().unwrap()]);
+    let r = local.call("hello-box_measure", json!({"id": "kunden/halter.stl"}));
+    assert_ne!(r["isError"], true, "a local AI sees them: {r}");
+
+    set_plugin_with(&f, &wasm, true, LibraryRead::None, 3);
+    let denied = local.call("hello-box_measure", json!({"id": "eigene/rose.stl"}));
+    assert_eq!(denied["isError"], true);
+    assert!(denied["content"][0]["text"].as_str().unwrap().contains("not allowed"), "{denied}");
 }

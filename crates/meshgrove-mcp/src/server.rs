@@ -662,7 +662,10 @@ mod plugins {
             }
             let base = self.paths.plugins.clone().or_else(meshgrove_plugins::default_base).unwrap_or_default();
             let language = config.language.clone().unwrap_or_else(|| "en".into());
-            let registry = Arc::new(Registry::load(config, &base, &host_info(config, &language, false), None));
+            let library: Arc<dyn meshgrove_plugins::LibraryAccess> =
+                Arc::new(meshgrove_plugins::LibraryReader::new(self.paths.db.clone(), self.paths.config.clone()));
+            let info = host_info(config, &language, false);
+            let registry = Arc::new(Registry::load(config, &base, &info, Some(library)));
             *loaded = Some((stamp, registry.clone()));
             registry
         }

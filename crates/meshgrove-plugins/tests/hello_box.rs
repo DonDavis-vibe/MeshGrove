@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use meshgrove_core::bundle::{BundleError, BundleItem, BundleList, BundleListKind, Limits};
 use meshgrove_core::changes::ApplyOp;
-use meshgrove_core::config::{LibraryRead, PluginConfig};
+use meshgrove_core::config::{AccessClass, LibraryRead, PluginConfig};
 use meshgrove_core::db::Library;
 use meshgrove_plugin_api::ui::{Effect, Event, JobSpec, Node};
 use meshgrove_plugin_api::{MeshData, Permission};
@@ -277,21 +277,27 @@ fn jobs_run_in_parallel_into_the_panels_folder() {
     }
 }
 
-/// A library of one box, for `measure`.
-struct OneBox;
+/// A library of one box, for `measure`, which cloud AI may not see; it takes `slow` to answer.
+struct OneBox {
+    slow: Duration,
+}
 
 impl LibraryAccess for OneBox {
-    fn search(&self, _query: &str, _limit: u32, _scope: LibraryRead) -> Result<Value, String> {
+    fn search(&self, _query: &str, _limit: u32, _read: LibraryRead, _class: AccessClass) -> Result<Value, String> {
         Ok(json!([{"id": "Eigene/box.stl"}]))
     }
 
-    fn describe(&self, id: &str, _scope: LibraryRead) -> Result<Value, String> {
+    fn describe(&self, id: &str, _read: LibraryRead, _class: AccessClass) -> Result<Value, String> {
         Ok(json!({"id": id}))
     }
 
-    fn triangles(&self, id: &str, _max: u32, scope: LibraryRead) -> Result<MeshData, String> {
-        assert_eq!(scope, LibraryRead::AiScope, "the host passes on what the user granted");
-        if id == "Eigene/box.stl" { Ok(MeshData::cuboid([10.0, 20.0, 30.0])) } else { Err(format!("unknown id: {id}")) }
+    fn triangles(&self, id: &str, _max: u32, read: LibraryRead, class: AccessClass) -> Result<MeshData, String> {
+        assert_eq!(read, LibraryRead::AiScope, "the host passes on what the user granted");
+        std::thread::sleep(self.slow);
+        match (id, class) {
+            ("Eigene/box.stl", AccessClass::Local) => Ok(MeshData::cuboid([10.0, 20.0, 30.0])),
+            _ => Err(format!("unknown id: {id}")),
+        }
     }
 }
 
@@ -299,7 +305,7 @@ impl LibraryAccess for OneBox {
 fn reading_the_library_needs_the_grant() {
     let Some(bytes) = wasm() else { return };
     let base = tempfile::tempdir().unwrap();
-    let library: Option<Arc<dyn LibraryAccess>> = Some(Arc::new(OneBox));
+    let library: Option<Arc<dyn LibraryAccess>> = Some(Arc::new(OneBox { slow: Duration::ZERO }));
     let args = json!({"id": "Eigene/box.stl"});
     let without = load(&bytes, Settings { library: library.clone(), ..granted(base.path()) });
     let err = without.call_tool("measure", &args, &CancelToken::new()).unwrap_err();
@@ -314,6 +320,22 @@ fn reading_the_library_needs_the_grant() {
     assert!(outcome.bundle.is_none());
     let err = with.call_tool("measure", &json!({"id": "x"}), &CancelToken::new()).unwrap_err();
     assert!(matches!(&err, Error::Denied(m) if m.contains("unknown id")), "{err}");
+    // Called by a cloud AI, it reads what that AI may see.
+    let err = with.call_tool_as("measure", &args, AccessClass::Cloud, &CancelToken::new()).unwrap_err();
+    assert!(matches!(&err, Error::Denied(m) if m.contains("unknown id")), "{err}");
+}
+
+#[test]
+fn time_spent_reading_the_library_is_not_the_plugins() {
+    let Some(bytes) = wasm() else { return };
+    let base = tempfile::tempdir().unwrap();
+    let mut settings = granted(base.path());
+    settings.grants.library_read = LibraryRead::AiScope;
+    settings.library = Some(Arc::new(OneBox { slow: Duration::from_millis(600) }));
+    settings.tool_deadline = Duration::from_millis(400);
+    let plugin = load(&bytes, settings);
+    let outcome = plugin.call_tool("measure", &json!({"id": "Eigene/box.stl"}), &CancelToken::new());
+    assert!(outcome.is_ok(), "the 600 ms of loading do not count against 400 ms: {outcome:?}");
 }
 
 #[test]

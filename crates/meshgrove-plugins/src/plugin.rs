@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use meshgrove_core::bundle::ResolvedBundle;
-use meshgrove_core::config::{Config, LibraryRead, PluginConfig, PluginGrants};
+use meshgrove_core::config::{AccessClass, Config, LibraryRead, PluginConfig, PluginGrants};
 use meshgrove_plugin_api::ui::Effect;
 use meshgrove_plugin_api::{API_VERSION, Bundle, HostInfo, Manifest, Permission, ToolDef};
 use serde_json::Value;
@@ -180,6 +180,7 @@ impl Plugin {
             let mut store = state::store(Setup {
                 plugin: "(loading)",
                 grants: &PluginGrants::default(),
+                class: AccessClass::Local,
                 wants_library: false,
                 library: None,
                 info: &self.settings.info,
@@ -281,12 +282,15 @@ impl Plugin {
         self.settings.base.join(&self.manifest.id).join("data")
     }
 
-    /// A store for one instance, with `out` as `/out` and a fresh `/tmp` (or `tmp`).
+    /// A store for one instance, with `out` as `/out` and a fresh `/tmp` (or `tmp`), reading
+    /// the library (if granted) as `class` would.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn store(
         &self,
         out: &Path,
         tmp: Option<&Path>,
         data_writable: bool,
+        class: AccessClass,
         cancel: CancelToken,
         progress: Option<Progress>,
     ) -> Result<Store<State>, Error> {
@@ -296,6 +300,7 @@ impl Plugin {
         state::store(Setup {
             plugin: &self.manifest.id,
             grants: &self.settings.grants,
+            class,
             wants_library: self.manifest.wants(Permission::LibraryRead),
             library: self.settings.library.clone(),
             info: &self.settings.info,
@@ -310,21 +315,33 @@ impl Plugin {
         self.pre.instantiate(&mut *store).map_err(|e| state::failure(store, &e))
     }
 
-    /// Calls tool `name` (as the plugin names it, without the `<id>_` prefix) for the AI; the
+    /// Calls tool `name` (as the plugin names it, without the `<id>_` prefix) for the user; the
     /// files it writes land in a new staging folder, kept when it returns a bundle.
     pub fn call_tool(&self, name: &str, args: &Value, cancel: &CancelToken) -> Result<ToolOutcome, Error> {
-        self.call_tool_in(name, args, Staging::new(&self.settings.base, &self.manifest.id)?, cancel)
+        self.call_tool_as(name, args, AccessClass::Local, cancel)
     }
 
-    /// [`Plugin::call_tool`] writing into `staging`.
+    /// [`Plugin::call_tool`] for an AI of access class `class`: the library reads as it would.
+    pub fn call_tool_as(
+        &self,
+        name: &str,
+        args: &Value,
+        class: AccessClass,
+        cancel: &CancelToken,
+    ) -> Result<ToolOutcome, Error> {
+        self.call_tool_in(name, args, Staging::new(&self.settings.base, &self.manifest.id)?, class, cancel)
+    }
+
+    /// [`Plugin::call_tool_as`] writing into `staging`.
     pub fn call_tool_in(
         &self,
         name: &str,
         args: &Value,
         staging: Staging,
+        class: AccessClass,
         cancel: &CancelToken,
     ) -> Result<ToolOutcome, Error> {
-        match self.run_tool(name, args, staging.out(), cancel) {
+        match self.run_tool(name, args, staging.out(), class, cancel) {
             Ok((result, images, Some(bundle))) => {
                 let plugin = self.manifest.id.clone();
                 Ok(ToolOutcome { result, images, bundle: Some(StagedBundle { plugin, bundle, staging }) })
@@ -345,13 +362,14 @@ impl Plugin {
         name: &str,
         args: &Value,
         out: &Path,
+        class: AccessClass,
         cancel: &CancelToken,
     ) -> Result<(Value, Vec<Image>, Option<Bundle>), Error> {
         self.require(Permission::AiTools)?;
         if !self.tools.iter().any(|t| t.name == name) {
             return Err(Error::Invalid(format!("{} has no tool {name:?}", self.manifest.id)));
         }
-        let mut store = self.store(out, None, false, cancel.clone(), None)?;
+        let mut store = self.store(out, None, false, class, cancel.clone(), None)?;
         state::arm(&mut store, Some(self.settings.tool_deadline));
         let instance = self.instantiate(&mut store)?;
         let output = instance
@@ -391,7 +409,7 @@ impl Plugin {
         cancel: &CancelToken,
         progress: Option<Progress>,
     ) -> Result<Value, Error> {
-        let mut store = self.store(out, None, true, cancel.clone(), progress)?;
+        let mut store = self.store(out, None, true, AccessClass::Local, cancel.clone(), progress)?;
         state::arm(&mut store, None);
         let instance = self.instantiate(&mut store)?;
         let text = instance
@@ -410,7 +428,7 @@ impl Plugin {
         }
         let staging = Staging::new(&self.settings.base, &self.manifest.id)?;
         let result = (|| {
-            let mut store = self.store(staging.out(), None, false, CancelToken::new(), None)?;
+            let mut store = self.store(staging.out(), None, false, AccessClass::Local, CancelToken::new(), None)?;
             state::arm(&mut store, Some(self.settings.tool_deadline));
             let instance = self.instantiate(&mut store)?;
             let text = instance

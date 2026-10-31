@@ -42,6 +42,15 @@ impl Scope {
         Scope { class, roots, hidden }
     }
 
+    /// Every library, whatever AI may see (for a plugin the user let read all of it).
+    pub fn whole(config: &Config) -> Scope {
+        let roots = aliases(&config.library_roots)
+            .into_iter()
+            .map(|(path, alias)| ScopedRoot { alias, path, images: false })
+            .collect();
+        Scope { class: AccessClass::Local, roots, hidden: Vec::new() }
+    }
+
     pub fn roots(&self) -> &[ScopedRoot] {
         &self.roots
     }

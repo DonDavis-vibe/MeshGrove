@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use meshgrove_core::config::{LibraryRead, PluginGrants};
+use meshgrove_core::config::{AccessClass, LibraryRead, PluginGrants};
 use meshgrove_plugin_api::HostInfo;
 use wasmtime::component::ResourceTable;
 use wasmtime::{ResourceLimiter, Store, UpdateDeadline};
@@ -81,6 +81,8 @@ pub(crate) struct State {
     pub limits: Limits,
     pub plugin: String,
     pub grants: PluginGrants,
+    /// Who the call is for, as far as reading the library goes (the user locally, or an AI).
+    pub class: AccessClass,
     /// The manifest asks for `library_read`.
     pub wants_library: bool,
     pub library: Option<Arc<dyn LibraryAccess>>,
@@ -116,6 +118,7 @@ pub(crate) struct Folders<'a> {
 pub(crate) struct Setup<'a> {
     pub plugin: &'a str,
     pub grants: &'a PluginGrants,
+    pub class: AccessClass,
     pub wants_library: bool,
     pub library: Option<Arc<dyn LibraryAccess>>,
     pub info: &'a HostInfo,
@@ -154,6 +157,7 @@ pub(crate) fn store(setup: Setup) -> Result<Store<State>, Error> {
         limits: Limits { memory_mb: setup.memory_mb, hit: false },
         plugin: setup.plugin.to_owned(),
         grants: setup.grants.clone(),
+        class: setup.class,
         wants_library: setup.wants_library,
         library: setup.library,
         info: setup.info.clone(),
@@ -234,33 +238,41 @@ impl host::Host for State {
 }
 
 impl State {
-    /// The library as far as the user lets this plugin read it.
-    fn library(&self) -> Result<(&dyn LibraryAccess, LibraryRead), String> {
+    /// Runs `f` on the library as far as the user lets this plugin read it. The time it takes
+    /// is the host's, not the plugin's: the deadline moves on by as much.
+    fn with_library<T>(
+        &mut self,
+        f: impl FnOnce(&dyn LibraryAccess, LibraryRead, AccessClass) -> Result<T, String>,
+    ) -> Result<T, String> {
         if !self.wants_library || self.grants.library_read == LibraryRead::None {
             return Err(format!(
                 "the user has not allowed {} to read the library (Meshgrove → Settings → Plugins)",
                 self.plugin
             ));
         }
-        let library = self.library.as_deref().ok_or("no library is open here")?;
-        Ok((library, self.grants.library_read))
+        let library = self.library.clone().ok_or("no library is open here")?;
+        let started = Instant::now();
+        let result = f(library.as_ref(), self.grants.library_read, self.class);
+        if let Some((until, limit)) = &mut self.deadline {
+            *until += started.elapsed();
+            *limit += started.elapsed();
+        }
+        result
     }
 }
 
 impl library::Host for State {
     fn search(&mut self, query: String, limit: u32) -> Result<String, String> {
-        let (library, scope) = self.library()?;
-        library.search(&query, limit.min(500), scope).map(|v| v.to_string())
+        self.with_library(|l, read, class| l.search(&query, limit.min(500), read, class)).map(|v| v.to_string())
     }
 
     fn describe(&mut self, id: String) -> Result<String, String> {
-        let (library, scope) = self.library()?;
-        library.describe(&id, scope).map(|v| v.to_string())
+        self.with_library(|l, read, class| l.describe(&id, read, class)).map(|v| v.to_string())
     }
 
     fn triangles(&mut self, id: String, max_triangles: u32) -> Result<types::MeshData, String> {
-        let (library, scope) = self.library()?;
-        let mesh = library.triangles(&id, max_triangles.clamp(1, 2_000_000), scope)?;
+        let mesh =
+            self.with_library(|l, read, class| l.triangles(&id, max_triangles.clamp(1, 2_000_000), read, class))?;
         mesh.check()?;
         Ok(types::MeshData { positions: mesh.positions, indices: mesh.indices })
     }

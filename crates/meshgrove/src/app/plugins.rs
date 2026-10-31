@@ -32,7 +32,7 @@ impl App {
 
     pub(super) fn reload_plugins(&mut self) {
         let info = self.plugin_info();
-        self.plugins.reload(&self.config, info);
+        self.plugins.reload(&self.config, info, &self.db_path);
     }
 
     /// Takes in what the plugins did since the last frame.

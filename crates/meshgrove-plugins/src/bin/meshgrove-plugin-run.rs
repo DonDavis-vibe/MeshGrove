@@ -17,6 +17,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use base64::Engine;
+use meshgrove_core::config::AccessClass;
 use meshgrove_plugins::{CancelToken, Plugin, PluginGrants, Settings, Staging, ToolOutcome};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation, ListToolsResult,
@@ -96,8 +97,9 @@ fn run(args: Args) -> Result<(), String> {
         (Some("tools"), _) => print(&serde_json::to_value(plugin.tools()).unwrap_or_default()),
         (Some("call"), Some(tool)) => {
             let staging = Staging::at(&args.out).map_err(|e| e.to_string())?;
-            let outcome =
-                plugin.call_tool_in(tool, &json_arg(2)?, staging, &CancelToken::new()).map_err(|e| e.to_string())?;
+            let outcome = plugin
+                .call_tool_in(tool, &json_arg(2)?, staging, AccessClass::Local, &CancelToken::new())
+                .map_err(|e| e.to_string())?;
             print(&outcome_json(&outcome, &args.out));
         }
         (Some("job"), Some(kind)) => {
@@ -181,7 +183,7 @@ impl ServerHandler for Runner {
         let (plugin, out) = (self.plugin.clone(), self.out.clone());
         let outcome = tokio::task::spawn_blocking(move || {
             let staging = Staging::at(&out).map_err(meshgrove_plugins::Error::from)?;
-            plugin.call_tool_in(&tool, &args, staging, &CancelToken::new()).map(|o| (o, out))
+            plugin.call_tool_in(&tool, &args, staging, AccessClass::Local, &CancelToken::new()).map(|o| (o, out))
         })
         .await
         .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;

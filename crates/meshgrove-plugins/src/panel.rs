@@ -150,7 +150,9 @@ fn run(
     queue: &Receiver<Request>,
 ) {
     let opened = (|| {
-        let mut store = plugin.store(out, Some(tmp), true, CancelToken::new(), None)?;
+        // A panel reads the library as the user, locally.
+        let mut store =
+            plugin.store(out, Some(tmp), true, meshgrove_core::config::AccessClass::Local, CancelToken::new(), None)?;
         state::arm(&mut store, Some(plugin.settings.event_deadline));
         let instance = plugin.instantiate(&mut store)?;
         let resource = instance

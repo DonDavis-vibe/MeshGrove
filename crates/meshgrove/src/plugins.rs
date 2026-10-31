@@ -175,14 +175,17 @@ impl PluginHost {
         &self.base
     }
 
-    /// Loads the plugins of `config` again, on a thread.
-    pub fn reload(&mut self, config: &Config, info: HostInfo) {
+    /// Loads the plugins of `config` again, on a thread; they read the library in `db` (and the
+    /// settings in the user's config.toml).
+    pub fn reload(&mut self, config: &Config, info: HostInfo, db: &Path) {
         let (tx, rx) = bounded(1);
         let (config, base, ctx) = (config.clone(), self.base.clone(), self.ctx.clone());
+        let library: Arc<dyn meshgrove_plugins::LibraryAccess> =
+            Arc::new(meshgrove_plugins::LibraryReader::new(db.to_path_buf(), None));
         std::thread::Builder::new()
             .name("plugins".into())
             .spawn(move || {
-                let registry = Registry::load(&config, &base, &info, None);
+                let registry = Registry::load(&config, &base, &info, Some(library));
                 let rows = rows(&config, &base, &registry);
                 let _ = tx.send((Arc::new(registry), rows));
                 ctx.request_repaint();
