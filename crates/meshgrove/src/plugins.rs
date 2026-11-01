@@ -589,36 +589,82 @@ fn work(
         }
         Err(e) => send(Output::Failed(e.to_string())),
     };
-    refresh(&mut revisions);
+    let on_event = |event: &Event, revisions: &mut HashMap<String, u64>| match handle.event(event) {
+        Ok(effects) => {
+            let mut rest = Vec::new();
+            for effect in effects {
+                let (apply, bundle) = match effect {
+                    Effect::ApplyBundle { bundle } => (true, bundle),
+                    Effect::ProposeBundle { bundle } => (false, bundle),
+                    other => {
+                        rest.push(other);
+                        continue;
+                    }
+                };
+                // What the panel and its jobs wrote goes with the bundle.
+                let staging = handle.take_output().map_err(|e| e.to_string());
+                send(Output::Bundle { apply, bundle, staging });
+            }
+            if !rest.is_empty() {
+                send(Output::Effects(rest));
+            }
+            refresh(revisions);
+        }
+        Err(e) => send(Output::Failed(e.to_string())),
+    };
+    // Once before the first view, so a panel can start right away what takes longer than an
+    // event may (a job), with what it is told about the host.
+    on_event(&Event::HostChanged { info: plugin.settings().info.clone() }, &mut revisions);
     for input in inputs {
         match input {
-            Input::Event(event) => match handle.event(&event) {
-                Ok(effects) => {
-                    let mut rest = Vec::new();
-                    for effect in effects {
-                        let (apply, bundle) = match effect {
-                            Effect::ApplyBundle { bundle } => (true, bundle),
-                            Effect::ProposeBundle { bundle } => (false, bundle),
-                            other => {
-                                rest.push(other);
-                                continue;
-                            }
-                        };
-                        // What the panel and its jobs wrote goes with the bundle.
-                        let staging = handle.take_output().map_err(|e| e.to_string());
-                        send(Output::Bundle { apply, bundle, staging });
-                    }
-                    if !rest.is_empty() {
-                        send(Output::Effects(rest));
-                    }
-                    refresh(&mut revisions);
-                }
-                Err(e) => send(Output::Failed(e.to_string())),
-            },
+            Input::Event(event) => on_event(&event, &mut revisions),
             Input::Render => refresh(&mut revisions),
             Input::Snapshot(reply) => {
                 let _ = reply.send(handle.snapshot().map_err(|e| e.to_string()));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The example plugin built for tests (`scripts/build-plugins.sh --test-hooks`), if there is one.
+    fn test_plugin() -> Option<Vec<u8>> {
+        let path = std::env::var_os("MESHGROVE_TEST_PLUGIN").map(PathBuf::from).unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/plugins-test/wasm32-wasip2/release/hello_box.wasm")
+        });
+        match std::fs::read(&path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if std::env::var("MESHGROVE_REQUIRE_PLUGIN").as_deref() == Ok("1") => {
+                panic!("{}: {e} (build it with scripts/build-plugins.sh --test-hooks)", path.display())
+            }
+            Err(_) => None,
+        }
+    }
+
+    #[test]
+    fn a_panel_hears_about_the_host_before_its_first_view() {
+        let Some(bytes) = test_plugin() else { return };
+        let base = tempfile::tempdir().unwrap();
+        let mut settings = Settings::new(base.path());
+        settings.info.language = "de".into();
+        let plugin = Arc::new(Plugin::from_bytes(&bytes, settings).unwrap());
+        let (inputs, input_rx) = unbounded();
+        let (output_tx, outputs) = unbounded();
+        let ctx = egui::Context::default();
+        let worker = std::thread::spawn(move || work(&plugin, "box", None, &input_rx, &output_tx, &ctx));
+        let next = || outputs.recv_timeout(Duration::from_secs(60)).expect("the panel answers");
+        assert!(matches!(next(), Output::Opened { .. }));
+        match next() {
+            Output::Effects(effects) => {
+                assert!(matches!(&effects[..], [Effect::Toast { text, .. }] if text == "host: de"));
+            }
+            _ => panic!("what the panel does on hearing about the host comes first"),
+        }
+        assert!(matches!(next(), Output::View(_)), "then its first view");
+        drop(inputs);
+        worker.join().unwrap();
     }
 }

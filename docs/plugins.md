@@ -207,7 +207,7 @@ Grants are checked on every call.
 - `cancelled()`
 - `info()`: JSON `HostInfo`, with the language (`de`/`en`), dark theme, printers with their
   build volumes (main one first), and Meshgrove's and the API's version. Panels get
-  `Event::HostChanged` when any of it changes.
+  `Event::HostChanged` when any of it changes, and once right after they open.
 
 **`library` (with `library_read`):**
 
@@ -294,6 +294,11 @@ A panel is Elm-like:
 1. `render()` returns a `View { v: 1, root: Node }`.
 2. When the user does something, Meshgrove sends an `Event` to `event()`.
 3. `event()` answers with a list of `Effect`s, and Meshgrove renders the panel again.
+
+Right after a panel opens, before its first `render()`, it gets `Event::HostChanged` with the
+current host info. Its effects count like any other's: a panel that needs longer than an event
+may (2 s) to build its first preview starts a job there and shows the result once the job has
+finished.
 
 While a panel works, its tab shows ⏳. The window never waits for a plugin.
 

@@ -9,7 +9,8 @@
 //! - Opens `*.box.json` files (a saved box) in its panel.
 //!
 //! With the feature `test-hooks` it has two more tools for Meshgrove's tests: `spin` never ends,
-//! `trap` eats all memory.
+//! `trap` eats all memory. Its panel then also answers `HostChanged` with a toast naming the
+//! language.
 
 use std::cell::RefCell;
 
@@ -333,6 +334,10 @@ impl GuestPanel for BoxPanel {
             Event::JobFinished { error: Some(error), .. } => {
                 s.busy = false;
                 vec![Effect::Toast { text: error, level: Level::Error }]
+            }
+            #[cfg(feature = "test-hooks")]
+            Event::HostChanged { info } => {
+                vec![Effect::Toast { text: format!("host: {}", info.language), level: Level::Info }]
             }
             _ => Vec::new(),
         };
