@@ -12,8 +12,10 @@
 
 mod bindings;
 pub mod engine;
+#[cfg(feature = "panels")]
 pub mod jobs;
 pub mod library;
+#[cfg(feature = "panels")]
 pub mod panel;
 mod plugin;
 pub mod registry;

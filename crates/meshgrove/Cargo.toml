@@ -43,7 +43,7 @@ base64.workspace = true
 # The widget trees, events and effects of plugin panels (serde types only).
 meshgrove-plugin-api.workspace = true
 # Runtime plugins (WebAssembly components); feature "plugins".
-meshgrove-plugins = { workspace = true, optional = true }
+meshgrove-plugins = { workspace = true, optional = true, features = ["panels"] }
 
 [features]
 default = ["plugins"]

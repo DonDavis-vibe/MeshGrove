@@ -5,5 +5,6 @@ wasmtime::component::bindgen!({
     world: "meshgrove-plugin",
 });
 
+#[cfg(feature = "panels")]
 pub use exports::meshgrove::plugin::plugin::GuestPanel;
 pub use meshgrove::plugin::types::PluginError;

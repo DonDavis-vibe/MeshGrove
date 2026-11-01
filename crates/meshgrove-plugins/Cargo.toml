@@ -30,8 +30,10 @@ base64 = { workspace = true, optional = true }
 env_logger = { workspace = true, optional = true }
 
 [features]
-default = ["runner"]
+default = ["runner", "panels"]
 runner = ["dep:rmcp", "dep:tokio", "dep:base64", "dep:env_logger"]
+# Panels and their jobs, for Meshgrove's window (meshgrove-mcp has neither).
+panels = []
 
 [[bin]]
 name = "meshgrove-plugin-run"
