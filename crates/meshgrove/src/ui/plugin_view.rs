@@ -63,6 +63,24 @@ struct Draw<'a> {
     units: DisplayUnits,
 }
 
+/// Nodes holding others (they keep a scope of their own in a row, for stable ids).
+fn is_container(node: &Node) -> bool {
+    matches!(
+        node,
+        Node::Column { .. }
+            | Node::Row { .. }
+            | Node::Group { .. }
+            | Node::Tabs { .. }
+            | Node::Split { .. }
+            | Node::Scroll { .. }
+            | Node::Form { .. }
+            | Node::Table { .. }
+            | Node::GridEditor(_)
+            | Node::Canvas(_)
+            | Node::MeshView { .. }
+    )
+}
+
 fn changed(id: &str, value: Value) -> Event {
     Event::Changed { id: id.to_owned(), value }
 }
@@ -105,7 +123,19 @@ impl Draw<'_> {
                 ui.vertical(|ui| self.children(ui, children));
             }
             Node::Row { children } => {
-                ui.horizontal_wrapped(|ui| self.children(ui, children));
+                ui.horizontal_wrapped(|ui| {
+                    // A button too wide for the rest of the line goes to the next one whole. Only
+                    // what lies in the row itself wraps: plain widgets go in without a scope of
+                    // their own (containers keep theirs, for their ids).
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    for (i, child) in children.iter().enumerate() {
+                        if is_container(child) {
+                            ui.push_id(i, |ui| self.node(ui, child));
+                        } else {
+                            self.node(ui, child);
+                        }
+                    }
+                });
             }
             Node::Group { title, collapsible, children } => match title {
                 Some(title) if *collapsible => {
@@ -342,7 +372,12 @@ impl Draw<'_> {
             let mut child =
                 ui.new_child(UiBuilder::new().id_salt(("part", i)).max_rect(part).layout(Layout::top_down(Align::Min)));
             child.set_clip_rect(part.intersect(ui.clip_rect()));
-            self.node(&mut child, node);
+            // What does not fit across (a wide form in a narrow part) can be scrolled to.
+            egui::ScrollArea::horizontal()
+                .id_salt(("part-scroll", i))
+                .auto_shrink([false, false])
+                .scroll_source(egui::containers::scroll_area::ScrollSource::SCROLL_BAR)
+                .show(&mut child, |ui| self.node(ui, node));
         }
         ui.advance_cursor_after_rect(rect);
     }
@@ -436,7 +471,9 @@ impl Draw<'_> {
         let current = self.pending_str(id).unwrap_or_else(|| selected.to_owned());
         let label = options.iter().find(|o| o.value == current).map_or(current.as_str(), |o| o.label.as_str());
         ui.add_enabled_ui(enabled, |ui| {
-            egui::ComboBox::from_id_salt(id).selected_text(label).show_ui(ui, |ui| {
+            // No wider than the row: long choices are cut short (the list shows them whole).
+            let width = ui.available_width().clamp(80.0, 240.0);
+            egui::ComboBox::from_id_salt(id).selected_text(label).width(width).truncate().show_ui(ui, |ui| {
                 for o in options {
                     if ui.selectable_label(o.value == current, o.label.as_str()).clicked() && o.value != current {
                         self.state.pending.insert(id.to_owned(), json!(o.value));
@@ -448,19 +485,47 @@ impl Draw<'_> {
     }
 
     fn form(&mut self, ui: &mut Ui, id: &str, rows: &[FormRow], submit: Option<&str>) {
-        egui::Grid::new(("form", id)).num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+        // The values get what the longest label leaves of the width, and wrap in it: a long
+        // checkbox label must not push the form (and what follows it) out of its part.
+        const GAP: f32 = 12.0;
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let color = ui.visuals().text_color();
+        let labels = rows
+            .iter()
+            .map(|r| ui.fonts_mut(|f| f.layout_no_wrap(r.label.clone(), font.clone(), color).size().x))
+            .fold(0.0, f32::max);
+        let values = ui.available_width() - labels - GAP;
+        if values < 100.0 {
+            // Too narrow beside each other: each label above its input.
             for (i, row) in rows.iter().enumerate() {
-                ui.label(row.label.as_str());
+                ui.label(RichText::new(row.label.as_str()).small().weak());
                 ui.push_id(i, |ui| self.node(ui, &row.node));
-                ui.end_row();
+                ui.add_space(4.0);
             }
-        });
+        } else {
+            self.form_grid(ui, id, rows, values);
+        }
         if let Some(label) = submit
             && ui.button(label).clicked()
         {
             let values = rows.iter().filter_map(|row| self.value_of(&row.node)).collect();
             self.events.push(Event::Submit { id: id.to_owned(), values });
         }
+    }
+
+    fn form_grid(&mut self, ui: &mut Ui, id: &str, rows: &[FormRow], values: f32) {
+        const GAP: f32 = 12.0;
+        egui::Grid::new(("form", id)).num_columns(2).spacing([GAP, 6.0]).show(ui, |ui| {
+            for (i, row) in rows.iter().enumerate() {
+                ui.label(row.label.as_str());
+                ui.push_id(i, |ui| {
+                    ui.set_max_width(values);
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                    self.node(ui, &row.node);
+                });
+                ui.end_row();
+            }
+        });
     }
 
     /// An input's id and value as shown (edited or rendered).
@@ -516,11 +581,13 @@ impl Draw<'_> {
                     let r = &rows[row.index()];
                     row.set_selected(current.as_deref() == Some(r.id.as_str()));
                     for (c, cell) in columns.iter().zip(&r.cells) {
+                        // Not selectable: a click on the text picks the row.
+                        let label = egui::Label::new(cell.as_str()).truncate().selectable(false);
                         row.col(|ui| {
                             if c.numeric {
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(cell.as_str()));
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.add(label));
                             } else {
-                                ui.add(egui::Label::new(cell.as_str()).truncate());
+                                ui.add(label);
                             }
                         });
                     }
@@ -603,5 +670,86 @@ mod tests {
         // egui may run a first frame twice (to size things).
         assert!(!keys.is_empty() && keys.iter().all(|k| k == "preview"), "{keys:?}");
         assert!(events.is_empty(), "{events:?}");
+    }
+
+    /// Clicks through egui: a frame with the press, one with the release; the events the view sent.
+    fn click_at(view: &View, at: impl Fn(&egui::Context) -> egui::Pos2) -> Vec<Event> {
+        let ctx = egui::Context::default();
+        let mut state = PanelUiState::default();
+        let mut events = Vec::new();
+        let mut time = 0.0;
+        let mut frame = |input: Vec<egui::Event>, events: &mut Vec<Event>| {
+            time += 0.05;
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 600.0))),
+                time: Some(time),
+                events: input,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(raw, |ui| {
+                // A 3D view takes its space and the pointer, as the real one does.
+                let mut mesh = |ui: &mut Ui, args: MeshViewArgs| {
+                    ui.allocate_exact_size(vec2(ui.available_width(), args.height), Sense::click_and_drag());
+                };
+                events.extend(show(ui, view, &mut state, &mut mesh));
+            });
+            output.textures_delta.clear();
+        };
+        frame(Vec::new(), &mut events);
+        frame(Vec::new(), &mut events);
+        let p = at(&ctx);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        frame(vec![egui::Event::PointerMoved(p), button(true)], &mut events);
+        frame(vec![button(false)], &mut events);
+        events
+    }
+
+    #[test]
+    fn table_rows_are_picked_by_a_click() {
+        let json = serde_json::json!({"v": 1, "root": {"type": "table", "id": "parts",
+            "columns": [{"title": "Teil"}, {"title": "Anzahl", "width": 60.0, "numeric": true}],
+            "rows": [{"id": "0", "cells": ["a", "1"]}, {"id": "1", "cells": ["b", "2"]}, {"id": "2", "cells": ["c", "3"]}],
+            "max_height": 260.0}});
+        let view: View = serde_json::from_value(json).unwrap();
+        // Header 20 points, rows 20 points: the middle of the second row.
+        let events = click_at(&view, |_| egui::pos2(40.0, 8.0 + 20.0 + 20.0 + 10.0));
+        assert_eq!(events, [Event::TableSelect { id: "parts".into(), row: Some("1".into()) }]);
+    }
+
+    /// Three buttons in a row too narrow for them: the third one goes to the next line, where
+    /// a click finds it.
+    #[test]
+    fn rows_wrap_buttons_to_the_next_line() {
+        let json = serde_json::json!({"v": 1, "root": {"type": "split", "ratio": 0.4,
+            "first": {"type": "row", "children": [
+                {"type": "button", "id": "a", "label": "Automatisch belegen"},
+                {"type": "button", "id": "g", "label": "Generieren + Druckliste"},
+                {"type": "button", "id": "k", "label": "Kalibrierteile"}]},
+            "second": {"type": "label", "text": "x"}}});
+        let view: View = serde_json::from_value(json).unwrap();
+        // The part is 0.4 × (400 − 8) ≈ 157 points wide: one button per line, about 22 apart.
+        let events = click_at(&view, |_| egui::pos2(30.0, 2.0 * 22.0 + 10.0));
+        assert_eq!(events, [Event::Click { id: "k".into() }]);
+    }
+
+    /// The parts table of a panel like Bingrove's: below a 3D view in the second part of a split.
+    #[test]
+    fn tables_in_a_split_below_a_mesh_view_take_clicks() {
+        let json = serde_json::json!({"v": 1, "root": {"type": "split", "ratio": 0.5,
+            "first": {"type": "label", "text": "form"},
+            "second": {"type": "column", "children": [
+                {"type": "mesh_view", "id": "m", "key": "drawer", "revision": 1, "height": 100.0},
+                {"type": "table", "id": "parts", "columns": [{"title": "Teil"}, {"title": "Anzahl", "width": 60.0}],
+                 "rows": [{"id": "0", "cells": ["baseplate_1A_5x4.stl", "1"]}, {"id": "1", "cells": ["bin_2x1_6u.stl", "2"]}],
+                 "max_height": 260.0}]}}});
+        let view: View = serde_json::from_value(json).unwrap();
+        // On the text of the second row's first cell.
+        let events = click_at(&view, |_| egui::pos2(215.0, 8.0 + 100.0 + 4.0 + 20.0 + 20.0 + 10.0));
+        assert_eq!(events, [Event::TableSelect { id: "parts".into(), row: Some("1".into()) }]);
     }
 }
