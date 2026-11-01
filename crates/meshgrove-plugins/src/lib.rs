@@ -11,6 +11,7 @@
 //! checked by [`meshgrove_core::bundle::resolve`] and applied as one change that can be undone.
 
 mod bindings;
+pub mod discovery;
 pub mod engine;
 #[cfg(feature = "panels")]
 pub mod jobs;

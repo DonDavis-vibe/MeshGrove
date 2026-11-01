@@ -94,6 +94,12 @@ pub enum SettingsChange {
     /// Installs the plugin in this `.wasm` file (copied into Meshgrove's plugins folder).
     #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
     InstallPlugin(PathBuf),
+    /// Asks for a plugin file in the system's file dialog, then installs it.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    PickPlugin,
+    /// Opens Meshgrove's plugins folder in the file manager.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    OpenPluginFolder,
     /// Switches a plugin on (as its file is now) or off.
     #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
     PluginEnabled {
@@ -734,6 +740,13 @@ impl SettingsDialog {
         self.editor_form = Default::default();
         self.mouse.reset();
         self.refresh_cache_size();
+        self.plugins.search_again();
+    }
+
+    /// A plugin came or went: the plugin search looks again.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    pub fn plugins_changed(&mut self) {
+        self.plugins.search_again();
     }
 
     /// Opens the window on the category named as in [`Category::from_name`] (unknown names keep the current one).

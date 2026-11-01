@@ -252,6 +252,9 @@ pub struct App {
     /// A path asked for a plugin (a file to open or where to save one).
     #[cfg(feature = "plugins")]
     plugin_prompt: Option<plugins::PathPrompt>,
+    /// The system's file dialog for a plugin to install, and the one open now.
+    #[cfg(feature = "plugins")]
+    plugin_dialog: plugins::PluginDialog,
 }
 
 impl App {
@@ -439,6 +442,8 @@ impl App {
             plugins: crate::plugins::PluginHost::new(cc.egui_ctx.clone()),
             #[cfg(feature = "plugins")]
             plugin_prompt: None,
+            #[cfg(feature = "plugins")]
+            plugin_dialog: plugins::PluginDialog::new(cc),
             config,
             config_error,
         };
@@ -1526,6 +1531,8 @@ impl App {
         for change in changes {
             match change {
                 change @ (SettingsChange::InstallPlugin(_)
+                | SettingsChange::PickPlugin
+                | SettingsChange::OpenPluginFolder
                 | SettingsChange::PluginEnabled { .. }
                 | SettingsChange::PluginGrants { .. }
                 | SettingsChange::RemovePlugin(_)) => {

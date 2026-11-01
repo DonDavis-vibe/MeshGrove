@@ -410,13 +410,17 @@ server, to try the tools from there. Meshgrove's own tests run `examples/plugins
 
 ## Installing and granting
 
-1. **Install:** Settings → Plugins. Type or drop the path of the `.wasm` file and click
-   "Install". Meshgrove checks the plugin, copies it to
-   `~/.local/share/meshgrove/plugins/<id>/<id>.wasm` (the data folder on Windows and macOS), and
+1. **Install:** Settings → Plugins. Meshgrove looks for plugins by itself: `.wasm` files directly
+   in its plugins folder ("Open plugins folder"), in Downloads, in the import folders and in the
+   folders plugins were installed from before. It checks each file the way an install would and
+   offers the plugins it finds with "Install". "Browse …" opens the system's file dialog, and a
+   `.wasm` file dropped on the window is installed as well. Meshgrove copies the plugin to
+   `~/.local/share/meshgrove/plugins/<id>/<id>.wasm` (the data folder on Windows and macOS) and
    switches it on with **nothing granted**.
 2. **Grant:** tick what it may do. Its panels appear under "Plugins ▾" next to "View".
-3. **Update:** install the new file the same way. The grants stay, but a plugin that asks for
-   more stays off until it is switched on again.
+3. **Update:** a file of an installed plugin with the same or a newer version is offered with
+   "Update"; so after installing once from your build folder, each new build shows up there.
+   The grants stay, but a plugin that asks for more stays off until it is switched on again.
 4. **Outside changes:** a file changed outside Meshgrove (another hash than the one enabled)
    does not run until the user switches it on again.
 5. **Remove:** "Remove" deletes the installed file. The plugin's data and staging folders

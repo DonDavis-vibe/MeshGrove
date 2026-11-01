@@ -736,6 +736,10 @@ pub struct Config {
     /// Installed plugins (WebAssembly components) and what the user allowed them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginConfig>,
+    /// Folders a plugin was installed from, newest first: the plugin search looks there too,
+    /// and the file dialog opens in the first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub plugin_folders: Vec<PathBuf>,
 }
 
 /// One installed plugin. Its rights hold for the file with hash `blake3` only: a changed file
@@ -1156,6 +1160,7 @@ impl Default for Config {
             gallery_view: GalleryView::Grid,
             list_columns: ListColumns::default(),
             plugins: Vec::new(),
+            plugin_folders: Vec::new(),
         }
     }
 }

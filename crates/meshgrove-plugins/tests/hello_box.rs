@@ -392,3 +392,25 @@ fn plugins_of_an_older_minor_api_still_load() {
     let Err(Error::Load(why)) = other else { panic!("loaded by a 1.0 host") };
     assert!(why.contains("built for plugin API 0.1.0") && why.contains("an older Meshgrove"), "{why}");
 }
+
+#[test]
+fn discovery_offers_the_plugin_once_and_not_when_installed() {
+    use meshgrove_plugins::discovery::{Folder, discover};
+    let Some(bytes) = wasm() else { return };
+    let base = tempfile::tempdir().unwrap();
+    let (put, downloads) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    std::fs::write(put.path().join("hello_box.wasm"), &bytes).unwrap();
+    std::fs::write(downloads.path().join("hello-box-copy.wasm"), &bytes).unwrap();
+    let folders = [
+        Folder { path: put.path().to_path_buf(), report_problems: true },
+        Folder { path: downloads.path().to_path_buf(), report_problems: false },
+    ];
+    let found = discover(&folders, &Settings::new(base.path()), &[]);
+    assert_eq!(found.len(), 1, "the copy has the same content: {found:?}");
+    let offer = found[0].plugin.as_ref().unwrap();
+    assert_eq!(offer.id, "hello-box");
+    assert!(!offer.name.is_empty() && !offer.version.is_empty());
+    assert_eq!(found[0].path, put.path().join("hello_box.wasm"));
+    let installed = [found[0].hash.clone()];
+    assert!(discover(&folders, &Settings::new(base.path()), &installed).is_empty());
+}

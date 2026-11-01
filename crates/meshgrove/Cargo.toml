@@ -44,10 +44,12 @@ base64.workspace = true
 meshgrove-plugin-api.workspace = true
 # Runtime plugins (WebAssembly components); feature "plugins".
 meshgrove-plugins = { workspace = true, optional = true, features = ["panels"] }
+# The system's file dialog for picking a plugin (the desktop portal on Linux).
+rfd = { version = "0.17", optional = true }
 
 [features]
 default = ["plugins"]
-plugins = ["dep:meshgrove-plugins"]
+plugins = ["dep:meshgrove-plugins", "dep:rfd"]
 
 [dev-dependencies]
 tempfile = "3"

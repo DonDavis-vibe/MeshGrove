@@ -1,7 +1,11 @@
 //! The plugins in the window: their panels as tabs, what the panels ask for (effects), the
 //! "Plugins" menu, opening files with a plugin, and installing, granting and removing plugins.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
 use egui::{RichText, Ui};
@@ -24,6 +28,32 @@ pub(super) enum PathPrompt {
     Save { from: PathBuf, input: String },
 }
 
+/// The system's file dialog for picking a plugin (rfd: the desktop portal on Linux). It is asked
+/// from the UI thread and its answer polled each frame, so the window keeps drawing meanwhile.
+pub(super) struct PluginDialog {
+    /// Set up with the window as its parent.
+    base: rfd::AsyncFileDialog,
+    open: Option<Pin<Box<dyn Future<Output = Option<rfd::FileHandle>>>>>,
+}
+
+impl PluginDialog {
+    pub(super) fn new(cc: &eframe::CreationContext<'_>) -> PluginDialog {
+        PluginDialog { base: rfd::AsyncFileDialog::new().set_parent(cc), open: None }
+    }
+}
+
+/// Wakes the UI when the dialog answers.
+struct Repaint(egui::Context);
+
+impl Wake for Repaint {
+    fn wake(self: Arc<Self>) {
+        self.0.request_repaint();
+    }
+}
+
+/// How many folders plugins came from are remembered for the search.
+const PLUGIN_FOLDERS: usize = 4;
+
 impl App {
     pub(super) fn plugin_info(&self) -> HostInfo {
         let language = if rust_i18n::locale().starts_with("de") { "de" } else { "en" };
@@ -37,6 +67,15 @@ impl App {
 
     /// Takes in what the plugins did since the last frame.
     pub(super) fn poll_plugins(&mut self) {
+        if let Some(open) = &mut self.plugin_dialog.open {
+            let waker = Waker::from(Arc::new(Repaint(self.egui_ctx.clone())));
+            if let Poll::Ready(picked) = open.as_mut().poll(&mut Context::from_waker(&waker)) {
+                self.plugin_dialog.open = None;
+                if let Some(file) = picked {
+                    self.apply_settings(vec![SettingsChange::InstallPlugin(file.path().to_path_buf())]);
+                }
+            }
+        }
         // Language, theme or printers changed: the plugins hear of it (tools load anew with it).
         let info = self.plugin_info();
         if self.plugins.info().is_some_and(|known| *known != info) {
@@ -361,13 +400,47 @@ impl App {
     /// A change on the settings' plugins page; `true`: the plugins load again.
     pub(super) fn plugin_setting(&mut self, change: SettingsChange) -> bool {
         match change {
-            SettingsChange::InstallPlugin(file) => match self.install_plugin(&file) {
-                Ok(name) => self.toast(t!("plugins.installed", name = name).into_owned()),
-                Err(e) => {
-                    self.toast(t!("plugins.install_failed", error = e).into_owned());
-                    return false;
+            SettingsChange::InstallPlugin(file) => {
+                let installed = self.install_plugin(&file);
+                self.settings.plugins_changed();
+                match installed {
+                    Ok(name) => {
+                        self.toast(t!("plugins.installed", name = name).into_owned());
+                        self.remember_plugin_folder(&file);
+                    }
+                    Err(e) => {
+                        self.toast(t!("plugins.install_failed", error = e).into_owned());
+                        return false;
+                    }
                 }
-            },
+            }
+            SettingsChange::PickPlugin => {
+                if self.plugin_dialog.open.is_none() {
+                    let mut dialog = self
+                        .plugin_dialog
+                        .base
+                        .clone()
+                        .set_title(t!("plugins.pick_title"))
+                        // Linux dialogs match the pattern by case.
+                        .add_filter(t!("plugins.filter"), &["wasm", "WASM"]);
+                    let start =
+                        self.config.plugin_folders.iter().find(|d| d.is_dir()).cloned().or_else(dirs::download_dir);
+                    if let Some(dir) = start {
+                        dialog = dialog.set_directory(dir);
+                    }
+                    self.plugin_dialog.open = Some(Box::pin(dialog.pick_file()));
+                }
+                return false;
+            }
+            SettingsChange::OpenPluginFolder => {
+                let base = self.plugins.base().to_path_buf();
+                if let Err(e) =
+                    std::fs::create_dir_all(&base).and_then(|()| crate::actions::open_with_default_app(&base))
+                {
+                    self.toast(format!("{}: {e}", base.display()));
+                }
+                return false;
+            }
             SettingsChange::PluginEnabled { id, enabled } => {
                 let hash = self.plugins.rows().iter().find(|r| r.id == id).and_then(|r| r.hash.clone());
                 if let Some(entry) = self.config.plugins.iter_mut().find(|p| p.id == id) {
@@ -396,10 +469,29 @@ impl App {
                     }
                 }
                 self.config.plugins.retain(|p| p.id != id);
+                // Its file may be offered again from where it came.
+                self.settings.plugins_changed();
             }
             _ => return false,
         }
         true
+    }
+
+    /// The folder a plugin was installed from goes first in the remembered ones. Not Meshgrove's
+    /// plugins folder, Downloads or an import folder: the search looks there anyway, and there
+    /// other `.wasm` files are no plugins gone wrong.
+    fn remember_plugin_folder(&mut self, file: &Path) {
+        let Some(dir) = file.parent().filter(|d| !d.as_os_str().is_empty()) else { return };
+        if dir.starts_with(self.plugins.base())
+            || dirs::download_dir().is_some_and(|d| d == dir)
+            || self.config.import.folders.iter().any(|f| f == dir)
+        {
+            return;
+        }
+        let folders = &mut self.config.plugin_folders;
+        folders.retain(|d| d != dir);
+        folders.insert(0, dir.to_path_buf());
+        folders.truncate(PLUGIN_FOLDERS);
     }
 
     /// Copies the plugin into `<plugins>/<id>/` and sets it up in the config: switched on with
