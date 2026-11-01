@@ -3388,6 +3388,7 @@ dependencies = [
  "crossbeam-channel",
  "dirs",
  "env_logger",
+ "glam",
  "log",
  "meshgrove-core",
  "meshgrove-plugin-api",

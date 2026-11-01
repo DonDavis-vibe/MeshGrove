@@ -139,7 +139,7 @@ fn load(path: &Path) -> Result<Mesh, String> {
 }
 
 /// `mesh` with at most `max` triangles: the vertices in each cell of a grid melt into one
-/// (vertex clustering), the grid as fine as the budget allows. Small parts may vanish and thin
+/// (vertex clustering), the grid as fine as the budget allows (one or two passes). Small parts may vanish and thin
 /// walls close, but outlines and proportions stay — enough for silhouettes and measuring.
 pub fn simplify(mesh: &Mesh, max: usize) -> MeshData {
     let tris: Vec<[[f32; 3]; 3]> = mesh.triangles().map(|t| t.map(|v| v.to_array())).collect();
@@ -148,17 +148,25 @@ pub fn simplify(mesh: &Mesh, max: usize) -> MeshData {
         return indexed(&tris);
     }
     let Some(bounds) = mesh.bounds() else { return MeshData::default() };
-    let (min, size) = (bounds.min.to_array(), bounds.size().max_element().max(1e-6));
-    // About two triangles per surface cell: start a little finer than the budget, coarsen
-    // until it fits.
-    let mut cells = ((max as f32 / 2.0).sqrt() * 1.5).max(2.0);
+    let min = bounds.min.to_array();
+    // A surface cut into cells of edge `step` gives about two triangles per cell: start from
+    // the area, then correct by how far off the count was (it goes with 1/step²).
+    let area: f64 = tris
+        .iter()
+        .map(|[a, b, c]| {
+            let (u, v) = (glam::Vec3::from(*b) - glam::Vec3::from(*a), glam::Vec3::from(*c) - glam::Vec3::from(*a));
+            f64::from(u.cross(v).length() / 2.0)
+        })
+        .sum();
+    let largest = bounds.size().max_element().max(1e-6);
+    let mut step = ((2.0 * area / max as f64).sqrt() as f32).clamp(largest / 4096.0, largest);
     loop {
-        let step = size / cells;
         let data = clustered(&tris, |p| [0, 1, 2].map(|i| ((p[i] - min[i]) / step).floor() as i32));
-        if data.triangles() <= max || cells <= 1.0 {
+        let count = data.triangles();
+        if count <= max || step >= largest {
             return data;
         }
-        cells *= 0.8;
+        step = (step * ((count as f32 / max as f32).sqrt() * 1.05).max(1.1)).min(largest);
     }
 }
 
