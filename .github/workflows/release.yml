@@ -89,7 +89,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-mcp
+      # meshgrove-mcp on its own: built together with the GUI, it gets the GUI's plugin panels
+      # (cargo unifies features) and no longer links with thin LTO.
+      - shell: bash
+        run: |
+          cargo build --release -p meshgrove -p meshgrove-step
+          cargo build --release -p meshgrove-mcp
 
       - name: Check the programs
         shell: bash
@@ -209,10 +214,14 @@ jobs:
         run: |
           for arch in aarch64:arm64 x86_64:x64; do
             installed="$VCPKG_ROOT/installed/${arch#*:}-osx-meshgrove"
-            PKG_CONFIG_LIBDIR="$installed/lib/pkgconfig" PKG_CONFIG_ALLOW_CROSS=1 LIBARCHIVE_STATIC=1 \
-            OCCT_INCLUDE="$installed/include/opencascade" OCCT_LIB="$installed/lib" OCCT_STATIC=1 \
-            MACOSX_DEPLOYMENT_TARGET=11.0 \
-              cargo build --release --target "${arch%%:*}-apple-darwin" -p meshgrove -p meshgrove-step -p meshgrove-mcp
+            # meshgrove-mcp on its own: built together with the GUI, it gets the GUI's plugin
+            # panels (cargo unifies features) and no longer links with thin LTO.
+            for packages in "-p meshgrove -p meshgrove-step" "-p meshgrove-mcp"; do
+              PKG_CONFIG_LIBDIR="$installed/lib/pkgconfig" PKG_CONFIG_ALLOW_CROSS=1 LIBARCHIVE_STATIC=1 \
+              OCCT_INCLUDE="$installed/include/opencascade" OCCT_LIB="$installed/lib" OCCT_STATIC=1 \
+              MACOSX_DEPLOYMENT_TARGET=11.0 \
+                cargo build --release --target "${arch%%:*}-apple-darwin" $packages
+            done
           done
 
       - name: Package
@@ -311,7 +320,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer -p meshgrove-mcp
+      # meshgrove-mcp on its own: built together with the GUI, it gets the GUI's plugin panels
+      # (cargo unifies features) and no longer links with thin LTO.
+      - run: |
+          cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
+          cargo build --release -p meshgrove-mcp
 
       - name: Check the programs
         run: |
@@ -395,7 +408,11 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: ${{ matrix.distro }}
-      - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer -p meshgrove-mcp
+      # meshgrove-mcp on its own: built together with the GUI, it gets the GUI's plugin panels
+      # (cargo unifies features) and no longer links with thin LTO.
+      - run: |
+          cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
+          cargo build --release -p meshgrove-mcp
       - name: Package
         run: |
           target/release/meshgrove-step-mesher --write-test-cube /tmp/cube.step
@@ -465,7 +482,11 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: fedora44
-      - run: cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer -p meshgrove-mcp
+      # meshgrove-mcp on its own: built together with the GUI, it gets the GUI's plugin panels
+      # (cargo unifies features) and no longer links with thin LTO.
+      - run: |
+          cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
+          cargo build --release -p meshgrove-mcp
       - name: Package
         run: |
           target/release/meshgrove-step-mesher --write-test-cube /tmp/cube.step
