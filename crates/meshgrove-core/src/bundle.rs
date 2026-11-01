@@ -438,6 +438,10 @@ mod tests {
         assert!(matches!(&ops[..2], [ApplyOp::Copy { folder: true, .. }, ApplyOp::Index { seen: true, .. }]));
 
         let report = lib.apply_change("plugin:bingrove", &resolved.title, &ops).unwrap();
+        // The journal names the staging folder (a redo copies from it): cleaning up keeps it.
+        let named = serde_json::to_string(&resolved.from).unwrap();
+        assert!(lib.journal_mentions(named.trim_matches('"')).unwrap());
+        assert!(!lib.journal_mentions("/elsewhere/staging/x").unwrap());
         assert_eq!(report.skipped, 0, "{report:?}");
         let bin = resolved.path_of("parts/bin_1x1.stl");
         assert!(bin.is_file() && f.out.join("parts").join("bin_1x1.stl").is_file(), "copied; staging stays");

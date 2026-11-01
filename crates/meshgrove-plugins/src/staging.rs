@@ -81,6 +81,47 @@ pub(crate) fn new_uid() -> String {
     blake3::hash(seed.as_bytes()).to_hex()[..16].to_owned()
 }
 
+/// What [`sweep`] removed.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Swept {
+    pub staging: usize,
+    pub leftovers: usize,
+}
+
+/// Cleans the plugins folder `base` up: staging folders nothing refers to any more (`referenced`
+/// says whether a change in the journal or a waiting suggestion names a folder), and panel,
+/// temporary and loading folders a crash left behind. Only what is older than `age`, so work
+/// going on now (a tool call, an open panel) keeps its folders.
+pub fn sweep(base: &Path, referenced: &dyn Fn(&Path) -> bool, age: std::time::Duration) -> Swept {
+    let old =
+        |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|e| e >= age));
+    let dirs = |p: PathBuf| -> Vec<PathBuf> {
+        std::fs::read_dir(p).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()
+    };
+    let mut swept = Swept::default();
+    let remove = |p: &Path, count: &mut usize| {
+        if std::fs::remove_dir_all(p).is_ok() {
+            *count += 1;
+        }
+    };
+    for p in dirs(base.join(".load")).iter().filter(|p| old(p)) {
+        remove(p, &mut swept.leftovers);
+    }
+    for plugin in
+        dirs(base.to_path_buf()).iter().filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
+    {
+        for p in dirs(plugin.join("staging")).iter().filter(|p| old(p) && !referenced(p)) {
+            remove(p, &mut swept.staging);
+        }
+        for sub in ["panels", "tmp"] {
+            for p in dirs(plugin.join(sub)).iter().filter(|p| old(p)) {
+                remove(p, &mut swept.leftovers);
+            }
+        }
+    }
+    swept
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,5 +145,26 @@ mod tests {
         let given = Staging::at(&dir.path().join("given")).unwrap();
         given.remove().unwrap();
         assert!(dir.path().join("given").is_dir(), "a given folder stays");
+    }
+
+    #[test]
+    fn sweeping_keeps_what_is_referenced_or_new() {
+        let base = tempfile::tempdir().unwrap();
+        let kept = Staging::new(base.path(), "bingrove").unwrap();
+        let gone = Staging::new(base.path(), "bingrove").unwrap();
+        let panel = base.path().join("bingrove").join("panels").join("x").join("out");
+        let tmp = base.path().join("bingrove").join("tmp").join("y");
+        let load = base.path().join(".load").join("z");
+        for d in [&panel, &tmp, &load] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let named = kept.out().parent().unwrap().to_path_buf();
+        let referenced = |p: &Path| p == named;
+        // Everything is new: nothing goes.
+        assert_eq!(sweep(base.path(), &referenced, std::time::Duration::from_secs(3600)), Swept::default());
+        let swept = sweep(base.path(), &referenced, std::time::Duration::ZERO);
+        assert_eq!(swept, Swept { staging: 1, leftovers: 3 });
+        assert!(kept.out().is_dir() && !gone.out().exists());
+        assert!(!panel.exists() && !tmp.exists() && !load.exists());
     }
 }

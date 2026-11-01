@@ -343,6 +343,15 @@ impl ProposalStore {
     }
 
     /// Batches waiting for a decision.
+    /// Whether a suggestion still waiting names `text` (a path as JSON writes it).
+    pub fn waiting_mentions(&self, text: &str) -> ToolResult<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM proposals WHERE state = 'pending' AND instr(payload, ?1) > 0)",
+            [text],
+            |r| r.get(0),
+        )?)
+    }
+
     pub fn pending_count(&self) -> ToolResult<usize> {
         let n: i64 =
             self.conn

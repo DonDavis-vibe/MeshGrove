@@ -932,6 +932,16 @@ impl Library {
         Ok(report)
     }
 
+    /// Whether a change in the journal — done, or undone and waiting for a redo — names `text`
+    /// (a path as JSON writes it).
+    pub fn journal_mentions(&self, text: &str) -> Result<bool, Error> {
+        self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM changes WHERE instr(ops, ?1) > 0 OR instr(undo, ?1) > 0)",
+            [text],
+            |r| r.get(0),
+        )
+    }
+
     /// The newest changes.
     pub fn changes(&self, limit: usize) -> Result<Vec<ChangeInfo>, Error> {
         let mut stmt = self.conn.prepare(

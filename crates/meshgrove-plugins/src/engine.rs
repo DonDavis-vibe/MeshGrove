@@ -49,9 +49,29 @@ pub struct Compiled {
 /// `<cache>/<blake3>-<engine>.cwasm`: the engine part changes with wasmtime's version and
 /// settings, so an update never loads code compiled by another one.
 fn cache_file(cache: &Path, hash: &str) -> PathBuf {
+    cache.join(format!("{hash}-{}.cwasm", engine_tag()))
+}
+
+/// This engine's part of the cache files' names.
+fn engine_tag() -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     engine().precompile_compatibility_hash().hash(&mut hasher);
-    cache.join(format!("{hash}-{:016x}.cwasm", hasher.finish()))
+    format!("{:016x}", hasher.finish())
+}
+
+/// Removes compiled code another wasmtime (an older Meshgrove) left in `cache`, and code of
+/// plugins whose hash is not in `keep`; how many files went.
+pub fn trim_cache(cache: &Path, keep: &[String]) -> usize {
+    let suffix = format!("-{}.cwasm", engine_tag());
+    let mut removed = 0;
+    for entry in std::fs::read_dir(cache).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let ours = name.strip_suffix(&suffix).is_some_and(|hash| keep.iter().any(|k| k.eq_ignore_ascii_case(hash)));
+        if name.ends_with(".cwasm") && !ours && std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// Compiles the plugin `bytes`, or loads what an earlier run compiled from `cache`.
@@ -98,4 +118,25 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension(format!("tmp{}", std::process::id()));
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, path)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_cache_keeps_this_engines_code_of_installed_plugins() {
+        let dir = tempfile::tempdir().unwrap();
+        let tag = super::engine_tag();
+        let names = [
+            format!("aaa-{tag}.cwasm"),
+            "aaa-0000000000000000.cwasm".into(),
+            format!("bbb-{tag}.cwasm"),
+            "notes.txt".into(),
+        ];
+        for n in &names {
+            std::fs::write(dir.path().join(n), b"x").unwrap();
+        }
+        assert_eq!(super::trim_cache(dir.path(), &["AAA".into()]), 2);
+        assert!(dir.path().join(&names[0]).is_file() && dir.path().join("notes.txt").is_file());
+        assert!(!dir.path().join(&names[1]).exists() && !dir.path().join(&names[2]).exists());
+    }
 }

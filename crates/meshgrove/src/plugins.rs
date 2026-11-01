@@ -468,6 +468,40 @@ impl PluginHost {
     }
 }
 
+/// Cleans the plugins folder `base` up, on a thread: staging folders that no change in the
+/// journal of `db` (a redo copies from them) and no waiting suggestion names, folders a crash
+/// left behind, and compiled code of another wasmtime or of plugins no longer installed
+/// (`installed`: their hashes).
+pub fn sweep(base: PathBuf, db: PathBuf, installed: Vec<String>) {
+    std::thread::Builder::new()
+        .name("plugin-sweep".into())
+        .spawn(move || {
+            let cache = meshgrove_plugins::engine::trim_cache(&base.join(".cache"), &installed);
+            // Without the journal nothing can be told apart: the staging folders stay.
+            let Some(lib) = meshgrove_core::db::Library::open_reader(&db) else { return };
+            let store = meshgrove_core::ai::proposals::ProposalStore::default_location()
+                .filter(|p| p.exists())
+                .map(|p| meshgrove_core::ai::proposals::ProposalStore::open(&p));
+            if matches!(store, Some(Err(_))) {
+                return;
+            }
+            let store = store.and_then(Result::ok);
+            let referenced = |dir: &Path| {
+                let text = serde_json::to_string(dir).unwrap_or_default();
+                let text = text.trim_matches('"');
+                lib.journal_mentions(text).unwrap_or(true)
+                    || store.as_ref().is_some_and(|s| s.waiting_mentions(text).unwrap_or(true))
+            };
+            let swept = meshgrove_plugins::staging::sweep(&base, &referenced, Duration::from_secs(3600));
+            log::info!(
+                "plugins folder cleaned up: {} staging folders, {} leftovers, {cache} compiled files",
+                swept.staging,
+                swept.leftovers
+            );
+        })
+        .expect("a thread for cleaning up the plugins folder");
+}
+
 /// What is installed: every plugin of `config`, loaded or (to show what it is) read once.
 fn rows(config: &Config, base: &Path, registry: &Registry) -> Vec<PluginRow> {
     config

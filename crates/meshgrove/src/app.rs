@@ -443,7 +443,11 @@ impl App {
             config_error,
         };
         #[cfg(feature = "plugins")]
-        app.reload_plugins();
+        {
+            app.reload_plugins();
+            let installed = app.config.plugins.iter().map(|p| p.blake3.clone()).collect();
+            crate::plugins::sweep(app.plugins.base().to_path_buf(), app.db_path.clone(), installed);
+        }
         Ok(app)
     }
 
