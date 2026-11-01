@@ -42,6 +42,8 @@ pub struct Settings {
     pub tool_deadline: Duration,
     /// How long a panel may take for one event ([`EVENT_DEADLINE`]).
     pub event_deadline: Duration,
+    /// The plugin API this host offers ([`API_VERSION`]; tests pretend to be another).
+    pub host_api: String,
 }
 
 impl Settings {
@@ -61,6 +63,7 @@ impl Settings {
             },
             tool_deadline: TOOL_DEADLINE,
             event_deadline: EVENT_DEADLINE,
+            host_api: API_VERSION.into(),
         }
     }
 
@@ -146,10 +149,7 @@ impl Plugin {
         let cache = settings.cache.then(|| settings.base.join(".cache"));
         let compiled = crate::engine::compile(bytes, cache.as_deref())?;
         match crate::engine::exported_api(&compiled.component) {
-            Some(v) if meshgrove_plugin_api::api_compatible(&v) => {}
-            Some(v) => {
-                return Err(Error::Load(format!("built for plugin API {v}, this Meshgrove supports {API_VERSION}")));
-            }
+            Some(v) => meshgrove_plugin_api::api_check(&settings.host_api, &v).map_err(Error::Load)?,
             None => return Err(Error::Load("not a Meshgrove plugin: it exports no meshgrove:plugin/plugin".into())),
         }
         let mut linker = Linker::new(crate::engine::engine());
@@ -166,7 +166,7 @@ impl Plugin {
             settings,
         };
         let (manifest, tools) = plugin.introduce()?;
-        manifest.check().map_err(Error::Load)?;
+        manifest.check_for(&plugin.settings.host_api).map_err(Error::Load)?;
         meshgrove_plugin_api::manifest::check_tools(&manifest.id, &tools).map_err(Error::Load)?;
         plugin.manifest = manifest;
         plugin.tools = tools;

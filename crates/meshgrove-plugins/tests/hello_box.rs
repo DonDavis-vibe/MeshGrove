@@ -379,3 +379,16 @@ fn cancel_stops_a_running_call() {
     assert!(matches!(err, Error::Cancelled), "{err}");
     assert!(started.elapsed() < Duration::from_secs(10), "long before the 60 s deadline");
 }
+
+/// The host a minor version on (0.2) still loads hello-box (0.1); a host of another major
+/// version refuses it and says why.
+#[test]
+fn plugins_of_an_older_minor_api_still_load() {
+    let Some(bytes) = wasm() else { return };
+    let base = tempfile::tempdir().unwrap();
+    let later = load(&bytes, Settings { host_api: "0.2.0".into(), ..granted(base.path()) });
+    assert!(later.call_tool("make_box", &json!({}), &CancelToken::new()).is_ok());
+    let other = Plugin::from_bytes(&bytes, Settings { host_api: "1.0.0".into(), ..granted(base.path()) });
+    let Err(Error::Load(why)) = other else { panic!("loaded by a 1.0 host") };
+    assert!(why.contains("built for plugin API 0.1.0") && why.contains("an older Meshgrove"), "{why}");
+}

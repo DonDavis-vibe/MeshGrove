@@ -157,8 +157,13 @@ fn valid_local_id(id: &str) -> bool {
 }
 
 impl Manifest {
-    /// Whether the manifest is usable; the text says what is wrong.
+    /// Whether the manifest is usable on this host; the text says what is wrong.
     pub fn check(&self) -> Result<(), String> {
+        self.check_for(crate::API_VERSION)
+    }
+
+    /// [`Manifest::check`] for a host of API `host`.
+    pub fn check_for(&self, host: &str) -> Result<(), String> {
         if !valid_plugin_id(&self.id) {
             return Err(format!("plugin id {:?} is not of the form [a-z][a-z0-9-]{{1,30}}", self.id));
         }
@@ -168,9 +173,7 @@ impl Manifest {
         if self.version.trim().is_empty() {
             return Err("the version is empty".into());
         }
-        if !crate::api_compatible(&self.api) {
-            return Err(format!("built for plugin API {}, this Meshgrove supports {}", self.api, crate::API_VERSION));
-        }
+        crate::api_check(host, &self.api)?;
         for (i, panel) in self.panels.iter().enumerate() {
             if !valid_local_id(&panel.id) || self.panels[..i].iter().any(|p| p.id == panel.id) {
                 return Err(format!("panel id {:?} is invalid or used twice", panel.id));
@@ -236,6 +239,9 @@ mod tests {
         assert!(Manifest { id: "Hello".into(), ..manifest() }.check().is_err());
         assert!(Manifest { id: "h".into(), ..manifest() }.check().is_err());
         assert!(Manifest { api: "0.9.0".into(), ..manifest() }.check().unwrap_err().contains("0.9.0"));
+        let one = Manifest { api: "1.0.0".into(), ..manifest() };
+        assert!(one.check_for("0.2.0").unwrap_err().contains("built for plugin API 1.0.0"));
+        assert_eq!(manifest().check_for("0.2.0"), Ok(()), "a 0.2 host runs 0.1 plugins");
         let twice = vec![PanelDef { id: "a".into(), title: "A".into() }; 2];
         assert!(Manifest { panels: twice, ..manifest() }.check().is_err());
         let unknown: Manifest = serde_json::from_str(
