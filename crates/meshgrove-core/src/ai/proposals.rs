@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::vocab::{MAX_TAG_CHARS, TagStatus, Vocabulary, valid_tag};
 use super::{Context, ToolError, ToolResult};
-use crate::config::AccessClass;
+use crate::config::{AccessClass, Config};
 use crate::db::nanos;
 
 const STORE_VERSION: i32 = 1;
@@ -27,11 +27,11 @@ const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS batches (
     id INTEGER PRIMARY KEY,
     uid TEXT NOT NULL UNIQUE,
-    -- 'mcp', 'endpoint' or 'chat'
+    -- 'mcp', 'endpoint', 'chat' or 'plugin:<id>'
     source TEXT NOT NULL,
     client TEXT,
     access_class TEXT NOT NULL,
-    -- 'tags', 'note', 'list', 'moves' or 'mixed'
+    -- 'tags', 'note', 'list', 'moves', 'bundle' or 'mixed'
     kind TEXT NOT NULL,
     title TEXT NOT NULL,
     summary TEXT,
@@ -100,7 +100,7 @@ pub struct Target {
 /// Who suggests.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Origin {
-    /// "mcp", "endpoint" or "chat".
+    /// "mcp", "endpoint", "chat" or "plugin:<id>".
     pub source: String,
     /// The client's name ("claude-desktop", "lm-studio" …) or the endpoint's model.
     pub client: Option<String>,
@@ -114,6 +114,8 @@ pub enum ProposalKind {
     Note,
     List,
     Move,
+    /// Files a plugin made, with their tags and lists ([`crate::bundle::ResolvedBundle`]).
+    Bundle,
 }
 
 impl ProposalKind {
@@ -123,6 +125,7 @@ impl ProposalKind {
             ProposalKind::Note => "note",
             ProposalKind::List => "list",
             ProposalKind::Move => "move",
+            ProposalKind::Bundle => "bundle",
         }
     }
 
@@ -131,6 +134,7 @@ impl ProposalKind {
             "note" => ProposalKind::Note,
             "list" => ProposalKind::List,
             "move" => ProposalKind::Move,
+            "bundle" => ProposalKind::Bundle,
             _ => ProposalKind::Tags,
         }
     }
@@ -339,6 +343,15 @@ impl ProposalStore {
     }
 
     /// Batches waiting for a decision.
+    /// Whether a suggestion still waiting names `text` (a path as JSON writes it).
+    pub fn waiting_mentions(&self, text: &str) -> ToolResult<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM proposals WHERE state = 'pending' AND instr(payload, ?1) > 0)",
+            [text],
+            |r| r.get(0),
+        )?)
+    }
+
     pub fn pending_count(&self) -> ToolResult<usize> {
         let n: i64 =
             self.conn
@@ -697,6 +710,12 @@ pub fn to_ops(p: &Proposal, picked: &Picked, inbox_done: bool) -> Vec<crate::cha
                 ops.push(ApplyOp::List { kind, name: list.name, query: list.query, items });
             }
         }
+        (ProposalKind::Bundle, _) if picked.whole => {
+            if let Ok(bundle) = serde_json::from_value::<crate::bundle::ResolvedBundle>(p.payload.clone()) {
+                // Its place may have been taken while it waited.
+                ops.extend(bundle.at_free_place().ops());
+            }
+        }
         _ => {}
     }
     if inbox_done
@@ -1038,6 +1057,38 @@ pub fn propose_list(
     let batch = NewBatch { origin, kind: "list", title: name, summary: None, inbox_done: false };
     let (_, uid) = store.insert_batch(&batch, &[proposal])?;
     Ok(Receipt { batch: uid, items: count, rejected, tags: Vec::new(), message: next_step(cx, origin).into() })
+}
+
+/// Files a plugin made, checked and placed ([`crate::bundle::resolve`]): one suggestion,
+/// accepted by itself only where the user lets this plugin's be.
+pub fn propose_bundle(
+    config: &Config,
+    store: &mut ProposalStore,
+    origin: &Origin,
+    bundle: &crate::bundle::ResolvedBundle,
+) -> ToolResult<Receipt> {
+    check_room(store, origin, 1)?;
+    let proposal = NewProposal {
+        kind: ProposalKind::Bundle,
+        target: None,
+        payload: serde_json::to_value(bundle).map_err(|e| ToolError::Invalid(e.to_string()))?,
+        reason: bundle.summary.clone(),
+        confidence: None,
+    };
+    let summary = bundle.summary.as_deref();
+    let batch = NewBatch { origin, kind: "bundle", title: &bundle.title, summary, inbox_done: false };
+    let (_, uid) = store.insert_batch(&batch, &[proposal])?;
+    let auto = config.ai.auto_accept_since.is_some()
+        && origin.source != "chat"
+        && config.plugin(&bundle.plugin).is_some_and(|p| p.grants.auto_accept);
+    let message = if auto { ACCEPTED } else { WAITING };
+    Ok(Receipt {
+        batch: uid,
+        items: bundle.files.len(),
+        rejected: Vec::new(),
+        tags: Vec::new(),
+        message: message.into(),
+    })
 }
 
 /// Replaces tags by one: per visible file carrying one of `from`, a suggestion to remove it

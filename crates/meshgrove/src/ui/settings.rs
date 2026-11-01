@@ -91,6 +91,22 @@ pub enum SettingsChange {
     },
     ShowAiReview,
     ShowAiHistory,
+    /// Installs the plugin in this `.wasm` file (copied into Meshgrove's plugins folder).
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    InstallPlugin(PathBuf),
+    /// Switches a plugin on (as its file is now) or off.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    PluginEnabled {
+        id: String,
+        enabled: bool,
+    },
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    PluginGrants {
+        id: String,
+        grants: meshgrove_core::config::PluginGrants,
+    },
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    RemovePlugin(String),
     /// Tags in their colours, or grey.
     ColoredTags(bool),
     /// How many tags a tile shows at most, and how.
@@ -287,6 +303,8 @@ pub struct AppInfo<'a> {
     pub ai_connect: (bool, bool),
     /// The library's tags with their counts, for the placement rules.
     pub tags: &'a [(String, usize)],
+    /// The installed plugins.
+    pub plugins: &'a [super::settings_plugins::PluginRow],
 }
 
 #[derive(Default)]
@@ -323,6 +341,8 @@ pub struct SettingsDialog {
     found_printers: Vec<DetectedPrinter>,
     /// The "KI & MCP" page.
     ai: super::settings_ai::AiSettings,
+    /// The "Plugins" page.
+    plugins: super::settings_plugins::PluginSettings,
     /// The sample tile of the "Kacheln" page.
     tiles: super::settings_tiles::TileSettings,
     /// A new theme as typed.
@@ -431,6 +451,7 @@ enum Section {
     Mcp,
     Endpoint,
     AiLog,
+    Plugins,
 }
 
 impl Section {
@@ -465,6 +486,7 @@ impl Section {
             Section::Mcp => t!("settings.mcp"),
             Section::Endpoint => t!("endpoint.title"),
             Section::AiLog => t!("settings.ai_log"),
+            Section::Plugins => t!("settings.plugins"),
         }
         .into_owned()
     }
@@ -488,12 +510,13 @@ enum Category {
     Programs,
     Printer,
     Ai,
+    Plugins,
     Data,
     About,
 }
 
 impl Category {
-    const ALL: [Category; 11] = [
+    const ALL: [Category; 12] = [
         Category::General,
         Category::Library,
         Category::Tags,
@@ -503,6 +526,7 @@ impl Category {
         Category::Programs,
         Category::Printer,
         Category::Ai,
+        Category::Plugins,
         Category::Data,
         Category::About,
     ];
@@ -514,6 +538,7 @@ impl Category {
             Category::Tiles | Category::View | Category::ModelsUnits => Some(t!("settings.group_display")),
             Category::Programs | Category::Printer => Some(t!("settings.group_printing")),
             Category::Ai => Some(t!("settings.group_extend")),
+            Category::Plugins => None,
             Category::Data | Category::About => Some(t!("settings.group_app")),
         }
         .map(|s| s.into_owned())
@@ -531,6 +556,7 @@ impl Category {
             Category::Programs => t!("settings.intro_programs"),
             Category::Printer => t!("settings.intro_printer"),
             Category::Ai => t!("settings.intro_ai"),
+            Category::Plugins => t!("settings.intro_plugins"),
             Category::Data => t!("settings.intro_data"),
             Category::About => t!("settings.intro_about"),
         }
@@ -624,6 +650,7 @@ impl Category {
             Category::Programs => "🔧",
             Category::Printer => "🖨",
             Category::Ai => "✧",
+            Category::Plugins => "🧩",
             Category::Data => "💾",
             Category::About => "ℹ",
         }
@@ -641,6 +668,7 @@ impl Category {
             "programs" => Category::Programs,
             "printer" => Category::Printer,
             "ai" => Category::Ai,
+            "plugins" => Category::Plugins,
             "data" => Category::Data,
             "about" => Category::About,
             _ => return None,
@@ -658,6 +686,7 @@ impl Category {
             Category::Programs => t!("settings.cat_programs"),
             Category::Printer => t!("settings.cat_printer"),
             Category::Ai => t!("settings.cat_ai"),
+            Category::Plugins => t!("settings.cat_plugins"),
             Category::Data => t!("settings.cat_data"),
             Category::About => t!("settings.cat_about"),
         }
@@ -842,6 +871,7 @@ impl SettingsDialog {
             // With AI off, only the switch: the rest would say "AI is off" four times.
             Category::Ai if !config.ai.enabled => &[Section::Ai],
             Category::Ai => &[Section::Ai, Section::AiLibraries, Section::Mcp, Section::Endpoint, Section::AiLog],
+            Category::Plugins => &[Section::Plugins],
             Category::Data => &[Section::UserData, Section::Storage],
             Category::About => {
                 about(ui, info);
@@ -878,6 +908,7 @@ impl SettingsDialog {
                     Section::Mcp => self.ai.mcp(ui, config, info.ai_connect, changes),
                     Section::Endpoint => self.ai.endpoint(ui, config, changes),
                     Section::AiLog => self.ai.log(ui, changes),
+                    Section::Plugins => self.plugins.page(ui, config, info.plugins, changes),
                     Section::UserData => self.user_data(ui, changes),
                     Section::Storage => self.storage(ui, changes),
                 });

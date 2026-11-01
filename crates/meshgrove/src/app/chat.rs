@@ -332,6 +332,7 @@ impl App {
         };
         messages.push(json!({"role": "user", "content": content}));
         let key = secret::load(&endpoint.base_url, endpoint.key_in_keyring, &endpoint.key_env);
+        let plugins = self.plugin_tools();
         let service = self.chat.service.get_or_insert_with(|| {
             ChatService::start(self.db_path.clone(), self.library.applier(), self.egui_ctx.clone())
         });
@@ -341,6 +342,7 @@ impl App {
             config: self.config.clone(),
             key,
             mode: self.config.ai.chat_mode,
+            plugins,
         });
         self.chat.answering = msg.id;
         self.chat.messages.push(msg);
@@ -368,6 +370,21 @@ impl App {
                 ChatEvent::Applied { change, title, applied } => {
                     msg.cards.push(Card::Applied { change, title, applied });
                     self.chat.changes_stale = true;
+                }
+                ChatEvent::Pictures(pictures) => {
+                    for (mime, data) in pictures {
+                        match image::load_from_memory(&data) {
+                            Ok(img) => {
+                                let img = img.to_rgba8();
+                                let size = [img.width() as usize, img.height() as usize];
+                                let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+                                let name = format!("chat-picture-{}", msg.pictures.len());
+                                let texture = self.egui_ctx.load_texture(name, color, egui::TextureOptions::LINEAR);
+                                msg.pictures.push(crate::ui::chat::Picture(texture));
+                            }
+                            Err(e) => log::warn!("a {mime} picture from a plugin: {e}"),
+                        }
+                    }
                 }
                 ChatEvent::Notice(n) => msg.notices.push(n),
                 ChatEvent::Done(_) | ChatEvent::Failed(_) => {

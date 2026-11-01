@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS inbox (
     first_seen_ns INTEGER NOT NULL,
     -- NULL while the file waits in the inbox
     done_ns INTEGER,
-    -- 'baseline', 'user' or 'proposal:<batch uid>'
+    -- 'baseline', 'user', 'proposal:<batch uid>' or 'generated' (made by a plugin)
     done_by TEXT
 );
 CREATE INDEX IF NOT EXISTS inbox_open ON inbox(first_seen_ns) WHERE done_ns IS NULL;
@@ -308,7 +308,8 @@ impl Library {
         let rel = dir.strip_prefix(root).unwrap_or(dir).to_string_lossy().to_lowercase();
         // When it was found: for the inbox; nothing in a baseline scan.
         let added = (!self.baseline_roots.contains(root)).then(|| nanos(Some(SystemTime::now())));
-        let tx = self.conn.transaction()?;
+        // A savepoint, not a transaction: a change's `ApplyOp::Index` runs it inside its own.
+        let tx = self.conn.savepoint()?;
         let mut changed = tx.query_row("SELECT 1 FROM dirs WHERE path = ?1", [dir_s], |_| Ok(())).optional()?.is_none();
         tx.execute(
             "INSERT INTO dirs (path, parent, mtime_ns, added_ns) VALUES (?1, ?2, ?3, ?4)
@@ -1013,6 +1014,14 @@ fn path_str(p: &Path) -> Option<&str> {
     p.to_str()
 }
 
+/// SQL bounds for the folders below `dir`: a stored path `p` with `lo < p < hi` starts with
+/// `dir` and the platform's separator (`/` on Linux and macOS, `\` on Windows).
+pub(crate) fn below_bounds(dir: &str) -> (String, String) {
+    let sep = std::path::MAIN_SEPARATOR;
+    let next = char::from_u32(sep as u32 + 1).unwrap_or(sep);
+    (format!("{dir}{sep}"), format!("{dir}{next}"))
+}
+
 fn escape_like(s: &str) -> String {
     s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
 }
@@ -1020,6 +1029,23 @@ fn escape_like(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounds_hold_exactly_the_folders_below() {
+        let dir = Path::new("lib").join("Garten");
+        let (lo, hi) = below_bounds(dir.to_str().unwrap());
+        let inside = |p: PathBuf| {
+            let s = p.to_str().unwrap().to_owned();
+            s > lo && s < hi
+        };
+        assert!(inside(dir.join("sub")));
+        assert!(inside(dir.join("sub").join("tiefer")));
+        assert!(inside(dir.join("Übertöpfe")));
+        assert!(!inside(dir.clone()));
+        for sibling in ["Garten2", "Garten 2", "Garten-alt", "Garten.alt", "Garten[x]", "Garten^x"] {
+            assert!(!inside(Path::new("lib").join(sibling)), "{sibling}");
+        }
+    }
     use crate::loaders::gcode::GcodeFacts;
     use crate::query;
 

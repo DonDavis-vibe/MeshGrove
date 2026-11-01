@@ -7,9 +7,9 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, SystemTime};
 
 use image::RgbaImage;
-use meshgrove_core::ai::proposals::ProposalStore;
+use meshgrove_core::ai::proposals::{ProposalKind, ProposalStore};
 use meshgrove_core::cache::{ThumbCache, ThumbMeta, Thumbnail};
-use meshgrove_core::config::{AiAccess, Config, LibraryAi};
+use meshgrove_core::config::{AiAccess, Config, LibraryAi, LibraryRead, PluginConfig, PluginGrants};
 use meshgrove_core::db::Library;
 use meshgrove_core::listing::Entry;
 use meshgrove_core::{Kind, Mesh};
@@ -78,8 +78,23 @@ fn fixture(ai_enabled: bool) -> Fixture {
 struct Server {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    /// Lines from stdout, read on a thread of their own.
+    stdout: std::sync::mpsc::Receiver<String>,
     next_id: i64,
+}
+
+/// Every line of `stdout`, as it comes.
+fn lines(stdout: ChildStdout) -> std::sync::mpsc::Receiver<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    rx
 }
 
 impl Server {
@@ -99,7 +114,7 @@ impl Server {
             .spawn()
             .unwrap();
         let stdin = child.stdin.take().unwrap();
-        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let stdout = lines(child.stdout.take().unwrap());
         let mut server = Server { child, stdin, stdout, next_id: 1 };
         // What Claude Desktop and others send today: an older protocol version with a handshake.
         let init = server.request(
@@ -123,15 +138,31 @@ impl Server {
         self.next_id += 1;
         self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
         loop {
-            let mut line = String::new();
-            assert!(self.stdout.read_line(&mut line).unwrap() > 0, "server closed stdout");
-            let message: Value =
-                serde_json::from_str(&line).unwrap_or_else(|e| panic!("not JSON-RPC on stdout: {line:?} ({e})"));
+            let message = self.next_message(Duration::from_secs(60)).expect("server closed stdout or timed out");
             if message["id"] == id {
                 assert!(message.get("error").is_none(), "{method}: {message}");
                 return message["result"].clone();
             }
         }
+    }
+
+    /// The next JSON-RPC message (every line on stdout must be one).
+    fn next_message(&mut self, timeout: Duration) -> Option<Value> {
+        let line = self.stdout.recv_timeout(timeout).ok()?;
+        Some(serde_json::from_str(&line).unwrap_or_else(|e| panic!("not JSON-RPC on stdout: {line:?} ({e})")))
+    }
+
+    /// Waits up to `timeout` for a notification `method`.
+    fn notified(&mut self, method: &str, timeout: Duration) -> bool {
+        let until = std::time::Instant::now() + timeout;
+        while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
+            match self.next_message(left) {
+                Some(m) if m["method"] == method => return true,
+                Some(_) => {}
+                None => return false,
+            }
+        }
+        false
     }
 
     fn call(&mut self, tool: &str, arguments: Value) -> Value {
@@ -262,4 +293,143 @@ fn says_what_is_wrong_instead_of_failing() {
 /// Sets the index's layout version as another Meshgrove would have.
 fn rusqlite_version(db: &Path, version: i32) {
     rusqlite::Connection::open(db).unwrap().pragma_update(None, "user_version", version).unwrap();
+}
+
+/// The example plugin (`scripts/build-plugins.sh --test-hooks`, or MESHGROVE_TEST_PLUGIN); without
+/// it the test passes with a note, unless MESHGROVE_REQUIRE_PLUGIN=1 (as in CI).
+fn test_plugin() -> Option<PathBuf> {
+    let path = std::env::var_os("MESHGROVE_TEST_PLUGIN").map(PathBuf::from).unwrap_or_else(|| {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/plugins-test/wasm32-wasip2/release/hello_box.wasm")
+    });
+    if path.is_file() {
+        return Some(path);
+    }
+    assert_ne!(std::env::var("MESHGROVE_REQUIRE_PLUGIN").as_deref(), Ok("1"), "{} is missing", path.display());
+    eprintln!("skipped: no {} (scripts/build-plugins.sh --test-hooks)", path.display());
+    None
+}
+
+/// Sets the plugin up in the fixture's config.toml, newer than before (the server loads
+/// plugins again when the file changed).
+fn set_plugin(f: &Fixture, wasm: &Path, enabled: bool) {
+    set_plugin_with(f, wasm, enabled, LibraryRead::None, if enabled { 1 } else { 2 });
+}
+
+/// [`set_plugin`] with what it may read of the library; `later` seconds newer than now.
+fn set_plugin_with(f: &Fixture, wasm: &Path, enabled: bool, library_read: LibraryRead, later: u64) {
+    let mut config = Config::load_from(&f.config).unwrap();
+    config.plugins = vec![PluginConfig {
+        id: "hello-box".into(),
+        file: wasm.to_path_buf(),
+        blake3: blake3::hash(&std::fs::read(wasm).unwrap()).to_hex().to_string(),
+        enabled,
+        grants: PluginGrants { ai_tools: true, bundles: true, library_read, ..PluginGrants::default() },
+        memory_mb: None,
+    }];
+    config.save_to(&f.config).unwrap();
+    let later = SystemTime::now() + Duration::from_secs(later);
+    std::fs::File::options().write(true).open(&f.config).unwrap().set_modified(later).unwrap();
+}
+
+#[test]
+fn plugin_tools_are_offered_and_their_files_wait_as_a_suggestion() {
+    let Some(wasm) = test_plugin() else { return };
+    let f = fixture(true);
+    set_plugin(&f, &wasm, true);
+    let plugins = f.config.parent().unwrap().join("plugins");
+    let mut s = Server::start(&f, &["--local", "--plugins", plugins.to_str().unwrap()]);
+    let tools = s.request("tools/list", json!({}));
+    let tools = tools["tools"].as_array().unwrap();
+    let make = tools.iter().find(|t| t["name"] == "hello-box_make_box").expect("the plugin's tool is listed");
+    assert_eq!(make["annotations"]["readOnlyHint"], false, "it makes files");
+    assert!(make["inputSchema"]["properties"]["width"].is_object());
+    let measure = tools.iter().find(|t| t["name"] == "hello-box_measure").unwrap();
+    assert_eq!(measure["annotations"]["readOnlyHint"], true);
+
+    let r = s.call("hello-box_make_box", json!({"width": 30, "depth": 20, "height": 10, "name": "Kiste", "copies": 2}));
+    assert_ne!(r["isError"], true, "{r}");
+    let answer = &r["structuredContent"];
+    assert_eq!(answer["plugin"], "hello-box");
+    let batch = answer["batch"].as_str().expect("a suggestion");
+    let lib = Library::open_reader(&f.db).unwrap();
+    assert_eq!(lib.all_tags().unwrap(), [("Garten".to_owned(), 1)], "the library is unchanged");
+    let store = ProposalStore::open(&f.proposals).unwrap();
+    let id = store.batch_by_uid(batch).unwrap().unwrap();
+    let b = store.batches(None, None, &["pending"], 10).unwrap().into_iter().find(|b| b.id == id).unwrap();
+    assert_eq!((b.kind.as_str(), b.source.as_str()), ("bundle", "mcp"));
+    let proposals = store.proposals(id).unwrap();
+    assert_eq!(proposals.len(), 1);
+    assert_eq!(proposals[0].kind, ProposalKind::Bundle);
+    assert_eq!(proposals[0].payload["plugin"], "hello-box");
+    let files = proposals[0].payload["files"].as_array().unwrap();
+    assert!(files.iter().any(|f| f["rel"].as_str().unwrap().ends_with(".stl")), "{files:?}");
+    assert!(store.access_log(10).unwrap().iter().any(|e| e.tool == "hello-box_make_box"));
+
+    // Switched off in Meshgrove: the client is told, and the tool is gone.
+    set_plugin(&f, &wasm, false);
+    assert!(s.notified("notifications/tools/list_changed", Duration::from_secs(10)), "no list_changed");
+    let tools = s.request("tools/list", json!({}));
+    assert!(!tools["tools"].as_array().unwrap().iter().any(|t| t["name"] == "hello-box_make_box"), "{tools}");
+    let r = s.call("hello-box_make_box", json!({"width": 30, "depth": 20, "height": 10, "name": "Kiste"}));
+    assert_eq!(r["isError"], true);
+}
+
+/// A tetrahedron 40 × 20 × 10 mm, as ASCII STL.
+const TETRA: &str = "solid t
+facet normal 0 0 0
+outer loop
+vertex 0 0 0
+vertex 40 0 0
+vertex 0 20 0
+endloop
+endfacet
+facet normal 0 0 0
+outer loop
+vertex 0 0 0
+vertex 0 20 0
+vertex 0 0 10
+endloop
+endfacet
+facet normal 0 0 0
+outer loop
+vertex 0 0 0
+vertex 0 0 10
+vertex 40 0 0
+endloop
+endfacet
+facet normal 0 0 0
+outer loop
+vertex 40 0 0
+vertex 0 0 10
+vertex 0 20 0
+endloop
+endfacet
+endsolid t
+";
+
+#[test]
+fn plugins_read_the_library_only_with_the_grant_and_within_the_scope() {
+    let Some(wasm) = test_plugin() else { return };
+    let f = fixture(true);
+    std::fs::create_dir_all(f.root.join("eigene")).unwrap();
+    std::fs::create_dir_all(f.root.join("kunden")).unwrap();
+    std::fs::write(f.root.join("eigene").join("rose.stl"), TETRA).unwrap();
+    std::fs::write(f.root.join("kunden").join("halter.stl"), TETRA).unwrap();
+    set_plugin_with(&f, &wasm, true, LibraryRead::AiScope, 1);
+    let plugins = f.config.parent().unwrap().join("plugins");
+    let mut cloud = Server::start(&f, &["--plugins", plugins.to_str().unwrap()]);
+    let r = cloud.call("hello-box_measure", json!({"id": "eigene/rose.stl"}));
+    assert_ne!(r["isError"], true, "{r}");
+    assert_eq!(r["structuredContent"]["result"], json!({"size_mm": [40.0, 20.0, 10.0], "triangles": 4}));
+    let hidden = cloud.call("hello-box_measure", json!({"id": "kunden/halter.stl"}));
+    assert_eq!(hidden["isError"], true, "customer files are local only: {hidden}");
+    assert!(hidden["content"][0]["text"].as_str().unwrap().contains("unknown id"), "{hidden}");
+    let mut local = Server::start(&f, &["--local", "--plugins", plugins.to_str().unwrap()]);
+    let r = local.call("hello-box_measure", json!({"id": "kunden/halter.stl"}));
+    assert_ne!(r["isError"], true, "a local AI sees them: {r}");
+
+    set_plugin_with(&f, &wasm, true, LibraryRead::None, 3);
+    let denied = local.call("hello-box_measure", json!({"id": "eigene/rose.stl"}));
+    assert_eq!(denied["isError"], true);
+    assert!(denied["content"][0]["text"].as_str().unwrap().contains("not allowed"), "{denied}");
 }

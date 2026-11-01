@@ -45,6 +45,7 @@
   - [Der Eingang](#der-eingang)
   - [Duplikate finden](#duplikate-finden)
   - [KI-Assistent und MCP (freiwillig)](#ki-assistent-und-mcp-freiwillig)
+  - [Plugins (freiwillig)](#plugins-freiwillig)
   - [Zusammenarbeit mit Slicer und anderen Programmen](#zusammenarbeit-mit-slicer-und-anderen-programmen)
   - [Archive (ZIP, 7z, RAR, TAR)](#archive-zip-7z-rar-tar)
   - [Dateien in den Papierkorb](#dateien-in-den-papierkorb)
@@ -737,6 +738,14 @@ Auf der Kommandozeile macht `meshgrove-mcp setup` dasselbe (`--dry-run` zeigt es
 `meshgrove-mcp --print-config claude-desktop` (oder `claude-code`, `lm-studio`, `cursor`, `vscode`,
 bei Bedarf mit `--local`) gibt einen aus. Beim AppImage lautet der Befehl `Meshgrove.AppImage mcp`.
 
+### Plugins (freiwillig)
+
+Plugins erweitern Meshgrove um Werkzeuge, zum Beispiel Bingrove, einen Generator für
+Gridfinity-Schubladeneinsätze. Ein Plugin ist eine einzige `.wasm`-Datei für alle Systeme und läuft
+abgeschottet. Es darf nichts, bis du es unter *Einstellungen → Plugins* erlaubst, und was es
+erzeugt, kommt als eine Änderung, die sich rückgängig machen lässt. Installieren, Rechte und
+Plugins schreiben: [docs/plugins.md](docs/plugins.md) (englisch).
+
 ### Zusammenarbeit mit Slicer und anderen Programmen
 
 - **In Slicer öffnen** (Kontextmenü, oder der Knopf unter den Angaben im Bereich *Info* und im
@@ -1151,7 +1160,7 @@ die Bibliotheken der Distribution. Die Skripte für die einzelnen Formate liegen
 
 ## Aufbau
 
-Meshgrove ist ein Cargo-Workspace aus sechs Crates:
+Meshgrove ist ein Cargo-Workspace aus acht Crates:
 
 | Crate | Aufgabe |
 |---|---|
@@ -1161,6 +1170,8 @@ Meshgrove ist ein Cargo-Workspace aus sechs Crates:
 | [`meshgrove-step`](crates/meshgrove-step) | `meshgrove-step-mesher`: STEP → STL mit OpenCascade, als eigener Prozess |
 | [`meshgrove-thumbnailer`](crates/meshgrove-thumbnailer) | Der freedesktop-Thumbnailer für Dolphin und Dateidialoge |
 | [`meshgrove-mcp`](crates/meshgrove-mcp) | `meshgrove-mcp`: der freiwillige MCP-Server, den der eigene Assistent startet (stdio); liest den Index, schreibt nur Vorschläge |
+| [`meshgrove-plugin-api`](crates/meshgrove-plugin-api) | Die Plugin-Schnittstelle (MIT OR Apache-2.0): WIT-Welt, Manifest, Werkzeuge, Panel-Widgets, Bundles; mit `guest` die Bindungen zum Schreiben eines Plugins ([docs/plugins.md](docs/plugins.md)) |
+| [`meshgrove-plugins`](crates/meshgrove-plugins) | Der Plugin-Host: wasmtime-Sandbox, Rechte, Panels, Jobs, Staging, die KI-Werkzeuge der Plugins und `meshgrove-plugin-run`, das ein Plugin ohne Meshgrove ausführt |
 
 Wie die Arbeit durch die App läuft:
 

@@ -9,8 +9,10 @@ use meshgrove_core::ai::proposals::{
     ListPayload, MovePayload, NotePayload, Picked, Proposal, ProposalKind, TagsPayload,
 };
 use meshgrove_core::ai::vocab::TagStatus;
+use meshgrove_core::bundle::ResolvedBundle;
 use meshgrove_core::changes::ChangeInfo;
 use meshgrove_core::listing::{self, Entry};
+use meshgrove_core::lists::ListKind;
 
 use super::duplicates::{TileClick, tile};
 use super::gallery::Gallery;
@@ -28,7 +30,8 @@ pub struct ReviewBatch {
     pub source: String,
     pub created: Option<SystemTime>,
     pub inbox_done: bool,
-    /// Made in the chat (its own switch decides whether it applies at once).
+    /// Made in the chat (its own switch decides whether it applies at once), or in a plugin's
+    /// panel for the user to look at: never accepted by itself.
     pub chat: bool,
     pub items: Vec<ReviewItem>,
 }
@@ -175,6 +178,7 @@ fn item_row(
                 ProposalKind::Note => note_row(ui, item),
                 ProposalKind::List => list_row(ui, item),
                 ProposalKind::Move => move_row(ui, item),
+                ProposalKind::Bundle => bundle_row(ui, item),
             }
             let p = &item.proposal;
             if let Some(reason) = &p.reason {
@@ -187,7 +191,7 @@ fn item_row(
             } else if let Some(to) = &item.moved_to {
                 ui.weak(t!("review.moved", path = to.display().to_string()));
             }
-            if item.copies > 1 && !matches!(p.kind, ProposalKind::List | ProposalKind::Move) {
+            if item.copies > 1 && !matches!(p.kind, ProposalKind::List | ProposalKind::Move | ProposalKind::Bundle) {
                 ui.weak(t!("review.copies", count = item.copies - 1));
             }
         });
@@ -333,6 +337,47 @@ fn list_row(ui: &mut Ui, item: &mut ReviewItem) {
             text += &format!(" {}", t!("review.more", count = more));
         }
         ui.label(text);
+    }
+}
+
+/// Files a plugin made: where they go, what they are, and which lists they join.
+fn bundle_row(ui: &mut Ui, item: &mut ReviewItem) {
+    const SHOWN: usize = 12;
+    let Ok(bundle) = serde_json::from_value::<ResolvedBundle>(item.proposal.payload.clone()) else { return };
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut item.picked.whole, "");
+        ui.label(RichText::new(&bundle.title).strong());
+        if !bundle.plugin.is_empty() {
+            ui.weak(format!("· {}", bundle.plugin));
+        }
+    });
+    // Where it lands now: its place may have been taken while it waited.
+    let to = bundle.clone().at_free_place().to;
+    let place = to.strip_prefix(&bundle.root).unwrap_or(&to).display().to_string();
+    ui.label(t!("review.bundle_files", count = bundle.files.len(), path = place));
+    ui.weak(t!("review.bundle_size", size = i18n::file_size(bundle.bytes)));
+    for f in bundle.files.iter().take(SHOWN) {
+        let mut line = format!("• {}", f.rel);
+        if !f.tags.is_empty() {
+            line += &format!("  🏷 {}", f.tags.join(", "));
+        }
+        ui.label(RichText::new(line).small());
+    }
+    if bundle.files.len() > SHOWN {
+        ui.weak(t!("review.more", count = bundle.files.len() - SHOWN));
+    }
+    for list in &bundle.lists {
+        let kind = if list.kind == ListKind::Print { t!("review.print_list") } else { t!("review.collection") };
+        let items: Vec<String> = list
+            .items
+            .iter()
+            .take(SHOWN)
+            .map(|(rel, n)| {
+                let name = rel.rsplit('/').next().unwrap_or(rel);
+                if *n > 1 { format!("{name} ×{n}") } else { name.to_owned() }
+            })
+            .collect();
+        ui.label(format!("{kind} „{}“: {}", list.name, items.join(", ")));
     }
 }
 

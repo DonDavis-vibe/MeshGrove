@@ -191,7 +191,7 @@ impl ModelWindow {
             }
             MeshState::Ready(loaded) => {
                 let loaded = loaded.clone();
-                self.viewer.set_mesh(Some((loaded.mesh, MeshSource { path, kind, plate: self.plate })));
+                self.viewer.set_mesh(Some((loaded.mesh, MeshSource::File { path, kind, plate: self.plate })));
                 if self.plates.is_empty() && !loaded.info.plates.is_empty() {
                     let id = self.id;
                     self.plates = loaded

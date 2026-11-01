@@ -68,6 +68,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-wasip2
       # Only main writes the cache: pull requests read it but would only fill the repository's
       # 10 GB with entries no other run can use, pushing out the ones that matter.
       - uses: Swatinem/rust-cache@v2
@@ -76,6 +77,13 @@ jobs:
 
       - run: cargo fmt --all --check
         if: runner.os == 'Linux'
+      # The example plugin, with its test hooks, for the plugin host's tests.
+      - name: Example plugin (wasm32-wasip2)
+        shell: bash
+        run: |
+          scripts/build-plugins.sh --test-hooks
+          echo "MESHGROVE_TEST_PLUGIN=${{ github.workspace }}/target/plugins-test/wasm32-wasip2/release/hello_box.wasm" >> "$GITHUB_ENV"
+          echo "MESHGROVE_REQUIRE_PLUGIN=1" >> "$GITHUB_ENV"
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests (render tests on lavapipe)
         if: runner.os == 'Linux'

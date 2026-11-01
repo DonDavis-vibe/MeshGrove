@@ -1,0 +1,26 @@
+[package]
+name = "meshgrove-plugin-api"
+description = "Plugin interface of Meshgrove: the WIT world, the JSON types of manifests, tools, panels and bundles, and helpers for plugins"
+# The API has its own version: the WIT package is meshgrove:plugin@0.1.0.
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+# Not Meshgrove's GPL: plugins built on this crate may use any license.
+license = "MIT OR Apache-2.0"
+publish = false
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["meshgrove", "plugin", "wasm", "component-model"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# JSON schemas of the types (feature "schema"), for tool definitions and documentation.
+schemars = { workspace = true, optional = true }
+# Bindings for plugins themselves (feature "guest"), built for wasm32-wasip2.
+wit-bindgen = { version = "0.63", optional = true, default-features = false, features = ["macros", "realloc", "std"] }
+
+[features]
+schema = ["dep:schemars"]
+guest = ["dep:wit-bindgen"]

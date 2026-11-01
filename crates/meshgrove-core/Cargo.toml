@@ -32,6 +32,8 @@ base64.workspace = true
 percent-encoding.workspace = true
 ab_glyph.workspace = true
 epaint_default_fonts.workspace = true
+# The bundles plugins hand over (serde types only, no WebAssembly).
+meshgrove-plugin-api.workspace = true
 # JSON schemas of the AI tool parameters, for meshgrove-mcp (feature "schema").
 schemars = { version = "1", optional = true }
 
@@ -40,7 +42,7 @@ schemars = { version = "1", optional = true }
 libc = "0.2"
 
 [features]
-schema = ["dep:schemars"]
+schema = ["dep:schemars", "meshgrove-plugin-api/schema"]
 
 [dev-dependencies]
 tempfile = "3"

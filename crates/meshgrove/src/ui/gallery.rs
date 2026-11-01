@@ -53,6 +53,8 @@ pub enum Action {
     /// The following act on the selection.
     /// Large preview of the selected model.
     Preview,
+    /// Open the selected file with this plugin.
+    OpenWithPlugin(String),
     /// A column title of the list view was clicked: sort by it (the same again: the other way round).
     SortBy(SortKey),
     /// Index the selected library folder (or archive) and everything below it again.
@@ -120,6 +122,8 @@ pub struct MenuContext {
     pub ai_chat: bool,
     /// AI may see some of the selection: references to it can be copied.
     pub ai_refs: bool,
+    /// Plugins that open the selected file: (id, name).
+    pub plugin_openers: Vec<(String, String)>,
 }
 
 pub struct GalleryOutput {
@@ -833,6 +837,9 @@ fn entry_menu(
                     }
                 });
             }
+        }
+        for (id, name) in &menu.plugin_openers {
+            item(ui, t!("menu.open_with_plugin", name = name), Action::OpenWithPlugin(id.clone()));
         }
         if show_folders {
             item(ui, t!("menu.show_in_folder"), Action::ShowInFolder(entry));

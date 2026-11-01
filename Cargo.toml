@@ -7,12 +7,16 @@ members = [
     "crates/meshgrove-step",
     "crates/meshgrove-thumbnailer",
     "crates/meshgrove-mcp",
+    "crates/meshgrove-plugin-api",
+    "crates/meshgrove-plugins",
 ]
+# Plugins are built for wasm32-wasip2 on their own (scripts/build-plugins.sh).
+exclude = ["examples/plugins"]
 
 [workspace.package]
 version = "0.7.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.97"
 license = "GPL-3.0-or-later"
 authors = ["Davis (German Redneck Engineering)"]
 repository = "https://github.com/DonDavis-vibe/MeshGrove"
@@ -23,6 +27,8 @@ keywords = ["stl", "3mf", "3d-printing", "gallery", "egui"]
 [workspace.dependencies]
 meshgrove-core = { path = "crates/meshgrove-core" }
 meshgrove-render = { path = "crates/meshgrove-render" }
+meshgrove-plugin-api = { path = "crates/meshgrove-plugin-api" }
+meshgrove-plugins = { path = "crates/meshgrove-plugins", default-features = false }
 
 anyhow = "1.0"
 thiserror = "2.0"
@@ -65,7 +71,7 @@ tobj = { version = "4.0", default-features = false }
 base64 = "0.23"
 # Only in meshgrove-mcp: the MCP server for the user's own AI assistant.
 rmcp = { version = "3.7", default-features = false, features = ["server", "macros", "transport-io", "schemars", "base64"] }
-tokio = { version = "1", features = ["rt", "macros", "io-std"] }
+tokio = { version = "1", features = ["rt", "macros", "io-std", "time"] }
 schemars = "1"
 # Only in the app: the user's own OpenAI-compatible endpoint (chat, one-click actions).
 # TLS through the platform's certificate store, so no bundled root list is needed.
@@ -75,6 +81,9 @@ keyring = "4.2"
 percent-encoding = "2.3"
 wl-clipboard-rs = "0.9"
 sys-locale = "0.3"
+# Only in meshgrove-plugins: the sandbox plugins run in (WebAssembly components, WASI preview 2).
+wasmtime = { version = "50", default-features = false, features = ["std", "runtime", "cranelift", "component-model", "parallel-compilation"] }
+wasmtime-wasi = { version = "50", default-features = false, features = ["p2"] }
 
 [profile.dev.package."*"]
 # Mesh parsing and image encoding are painfully slow unoptimized; keep our own code debuggable.

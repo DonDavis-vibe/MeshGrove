@@ -46,7 +46,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
     let mut out = Args {
         class: AccessClass::Cloud,
         client: None,
-        paths: Paths { config: None, db, proposals, thumbs },
+        paths: Paths { config: None, db, proposals, thumbs, plugins: None },
         print_config: None,
     };
     let mut args = args.peekable();
@@ -59,6 +59,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
             "--db" => out.paths.db = value()?.into(),
             "--proposals" => out.paths.proposals = value()?.into(),
             "--thumbs" => out.paths.thumbs = value()?.into(),
+            "--plugins" => out.paths.plugins = Some(value()?.into()),
             "--print-config" => out.print_config = Some(value()?),
             "--version" | "-V" => {
                 println!("meshgrove-mcp {}", env!("CARGO_PKG_VERSION"));
