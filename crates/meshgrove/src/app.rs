@@ -1424,7 +1424,14 @@ impl App {
                     ctx.request_repaint();
                 });
             }
-            Action::EditTags => self.focus_tags = true,
+            Action::EditTags => {
+                // The tag field is in Info: folded away, it comes back.
+                if self.layout.details_folded() {
+                    self.layout.show_details(true);
+                    self.layout.save();
+                }
+                self.focus_tags = true;
+            }
             Action::Trash => self.request_trash(self.selected_paths()),
             Action::SuggestTags => self.suggest_tags(self.selected_paths()),
             Action::PlaceByTag => self.library.place_by_tag(self.selected_paths()),
@@ -1605,6 +1612,7 @@ impl App {
                     self.refresh_gallery(false);
                 }
                 SettingsChange::LockPanes(locked) => self.config.lock_panes = locked,
+                SettingsChange::FoldForPlugins(on) => self.config.fold_for_plugins = on,
                 SettingsChange::AiEnabled(on) => {
                     self.config.ai.enabled = on;
                     if !on && matches!(self.view, View::Review { .. } | View::History { .. }) {
@@ -2205,6 +2213,12 @@ impl App {
             ui.separator();
             ui.label(RichText::new(t!("gallery.tile_size")).weak());
             ui.add(egui::Slider::new(&mut self.config.tile_size, TILE_SIZE).show_value(false));
+            ui.separator();
+            let mut details = !self.layout.details_folded();
+            if ui.checkbox(&mut details, t!("pane.details_menu")).changed() {
+                self.layout.show_details(details);
+                self.layout.save();
+            }
         });
         if flatten != self.flatten {
             self.set_flatten(flatten);
@@ -2831,6 +2845,9 @@ struct PaneHost<'a> {
     /// Panes can only be resized: nothing to drag, and single panes have no header.
     locked: bool,
     reset: bool,
+    /// Preview and Info are folded away; the button beside the files' tabs was clicked.
+    details_folded: bool,
+    toggle_details: bool,
 }
 
 impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
@@ -2922,7 +2939,16 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
     ) {
         let holds_files =
             tabs.children.iter().any(|&c| matches!(tiles.get(c), Some(egui_tiles::Tile::Pane(Pane::Files))));
-        if holds_files && ui.small_button("↺").on_hover_text(t!("pane.reset")).clicked() {
+        if !holds_files {
+            return;
+        }
+        // Right to left: folding comes first, next to the details it folds.
+        let (fold, hint) =
+            if self.details_folded { ("«", t!("pane.details_show")) } else { ("»", t!("pane.details_hide")) };
+        if ui.small_button(fold).on_hover_text(hint).clicked() {
+            self.toggle_details = true;
+        }
+        if ui.small_button("↺").on_hover_text(t!("pane.reset")).clicked() {
             self.reset = true;
         }
     }
@@ -3063,14 +3089,20 @@ impl eframe::App for App {
 
         let fill = ui.visuals().panel_fill;
         self.layout.apply_focus();
+        self.layout.follow_plugins(self.config.fold_for_plugins);
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
+            let details_folded = self.layout.details_folded();
             let mut tree = std::mem::replace(&mut self.layout.tree, Tree::empty(egui::Id::unique("layout")));
             let locked = self.config.lock_panes;
-            let mut host = PaneHost { app: self, rs: &rs, locked, reset: false };
+            let mut host = PaneHost { app: self, rs: &rs, locked, reset: false, details_folded, toggle_details: false };
             tree.ui(&mut host, ui);
-            let reset = host.reset;
+            let (reset, toggle) = (host.reset, host.toggle_details);
             self.layout.tree = tree;
             self.layout.drawn();
+            if toggle {
+                self.layout.show_details(details_folded);
+                self.layout.save();
+            }
             if reset {
                 self.layout.reset();
             } else if ctx.input(|i| i.pointer.any_released()) {

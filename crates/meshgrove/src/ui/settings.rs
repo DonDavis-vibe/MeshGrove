@@ -54,6 +54,7 @@ pub enum SettingsChange {
     DoubleClick(DoubleClick),
     FolderPreviews(FolderPreviews),
     LockPanes(bool),
+    FoldForPlugins(bool),
     /// The inbox of new files in the sidebar.
     Inbox(bool),
     /// The folders looked at for new files to import.
@@ -149,6 +150,10 @@ fn panes(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
     let mut locked = config.lock_panes;
     if check(ui, &mut locked, t!("settings.panes_lock"), t!("settings.panes_hint")) {
         changes.push(SettingsChange::LockPanes(locked));
+    }
+    let mut fold = config.fold_for_plugins;
+    if check(ui, &mut fold, t!("settings.panes_fold"), t!("settings.panes_fold_hint")) {
+        changes.push(SettingsChange::FoldForPlugins(fold));
     }
     if ui.button(t!("pane.reset")).clicked() {
         changes.push(SettingsChange::ResetLayout);
@@ -598,6 +603,7 @@ impl Category {
                 put(config.language.is_some(), SettingsChange::Language(None));
                 put(config.double_click != d.double_click, SettingsChange::DoubleClick(d.double_click));
                 put(config.lock_panes != d.lock_panes, SettingsChange::LockPanes(d.lock_panes));
+                put(config.fold_for_plugins != d.fold_for_plugins, SettingsChange::FoldForPlugins(d.fold_for_plugins));
             }
             Category::Library => {
                 put(config.inbox != d.inbox, SettingsChange::Inbox(d.inbox));

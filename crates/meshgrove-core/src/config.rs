@@ -685,6 +685,8 @@ pub struct Config {
     pub folder_previews: FolderPreviews,
     /// The panes of the main window can only be resized, not moved.
     pub lock_panes: bool,
+    /// Preview and Info fold away while a plugin panel is in front (and come back with the files).
+    pub fold_for_plugins: bool,
     /// The sidebar lists the inbox of new files.
     pub inbox: bool,
     /// Folders outside the libraries (a downloads folder) whose new 3D-print files Meshgrove
@@ -1137,6 +1139,7 @@ impl Default for Config {
             double_click: DoubleClick::Window,
             folder_previews: FolderPreviews::default(),
             lock_panes: false,
+            fold_for_plugins: true,
             inbox: true,
             import: ImportConfig::default(),
             placement: PlacementConfig::default(),
@@ -1325,7 +1328,8 @@ library_read = "ai-scope"
         assert!(p.usable("abc123") && !p.usable("def456"), "another file waits for the user");
         let back: Config = toml::from_str(&toml::to_string_pretty(&config).unwrap()).unwrap();
         assert_eq!(back, config);
-        assert!(!toml::to_string(&Config::default()).unwrap().contains("plugins"), "nothing written without plugins");
+        let empty = toml::to_string(&Config::default()).unwrap();
+        assert!(!empty.contains("[[plugins]]") && !empty.contains("plugin_folders"), "nothing written without plugins");
     }
 
     #[test]
