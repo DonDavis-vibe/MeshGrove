@@ -180,7 +180,10 @@ pub fn resolve_with(
         lists.push(ResolvedList { name: name.to_owned(), kind, items });
     }
     let place = match &bundle.folder {
-        Some(folder) => root.join(relative(folder).ok_or_else(|| BundleError::BadPath(folder.clone()))?),
+        Some(folder) => relative(folder)
+            .ok_or_else(|| BundleError::BadPath(folder.clone()))?
+            .split('/')
+            .fold(root.to_path_buf(), |p, part| p.join(part)),
         None => {
             let name = folder_name(title);
             if crate::fsops::check_name(&name).is_err() {
