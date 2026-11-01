@@ -741,21 +741,10 @@ bei Bedarf mit `--local`) gibt einen aus. Beim AppImage lautet der Befehl `Meshg
 ### Plugins (freiwillig)
 
 Plugins erweitern Meshgrove um Werkzeuge, zum Beispiel Bingrove, einen Generator für
-Gridfinity-Schubladeneinsätze. Ein Plugin ist eine einzige `.wasm`-Datei für alle Systeme. Es
-läuft abgeschottet: ohne Netz, nur mit seinem eigenen Ordner, mit Speichergrenze und Fristen.
-
-- **Installieren:** unter Einstellungen → Plugins den Pfad der Datei eintippen oder sie
-  hineinziehen und „Installieren“ klicken.
-- **Erlauben:** ein neues Plugin ist eingeschaltet, darf aber noch nichts. Hake an, was es darf:
-  Werkzeuge für die KI anbieten (Chat und KI-Apps über MCP), Dateien in die Bibliothek legen,
-  diese ohne Prüfung übernehmen lassen, die Bibliothek lesen (was lokale KI sieht, oder alles).
-- **Benutzen:** seine Fenster öffnen sich über „Plugins ▾“ neben „Ansicht“ als Tabs neben den
-  Dateien. Dateien seiner Typen bekommen „Mit <Plugin> öffnen“ im Kontextmenü.
-- **Rückgängig:** was ein Plugin erzeugt, kommt als eine Änderung in die Bibliothek und lässt
-  sich im Verlauf rückgängig machen.
-
-Plugins schreiben: siehe [docs/plugins.md](docs/plugins.md) (englisch). Die Plugin-Schnittstelle
-steht unter MIT/Apache-2.0, Plugins dürfen also jede Lizenz haben.
+Gridfinity-Schubladeneinsätze. Ein Plugin ist eine einzige `.wasm`-Datei für alle Systeme und läuft
+abgeschottet. Es darf nichts, bis du es unter *Einstellungen → Plugins* erlaubst, und was es
+erzeugt, kommt als eine Änderung, die sich rückgängig machen lässt. Installieren, Rechte und
+Plugins schreiben: [docs/plugins.md](docs/plugins.md) (englisch).
 
 ### Zusammenarbeit mit Slicer und anderen Programmen
 
@@ -1171,7 +1160,7 @@ die Bibliotheken der Distribution. Die Skripte für die einzelnen Formate liegen
 
 ## Aufbau
 
-Meshgrove ist ein Cargo-Workspace aus sechs Crates:
+Meshgrove ist ein Cargo-Workspace aus acht Crates:
 
 | Crate | Aufgabe |
 |---|---|

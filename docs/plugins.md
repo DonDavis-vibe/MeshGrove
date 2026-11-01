@@ -8,7 +8,7 @@ four kinds of things:
 - **tools** for the AI: the chat, and AI apps through `meshgrove-mcp`
 - **panels**: tabs in Meshgrove's window, drawn from a widget tree the plugin sends
 - **jobs**: background work a panel starts
-- **file handlers**: "Mit <Plugin> öffnen" for the plugin's file types
+- **file handlers**: "Open with <plugin>" for the plugin's file types
 
 Plugins never write into the library directly. They hand over a **bundle**: files plus tags,
 notes and print lists, which Meshgrove applies as one change the user can undo. A plugin may
@@ -170,9 +170,9 @@ PATH="$(dirname "$(rustup which --toolchain stable cargo)"):$PATH" cargo build -
 
 | Permission | Lets the plugin | The user grants |
 |---|---|---|
-| `ai_tools` | offer its tools to the chat and to AI apps | "Werkzeuge für die KI" |
-| `bundles` | hand files over to the library | "Dateien in die Bibliothek legen", and optionally "Ohne Prüfung übernehmen" (auto-accept) |
-| `library_read` | `library.search`, `describe`, `triangles` | "Bibliothek lesen": no / what local AI sees / everything |
+| `ai_tools` | offer its tools to the chat and to AI apps | "Tools for the AI" |
+| `bundles` | hand files over to the library | "Put files into the library", and optionally "Accept without review" (auto-accept) |
+| `library_read` | `library.search`, `describe`, `triangles` | "Read the library": no / what local AI sees / everything |
 
 Without a grant, the matching call fails with a message the plugin can pass on, for example
 "the user has not allowed bingrove to read the library (Meshgrove → Settings → Plugins)".
@@ -282,8 +282,8 @@ Write the files below `/out`, then describe them:
 | Coming from | What happens |
 |---|---|
 | A tool, chat in review mode | waits in the review as a card (files, folder, size, lists) |
-| A tool, chat in automatic mode | applied at once, unless the plugin lacks "Ohne Prüfung übernehmen" |
-| A tool, AI app over MCP | waits in the review; accepted by itself only when the AI's auto-accept is on **and** the plugin has "Ohne Prüfung übernehmen" |
+| A tool, chat in automatic mode | applied at once, unless the plugin lacks "Accept without review" |
+| A tool, AI app over MCP | waits in the review; accepted by itself only when the AI's auto-accept is on **and** the plugin has "Accept without review" |
 | A panel, `Effect::ApplyBundle` | applied at once (the user clicked for it), with a toast; undo in the history |
 | A panel, `Effect::ProposeBundle` | goes to the review, never accepted by itself |
 
@@ -339,9 +339,9 @@ plugin's values count: it may correct or refuse them.
 - **Keys:** arrows send one `Moved` per selected item; Delete/Backspace sends `Deleted {items}`.
 - **Context menu:**
   - the item's `actions`, each sending `Action {item, action}`
-  - "Zusammenlegen (w × h)" when several items are selected → `Merge {items}`
-  - "Teilen" for items larger than a cell → `Split {item}`
-  - "Löschen" → `Deleted`
+  - "Merge (w × h)" when several items are selected → `Merge {items}`
+  - "Split" for items larger than a cell → `Split {item}`
+  - "Delete" → `Deleted`
 - **Locked items** cannot be dragged, resized or deleted.
 - **Item ids** are the plugin's. If they are indices, re-number the selection after edits.
 
@@ -387,7 +387,7 @@ plugin's values count: it may correct or refuse them.
 ## Opening files
 
 For a file matching one of the manifest's `file_types`, the gallery's context menu offers
-"Mit <Plugin> öffnen". Meshgrove calls `open_file(name, bytes)` (up to 64 MiB), and the plugin
+"Open with <plugin>". Meshgrove calls `open_file(name, bytes)` (up to 64 MiB), and the plugin
 answers with effects, usually `open_panel` with the file's content as state.
 
 ## Testing with meshgrove-plugin-run
@@ -411,15 +411,15 @@ server, to try the tools from there. Meshgrove's own tests run `examples/plugins
 ## Installing and granting
 
 1. **Install:** Settings → Plugins. Type or drop the path of the `.wasm` file and click
-   "Installieren". Meshgrove checks the plugin, copies it to
+   "Install". Meshgrove checks the plugin, copies it to
    `~/.local/share/meshgrove/plugins/<id>/<id>.wasm` (the data folder on Windows and macOS), and
    switches it on with **nothing granted**.
-2. **Grant:** tick what it may do. Its panels appear under "Plugins ▾" next to "Ansicht".
+2. **Grant:** tick what it may do. Its panels appear under "Plugins ▾" next to "View".
 3. **Update:** install the new file the same way. The grants stay, but a plugin that asks for
    more stays off until it is switched on again.
 4. **Outside changes:** a file changed outside Meshgrove (another hash than the one enabled)
    does not run until the user switches it on again.
-5. **Remove:** "Entfernen" deletes the installed file. The plugin's data and staging folders
+5. **Remove:** "Remove" deletes the installed file. The plugin's data and staging folders
    stay, so undo keeps working. Meshgrove cleans up staging folders nothing refers to any more
    when it starts.
 

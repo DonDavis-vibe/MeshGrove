@@ -700,19 +700,9 @@ with `--local` if needed) prints one. With the AppImage the command is `Meshgrov
 ### Plugins (optional)
 
 Plugins add tools to Meshgrove, for example Bingrove, a generator for Gridfinity drawer inserts.
-A plugin is a single `.wasm` file for every system. It runs sealed off: no network, only its own
-folder, a memory limit and deadlines.
-
-- **Install:** under Settings → Plugins, type or drop the file's path and click "Installieren".
-- **Grant:** a new plugin is switched on with nothing granted. Tick what it may do: offer tools
-  to the AI (the chat and AI apps over MCP), put files into the library, have those accepted
-  without review, read the library (what local AI sees, or everything).
-- **Use it:** its panels open from "Plugins ▾" next to "Ansicht" as tabs beside the files. Files
-  of its types get "Mit <Plugin> öffnen" in the context menu.
-- **Undo:** what a plugin makes goes into the library as one change, undone in the history.
-
-Writing a plugin: see [docs/plugins.md](docs/plugins.md). The plugin interface is MIT/Apache-2.0,
-so plugins may use any licence.
+A plugin is one `.wasm` file for every system and runs sealed off. It may do nothing until you
+allow it in *Settings → Plugins*, and what it makes comes in as one change you can undo.
+Installing, granting and writing plugins: [docs/plugins.md](docs/plugins.md).
 
 ### Working with your slicer and other apps
 
@@ -1113,7 +1103,7 @@ distribution's libraries. The scripts for each format are in [`packaging`](packa
 
 ## Architecture
 
-Meshgrove is a Cargo workspace of six crates:
+Meshgrove is a Cargo workspace of eight crates:
 
 | Crate | Purpose |
 |---|---|
