@@ -30,7 +30,9 @@ cargo build --target wasm32-wasip2 --release
 Where a distribution's Rust comes first in `PATH` (Fedora's `/usr/bin/cargo`), use rustup's
 toolchain for both cargo and rustc, e.g. `PATH="$(dirname "$(rustup which cargo)"):$PATH"`.
 
-See `examples/plugins/hello-box` in the Meshgrove repository for a complete plugin.
+How to write one — manifest, permissions, tools, panels and their widgets, bundles, testing with
+`meshgrove-plugin-run` — is in `docs/plugins.md` of the Meshgrove repository;
+`examples/plugins/hello-box` there is a complete plugin.
 
 ## License
 

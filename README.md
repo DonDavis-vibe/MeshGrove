@@ -45,6 +45,7 @@
   - [The inbox](#the-inbox)
   - [Duplicate finder](#duplicate-finder)
   - [AI assistant and MCP (optional)](#ai-assistant-and-mcp-optional)
+  - [Plugins (optional)](#plugins-optional)
   - [Working with your slicer and other apps](#working-with-your-slicer-and-other-apps)
   - [Archives (ZIP, 7z, RAR, TAR)](#archives-zip-7z-rar-tar)
   - [Moving files to the trash](#moving-files-to-the-trash)
@@ -696,6 +697,23 @@ On the command line, `meshgrove-mcp setup` does the same (`--dry-run` shows it f
 `meshgrove-mcp --print-config claude-desktop` (or `claude-code`, `lm-studio`, `cursor`, `vscode`,
 with `--local` if needed) prints one. With the AppImage the command is `Meshgrove.AppImage mcp`.
 
+### Plugins (optional)
+
+Plugins add tools to Meshgrove, for example Bingrove, a generator for Gridfinity drawer inserts.
+A plugin is a single `.wasm` file for every system. It runs sealed off: no network, only its own
+folder, a memory limit and deadlines.
+
+- **Install:** under Settings → Plugins, type or drop the file's path and click "Installieren".
+- **Grant:** a new plugin is switched on with nothing granted. Tick what it may do: offer tools
+  to the AI (the chat and AI apps over MCP), put files into the library, have those accepted
+  without review, read the library (what local AI sees, or everything).
+- **Use it:** its panels open from "Plugins ▾" next to "Ansicht" as tabs beside the files. Files
+  of its types get "Mit <Plugin> öffnen" in the context menu.
+- **Undo:** what a plugin makes goes into the library as one change, undone in the history.
+
+Writing a plugin: see [docs/plugins.md](docs/plugins.md). The plugin interface is MIT/Apache-2.0,
+so plugins may use any licence.
+
 ### Working with your slicer and other apps
 
 - **Open in slicer** (context menu, or the button below the facts in the *Info* pane and in a
@@ -1105,6 +1123,8 @@ Meshgrove is a Cargo workspace of six crates:
 | [`meshgrove-step`](crates/meshgrove-step) | `meshgrove-step-mesher`: STEP → STL with OpenCascade, as a separate process |
 | [`meshgrove-thumbnailer`](crates/meshgrove-thumbnailer) | The freedesktop thumbnailer for Dolphin and file dialogs |
 | [`meshgrove-mcp`](crates/meshgrove-mcp) | `meshgrove-mcp`: the optional MCP server the user's own assistant starts (stdio); reads the index, writes only suggestions |
+| [`meshgrove-plugin-api`](crates/meshgrove-plugin-api) | The plugin interface (MIT OR Apache-2.0): the WIT world, manifest, tools, panel widgets, bundles; with `guest` the bindings for writing a plugin ([docs/plugins.md](docs/plugins.md)) |
+| [`meshgrove-plugins`](crates/meshgrove-plugins) | The plugin host: wasmtime sandbox, grants, panels, jobs, staging, the AI tools of plugins, and `meshgrove-plugin-run` for running a plugin without Meshgrove |
 
 How work flows through the app:
 

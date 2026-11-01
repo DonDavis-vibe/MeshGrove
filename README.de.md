@@ -45,6 +45,7 @@
   - [Der Eingang](#der-eingang)
   - [Duplikate finden](#duplikate-finden)
   - [KI-Assistent und MCP (freiwillig)](#ki-assistent-und-mcp-freiwillig)
+  - [Plugins (freiwillig)](#plugins-freiwillig)
   - [Zusammenarbeit mit Slicer und anderen Programmen](#zusammenarbeit-mit-slicer-und-anderen-programmen)
   - [Archive (ZIP, 7z, RAR, TAR)](#archive-zip-7z-rar-tar)
   - [Dateien in den Papierkorb](#dateien-in-den-papierkorb)
@@ -737,6 +738,25 @@ Auf der Kommandozeile macht `meshgrove-mcp setup` dasselbe (`--dry-run` zeigt es
 `meshgrove-mcp --print-config claude-desktop` (oder `claude-code`, `lm-studio`, `cursor`, `vscode`,
 bei Bedarf mit `--local`) gibt einen aus. Beim AppImage lautet der Befehl `Meshgrove.AppImage mcp`.
 
+### Plugins (freiwillig)
+
+Plugins erweitern Meshgrove um Werkzeuge, zum Beispiel Bingrove, einen Generator für
+Gridfinity-Schubladeneinsätze. Ein Plugin ist eine einzige `.wasm`-Datei für alle Systeme. Es
+läuft abgeschottet: ohne Netz, nur mit seinem eigenen Ordner, mit Speichergrenze und Fristen.
+
+- **Installieren:** unter Einstellungen → Plugins den Pfad der Datei eintippen oder sie
+  hineinziehen und „Installieren“ klicken.
+- **Erlauben:** ein neues Plugin ist eingeschaltet, darf aber noch nichts. Hake an, was es darf:
+  Werkzeuge für die KI anbieten (Chat und KI-Apps über MCP), Dateien in die Bibliothek legen,
+  diese ohne Prüfung übernehmen lassen, die Bibliothek lesen (was lokale KI sieht, oder alles).
+- **Benutzen:** seine Fenster öffnen sich über „Plugins ▾“ neben „Ansicht“ als Tabs neben den
+  Dateien. Dateien seiner Typen bekommen „Mit <Plugin> öffnen“ im Kontextmenü.
+- **Rückgängig:** was ein Plugin erzeugt, kommt als eine Änderung in die Bibliothek und lässt
+  sich im Verlauf rückgängig machen.
+
+Plugins schreiben: siehe [docs/plugins.md](docs/plugins.md) (englisch). Die Plugin-Schnittstelle
+steht unter MIT/Apache-2.0, Plugins dürfen also jede Lizenz haben.
+
 ### Zusammenarbeit mit Slicer und anderen Programmen
 
 - **In Slicer öffnen** (Kontextmenü, oder der Knopf unter den Angaben im Bereich *Info* und im
@@ -1161,6 +1181,8 @@ Meshgrove ist ein Cargo-Workspace aus sechs Crates:
 | [`meshgrove-step`](crates/meshgrove-step) | `meshgrove-step-mesher`: STEP → STL mit OpenCascade, als eigener Prozess |
 | [`meshgrove-thumbnailer`](crates/meshgrove-thumbnailer) | Der freedesktop-Thumbnailer für Dolphin und Dateidialoge |
 | [`meshgrove-mcp`](crates/meshgrove-mcp) | `meshgrove-mcp`: der freiwillige MCP-Server, den der eigene Assistent startet (stdio); liest den Index, schreibt nur Vorschläge |
+| [`meshgrove-plugin-api`](crates/meshgrove-plugin-api) | Die Plugin-Schnittstelle (MIT OR Apache-2.0): WIT-Welt, Manifest, Werkzeuge, Panel-Widgets, Bundles; mit `guest` die Bindungen zum Schreiben eines Plugins ([docs/plugins.md](docs/plugins.md)) |
+| [`meshgrove-plugins`](crates/meshgrove-plugins) | Der Plugin-Host: wasmtime-Sandbox, Rechte, Panels, Jobs, Staging, die KI-Werkzeuge der Plugins und `meshgrove-plugin-run`, das ein Plugin ohne Meshgrove ausführt |
 
 Wie die Arbeit durch die App läuft:
 
