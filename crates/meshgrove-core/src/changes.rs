@@ -660,14 +660,15 @@ impl Library {
         // Rebuilt from its parts: the index stores paths with the platform's separator only.
         let dir: PathBuf = dir.components().collect();
         let d = dir.to_string_lossy();
-        let (below_lo, below_hi) = crate::db::below_bounds(&d);
+        let b = crate::db::below_bounds(&d);
         let files: Vec<(PathBuf, bool)> = {
             let mut stmt = self.conn.prepare(&format!(
                 "SELECT d.path, f.name, f.kind IN ({}) FROM files f JOIN dirs d ON d.id = f.dir_id
-                 WHERE d.path = ?1 OR (d.path > ?2 AND d.path < ?3) ORDER BY d.path, f.name",
+                 WHERE d.path = ?1 OR (d.path > ?2 AND d.path < ?3) OR (d.path > ?4 AND d.path < ?5)
+                 ORDER BY d.path, f.name",
                 crate::inbox::INBOX_KINDS
             ))?;
-            stmt.query_map(params![d, below_lo, below_hi], |r| {
+            stmt.query_map(params![d, b[0], b[1], b[2], b[3]], |r| {
                 Ok((Path::new(&r.get::<_, String>(0)?).join(r.get::<_, String>(1)?), r.get(2)?))
             })?
             .collect::<Result<_, _>>()?

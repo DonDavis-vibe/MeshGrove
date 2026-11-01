@@ -168,14 +168,16 @@ impl Library {
     /// Files below `folder` that arrived after the baseline but whose content was known.
     fn known_in(&self, folder: &Path) -> Result<usize, Error> {
         let f = folder.to_string_lossy();
+        let b = crate::db::below_bounds(&f);
         let count: i64 = self.conn.query_row(
             &format!(
                 "SELECT COUNT(*) FROM files f JOIN dirs d ON d.id = f.dir_id
-                 WHERE (d.path = ?1 OR (d.path > ?2 AND d.path < ?3)) AND f.added_ns IS NOT NULL
+                 WHERE (d.path = ?1 OR (d.path > ?2 AND d.path < ?3) OR (d.path > ?4 AND d.path < ?5))
+                   AND f.added_ns IS NOT NULL
                    AND f.kind IN ({INBOX_KINDS})
                    AND f.content_hash IN (SELECT content_hash FROM inbox WHERE done_ns IS NOT NULL)"
             ),
-            params![f, format!("{f}/"), format!("{f}0")],
+            params![f, b[0], b[1], b[2], b[3]],
             |r| r.get(0),
         )?;
         Ok(count as usize)

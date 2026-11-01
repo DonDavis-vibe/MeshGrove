@@ -614,12 +614,14 @@ impl Library {
     /// before G-code, files directly inside before those in subfolders.
     pub fn folder_preview(&self, dir: &Path, n: usize) -> Result<Vec<Entry>, Error> {
         let Some(d) = path_str(dir) else { return Ok(Vec::new()) };
+        let b = below_bounds(d);
         let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns FROM files f JOIN dirs d ON d.id = f.dir_id
-             WHERE (d.path = ?1 OR (d.path > ?2 AND d.path < ?3)) AND f.kind IN ({MODEL_KINDS}, 'image', 'gcode')
-             ORDER BY CASE f.kind WHEN 'image' THEN 1 WHEN 'gcode' THEN 2 ELSE 0 END, (d.path = ?1) DESC, d.path, f.name COLLATE NOCASE LIMIT ?4"
+             WHERE (d.path = ?1 OR (d.path > ?2 AND d.path < ?3) OR (d.path > ?4 AND d.path < ?5))
+               AND f.kind IN ({MODEL_KINDS}, 'image', 'gcode')
+             ORDER BY CASE f.kind WHEN 'image' THEN 1 WHEN 'gcode' THEN 2 ELSE 0 END, (d.path = ?1) DESC, d.path, f.name COLLATE NOCASE LIMIT ?6"
         ))?;
-        stmt.query_map(params![d, format!("{d}/"), format!("{d}0"), n as i64], entry_from_row)?.collect()
+        stmt.query_map(params![d, b[0], b[1], b[2], b[3], n as i64], entry_from_row)?.collect()
     }
 
     pub(crate) fn content_hash_of(&self, path: &Path) -> Result<Option<String>, Error> {
@@ -903,9 +905,10 @@ fn listing_name(path: &Path) -> String {
 
 fn remove_tree(conn: &Connection, dir: &Path) -> Result<(), Error> {
     let Some(d) = path_str(dir) else { return Ok(()) };
+    let b = below_bounds(d);
     conn.execute(
-        "DELETE FROM dirs WHERE path = ?1 OR (path > ?2 AND path < ?3)",
-        params![d, format!("{d}/"), format!("{d}0")],
+        "DELETE FROM dirs WHERE path = ?1 OR (path > ?2 AND path < ?3) OR (path > ?4 AND path < ?5)",
+        params![d, b[0], b[1], b[2], b[3]],
     )?;
     Ok(())
 }
@@ -1014,12 +1017,14 @@ fn path_str(p: &Path) -> Option<&str> {
     p.to_str()
 }
 
-/// SQL bounds for the folders below `dir`: a stored path `p` with `lo < p < hi` starts with
-/// `dir` and the platform's separator (`/` on Linux and macOS, `\` on Windows).
-pub(crate) fn below_bounds(dir: &str) -> (String, String) {
-    let sep = std::path::MAIN_SEPARATOR;
-    let next = char::from_u32(sep as u32 + 1).unwrap_or(sep);
-    (format!("{dir}{sep}"), format!("{dir}{next}"))
+/// SQL bounds for the folders below `dir`, one pair per separator: a stored path `p` with
+/// `b[0] < p < b[1]` or `b[2] < p < b[3]` starts with `dir` and a separator. That is `/`, and on
+/// Windows also `\` (the one the system uses there); elsewhere both pairs are the same.
+pub(crate) fn below_bounds(dir: &str) -> [String; 4] {
+    let pair = |sep: char| (format!("{dir}{sep}"), format!("{dir}{}", char::from(sep as u8 + 1)));
+    let (a, b) = pair('/');
+    let (c, d) = pair(if cfg!(windows) { '\\' } else { '/' });
+    [a, b, c, d]
 }
 
 fn escape_like(s: &str) -> String {
@@ -1033,17 +1038,20 @@ mod tests {
     #[test]
     fn bounds_hold_exactly_the_folders_below() {
         let dir = Path::new("lib").join("Garten");
-        let (lo, hi) = below_bounds(dir.to_str().unwrap());
-        let inside = |p: PathBuf| {
-            let s = p.to_str().unwrap().to_owned();
-            s > lo && s < hi
-        };
-        assert!(inside(dir.join("sub")));
-        assert!(inside(dir.join("sub").join("tiefer")));
-        assert!(inside(dir.join("Übertöpfe")));
-        assert!(!inside(dir.clone()));
-        for sibling in ["Garten2", "Garten 2", "Garten-alt", "Garten.alt", "Garten[x]", "Garten^x"] {
-            assert!(!inside(Path::new("lib").join(sibling)), "{sibling}");
+        let d = dir.to_str().unwrap();
+        let b = below_bounds(d);
+        let inside = |s: &str| (s > b[0].as_str() && s < b[1].as_str()) || (s > b[2].as_str() && s < b[3].as_str());
+        let path = |p: PathBuf| p.to_str().unwrap().to_owned();
+        assert!(inside(&path(dir.join("sub"))));
+        assert!(inside(&path(dir.join("sub").join("tiefer"))));
+        assert!(inside(&path(dir.join("Übertöpfe"))));
+        assert!(inside(&format!("{d}/sub")), "/ separates everywhere");
+        assert_eq!(inside(&format!("{d}\\sub")), cfg!(windows), "\\ separates on Windows only");
+        assert!(!inside(d));
+        for sibling in
+            ["Garten2", "Garten0", "Garten 2", "Garten-alt", "Garten.alt", "Garten[x]", "Garten]x", "Garten^x"]
+        {
+            assert!(!inside(&path(Path::new("lib").join(sibling))), "{sibling}");
         }
     }
     use crate::loaders::gcode::GcodeFacts;
