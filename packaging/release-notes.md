@@ -7,7 +7,27 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 
 ## Highlights
 
-**From Downloads into the library** (new in 0.7)
+**Plugins** (new in 0.8)
+
+- Meshgrove can now be extended with plugins: small programs (WebAssembly) that bring tools and panels of their own. They run sealed off – no network, only their own folder, limited time and memory – and see your library only if you allow it. Nothing changes until you install one.
+- *Settings → Plugins* looks for plugins in your Downloads, the import folders and Meshgrove's plugins folder and offers *Install*, or *Update* for a newer version; *Browse …* picks one by hand, and a `.wasm` dropped on the window is installed at once. What each plugin may do is up to you, one switch each: *Tools for the AI*, *Put files into the library*, *Read the library* (no, what local AI sees, or everything) and *Accept without review*.
+- A plugin's panel opens from the *Plugins* menu as a tab of its own, with forms, tables, a 3D preview on your printer's bed, a grid editor or a drawing canvas. Preview and Info fold away while it is in front, so the panel gets the room.
+- What a plugin makes comes into the library as one change: a new folder of models with their tags, notes and print lists, which the history takes back with one click. Made from its panel, it goes in at once; asked for by an AI, it waits in the review.
+- Plugin tools join the AI chat and `meshgrove-mcp`, so your assistants can use them too. Stopping the chat stops a running tool, and pictures a tool returns show in the chat.
+- For developers: [how to write a plugin](https://github.com/DonDavis-vibe/MeshGrove/blob/v@VERSION@/docs/plugins.md), the `meshgrove-plugin-api` crate (MIT or Apache-2.0, so a plugin can use any license) and the small `hello-box` example.
+
+**Bingrove, the first plugin** (new in 0.8)
+
+- [Bingrove](https://github.com/DonDavis-vibe/Bingrove) makes Gridfinity inserts for your drawers: give it the drawer's size, arrange the bins in the grid editor (move, resize, merge, split, add holders), and it puts the STLs, the print beds and a print list into your library. Magnet holes are an option, and calibration pieces test the fit before the big print.
+- Your AI can do it as well: "Gridfinity inserts for my 250 × 305 mm drawer" in the chat or in an AI app.
+- Get `bingrove.wasm` from [Bingrove's releases](https://github.com/DonDavis-vibe/Bingrove/releases) and install it in *Settings → Plugins*.
+
+**Smaller things** (new in 0.8)
+
+- Preview and Info fold away with » at the right above the files, or *View → Preview and info*; « brings them back. *Settings → General → Panes* switches off their folding away for plugin panels.
+- Fixed (Windows): a folder's tile now shows models from its subfolders too, the inbox counts known files in subfolders, and a folder that is gone no longer leaves its subfolders behind in the index.
+
+**From Downloads into the library** (since 0.7)
 
 - Name a downloads folder in *Settings → Library → Import* (one click for your Downloads). At start, or with *⬇ Import* in the sidebar, Meshgrove shows the new models, G-code and archives with models in there; tick what should come in and it moves them into the library's landing folder (`Import`), across drives too, numbered when a name is taken. Archives come in whole or unpacked, as you choose. Files still downloading and content the library has already are left out.
 - Imported files land in the inbox like any new file; the history brings them back to where they were. Power users let the import run by itself at start.
@@ -16,7 +36,7 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 <img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-import.png" alt="The import view: new files in Downloads with a tick each, archives whole or unpacked, Import selected" width="60%">
 </p>
 
-**Placed by tag** (new in 0.7)
+**Placed by tag** (since 0.7)
 
 - A file in the landing folder that gets a theme tag – from you, from the inbox's *✧ Sort in* or from your assistant – is placed into that tag's folder (`Garten/`), with missing folders made. *Settings → Tags → Placement by tag* holds the folder for each theme and for your own tags, in order of precedence: with several tags, the topmost wins (your own tags before the themes, a deeper folder before a flat one; drag a row by its handle or use ▲▼ to reorder). The review shows the other folders that fit, to choose instead.
 - Placement is a suggestion like an assistant's and waits in the review; with *Accept suggestions automatically* on, moves out of the landing folder are applied by themselves – but only when exactly one folder fits; otherwise the file waits for your choice. Your own folders are never rearranged without you: *Place by tag* in the context menu asks, and every move can be undone.
@@ -27,16 +47,16 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 <img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-placement.png" alt="Settings → Tags → Placement by tag: the folder for each tag in order of precedence, one row being dragged by its handle" width="49%">
 </p>
 
-**Duplicates cleaned up at once** (new in 0.7)
+**Duplicates cleaned up at once** (since 0.7)
 
 - After looking through the duplicates, tick the groups whose ★ copy is the right one – or *All suggestions are fine* – and *Clean up selected* moves the extra copies of all of them to the trash with one confirmation. Rather keep another copy? Point at it and click ☆ *Keep*.
 
-**Cut and paste** (new in 0.7)
+**Cut and paste** (since 0.7)
 
 - Ctrl+V (or *Paste* in the context menu, on a folder tile or the empty part of the view) copies the files on the clipboard into the folder: what you copied in Meshgrove with Ctrl+C, in Dolphin, Explorer or Finder, or paths as text. Taken names get a number, nothing is replaced, the copies keep their tags and notes (they are the same model), and the history undoes it.
 - Ctrl+X (or *Cut*) marks the selection – the tiles fade – and the next paste moves the files instead: within a library with tags, notes and previews along, from elsewhere like an import; journalled and undoable like every move. Dolphin and Nautilus honour the cut marker, and what they cut is moved when pasted in Meshgrove.
 
-**Smaller things** (new in 0.7)
+**Smaller things** (since 0.7)
 
 - *Zuletzt gedruckt / Last printed* below the favourites in the sidebar: the models you last sent to the slicer, newest first. How many it keeps (10 unless you change it, or off) is a slider in *Settings → Programs*.
 - Sorting moved into its own toolbar button next to the folder/library switch, and files Meshgrove cannot show (stray `.txt`, `.ini` and the like) now come after the ones it can, whatever the sort order; the same menu turns that off.
@@ -151,7 +171,9 @@ If Meshgrove saves you time, you can leave a tip on [Ko-fi](https://ko-fi.com/do
 
 **Meshgrove @VERSION@**: eine schnelle, native Galerie für 3D-Druck-Dateien unter Linux, Windows und macOS, mit echten Vorschauen für STL, 3MF, STEP, OBJ, PLY, glTF, G-code, Modelle in ZIP/7z/RAR, PDFs und Readmes, dazu Favoriten, Drucklisten und einem Druckprotokoll.
 
-**Neu in 0.7:** Nenne unter *Einstellungen → Bibliothek → Import* deinen Download-Ordner, und Meshgrove zeigt beim Start oder über *⬇ Import* in der Seitenleiste, welche neuen Modelle, G-Codes und Archive dort liegen; ein Klick holt sie in den Landeordner der Bibliothek (verschoben, auch über Laufwerke hinweg, Archive ganz oder entpackt, rückgängig machbar). Bekommt eine Datei dort einen Themen-Tag, legt Meshgrove sie in den Ordner des Tags ab – nach den Regeln unter *Einstellungen → Tags → Ablage nach Tag* (bei mehreren Tags zählt der oberste; die Prüfliste bietet die anderen passenden Ordner an), als Vorschlag in der Prüfliste oder mit „automatisch annehmen“ von selbst, wenn genau ein Ordner passt. Deine eigenen Ordner werden nie ungefragt umgeräumt; „Nach Tag ablegen“ im Rechtsklick-Menü fragt immer. Strg+V (oder „Einfügen“ im Rechtsklick-Menü) kopiert Dateien aus der Zwischenablage in den Ordner – aus Meshgrove, dem Dateimanager oder als Pfade – ohne etwas zu ersetzen, mit Tags und Notizen und rückgängig machbar; nach Strg+X („Ausschneiden“) verschiebt das Einfügen stattdessen. Bei den Duplikaten hakst du nach der Sichtung die Gruppen ab, deren ★-Kopie passt, und bereinigst alle auf einmal; ☆ *Behalten* wählt eine andere Kopie. Dazu „Zuletzt gedruckt“ in der Seitenleiste (die zuletzt an den Slicer geschickten Modelle) und ein eigener Sortier-Knopf, bei dem unterstützte Dateien zuerst kommen. Dein KI-Assistent kennt die Regeln ebenfalls.
+**Neu in 0.8:** Plugins – kleine Programme (WebAssembly), die Meshgrove um eigene Werkzeuge und Panels erweitern. Sie laufen abgeschottet (kein Netz, nur ihr eigener Ordner) und sehen deine Bibliothek nur, wenn du es erlaubst. *Einstellungen → Plugins* findet sie in Downloads, den Import-Ordnern und im Plugin-Ordner und bietet *Installieren* oder *Aktualisieren* an; *Durchsuchen …* oder eine aufs Fenster gezogene `.wasm` gehen auch. Was jedes Plugin darf – *Werkzeuge für die KI*, *Dateien in die Bibliothek legen*, *Bibliothek lesen*, *Ohne Prüfung übernehmen* –, schaltest du einzeln frei. Ein Plugin-Panel öffnet sich über das Menü *Plugins* als eigener Tab, mit Formularen, Tabellen, 3D-Vorschau auf dem Druckbett und Raster-Editor; Vorschau und Info klappen dabei weg. Was ein Plugin erzeugt, kommt als eine Änderung in die Bibliothek – ein neuer Ordner mit Tags, Notizen und Drucklisten – und lässt sich im Verlauf mit einem Klick zurücknehmen. Die Werkzeuge der Plugins stehen auch im KI-Chat und über `meshgrove-mcp` deinen KI-Apps zur Verfügung. Erstes Plugin ist [Bingrove](https://github.com/DonDavis-vibe/Bingrove): Gridfinity-Einsätze für deine Schubladen, im Raster-Editor angeordnet, mit Haltern, Magnetlöchern und Kalibrierteilen, als STLs, Druckbetten und Druckliste direkt in der Bibliothek – auch auf Zuruf deiner KI (die `bingrove.wasm` gibt es bei den Bingrove-Releases). Vorschau und Info lassen sich außerdem von Hand mit » einklappen. Behoben (Windows): Ordner-Kacheln zeigen auch Modelle aus Unterordnern, und der Eingang zählt bekannte Dateien in Unterordnern mit.
+
+**Seit 0.7:** Nenne unter *Einstellungen → Bibliothek → Import* deinen Download-Ordner, und Meshgrove zeigt beim Start oder über *⬇ Import* in der Seitenleiste, welche neuen Modelle, G-Codes und Archive dort liegen; ein Klick holt sie in den Landeordner der Bibliothek (verschoben, auch über Laufwerke hinweg, Archive ganz oder entpackt, rückgängig machbar). Bekommt eine Datei dort einen Themen-Tag, legt Meshgrove sie in den Ordner des Tags ab – nach den Regeln unter *Einstellungen → Tags → Ablage nach Tag* (bei mehreren Tags zählt der oberste; die Prüfliste bietet die anderen passenden Ordner an), als Vorschlag in der Prüfliste oder mit „automatisch annehmen“ von selbst, wenn genau ein Ordner passt. Deine eigenen Ordner werden nie ungefragt umgeräumt; „Nach Tag ablegen“ im Rechtsklick-Menü fragt immer. Strg+V (oder „Einfügen“ im Rechtsklick-Menü) kopiert Dateien aus der Zwischenablage in den Ordner – aus Meshgrove, dem Dateimanager oder als Pfade – ohne etwas zu ersetzen, mit Tags und Notizen und rückgängig machbar; nach Strg+X („Ausschneiden“) verschiebt das Einfügen stattdessen. Bei den Duplikaten hakst du nach der Sichtung die Gruppen ab, deren ★-Kopie passt, und bereinigst alle auf einmal; ☆ *Behalten* wählt eine andere Kopie. Dazu „Zuletzt gedruckt“ in der Seitenleiste (die zuletzt an den Slicer geschickten Modelle) und ein eigener Sortier-Knopf, bei dem unterstützte Dateien zuerst kommen. Dein KI-Assistent kennt die Regeln ebenfalls.
 
 **Seit 0.6:** Meshgrove trägt sich selbst bei deinen KI-Apps ein (Claude Desktop, Claude Code, LM Studio, Cursor, VS Code, Codex, Gemini CLI und weitere; Idee und Code von SolidCraft) – kein Eintrag muss mehr kopiert werden. Die Einstellungen sind neu geordnet: Seiten in Gruppen, einklappbare Abschnitte, ausgerichtete Zeilen und „Standard wiederherstellen“. In der Prüfliste gibt es Häkchen pro Datei und pro Block, und wer möchte, lässt neue Vorschläge automatisch annehmen (Verschiebungen warten immer). Behoben: Nach einem Tag oder einer Suche zeigte die Bibliothek ihre Ordner ohne Bilder, bis man F5 drückte.
 
