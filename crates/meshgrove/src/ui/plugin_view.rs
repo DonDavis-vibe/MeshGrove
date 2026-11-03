@@ -23,6 +23,8 @@ pub struct PanelUiState {
     pending: HashMap<String, Value>,
     /// The text input with the keyboard focus (its text survives a new view).
     typing: Option<String>,
+    /// The number field whose typing Escape just dropped.
+    escaped: Option<String>,
     /// Decoded pictures, by a hash of their data.
     textures: HashMap<u64, egui::TextureHandle>,
     markdown: CommonMarkCache,
@@ -303,9 +305,11 @@ impl Draw<'_> {
         self.state.pending.get(id).and_then(Value::as_str).map(str::to_owned)
     }
 
-    /// A dragged value is kept here while dragging and sent when let go; a typed one at once.
+    /// A dragged value is kept here while dragging and sent when let go; a changed one at once.
+    /// Nothing is kept while the value is being typed: a value that moves under a `DragValue`
+    /// makes it drop the text typed so far.
     fn after_drag(&mut self, id: &str, value: f64, r: &egui::Response) {
-        if r.dragged() || r.changed() || r.has_focus() {
+        if r.dragged() || r.changed() {
             self.state.pending.insert(id.to_owned(), json!(value));
         }
         if r.drag_stopped() || (r.changed() && !r.dragged()) {
@@ -457,13 +461,29 @@ impl Draw<'_> {
             Unit::None => "",
         };
         let mut shown = self.pending_f64(id).unwrap_or(value) / scale;
-        let mut drag = egui::DragValue::new(&mut shown).suffix(suffix).speed(step.unwrap_or(0.1) / scale);
+        // A typed value counts when the user is done (Enter, Tab or leaving the field; Escape
+        // drops it): not clamped after the first digit, and sent once instead of per keystroke.
+        let mut drag = egui::DragValue::new(&mut shown)
+            .suffix(suffix)
+            .speed(step.unwrap_or(0.1) / scale)
+            .update_while_editing(false);
         if min.is_some() || max.is_some() {
             drag = drag.range(min.unwrap_or(f64::MIN) / scale..=max.unwrap_or(f64::MAX) / scale);
         }
         let decimals = decimals.map(usize::from).map(|d| if scale != 1.0 { d + 2 } else { d });
         drag = drag.max_decimals_opt(decimals);
         let r = ui.add_enabled(enabled, drag);
+        // Escape drops the text, but egui takes it a frame later all the same (the field has
+        // lost its focus again then, without the key): that change is not the user's.
+        if self.state.escaped.as_deref() == Some(id) {
+            self.state.escaped = None;
+            if r.changed() {
+                return;
+            }
+        }
+        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.state.escaped = Some(id.to_owned());
+        }
         self.after_drag(id, shown * scale, &r);
     }
 
@@ -560,11 +580,13 @@ impl Draw<'_> {
             .sense(Sense::click())
             .cell_layout(Layout::left_to_right(Align::Center))
             .max_scroll_height(max_height.unwrap_or(f32::INFINITY));
+        // Columns without a width of the plugin's can be dragged wider at their right edge, so
+        // a value cut short can be read whole (or on hover); the last one takes what is left.
         for (i, c) in columns.iter().enumerate() {
             table = table.column(match c.width {
                 Some(w) => egui_extras::Column::exact(w),
                 None if i + 1 == columns.len() => egui_extras::Column::remainder(),
-                None => egui_extras::Column::auto().at_least(40.0),
+                None => egui_extras::Column::auto().at_least(40.0).resizable(true),
             });
         }
         let mut clicked = None;
@@ -672,8 +694,12 @@ mod tests {
         assert!(events.is_empty(), "{events:?}");
     }
 
-    /// Clicks through egui: a frame with the press, one with the release; the events the view sent.
-    fn click_at(view: &View, at: impl Fn(&egui::Context) -> egui::Pos2) -> Vec<Event> {
+    type Shapes = Vec<egui::epaint::ClippedShape>;
+
+    /// Runs `view` in a headless egui of `width` × 600 points: two frames to settle, then one
+    /// for each input of `steps`, which sees what the last settling frame drew. The events the
+    /// view sent, and what the last frame drew.
+    fn drive(view: &View, width: f32, steps: impl FnOnce(&Shapes) -> Vec<Vec<egui::Event>>) -> (Vec<Event>, Shapes) {
         let ctx = egui::Context::default();
         let mut state = PanelUiState::default();
         let mut events = Vec::new();
@@ -681,7 +707,7 @@ mod tests {
         let mut frame = |input: Vec<egui::Event>, events: &mut Vec<Event>| {
             time += 0.05;
             let raw = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 600.0))),
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 600.0))),
                 time: Some(time),
                 events: input,
                 ..Default::default()
@@ -694,19 +720,121 @@ mod tests {
                 events.extend(show(ui, view, &mut state, &mut mesh));
             });
             output.textures_delta.clear();
+            output.shapes
         };
         frame(Vec::new(), &mut events);
-        frame(Vec::new(), &mut events);
-        let p = at(&ctx);
-        let button = |pressed| egui::Event::PointerButton {
-            pos: p,
+        let mut shapes = frame(Vec::new(), &mut events);
+        for input in steps(&shapes) {
+            shapes = frame(input, &mut events);
+        }
+        (events, shapes)
+    }
+
+    fn button(at: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: at,
             button: egui::PointerButton::Primary,
             pressed,
             modifiers: Default::default(),
+        }
+    }
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }
+    }
+
+    /// Clicks through egui: a frame with the press, one with the release; the events the view sent.
+    fn click_at(view: &View, p: egui::Pos2) -> Vec<Event> {
+        drive(view, 400.0, |_| vec![vec![egui::Event::PointerMoved(p), button(p, true)], vec![button(p, false)]]).0
+    }
+
+    /// The texts a frame drew: each with its place and whether it was cut short.
+    fn texts(shapes: &Shapes) -> Vec<(String, Rect, bool)> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, Rect, bool)>) {
+            match shape {
+                egui::Shape::Text(t) => {
+                    out.push((t.galley.text().to_owned(), t.visual_bounding_rect(), t.galley.elided))
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        shapes.iter().for_each(|s| walk(&s.shape, &mut out));
+        out
+    }
+
+    /// A number field with a minimum, typed into: nothing while typing (no clamping to 42 after
+    /// the "2"), the whole number once on Enter.
+    #[test]
+    fn typed_numbers_are_sent_once_when_done() {
+        let json = serde_json::json!({"v": 1, "root": {"type": "number_input", "id": "w", "value": 42.0,
+            "min": 42.0, "max": 500.0, "unit": "mm"}});
+        let view: View = serde_json::from_value(json).unwrap();
+        let at = egui::pos2(20.0, 17.0);
+        let typed = |last: egui::Event| {
+            drive(&view, 400.0, |_| {
+                vec![
+                    vec![egui::Event::PointerMoved(at), button(at, true)],
+                    vec![button(at, false)],
+                    // The field takes the keyboard and selects its text.
+                    Vec::new(),
+                    vec![egui::Event::Text("2".into())],
+                    vec![egui::Event::Text("50".into())],
+                    vec![last],
+                    Vec::new(),
+                    Vec::new(),
+                ]
+            })
         };
-        frame(vec![egui::Event::PointerMoved(p), button(true)], &mut events);
-        frame(vec![button(false)], &mut events);
-        events
+        let (events, _) = typed(key(egui::Key::Enter));
+        assert_eq!(events, [Event::Changed { id: "w".into(), value: json!(250.0) }]);
+        let (events, shapes) = typed(key(egui::Key::Escape));
+        assert_eq!(events, [], "Escape drops what was typed");
+        assert!(texts(&shapes).iter().any(|(t, ..)| t.starts_with("42")), "{:?}", texts(&shapes));
+    }
+
+    /// The sizes column of a narrow parts table cuts its values short: hovering shows one whole,
+    /// and dragging the column's right edge makes room for it.
+    #[test]
+    fn cut_short_cells_can_be_read() {
+        const SIZE: &str = "250.0 × 305.0 × 7.0 mm";
+        let json = serde_json::json!({"v": 1, "root": {"type": "table", "id": "parts",
+            "columns": [{"title": "Teil"}, {"title": "mm"}, {"title": "Stk.", "width": 36.0, "numeric": true}],
+            "rows": [{"id": "0", "cells": ["baseplate_1A_5x4.stl", SIZE, "1"]}]}});
+        let view: View = serde_json::from_value(json).unwrap();
+        let cell = |shapes: &Shapes| texts(shapes).into_iter().find(|(t, _, elided)| t == SIZE && *elided);
+        let whole = |shapes: &Shapes| texts(shapes).into_iter().any(|(t, _, elided)| t == SIZE && !elided);
+
+        let (_, shapes) = drive(&view, 220.0, |shapes| {
+            let (_, rect, _) = cell(shapes).expect("cut short at first");
+            let hover = vec![egui::Event::PointerMoved(rect.center())];
+            // Still for a second: longer than egui waits before a tooltip.
+            std::iter::once(hover).chain(std::iter::repeat_n(Vec::new(), 20)).collect()
+        });
+        assert!(whole(&shapes), "the whole value on hover: {:?}", texts(&shapes));
+
+        let (_, shapes) = drive(&view, 220.0, |shapes| {
+            // The resize line of the sizes column: the second vertical line from the left.
+            let mut lines: Vec<f32> = shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::LineSegment { points: [a, b], .. } if a.x == b.x && (b.y - a.y).abs() > 15.0 => {
+                        Some(a.x)
+                    }
+                    _ => None,
+                })
+                .collect();
+            lines.sort_by(f32::total_cmp);
+            let x = lines[1];
+            let at = |dx: f32| egui::pos2(x + dx, 40.0);
+            let mut steps = vec![vec![egui::Event::PointerMoved(at(0.0)), button(at(0.0), true)]];
+            steps.extend([10.0, 40.0, 80.0, 120.0].map(|dx| vec![egui::Event::PointerMoved(at(dx))]));
+            steps.push(vec![button(at(120.0), false), egui::Event::PointerMoved(egui::pos2(5.0, 300.0))]);
+            steps.extend([Vec::new(), Vec::new()]);
+            steps
+        });
+        assert!(whole(&shapes) && cell(&shapes).is_none(), "room for the whole value: {:?}", texts(&shapes));
     }
 
     #[test]
@@ -717,7 +845,7 @@ mod tests {
             "max_height": 260.0}});
         let view: View = serde_json::from_value(json).unwrap();
         // Header 20 points, rows 20 points: the middle of the second row.
-        let events = click_at(&view, |_| egui::pos2(40.0, 8.0 + 20.0 + 20.0 + 10.0));
+        let events = click_at(&view, egui::pos2(40.0, 8.0 + 20.0 + 20.0 + 10.0));
         assert_eq!(events, [Event::TableSelect { id: "parts".into(), row: Some("1".into()) }]);
     }
 
@@ -733,7 +861,7 @@ mod tests {
             "second": {"type": "label", "text": "x"}}});
         let view: View = serde_json::from_value(json).unwrap();
         // The part is 0.4 × (400 − 8) ≈ 157 points wide: one button per line, about 22 apart.
-        let events = click_at(&view, |_| egui::pos2(30.0, 2.0 * 22.0 + 10.0));
+        let events = click_at(&view, egui::pos2(30.0, 2.0 * 22.0 + 10.0));
         assert_eq!(events, [Event::Click { id: "k".into() }]);
     }
 
@@ -749,7 +877,7 @@ mod tests {
                  "max_height": 260.0}]}}});
         let view: View = serde_json::from_value(json).unwrap();
         // On the text of the second row's first cell.
-        let events = click_at(&view, |_| egui::pos2(215.0, 8.0 + 100.0 + 4.0 + 20.0 + 20.0 + 10.0));
+        let events = click_at(&view, egui::pos2(215.0, 8.0 + 100.0 + 4.0 + 20.0 + 20.0 + 10.0));
         assert_eq!(events, [Event::TableSelect { id: "parts".into(), row: Some("1".into()) }]);
     }
 }

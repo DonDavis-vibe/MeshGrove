@@ -320,11 +320,11 @@ plugin's values count: it may correct or refuse them.
 | `label` (style: body, heading, strong, small, weak, mono), `markdown`, `separator`, `notice` (info, success, warn, error), `progress` (`fraction`; none = busy), `image` (base64 PNG/JPEG) | — |
 | `button` (primary, enabled) | `Click` |
 | `text_input` | `Changed {value: text}` on Enter or when the field loses focus, not per keystroke |
-| `number_input` (min, max, step, decimals, unit) | `Changed {value: number}` when typed, or when a drag is let go. With `unit: mm` it shows the user's unit (inches when imperial) but **always sends millimetres** |
+| `number_input` (min, max, step, decimals, unit) | `Changed {value: number}` once a typed number is done (Enter, Tab or leaving the field; Escape drops it), or when a drag is let go. With `unit: mm` it shows the user's unit (inches when imperial) but **always sends millimetres** |
 | `slider` | like `number_input` |
 | `checkbox`, `select`, `radio`, `color` (`#rrggbb[aa]`) | `Changed` at once |
 | `form` (rows of label + node; optional `submit` button) | the rows' own events; `Submit {values}` with every input by id |
-| `table` (columns: title, width, numeric; rows: id + cells; selected; max_height) | `TableSelect {row}`; clicking the selected row again sends `row: null` |
+| `table` (columns: title, width, numeric; rows: id + cells; selected; max_height) | `TableSelect {row}`; clicking the selected row again sends `row: null`. Columns without a `width` can be dragged wider by the user; a cell cut short shows its whole text on hover |
 | `mesh_view` (key, revision, height, `bed: [x, y]`) | — the bed is drawn under the model, centred |
 | `grid_editor` | `Grid {change}`, see below |
 | `canvas` | `Canvas {change}` when `interactive`, see below |
