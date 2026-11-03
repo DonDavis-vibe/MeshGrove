@@ -534,6 +534,32 @@ pub enum Event {
     HostChanged {
         info: HostInfo,
     },
+    /// What became of a bundle the panel handed over with [`Effect::ApplyBundle`] or
+    /// [`Effect::ProposeBundle`]. `title` is the bundle's. An older Meshgrove does not send it.
+    BundleFinished {
+        title: String,
+        outcome: BundleOutcome,
+    },
+    /// An event of a newer API than this crate's: nothing to do.
+    #[serde(other)]
+    Unknown,
+}
+
+/// See [`Event::BundleFinished`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum BundleOutcome {
+    /// In the library, as one change the history can undo: `steps` went through, `skipped` did
+    /// nothing (a file already had that tag, say).
+    Applied { steps: u32, skipped: u32 },
+    /// Waiting in the review, for the user to decide.
+    Queued,
+    /// The user has not allowed this plugin to put files into the library (Settings → Plugins).
+    /// The files are gone; nothing was tried.
+    Refused,
+    /// It did not work, and the library is as it was.
+    Failed { error: String },
 }
 
 /// A change on a [`GridEditor`], in cells.
@@ -753,6 +779,33 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bundles_outcome_reads_as_documented() {
+        let applied =
+            Event::BundleFinished { title: "Box".into(), outcome: BundleOutcome::Applied { steps: 56, skipped: 0 } };
+        let json = serde_json::json!({"type": "bundle_finished", "title": "Box",
+            "outcome": {"status": "applied", "steps": 56, "skipped": 0}});
+        assert_eq!(serde_json::to_value(&applied).unwrap(), json);
+        assert_eq!(serde_json::from_value::<Event>(json).unwrap(), applied);
+        for (outcome, json) in [
+            (BundleOutcome::Queued, serde_json::json!({"status": "queued"})),
+            (BundleOutcome::Refused, serde_json::json!({"status": "refused"})),
+            (
+                BundleOutcome::Failed { error: "disk full".into() },
+                serde_json::json!({"status": "failed", "error": "disk full"}),
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(&outcome).unwrap(), json);
+            assert_eq!(serde_json::from_value::<BundleOutcome>(json).unwrap(), outcome);
+        }
+    }
+
+    #[test]
+    fn events_of_a_newer_api_are_read_as_unknown() {
+        let event: Event = serde_json::from_str(r#"{"type": "from_the_future", "x": 1}"#).unwrap();
+        assert_eq!(event, Event::Unknown);
+    }
     use serde_json::json;
 
     fn round_trip<T: Serialize + for<'de> Deserialize<'de> + PartialEq + std::fmt::Debug>(value: &T) {

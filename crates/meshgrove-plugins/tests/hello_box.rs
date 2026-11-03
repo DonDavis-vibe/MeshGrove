@@ -11,7 +11,7 @@ use meshgrove_core::bundle::{BundleError, BundleItem, BundleList, BundleListKind
 use meshgrove_core::changes::ApplyOp;
 use meshgrove_core::config::{AccessClass, LibraryRead, PluginConfig};
 use meshgrove_core::db::Library;
-use meshgrove_plugin_api::ui::{Effect, Event, JobSpec, Node};
+use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, JobSpec, Node};
 use meshgrove_plugin_api::{MeshData, Permission};
 use meshgrove_plugins::jobs::{JobEvent, JobPool};
 use meshgrove_plugins::{CancelToken, Error, LibraryAccess, Plugin, PluginGrants, Settings, Staging};
@@ -208,6 +208,8 @@ fn panels_render_change_and_show_their_mesh() {
 
     let info = meshgrove_plugin_api::HostInfo { language: "de".into(), dark: true, ..Default::default() };
     assert!(panel.event(&Event::HostChanged { info }).is_ok(), "the panel hears that the host changed");
+    let finished = Event::BundleFinished { title: "Box".into(), outcome: BundleOutcome::Refused };
+    assert_eq!(panel.event(&finished).unwrap(), [], "and what became of its bundle");
     let effects = panel.event(&Event::Changed { id: "width".into(), value: json!(33.5) }).unwrap();
     assert!(effects.is_empty());
     let view = panel.render().unwrap();

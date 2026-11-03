@@ -9,12 +9,14 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use meshgrove_core::ai::dispatch::ToolProvider;
+use meshgrove_core::bundle::ResolvedBundle;
 use meshgrove_core::config::Config;
-use meshgrove_plugin_api::ui::{Effect, Event, Node, View};
+use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Node, View};
 use meshgrove_plugin_api::{Bundle, HostInfo, MeshData};
 use meshgrove_plugins::jobs::{JobEvent, JobPool};
-use meshgrove_plugins::{CancelToken, Plugin, Registry, Settings, Staging};
+use meshgrove_plugins::{CancelToken, Plugin, Registry, Settings, StagedBundle, Staging};
 
+use crate::library::{Applied, LibraryService};
 use crate::ui::plugin_view::PanelUiState;
 use crate::ui::settings_plugins::PluginRow;
 use crate::ui::viewer::{MeshSource, ModelViewer};
@@ -34,6 +36,7 @@ pub enum PanelAction {
     /// Files for the library: put in at once (`apply`) or suggested; `staging` holds them.
     Bundle {
         plugin: String,
+        panel: String,
         apply: bool,
         bundle: Bundle,
         staging: Result<Staging, String>,
@@ -207,6 +210,13 @@ impl PluginHost {
     pub fn host_changed(&mut self, info: &HostInfo) {
         for p in &mut self.panels {
             p.send(Event::HostChanged { info: info.clone() });
+        }
+    }
+
+    /// Tells a panel what became of its bundle (it may have been closed since).
+    pub fn bundle_finished(&mut self, plugin: &str, panel: &str, title: String, outcome: BundleOutcome) {
+        if let Some(p) = self.find(plugin, panel) {
+            p.send(Event::BundleFinished { title, outcome });
         }
     }
 
@@ -410,7 +420,8 @@ impl PluginHost {
                         effect,
                     })),
                     Output::Bundle { apply, bundle, staging } => {
-                        actions.push(PanelAction::Bundle { plugin: p.plugin.clone(), apply, bundle, staging });
+                        let (plugin, panel) = (p.plugin.clone(), p.panel.clone());
+                        actions.push(PanelAction::Bundle { plugin, panel, apply, bundle, staging });
                     }
                     Output::Mesh { key, mesh } => {
                         let m = p.meshes.entry(key).or_insert_with(|| {
@@ -545,6 +556,63 @@ fn rows(config: &Config, base: &Path, registry: &Registry) -> Vec<PluginRow> {
         .collect()
 }
 
+/// Where a panel's bundle is to go.
+pub enum BundleRoute<'a> {
+    /// Into the library now; `from` (plugin, panel) comes back with the outcome.
+    Apply { library: &'a LibraryService, from: (String, String) },
+    /// Into the review.
+    Propose(&'a dyn Fn(&ResolvedBundle) -> Result<(), String>),
+}
+
+/// Takes a panel's bundle as far as it goes here. The outcome, or `None` when it is on its way
+/// to the library's thread, which answers with [`Applied`] once the change went through.
+pub fn settle_bundle(
+    allowed: bool,
+    staged: StagedBundle,
+    config: &Config,
+    route: BundleRoute,
+) -> Option<BundleOutcome> {
+    if !allowed {
+        let _ = staged.staging.remove();
+        return Some(BundleOutcome::Refused);
+    }
+    let resolved = match staged.resolve_for(config) {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            let _ = staged.staging.remove();
+            return Some(BundleOutcome::Failed { error: e.to_string() });
+        }
+    };
+    match route {
+        BundleRoute::Apply { library, from } => {
+            let origin = format!("plugin:{}", staged.plugin);
+            library.apply_bundle(origin, resolved.title.clone(), resolved.ops(), from);
+            None
+        }
+        BundleRoute::Propose(propose) => Some(match propose(&resolved) {
+            Ok(()) => BundleOutcome::Queued,
+            Err(error) => {
+                let _ = staged.staging.remove();
+                BundleOutcome::Failed { error }
+            }
+        }),
+    }
+}
+
+/// The panel to tell, the bundle's title and its outcome, if `applied` is about a bundle.
+pub fn bundle_outcome(applied: &Applied) -> Option<((String, String), String, BundleOutcome)> {
+    match applied {
+        Applied::Bundle { title, report, from } => {
+            let outcome = BundleOutcome::Applied { steps: report.applied as u32, skipped: report.skipped as u32 };
+            Some((from.clone(), title.clone(), outcome))
+        }
+        Applied::BundleFailed { title, error, from } => {
+            Some((from.clone(), title.clone(), BundleOutcome::Failed { error: error.clone() }))
+        }
+        _ => None,
+    }
+}
+
 /// A panel's worker: opens it, then turns each event into effects, a new view and the meshes
 /// whose revision changed.
 fn work(
@@ -666,5 +734,107 @@ mod tests {
         assert!(matches!(next(), Output::View(_)), "then its first view");
         drop(inputs);
         worker.join().unwrap();
+    }
+
+    /// A library with one folder and a panel's bundle for it, which holds one file.
+    struct Scene {
+        _dir: tempfile::TempDir,
+        root: PathBuf,
+        db: PathBuf,
+        config: Config,
+        staged: StagedBundle,
+    }
+
+    fn scene() -> Scene {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("lib");
+        std::fs::create_dir_all(root.join("Garten")).unwrap();
+        let staging = Staging::new(&dir.path().join("plugins"), "test").unwrap();
+        std::fs::write(staging.out().join("a.stl"), "solid a").unwrap();
+        let bundle = Bundle { title: "Box".into(), folder: Some("Boxes".into()), ..Bundle::default() };
+        let staged = StagedBundle { plugin: "test".into(), bundle, staging };
+        let config = Config { library_roots: vec![root.clone()], ..Config::default() };
+        Scene { db: dir.path().join("library.db"), root, config, staged, _dir: dir }
+    }
+
+    fn never(_: &ResolvedBundle) -> Result<(), String> {
+        panic!("not to be proposed")
+    }
+
+    #[test]
+    fn a_bundle_without_the_grant_is_refused() {
+        let s = scene();
+        let out = s.staged.staging.out().to_path_buf();
+        let outcome = settle_bundle(false, s.staged, &s.config, BundleRoute::Propose(&never));
+        assert_eq!(outcome, Some(BundleOutcome::Refused));
+        assert!(!out.exists(), "its files are gone");
+        assert!(!s.root.join("Boxes").exists(), "and the library is as it was");
+    }
+
+    /// `applied` means the change went through on the library's thread, not that it was sent there.
+    #[test]
+    fn an_applied_bundle_comes_back_from_the_librarys_thread() {
+        let s = scene();
+        let library = LibraryService::start(s.db.clone(), vec![s.root.clone()], egui::Context::default());
+        let from = ("test".to_owned(), "panel".to_owned());
+        let route = BundleRoute::Apply { library: &library, from: from.clone() };
+        assert_eq!(settle_bundle(true, s.staged, &s.config, route), None, "not done yet");
+        let until = Instant::now() + Duration::from_secs(30);
+        let answer = loop {
+            assert!(Instant::now() < until, "no answer from the library");
+            match library.try_event() {
+                Some(crate::library::LibEvent::Applied(applied)) => break bundle_outcome(&applied),
+                Some(_) => {}
+                None => std::thread::sleep(Duration::from_millis(5)),
+            }
+        };
+        let (to, title, outcome) = answer.expect("about the bundle");
+        assert_eq!((to, title.as_str()), (from, "Box"));
+        assert!(matches!(outcome, BundleOutcome::Applied { steps, skipped: 0 } if steps > 0), "{outcome:?}");
+        assert!(s.root.join("Boxes").join("a.stl").is_file());
+    }
+
+    #[test]
+    fn a_failure_says_why_and_is_no_refusal() {
+        let mut s = scene();
+        // A list naming a file the plugin did not write: the bundle does not resolve.
+        s.staged.bundle.lists.push(meshgrove_plugin_api::BundleList {
+            name: "Teile".into(),
+            kind: Default::default(),
+            items: vec![meshgrove_plugin_api::BundleItem { path: "missing.stl".into(), quantity: 1 }],
+        });
+        let out = s.staged.staging.out().to_path_buf();
+        match settle_bundle(true, s.staged, &s.config, BundleRoute::Propose(&never)) {
+            Some(BundleOutcome::Failed { error }) => assert!(error.contains("missing.stl"), "{error}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(!out.exists());
+        // And one the library's thread could not apply.
+        let failed = Applied::BundleFailed {
+            title: "Box".into(),
+            error: "disk full".into(),
+            from: ("test".into(), "panel".into()),
+        };
+        let (_, _, outcome) = bundle_outcome(&failed).unwrap();
+        assert_eq!(outcome, BundleOutcome::Failed { error: "disk full".into() });
+        assert!(bundle_outcome(&Applied::Failed("not ours".into())).is_none());
+    }
+
+    #[test]
+    fn a_proposed_bundle_waits_in_the_review() {
+        let s = scene();
+        let propose = |r: &ResolvedBundle| if r.title == "Box" { Ok(()) } else { Err("wrong".to_owned()) };
+        assert_eq!(
+            settle_bundle(true, s.staged, &s.config, BundleRoute::Propose(&propose)),
+            Some(BundleOutcome::Queued)
+        );
+        let s = scene();
+        let out = s.staged.staging.out().to_path_buf();
+        let fail = |_: &ResolvedBundle| Err("no data folder".to_owned());
+        assert_eq!(
+            settle_bundle(true, s.staged, &s.config, BundleRoute::Propose(&fail)),
+            Some(BundleOutcome::Failed { error: "no data folder".into() })
+        );
+        assert!(!out.exists());
     }
 }

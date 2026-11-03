@@ -287,6 +287,21 @@ Write the files below `/out`, then describe them:
 | A panel, `Effect::ApplyBundle` | applied at once (the user clicked for it), with a toast; undo in the history |
 | A panel, `Effect::ProposeBundle` | goes to the review, never accepted by itself |
 
+**What became of it:** a panel hears back with `Event::BundleFinished { title, outcome }`, where
+`title` is the bundle's. Show this to the user rather than assuming that handing the bundle over
+worked.
+
+| `outcome` | Meaning |
+|---|---|
+| `Applied { steps, skipped }` | the change went through and is in the history; `skipped` steps did nothing (a file already had that tag, say). Sent once it is done, not when it starts |
+| `Queued` | waits in the review for the user to decide |
+| `Refused` | the user has not allowed "Put files into the library" (Settings → Plugins). Nothing was tried and the files are gone |
+| `Failed { error }` | it did not work, and the library is as it was |
+
+A panel closed in the meantime hears nothing, and neither does a panel after the user decides in
+the review. Meshgrove 0.8.1 and older do not send this event, so a panel must keep working
+without it.
+
 ## Panels
 
 A panel is Elm-like:
@@ -456,3 +471,12 @@ runs plugins built for 0.1. A plugin built for a newer minor asks the user to up
 One built for another major version is refused, with a message saying which Meshgrove it needs.
 Widgets Meshgrove does not know show as placeholders, so a panel still works on a slightly older
 Meshgrove.
+
+Events go the other way, so a newer Meshgrove can send a kind your plugin has never heard of. It
+reads as `Event::Unknown`; with an older `meshgrove-plugin-api`, parsing it fails instead. Either
+way, answer with no effects, as hello-box does, and never `unwrap()` the parse: a panic ends the
+panel.
+
+```rust
+let Ok(event) = serde_json::from_str::<Event>(&event) else { return guest::effects(&[]) };
+```

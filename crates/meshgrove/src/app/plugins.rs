@@ -11,12 +11,12 @@ use std::time::Duration;
 use egui::{RichText, Ui};
 use meshgrove_core::ai::proposals::{self, Origin, ProposalStore};
 use meshgrove_core::config::{AccessClass, PluginConfig};
-use meshgrove_plugin_api::ui::{Effect, Event, Level};
+use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Level};
 use meshgrove_plugin_api::{Bundle, HostInfo, Permission};
 use meshgrove_plugins::{StagedBundle, Staging};
 
 use super::App;
-use crate::plugins::PanelAction;
+use crate::plugins::{BundleRoute, PanelAction, settle_bundle};
 use crate::ui::plugin_view::{self, MeshViewArgs};
 use crate::ui::settings::SettingsChange;
 
@@ -113,10 +113,19 @@ impl App {
                 Ok(effects) => effects.into_iter().for_each(|e| self.plugin_effect(&plugin, None, e)),
                 Err(e) => self.toast(format!("{}: {e}", self.plugin_name(&plugin))),
             },
-            PanelAction::Bundle { plugin, apply, bundle, staging } => match staging {
-                Ok(staging) => self.plugin_bundle(&plugin, apply, bundle, staging),
-                Err(e) => self.toast(t!("plugins.bundle_failed", error = e).into_owned()),
-            },
+            PanelAction::Bundle { plugin, panel, apply, bundle, staging } => {
+                let title = bundle.title.clone();
+                let outcome = match staging {
+                    Ok(staging) => self.plugin_bundle(&plugin, &panel, apply, bundle, staging),
+                    Err(error) => {
+                        self.toast(t!("plugins.bundle_failed", error = error).into_owned());
+                        Some(BundleOutcome::Failed { error })
+                    }
+                };
+                if let Some(outcome) = outcome {
+                    self.plugins.bundle_finished(&plugin, &panel, title, outcome);
+                }
+            }
         }
     }
 
@@ -176,42 +185,46 @@ impl App {
         }
     }
 
-    /// Files from a panel: into the library now, or into the review.
-    fn plugin_bundle(&mut self, plugin: &str, apply: bool, bundle: Bundle, staging: Staging) {
-        let name = self.plugin_name(plugin);
-        if !self.plugins.plugin(plugin).is_some_and(|p| p.may(Permission::Bundles)) {
-            let _ = staging.remove();
-            self.toast(t!("plugins.bundles_denied", name = name).into_owned());
-            return;
-        }
+    /// Files from a panel: into the library now, or into the review. The outcome, or `None`
+    /// when the library's thread will answer (see `applied`).
+    fn plugin_bundle(
+        &mut self,
+        plugin: &str,
+        panel: &str,
+        apply: bool,
+        bundle: Bundle,
+        staging: Staging,
+    ) -> Option<BundleOutcome> {
+        let allowed = self.plugins.plugin(plugin).is_some_and(|p| p.may(Permission::Bundles));
         let staged = StagedBundle { plugin: plugin.to_owned(), bundle, staging };
-        let resolved = match staged.resolve_for(&self.config) {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = staged.staging.remove();
-                self.toast(t!("plugins.bundle_failed", error = e.to_string()).into_owned());
-                return;
-            }
+        let propose = |resolved: &_| {
+            let origin = Origin { source: format!("plugin:{plugin}"), client: None, class: AccessClass::Local };
+            ProposalStore::default_location()
+                .ok_or_else(|| "no data folder".to_owned())
+                .and_then(|path| ProposalStore::open(&path).map_err(|e| e.to_string()))
+                .and_then(|mut store| {
+                    proposals::propose_bundle(&self.config, &mut store, &origin, resolved).map_err(|e| e.to_string())
+                })
+                .map(|_| ())
         };
-        let origin = format!("plugin:{plugin}");
-        if apply {
-            self.library.apply_bundle(origin, resolved.title.clone(), resolved.ops());
-            return;
-        }
-        let origin = Origin { source: origin, client: None, class: AccessClass::Local };
-        let receipt = ProposalStore::default_location()
-            .ok_or_else(|| "no data folder".to_owned())
-            .and_then(|path| ProposalStore::open(&path).map_err(|e| e.to_string()))
-            .and_then(|mut store| {
-                proposals::propose_bundle(&self.config, &mut store, &origin, &resolved).map_err(|e| e.to_string())
-            });
-        match receipt {
-            Ok(_) => self.show_review(),
-            Err(e) => {
-                let _ = staged.staging.remove();
-                self.toast(t!("plugins.bundle_failed", error = e).into_owned());
+        let route = if apply {
+            BundleRoute::Apply { library: &self.library, from: (plugin.to_owned(), panel.to_owned()) }
+        } else {
+            BundleRoute::Propose(&propose)
+        };
+        let outcome = settle_bundle(allowed, staged, &self.config, route);
+        match &outcome {
+            Some(BundleOutcome::Refused) => {
+                let name = self.plugin_name(plugin);
+                self.toast(t!("plugins.bundles_denied", name = name).into_owned());
             }
+            Some(BundleOutcome::Failed { error }) => {
+                self.toast(t!("plugins.bundle_failed", error = error).into_owned());
+            }
+            Some(BundleOutcome::Queued) => self.show_review(),
+            _ => {}
         }
+        outcome
     }
 
     /// The tab of a plugin panel.

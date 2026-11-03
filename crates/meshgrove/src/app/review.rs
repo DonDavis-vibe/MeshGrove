@@ -229,12 +229,19 @@ impl App {
 
     /// Says what came of accepting, undoing or redoing, and shows the views anew.
     pub(super) fn applied(&mut self, applied: Applied) {
+        #[cfg(feature = "plugins")]
+        if let Some((from, title, outcome)) = crate::plugins::bundle_outcome(&applied) {
+            self.plugins.bundle_finished(&from.0, &from.1, title, outcome);
+        }
         let message = match applied {
             Applied::Accepted { title, report } if report.skipped > 0 => {
                 t!("review.accepted_skipped", title = title, count = report.applied, skipped = report.skipped)
             }
             Applied::Accepted { title, report } => t!("review.accepted", title = title, count = report.applied),
-            Applied::Bundle { title, report } => t!("plugins.bundle_applied", title = title, count = report.applied),
+            Applied::Bundle { title, report, .. } => {
+                t!("plugins.bundle_applied", title = title, count = report.applied)
+            }
+            Applied::BundleFailed { error, .. } => t!("plugins.bundle_failed", error = error),
             Applied::Undone { title, report } if report.kept > 0 => {
                 t!("history.undone_kept", title = title, kept = report.kept)
             }
