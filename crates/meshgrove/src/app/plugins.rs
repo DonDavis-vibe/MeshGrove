@@ -212,7 +212,13 @@ impl App {
         } else {
             BundleRoute::Propose(&propose)
         };
-        let outcome = settle_bundle(allowed, staged, &self.config, route);
+        let mut outcome = settle_bundle(allowed, staged, &self.config, route);
+        // No library yet (a fresh install): say so in the user's language, with the way out.
+        if self.config.import_root().is_none()
+            && let Some(BundleOutcome::Failed { error }) = &mut outcome
+        {
+            *error = t!("plugins.no_library").into_owned();
+        }
         match &outcome {
             Some(BundleOutcome::Refused) => {
                 let name = self.plugin_name(plugin);

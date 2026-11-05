@@ -30,6 +30,8 @@ pub enum ModelStatus {
 
 /// Tags of the selection and the library, for the tag editor.
 pub struct TagEditor<'a> {
+    /// Outside the library: the folder shown could become part of it, right from here.
+    pub can_add_folder: bool,
     /// The selection lies in the library (tags live in its index).
     pub enabled: bool,
     pub on_selection: &'a [(String, usize)],
@@ -57,6 +59,8 @@ pub struct DetailsOutput {
     pub remove_tag: Option<String>,
     /// The note text was edited this frame.
     pub note_changed: bool,
+    /// "Add this folder to the library" was clicked.
+    pub add_folder: bool,
     /// Result of a viewer tool (picture saved, …) for the status bar.
     pub message: Option<String>,
     /// "Open in slicer" was clicked.
@@ -218,6 +222,9 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
     // Without a selection the preview pane says what to do; once is enough.
     let Some(entry) = cx.entry else { return out };
     let (count, _) = cx.selection;
+    // The bar shows without the pointer on it: tags and the note lie below the facts, out of
+    // sight in a small pane, and nothing else says so.
+    ui.spacing_mut().scroll.dormant_handle_opacity = 0.6;
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         ui.add_space(4.0);
         facts(ui, entry, cx.thumb, cx.model, cx.printers, cx.checks);
@@ -380,7 +387,10 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
     ui.add_space(10.0);
     ui.label(RichText::new(t!("tags.title")).weak());
     if !ed.enabled {
-        ui.weak(t!("tags.only_library"));
+        ui.label(t!("tags.only_library"));
+        if ed.can_add_folder && ui.button(t!("sidebar.add_root")).clicked() {
+            out.add_folder = true;
+        }
         return;
     }
     ui.horizontal_wrapped(|ui| {

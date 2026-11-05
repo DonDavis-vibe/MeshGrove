@@ -151,8 +151,7 @@ pub struct Layout {
     focus_chat: bool,
     /// This pane's tab comes to the front before the next drawing ([`Layout::apply_focus`]).
     focus: Option<Pane>,
-    /// Whether a plugin panel was in front at the last [`Layout::follow_plugins`] (`None`:
-    /// not called yet).
+    /// Whether a plugin panel was in front at the last [`Layout::follow_plugins`].
     plugin_front: Option<bool>,
     /// The details were folded away because a plugin panel came to the front (not by the
     /// user): they come back when it goes, and they are saved unfolded.
@@ -323,17 +322,15 @@ impl Layout {
     /// or unfolded them in between.
     pub fn follow_plugins(&mut self, fold: bool) {
         let front = self.plugin_in_front();
-        match self.plugin_front.replace(front) {
-            Some(was) if was != front => {
-                if front && fold && !self.details_folded() {
-                    self.set_details(false);
-                    self.auto_folded = true;
-                } else if !front && self.auto_folded {
-                    self.set_details(true);
-                    self.auto_folded = false;
-                }
+        // At the start nothing was in front: a panel the last run left there folds them too.
+        if self.plugin_front.replace(front).unwrap_or(false) != front {
+            if front && fold && !self.details_folded() {
+                self.set_details(false);
+                self.auto_folded = true;
+            } else if !front && self.auto_folded {
+                self.set_details(true);
+                self.auto_folded = false;
             }
-            _ => {}
         }
     }
 
@@ -458,5 +455,17 @@ mod tests {
         front(&mut layout, drawer);
         layout.follow_plugins(false);
         assert!(!layout.details_folded());
+    }
+
+    #[test]
+    fn a_panel_left_in_front_folds_the_details_at_the_start() {
+        let mut layout = Layout::with(default_tree());
+        layout.sync_plugins(&[("bingrove".into(), "drawer".into())]);
+        front(&mut layout, Pane::Plugin { plugin: "bingrove".into(), panel: "drawer".into() });
+        layout.follow_plugins(true);
+        assert!(layout.details_folded());
+        front(&mut layout, Pane::Files);
+        layout.follow_plugins(true);
+        assert!(!layout.details_folded(), "and they come back with the files");
     }
 }

@@ -1008,6 +1008,16 @@ impl App {
         self.config.library_roots.iter().any(|r| path.starts_with(r))
     }
 
+    /// Makes `path` a library folder, from the sidebar or the info pane.
+    fn add_library_folder(&mut self, path: PathBuf) {
+        if !self.config.library_roots.contains(&path) {
+            self.config.library_roots.push(path);
+            self.save_config();
+            self.library.set_roots(self.config.library_roots.clone());
+            self.menu_for.clear(); // what the selection offers changes with it: tags, the note
+        }
+    }
+
     /// Context menu and tag facts follow the selection.
     fn update_selection_facts(&mut self) {
         let paths = self.selected_paths();
@@ -2576,13 +2586,7 @@ impl App {
         };
         match self.sidebar.show(ui, &self.config, self.nav.current(), info) {
             Some(SidebarAction::Navigate(path)) => self.navigate(path),
-            Some(SidebarAction::AddRoot(path)) => {
-                if !self.config.library_roots.contains(&path) {
-                    self.config.library_roots.push(path);
-                    self.save_config();
-                    self.library.set_roots(self.config.library_roots.clone());
-                }
-            }
+            Some(SidebarAction::AddRoot(path)) => self.add_library_folder(path),
             Some(SidebarAction::Rescan(path)) => self.library.rescan(path, true),
             Some(SidebarAction::Fold(key)) => {
                 let folded = &mut self.config.sidebar_collapsed;
@@ -2660,6 +2664,7 @@ impl App {
             selection,
             tags: TagEditor {
                 ai: ai_tags.then(|| self.ai_tags.for_paths(&self.menu_for)),
+                can_add_folder: matches!(self.view, View::Folder) && !self.in_library(self.nav.current()),
                 enabled: self.menu.can_tag,
                 on_selection: &self.selection_tags,
                 all: &self.all_tags,
@@ -2764,6 +2769,9 @@ impl App {
     }
 
     fn apply_details_output(&mut self, out: DetailsOutput) {
+        if out.add_folder {
+            self.add_library_folder(self.nav.current().to_path_buf());
+        }
         if out.toggle_favorite {
             self.toggle_favorite();
         }
