@@ -50,9 +50,12 @@ pub fn csv(rows: &[Row], header: &CsvHeader, separator: char) -> String {
         if s.contains([separator, '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_owned() }
     };
     let line = |fields: &[String]| fields.iter().map(|f| field(f)).collect::<Vec<_>>().join(&separator.to_string());
-    let mut out = line(
+    // The byte order mark tells Excel the file is UTF-8; without it, umlauts and the × of the
+    // sizes come out garbled on Windows. LibreOffice and Numbers take it in their stride.
+    let mut out = String::from('\u{FEFF}');
+    out.push_str(&line(
         &[header.name, header.folder, header.quantity, header.done, header.size, header.filaments].map(str::to_owned),
-    );
+    ));
     out.push_str("\r\n");
     for r in rows {
         let size = r.size_mm.map(|s| size_text(s, false)).unwrap_or_default();
@@ -286,7 +289,8 @@ mod tests {
             filaments: "Filamente",
         };
         let out = csv(&rows(), &header, ';');
-        let lines: Vec<&str> = out.lines().collect();
+        let body = out.strip_prefix('\u{FEFF}').expect("byte order mark for Excel");
+        let lines: Vec<&str> = body.lines().collect();
         assert_eq!(lines[0], "Name;Ordner;Stück;Fertig;Maße (mm);Filamente");
         assert_eq!(lines[1], "Body2.stl;/lib/Airsoft Gear;3;1;124.8 × 144.1 × 50.0;#ffffff #c81428");
         assert_eq!(lines[2], "\"Lid; \"\"round\"\".stl\";/lib;14;0;;");

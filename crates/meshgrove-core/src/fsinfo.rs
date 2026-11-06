@@ -22,6 +22,41 @@ fn existing_ancestor(path: &Path) -> PathBuf {
     path.ancestors().find(|p| p.exists()).unwrap_or(Path::new("/")).to_path_buf()
 }
 
+/// `path` spelled the way the library root it lies in is spelled. A path handed to us from
+/// outside (the command line, "Open with" in another program) may name the same file in
+/// another case (`c:\…` on Windows, where that is the same file) or through a symlink;
+/// compared byte by byte it would not count as part of the library. Paths outside every root
+/// and paths that do not exist stay as they are.
+pub fn spelled_like_root(path: &Path, roots: &[PathBuf]) -> PathBuf {
+    if roots.iter().any(|r| path.starts_with(r)) {
+        return path.to_path_buf();
+    }
+    let Ok(real) = path.canonicalize() else { return path.to_path_buf() };
+    roots
+        .iter()
+        .filter_map(|root| real.strip_prefix(root.canonicalize().ok()?).ok().map(|rest| root.join(rest)))
+        .max_by_key(|p| p.as_os_str().len())
+        .unwrap_or_else(|| without_verbatim(path, real))
+}
+
+/// Outside the library, Windows still gets the file system's own spelling (so the file is
+/// found among its folder's entries), without the `\\?\` canonical paths carry there.
+#[cfg(windows)]
+fn without_verbatim(_path: &Path, real: PathBuf) -> PathBuf {
+    let s = real.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if rest.starts_with("UNC\\") => PathBuf::from(format!(r"\\{}", &rest[4..])),
+        Some(rest) => PathBuf::from(rest),
+        None => real,
+    }
+}
+
+/// Elsewhere canonical paths resolve symlinks, which the user may well have chosen on purpose.
+#[cfg(not(windows))]
+fn without_verbatim(path: &Path, _real: PathBuf) -> PathBuf {
+    path.to_path_buf()
+}
+
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn mount_is_read_only(mounts: &str, path: &Path) -> bool {
     mounts
@@ -75,5 +110,34 @@ mod tests {
         assert!(!ro("/run/media/maker/My Drive/x.stl"), "escaped spaces in mount points");
         assert!(!ro("/mnt/rofs/x"), "'remount-ro' is not the 'ro' flag");
         assert!(!ro("/run/media/maker/1A2B3C4D5E6F7A8Bx/y"), "sibling with a longer name");
+    }
+
+    #[test]
+    fn paths_take_the_spelling_of_their_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Library");
+        std::fs::create_dir_all(root.join("Sub")).unwrap();
+        let inside = root.join("Sub").join("part.stl");
+        std::fs::write(&inside, b"solid").unwrap();
+        let roots = vec![root.clone()];
+        assert_eq!(spelled_like_root(&inside, &roots), inside, "already spelled like the root");
+        let missing = dir.path().join("nowhere").join("x.stl");
+        assert_eq!(spelled_like_root(&missing, &roots), missing, "nothing to look up");
+        let elsewhere = dir.path().join("other.stl");
+        std::fs::write(&elsewhere, b"solid").unwrap();
+        let outside = spelled_like_root(&elsewhere, &roots);
+        assert!(outside.ends_with("other.stl") && !outside.to_string_lossy().contains("?"), "{outside:?}");
+        #[cfg(unix)]
+        {
+            assert_eq!(outside, elsewhere, "outside the library nothing is resolved");
+            let link = dir.path().join("link");
+            std::os::unix::fs::symlink(&root, &link).unwrap();
+            assert_eq!(spelled_like_root(&link.join("Sub").join("part.stl"), &roots), inside, "through a symlink");
+        }
+        #[cfg(windows)]
+        {
+            let shouted = PathBuf::from(inside.to_string_lossy().to_uppercase());
+            assert_eq!(spelled_like_root(&shouted, &roots), inside, "another case of the same file");
+        }
     }
 }

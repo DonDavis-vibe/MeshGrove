@@ -22,9 +22,28 @@ impl Entry {
     }
 }
 
-/// Dotfiles and Windows system folders, which Dolphin hides as well on NTFS drives.
+/// Dotfiles, Windows system folders and Explorer's own leftovers (`desktop.ini`, `Thumbs.db`),
+/// which Dolphin hides as well on NTFS drives.
 pub fn is_hidden(name: &str) -> bool {
-    name.starts_with('.') || name.starts_with('$') || name == "System Volume Information"
+    name.starts_with('.')
+        || name.starts_with('$')
+        || name == "System Volume Information"
+        || name.eq_ignore_ascii_case("desktop.ini")
+        || name.eq_ignore_ascii_case("Thumbs.db")
+}
+
+/// Marked hidden by Windows, where that is an attribute rather than a name; Explorer leaves
+/// such files out.
+#[cfg(windows)]
+pub fn has_hidden_attribute(meta: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    meta.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0
+}
+
+#[cfg(not(windows))]
+pub fn has_hidden_attribute(_meta: &std::fs::Metadata) -> bool {
+    false
 }
 
 pub fn list_dir(dir: &Path) -> io::Result<Vec<Entry>> {
@@ -38,6 +57,9 @@ pub fn list_dir(dir: &Path) -> io::Result<Vec<Entry>> {
         let path = item.path();
         // Follow symlinks like a file manager does; skip dangling ones.
         let Ok(meta) = std::fs::metadata(&path) else { continue };
+        if has_hidden_attribute(&meta) {
+            continue;
+        }
         let kind = if meta.is_dir() { Kind::Folder } else { Kind::from_file_name(&name) };
         entries.push(Entry {
             name,
@@ -93,6 +115,7 @@ pub fn subdirs(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(Result::ok)
         .filter(|e| !is_hidden(&e.file_name().to_string_lossy()))
+        .filter(|e| !cfg!(windows) || !e.metadata().is_ok_and(|m| has_hidden_attribute(&m)))
         .map(|e| e.path())
         .filter(|p| p.is_dir())
         .collect();
@@ -192,6 +215,8 @@ mod tests {
         std::fs::write(p.join("a.stl"), b"solid").unwrap();
         std::fs::write(p.join(".hidden"), b"x").unwrap();
         std::fs::write(p.join("photo.JPG"), b"x").unwrap();
+        std::fs::write(p.join("Thumbs.db"), b"x").unwrap();
+        std::fs::write(p.join("Desktop.ini"), b"x").unwrap();
         let entries = list_dir(p).unwrap();
         let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["zeta", "a.stl", "photo.JPG"]);
@@ -199,5 +224,23 @@ mod tests {
         assert_eq!(entries[1].size, 5);
         assert_eq!(entries[2].kind, Kind::Image);
         assert_eq!(subdirs(p).unwrap(), vec![p.join("zeta")]);
+    }
+
+    /// Windows marks files hidden with an attribute, whatever their name.
+    #[cfg(windows)]
+    #[test]
+    fn hides_entries_with_the_hidden_attribute() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        std::fs::write(p.join("shown.stl"), b"solid").unwrap();
+        std::fs::write(p.join("hidden.stl"), b"solid").unwrap();
+        std::fs::create_dir(p.join("private")).unwrap();
+        for name in ["hidden.stl", "private"] {
+            let status = std::process::Command::new("attrib").arg("+h").arg(p.join(name)).status().unwrap();
+            assert!(status.success());
+        }
+        let names: Vec<_> = list_dir(p).unwrap().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["shown.stl"]);
+        assert!(subdirs(p).unwrap().is_empty());
     }
 }

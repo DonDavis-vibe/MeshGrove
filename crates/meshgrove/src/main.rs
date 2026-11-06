@@ -50,7 +50,8 @@ fn main() -> eframe::Result {
         .nth(1)
         .filter(|a| !a.is_empty())
         .map(PathBuf::from)
-        .map(|p| std::path::absolute(&p).unwrap_or(p));
+        .map(|p| std::path::absolute(&p).unwrap_or(p))
+        .map(|p| meshgrove_core::fsinfo::spelled_like_root(&p, &config.library_roots));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(t!("app.title"))

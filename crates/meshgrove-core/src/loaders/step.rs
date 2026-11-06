@@ -59,9 +59,18 @@ fn load_with(path: &Path, cache: &Path, mesher: &Path) -> Result<Mesh, LoadError
         return stl::parse(&bytes);
     }
     std::fs::create_dir_all(cache)?;
-    let tmp = cached.with_extension(format!("tmp{}", std::process::id()));
+    // The preview and a thumbnail may tessellate the same file at once: each gets its own
+    // scratch file, and whichever finishes second finds the other's result in place.
+    static SCRATCH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let serial = SCRATCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = cached.with_extension(format!("tmp{}-{serial}", std::process::id()));
     run(mesher, &source, &tmp)?;
-    std::fs::rename(&tmp, &cached)?;
+    if let Err(e) = std::fs::rename(&tmp, &cached) {
+        let _ = std::fs::remove_file(&tmp);
+        if !cached.is_file() {
+            return Err(e.into());
+        }
+    }
     stl::parse(&std::fs::read(&cached)?)
 }
 
