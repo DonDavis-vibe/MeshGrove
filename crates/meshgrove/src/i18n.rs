@@ -34,6 +34,17 @@ impl Lang {
     }
 }
 
+/// What the file manager is called where the user is: Explorer, Finder, or the plain word.
+pub fn file_manager() -> std::borrow::Cow<'static, str> {
+    if cfg!(windows) {
+        "Explorer".into()
+    } else if cfg!(target_os = "macos") {
+        "Finder".into()
+    } else {
+        t!("file_manager")
+    }
+}
+
 /// `override_tag` comes from the settings ("de"/"en"); `None` follows the system locale.
 pub fn init(override_tag: Option<&str>) {
     let tag = override_tag.map(str::to_owned).or_else(sys_locale::get_locale).unwrap_or_default();

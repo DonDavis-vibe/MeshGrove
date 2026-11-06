@@ -1406,7 +1406,8 @@ impl App {
             Action::OpenInEditor(index) => self.open_in_editor_with(self.selected_paths(), index),
             Action::ShowInFileManager => {
                 if let Err(e) = actions::show_in_file_manager(&self.selected_paths()) {
-                    self.toast(t!("toast.file_manager_failed", error = e.to_string()).into_owned());
+                    let manager = i18n::file_manager();
+                    self.toast(t!("toast.file_manager_failed", manager = manager, error = e.to_string()).into_owned());
                 }
             }
             Action::CopyPaths => {
@@ -1421,7 +1422,7 @@ impl App {
                 let (tx, ctx) = (self.messages.0.clone(), ctx.clone());
                 std::thread::spawn(move || {
                     let message = match actions::copy_files(&paths, false) {
-                        Ok(n) => t!("toast.files_copied", count = n),
+                        Ok(n) => t!("toast.files_copied", count = n, manager = i18n::file_manager()),
                         Err(e) => {
                             // No Wayland data-control support: at least the paths as text.
                             log::warn!("copying files failed: {e}");
@@ -1518,7 +1519,7 @@ impl App {
             let plan = copies::plan(&files, root.as_deref().unwrap_or(&dir), &dir, moving);
             if plan.items.is_empty() {
                 let message = if files.is_empty() {
-                    t!("toast.paste_nothing")
+                    t!("toast.paste_nothing", manager = i18n::file_manager())
                 } else {
                     t!("toast.paste_nothing_done", skipped = plan.skipped.len())
                 };

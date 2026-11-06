@@ -844,7 +844,7 @@ fn entry_menu(
         if show_folders {
             item(ui, t!("menu.show_in_folder"), Action::ShowInFolder(entry));
         }
-        item(ui, t!("menu.show_in_file_manager"), Action::ShowInFileManager);
+        item(ui, t!("menu.show_in_file_manager", manager = crate::i18n::file_manager()), Action::ShowInFileManager);
         if menu.rescan {
             item(ui, t!("menu.rescan"), Action::Rescan);
         }

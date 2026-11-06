@@ -1,5 +1,7 @@
 _version: 1
 app.title: "Meshgrove"
+# What the file manager is called where there is no Explorer or Finder.
+file_manager: "the file manager"
 
 nav.back: "Back (Alt+←)"
 nav.forward: "Forward (Alt+→)"
@@ -118,7 +120,7 @@ tags.only_library: "Tags and notes are available for files in the library."
 
 menu.open_with_default_app: "Open with default app"
 menu.open_in_slicer: "Open in %{name}"
-menu.show_in_file_manager: "Show in file manager"
+menu.show_in_file_manager: "Show in %{manager}"
 menu.copy_path: "Copy path"
 menu.edit_tags: "Edit tags …"
 menu.place_by_tag: "Place by tag"
@@ -134,7 +136,7 @@ trash.blocked_read_only: "The drive is mounted read-only."
 
 toast.slicer_started: "Opening %{count} file(s) in %{name} …"
 toast.slicer_failed: "Could not start %{name}: %{error}"
-toast.file_manager_failed: "Could not open the file manager: %{error}"
+toast.file_manager_failed: "Could not open %{manager}: %{error}"
 toast.copied: "Copied %{count} path(s)"
 toast.trashed: "Moved %{count} file(s) to the trash"
 toast.trash_failed: "Moving to the trash failed: %{error}"
@@ -284,10 +286,10 @@ viewer.picture_hint: "Saves the current view as PNG (2048 px) in Pictures/Meshgr
 toast.picture_saved: "Picture saved: %{path}"
 toast.picture_failed: "Could not save the picture: %{error}"
 menu.copy_files: "Copy (Ctrl+C)"
-toast.files_copied: "Copied %{count} file(s) – paste in Meshgrove, the file manager or the slicer"
+toast.files_copied: "Copied %{count} file(s) – paste in Meshgrove, %{manager} or the slicer"
 menu.paste_files: "Paste (Ctrl+V)"
 menu.cut_files: "Cut (Ctrl+X)"
-toast.paste_nothing: "Nothing to paste: copy files first – in Meshgrove, in the file manager or as paths"
+toast.paste_nothing: "Nothing to paste: copy files first – in Meshgrove, in %{manager} or as paths"
 toast.paste_nothing_done: "Nothing pasted: %{skipped} source(s) are gone, links or there already"
 toast.paste_read_only: "This folder is read-only"
 toast.pasted: "Copied %{count} file(s) into %{to}"
