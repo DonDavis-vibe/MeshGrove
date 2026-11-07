@@ -26,6 +26,17 @@ pub(super) enum PathPrompt {
     Open { plugin: String, panel: String, id: String, title: String, input: String, extensions: Vec<String> },
     /// Where to save a file a plugin wrote (`Effect::SaveFile`).
     Save { from: PathBuf, input: String },
+    /// Where the files of a plugin go while there is no library yet: that folder becomes one.
+    /// `title` is the question, `bundle_title` goes back to the panel with the outcome.
+    Library {
+        plugin: String,
+        panel: String,
+        apply: bool,
+        staged: StagedBundle,
+        title: String,
+        bundle_title: String,
+        input: String,
+    },
 }
 
 /// The system's file dialog for picking a plugin (rfd: the desktop portal on Linux). It is asked
@@ -195,8 +206,27 @@ impl App {
         bundle: Bundle,
         staging: Staging,
     ) -> Option<BundleOutcome> {
-        let allowed = self.plugins.plugin(plugin).is_some_and(|p| p.may(Permission::Bundles));
         let staged = StagedBundle { plugin: plugin.to_owned(), bundle, staging };
+        self.settle_staged(plugin, panel, apply, staged)
+    }
+
+    fn settle_staged(&mut self, plugin: &str, panel: &str, apply: bool, staged: StagedBundle) -> Option<BundleOutcome> {
+        let allowed = self.plugins.plugin(plugin).is_some_and(|p| p.may(Permission::Bundles));
+        // No library yet (a fresh install): ask where the files should go. That folder becomes
+        // the library, and the bundle follows once it is chosen.
+        if allowed && self.config.import_root().is_none() && self.plugin_prompt.is_none() {
+            let input = dirs::document_dir().or_else(dirs::home_dir).unwrap_or_default().join("Meshgrove");
+            self.plugin_prompt = Some(PathPrompt::Library {
+                plugin: plugin.to_owned(),
+                panel: panel.to_owned(),
+                apply,
+                title: t!("plugins.pick_library", name = self.plugin_name(plugin)).into_owned(),
+                bundle_title: staged.bundle.title.clone(),
+                staged,
+                input: input.display().to_string(),
+            });
+            return None;
+        }
         let propose = |resolved: &_| {
             let origin = Origin { source: format!("plugin:{plugin}"), client: None, class: AccessClass::Local };
             ProposalStore::default_location()
@@ -340,17 +370,20 @@ impl App {
         let mut decision = None;
         if let Some(path) = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf())) {
             match prompt {
-                PathPrompt::Open { input, .. } | PathPrompt::Save { input, .. } => *input = path.display().to_string(),
+                PathPrompt::Open { input, .. } | PathPrompt::Save { input, .. } | PathPrompt::Library { input, .. } => {
+                    *input = path.display().to_string();
+                }
             }
         }
         egui::Modal::new(egui::Id::unique("plugin_prompt")).show(ctx, |ui| {
             ui.set_max_width(520.0);
-            let (title, input) = match prompt {
-                PathPrompt::Open { title, input, .. } => (title.clone(), input),
-                PathPrompt::Save { input, .. } => (t!("plugins.save_as").into_owned(), input),
+            let (title, hint, input) = match prompt {
+                PathPrompt::Open { title, input, .. } => (title.clone(), t!("plugins.path_hint"), input),
+                PathPrompt::Save { input, .. } => (t!("plugins.save_as").into_owned(), t!("plugins.path_hint"), input),
+                PathPrompt::Library { title, input, .. } => (title.clone(), t!("plugins.pick_library_hint"), input),
             };
             ui.heading(title);
-            ui.weak(t!("plugins.path_hint"));
+            ui.weak(hint);
             let r = ui.add(egui::TextEdit::singleline(input).desired_width(500.0));
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 decision = Some(true);
@@ -371,13 +404,39 @@ impl App {
                     self.toast(e);
                 }
             }
-            Some(false) => self.plugin_prompt = None,
+            Some(false) => {
+                // A bundle nobody wants a place for stays out; its panel hears why.
+                if let Some(PathPrompt::Library { plugin, panel, staged, bundle_title, .. }) = self.plugin_prompt.take()
+                {
+                    let _ = staged.staging.remove();
+                    let error = t!("plugins.no_library").into_owned();
+                    self.plugins.bundle_finished(&plugin, &panel, bundle_title, BundleOutcome::Failed { error });
+                }
+            }
             None => {}
         }
     }
 
     fn answer_prompt(&mut self, prompt: PathPrompt) -> Result<(), String> {
         match prompt {
+            PathPrompt::Library { plugin, panel, apply, staged, bundle_title, input, .. } => {
+                let root = PathBuf::from(input.trim());
+                if let Err(e) = std::fs::create_dir_all(&root).and_then(|()| root.canonicalize()) {
+                    let _ = staged.staging.remove();
+                    let error = e.to_string();
+                    self.plugins.bundle_finished(
+                        &plugin,
+                        &panel,
+                        bundle_title,
+                        BundleOutcome::Failed { error: error.clone() },
+                    );
+                    return Err(t!("plugins.bundle_failed", error = error).into_owned());
+                }
+                self.add_library_folder(root);
+                if let Some(outcome) = self.settle_staged(&plugin, &panel, apply, staged) {
+                    self.plugins.bundle_finished(&plugin, &panel, bundle_title, outcome);
+                }
+            }
             PathPrompt::Save { from, input } => {
                 let to = PathBuf::from(input.trim());
                 if to.exists() {

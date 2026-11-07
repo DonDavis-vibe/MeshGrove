@@ -975,6 +975,8 @@ plugins.bundle_applied: "„%{title}“: %{count} Schritte in der Bibliothek –
 plugins.bundle_failed: "Die Dateien des Plugins kamen nicht in die Bibliothek: %{error}"
 plugins.bundles_denied: "%{name} darf keine Dateien in die Bibliothek legen (Einstellungen → Plugins)."
 plugins.no_library: "Es gibt noch keine Bibliothek. Öffne deinen Modell-Ordner und klicke links auf „Diesen Ordner zur Bibliothek hinzufügen“."
+plugins.pick_library: "Wohin mit den Dateien von %{name}?"
+plugins.pick_library_hint: "Es gibt noch keine Bibliothek. Dieser Ordner wird sie – dein vorhandener Modell-Ordner oder ein neuer, der dann angelegt wird. Die Dateien kommen in einen eigenen Unterordner, mit Tags und Listen."
 plugins.unknown_model: "Unbekannte Datei: %{id}"
 plugins.no_such_file: "Keine Datei %{path}"
 plugins.pick_file: "Datei wählen"

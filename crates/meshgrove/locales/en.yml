@@ -975,6 +975,8 @@ plugins.bundle_applied: "“%{title}”: %{count} steps in the library – undo 
 plugins.bundle_failed: "The plugin's files did not go into the library: %{error}"
 plugins.bundles_denied: "%{name} may not put files into the library (Settings → Plugins)."
 plugins.no_library: "There is no library yet. Open your models folder and click “Add this folder to the library” on the left."
+plugins.pick_library: "Where should the files from %{name} go?"
+plugins.pick_library_hint: "There is no library yet. This folder becomes it – your existing model folder, or a new one, which is then created. The files go into a folder of their own there, with tags and lists."
 plugins.unknown_model: "Unknown file: %{id}"
 plugins.no_such_file: "No file %{path}"
 plugins.pick_file: "Choose a file"
