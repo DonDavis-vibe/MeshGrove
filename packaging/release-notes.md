@@ -7,6 +7,16 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 
 ## Highlights
 
+**Checked on Windows** (new in 0.8.3) – a day in a Windows 11 VM, and what Linux never showed:
+
+- Files Windows marks hidden (`desktop.ini`, `Thumbs.db`) no longer show up as tiles; the two names are left out on every system, NTFS drives on Linux included.
+- A file handed to Meshgrove from another program with its path spelled differently (`c:\…`) is found in the library with its tags; the same goes for a path through a symlink on Linux.
+- The print list as CSV opens in Excel with umlauts and × intact.
+- A STEP preview and its thumbnail no longer trip over each other while the file is tessellated.
+- The context menu says *Explorer* on Windows and *Finder* on macOS.
+- A plugin's files before there is a library (Bingrove on a fresh install): Meshgrove asks where they should go, that folder becomes the library, and the files come in with their tags and lists.
+- A fresh install explains itself: the Info pane says there is no library yet and offers *Add this folder*; a plugin's refused bundle says why in your language; the Info pane's scroll bar stays visible.
+
 **Plugins** (new in 0.8)
 
 - Meshgrove can now be extended with plugins: small programs (WebAssembly) that bring tools and panels of their own. They run sealed off – no network, only their own folder, limited time and memory – and see your library only if you allow it. Nothing changes until you install one.
