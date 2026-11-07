@@ -32,7 +32,7 @@ pub(super) enum PathPrompt {
         plugin: String,
         panel: String,
         apply: bool,
-        staged: StagedBundle,
+        staged: Box<StagedBundle>,
         title: String,
         bundle_title: String,
         input: String,
@@ -222,7 +222,7 @@ impl App {
                 apply,
                 title: t!("plugins.pick_library", name = self.plugin_name(plugin)).into_owned(),
                 bundle_title: staged.bundle.title.clone(),
-                staged,
+                staged: Box::new(staged),
                 input: input.display().to_string(),
             });
             return None;
@@ -433,7 +433,7 @@ impl App {
                     return Err(t!("plugins.bundle_failed", error = error).into_owned());
                 }
                 self.add_library_folder(root);
-                if let Some(outcome) = self.settle_staged(&plugin, &panel, apply, staged) {
+                if let Some(outcome) = self.settle_staged(&plugin, &panel, apply, *staged) {
                     self.plugins.bundle_finished(&plugin, &panel, bundle_title, outcome);
                 }
             }
