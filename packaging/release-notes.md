@@ -26,6 +26,11 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 - Plugin tools join the AI chat and `meshgrove-mcp`, so your assistants can use them too. Stopping the chat stops a running tool, and pictures a tool returns show in the chat.
 - For developers: [how to write a plugin](https://github.com/DonDavis-vibe/MeshGrove/blob/v@VERSION@/docs/plugins.md), the `meshgrove-plugin-api` crate (MIT or Apache-2.0, so a plugin can use any license) and the small `hello-box` example.
 
+<p>
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-plugin.png" alt="Bingrove's panel as a tab: the drawer's grid of bins, the 3D preview on the print bed and the list of parts" width="49%">
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-plugin-settings.png" alt="Settings → Plugins: Bingrove installed, with the switches for what it may do" width="49%">
+</p>
+
 **Bingrove, the first plugin** (new in 0.8)
 
 - [Bingrove](https://github.com/DonDavis-vibe/Bingrove) makes Gridfinity inserts for your drawers: give it the drawer's size, arrange the bins in the grid editor (move, resize, merge, split, add holders), and it puts the STLs, the print beds and a print list into your library. Magnet holes are an option, and calibration pieces test the fit before the big print.
