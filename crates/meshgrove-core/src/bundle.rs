@@ -2,6 +2,10 @@
 //! are checked ([`resolve`]) and become the steps of [`crate::changes`] — a copy of the whole
 //! folder to a free place, its indexing, then tags, notes and lists ([`ResolvedBundle::ops`]).
 //! The staging folder stays until the change is gone from the history, so a redo can copy again.
+//!
+//! A bundle may instead put its files beside the library files they were made from
+//! ([`resolve_beside`]): loose copies under free names, each a step of its own, and only those
+//! are indexed and taken back.
 
 use std::path::{Path, PathBuf};
 
@@ -62,9 +66,10 @@ pub struct ResolvedBundle {
     pub summary: Option<String>,
     /// The library it goes into.
     pub root: PathBuf,
-    /// The staging folder (the plugin's `/out`), copied as a whole.
+    /// The staging folder (the plugin's `/out`), copied as a whole, or file by file when the
+    /// files land loose ([`ResolvedFile::at`]).
     pub from: PathBuf,
-    /// The free place below `root` it is copied to.
+    /// The free place below `root` it is copied to; of loose files, the folder the first lands in.
     pub to: PathBuf,
     /// New content does not wait in the inbox.
     pub seen: bool,
@@ -85,6 +90,25 @@ pub struct ResolvedFile {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Where it lands as a loose file beside its source ([`resolve_beside`]); none: below the
+    /// bundle's folder, as `rel` says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<PathBuf>,
+    /// The name of the library file it lands beside, for the review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub beside: Option<String>,
+}
+
+/// A library file a bundle's files are put beside ([`Bundle::next_to`]), found by the host as
+/// far as the plugin may read the library.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Source {
+    /// As the bundle names it.
+    pub reference: String,
+    /// The library it is in.
+    pub root: PathBuf,
+    /// The file (also one inside an archive).
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -111,12 +135,123 @@ pub fn resolve_with(
     landing: &Path,
     limits: Limits,
 ) -> Result<ResolvedBundle, BundleError> {
+    if bundle.uses_next_to() {
+        return Err(BundleError::Invalid(
+            "the bundle puts its files beside library files (next_to), which have to be found first".into(),
+        ));
+    }
+    if !landing.starts_with(root) {
+        return Err(BundleError::Invalid("the import folder is not in the library".into()));
+    }
+    let checked = check(bundle, out, limits)?;
+    let place = match &bundle.folder {
+        Some(folder) => relative(folder)
+            .ok_or_else(|| BundleError::BadPath(folder.clone()))?
+            .split('/')
+            .fold(root.to_path_buf(), |p, part| p.join(part)),
+        None => {
+            let name = folder_name(&checked.title);
+            if crate::fsops::check_name(&name).is_err() {
+                let title = &checked.title;
+                return Err(BundleError::Invalid(format!("no folder name can be made of the title {title:?}")));
+            }
+            landing.join(name)
+        }
+    };
+    Ok(checked.placed(bundle, out, root, free_folder(&place)))
+}
+
+/// Checks `bundle` against `out` like [`resolve`], for a bundle whose files land loose beside
+/// library files ([`Bundle::next_to`], [`crate::bundle::BundleFile::next_to`]): each in the
+/// folder of its source (of the archive, for a source inside one) under its own name, with a
+/// number where that is taken. `sources` are the files the bundle names, as the host found
+/// them. Every file needs a source, the bundle's or its own; all of them are in one library; a
+/// folder of its own the bundle cannot have as well.
+pub fn resolve_beside(
+    bundle: &Bundle,
+    out: &Path,
+    sources: &[Source],
+    limits: Limits,
+) -> Result<ResolvedBundle, BundleError> {
+    if bundle.folder.is_some() {
+        return Err(BundleError::Invalid(
+            "next_to and folder do not go together: files beside their source land loose, not in a folder".into(),
+        ));
+    }
+    let mut checked = check(bundle, out, limits)?;
+    let mut root: Option<&Path> = None;
+    let mut taken: Vec<PathBuf> = Vec::new();
+    for file in &mut checked.files {
+        let own = bundle.files.iter().find(|f| relative(&f.path).as_deref() == Some(file.rel.as_str()));
+        let reference = own.and_then(|f| f.next_to.as_ref()).or(bundle.next_to.as_ref()).ok_or_else(|| {
+            BundleError::Invalid(format!(
+                "{:?} has no place: with next_to every file is put beside a library file, its own or the bundle's",
+                file.rel
+            ))
+        })?;
+        let source = sources
+            .iter()
+            .find(|s| s.reference == *reference)
+            .ok_or_else(|| BundleError::Invalid(format!("the file to put {:?} beside was not found", file.rel)))?;
+        if *root.get_or_insert(&source.root) != source.root {
+            return Err(BundleError::Invalid(
+                "the files would go into several libraries: hand over one bundle for each library".into(),
+            ));
+        }
+        // The folder the source is in; of a file inside an archive, the archive's.
+        let dir = source
+            .path
+            .ancestors()
+            .skip(1)
+            .find(|a| a.is_dir())
+            .filter(|dir| dir.starts_with(&source.root))
+            .ok_or_else(|| BundleError::Invalid(format!("the file to put {:?} beside is gone", file.rel)))?;
+        let name = file.rel.rsplit('/').next().unwrap_or(&file.rel);
+        let at = crate::import::free_target(dir, name, &taken);
+        taken.push(at.clone());
+        file.at = Some(at);
+        file.beside = Some(crate::listing::file_name(&source.path));
+    }
+    let root = root.ok_or_else(|| BundleError::Invalid("the bundle holds no files".into()))?.to_path_buf();
+    let to = taken.first().and_then(|p| p.parent()).unwrap_or(&root).to_path_buf();
+    Ok(checked.placed(bundle, out, &root, to))
+}
+
+/// What of a bundle is the same wherever it goes.
+struct Checked {
+    title: String,
+    files: Vec<ResolvedFile>,
+    lists: Vec<ResolvedList>,
+    bytes: u64,
+}
+
+impl Checked {
+    fn placed(self, bundle: &Bundle, out: &Path, root: &Path, to: PathBuf) -> ResolvedBundle {
+        ResolvedBundle {
+            plugin: String::new(),
+            title: self.title,
+            summary: bundle.summary.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned),
+            root: root.to_path_buf(),
+            from: out.to_path_buf(),
+            to,
+            seen: true,
+            files: self.files,
+            lists: self.lists,
+            bytes: self.bytes,
+        }
+    }
+}
+
+/// The title, files (with tags and notes) and lists of `bundle`, checked against what is in `out`.
+fn check(bundle: &Bundle, out: &Path, limits: Limits) -> Result<Checked, BundleError> {
     let title = bundle.title.trim();
     if title.is_empty() || title.chars().count() > 120 {
         return Err(BundleError::Invalid("the title is empty or longer than 120 characters".into()));
     }
-    if !landing.starts_with(root) {
-        return Err(BundleError::Invalid("the import folder is not in the library".into()));
+    if bundle.job.is_some() {
+        return Err(BundleError::Invalid(
+            "this Meshgrove does not start a bundle's job yet: write the files first".into(),
+        ));
     }
     let found = files_below(out, limits)?;
     let bytes = found.iter().map(|(_, m)| m.len()).sum();
@@ -153,6 +288,8 @@ pub fn resolve_with(
             hash: crate::dedupe::content_hash(&std::fs::read(out.join(rel))?),
             tags: tags(own.map_or(&[], |f| f.tags.as_slice()))?,
             note: note.map(str::to_owned),
+            at: None,
+            beside: None,
         });
     }
     if bundle.lists.len() > MAX_LISTS {
@@ -179,31 +316,7 @@ pub fn resolve_with(
         }
         lists.push(ResolvedList { name: name.to_owned(), kind, items });
     }
-    let place = match &bundle.folder {
-        Some(folder) => relative(folder)
-            .ok_or_else(|| BundleError::BadPath(folder.clone()))?
-            .split('/')
-            .fold(root.to_path_buf(), |p, part| p.join(part)),
-        None => {
-            let name = folder_name(title);
-            if crate::fsops::check_name(&name).is_err() {
-                return Err(BundleError::Invalid(format!("no folder name can be made of the title {title:?}")));
-            }
-            landing.join(name)
-        }
-    };
-    Ok(ResolvedBundle {
-        plugin: String::new(),
-        title: title.to_owned(),
-        summary: bundle.summary.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned),
-        root: root.to_path_buf(),
-        from: out.to_path_buf(),
-        to: free_folder(&place),
-        seen: true,
-        files,
-        lists,
-        bytes,
-    })
+    Ok(Checked { title: title.to_owned(), files, lists, bytes })
 }
 
 /// A `/`-separated path below a folder, every part a valid name; `None` otherwise.
@@ -291,9 +404,17 @@ fn files_below(out: &Path, limits: Limits) -> Result<Vec<(String, std::fs::Metad
 }
 
 impl ResolvedBundle {
+    /// Whether the files land loose beside library files, not in a folder of their own.
+    pub fn is_loose(&self) -> bool {
+        self.files.iter().any(|f| f.at.is_some())
+    }
+
     /// Where file `rel` lands.
     pub fn path_of(&self, rel: &str) -> PathBuf {
-        rel.split('/').fold(self.to.clone(), |p, part| p.join(part))
+        match self.files.iter().find(|f| f.rel == rel).and_then(|f| f.at.clone()) {
+            Some(at) => at,
+            None => rel.split('/').fold(self.to.clone(), |p, part| p.join(part)),
+        }
     }
 
     fn target(&self, file: &ResolvedFile) -> Target {
@@ -305,13 +426,18 @@ impl ResolvedBundle {
         }
     }
 
-    /// The steps of the change: copy the staging folder, index it, then tags, notes and lists.
+    /// The steps of the change: copy the staging folder and index it (or, of loose files, copy
+    /// each beside its source and index just those), then tags, notes and lists.
     pub fn ops(&self) -> Vec<ApplyOp> {
-        let staging = Target { path: self.from.clone(), hash: None, size: 0, mtime_ns: 0 };
-        let mut ops = vec![
-            ApplyOp::Copy { root: self.root.clone(), from: staging, to: self.to.clone(), folder: true },
-            ApplyOp::Index { root: self.root.clone(), dir: self.to.clone(), seen: self.seen },
-        ];
+        let mut ops = if self.is_loose() {
+            self.loose_copies()
+        } else {
+            let staging = Target { path: self.from.clone(), hash: None, size: 0, mtime_ns: 0 };
+            vec![
+                ApplyOp::Copy { root: self.root.clone(), from: staging, to: self.to.clone(), folder: true },
+                ApplyOp::Index { root: self.root.clone(), dir: self.to.clone(), seen: self.seen, only: Vec::new() },
+            ]
+        };
         for file in &self.files {
             ops.extend(file.tags.iter().map(|tag| ApplyOp::AddTag { target: self.target(file), tag: tag.clone() }));
             if let Some(note) = &file.note {
@@ -329,10 +455,46 @@ impl ResolvedBundle {
         ops
     }
 
+    /// One copy for each loose file, then one index step for each folder they land in, which
+    /// looks at those files only: the folder is the user's.
+    fn loose_copies(&self) -> Vec<ApplyOp> {
+        let mut ops = Vec::new();
+        let mut folders: Vec<(PathBuf, Vec<PathBuf>)> = Vec::new();
+        for file in &self.files {
+            let Some(at) = &file.at else { continue };
+            let staged = file.rel.split('/').fold(self.from.clone(), |p, part| p.join(part));
+            let from = Target { path: staged, hash: Some(file.hash.clone()), size: file.size, mtime_ns: file.mtime_ns };
+            ops.push(ApplyOp::Copy { root: self.root.clone(), from, to: at.clone(), folder: false });
+            let dir = at.parent().unwrap_or(&self.root).to_path_buf();
+            match folders.iter_mut().find(|(d, _)| *d == dir) {
+                Some((_, files)) => files.push(at.clone()),
+                None => folders.push((dir, vec![at.clone()])),
+            }
+        }
+        ops.extend(folders.into_iter().map(|(dir, only)| ApplyOp::Index {
+            root: self.root.clone(),
+            dir,
+            seen: self.seen,
+            only,
+        }));
+        ops
+    }
+
     /// The same bundle at another free place, should its own have been taken since it was
     /// resolved (a suggestion that waited in the review).
     pub fn at_free_place(mut self) -> ResolvedBundle {
-        self.to = free_folder(&self.to);
+        if !self.is_loose() {
+            self.to = free_folder(&self.to);
+            return self;
+        }
+        let mut taken: Vec<PathBuf> = Vec::new();
+        for file in &mut self.files {
+            let Some(at) = &file.at else { continue };
+            let name = file.rel.rsplit('/').next().unwrap_or(&file.rel);
+            let free = crate::import::free_target(at.parent().unwrap_or(&self.root), name, &taken);
+            taken.push(free.clone());
+            file.at = Some(free);
+        }
         self
     }
 }
@@ -378,6 +540,7 @@ mod tests {
                 path: "drawer.gridfinity.json".into(),
                 tags: vec!["Projekt".into()],
                 note: Some("Belegung".into()),
+                ..BundleFile::default()
             }],
             tags: vec!["Gridfinity".into()],
             lists: vec![BundleList {
@@ -414,7 +577,7 @@ mod tests {
         let new = f.root.join("Neu");
         std::fs::create_dir_all(new.join("sub")).unwrap();
         std::fs::write(new.join("sub").join("a.stl"), "a").unwrap();
-        let ops = [ApplyOp::Index { root: f.root.clone(), dir: new.clone(), seen: true }];
+        let ops = [ApplyOp::Index { root: f.root.clone(), dir: new.clone(), seen: true, only: Vec::new() }];
         let report = lib.apply_change("plugin:test", "Index", &ops).unwrap();
         assert_eq!((report.applied, report.skipped), (1, 0));
         let a = new.join("sub").join("a.stl");
@@ -423,7 +586,7 @@ mod tests {
         assert_eq!(lib.inbox_count().unwrap(), 0, "seen: not in the inbox");
         // Not seen: the new content waits in the inbox, and the undo takes that back.
         std::fs::write(new.join("b.stl"), "b").unwrap();
-        let ops = [ApplyOp::Index { root: f.root.clone(), dir: new.clone(), seen: false }];
+        let ops = [ApplyOp::Index { root: f.root.clone(), dir: new.clone(), seen: false, only: Vec::new() }];
         let report = lib.apply_change("plugin:test", "Index", &ops).unwrap();
         assert_eq!(lib.inbox_count().unwrap(), 1);
         lib.undo_change(report.id).unwrap();
@@ -486,7 +649,7 @@ mod tests {
         let staging = Target { path: f.out.clone(), hash: None, size: 0, mtime_ns: 0 };
         let ops = [
             ApplyOp::Copy { root: f.root.clone(), from: staging, to: taken.clone(), folder: true },
-            ApplyOp::Index { root: f.root.clone(), dir: taken.clone(), seen: true },
+            ApplyOp::Index { root: f.root.clone(), dir: taken.clone(), seen: true, only: Vec::new() },
         ];
         let report = lib.apply_change("plugin:test", "Taken", &ops).unwrap();
         assert_eq!((report.applied, report.skipped), (0, 2));
@@ -499,6 +662,214 @@ mod tests {
         let b = Bundle { title: "Box: 20/30".into(), folder: None, ..bundle() };
         let resolved = resolve(&b, &f.out, &f.root, &f.landing).unwrap();
         assert_eq!(resolved.to, f.landing.join("Box 20 30"));
+    }
+
+    /// The library of [`fixture`] with a second folder, and a staging folder of two textured
+    /// models: one for the rose, one (in a folder of its own there) for the pot.
+    fn beside() -> (Fixture, Library, Vec<Source>) {
+        let (mut f, mut lib) = fixture();
+        std::fs::create_dir_all(f.root.join("Töpfe")).unwrap();
+        std::fs::write(f.root.join("Töpfe").join("topf.stl"), "topf").unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        crate::scan::scan(&mut lib, &f.root, &f.root, crate::scan::Force::Nothing, &cancel).unwrap();
+        f.out = f.out.parent().unwrap().parent().unwrap().join("u2").join("out");
+        std::fs::create_dir_all(f.out.join("sub")).unwrap();
+        std::fs::write(f.out.join("rose – Holz.3mf"), "rose with wood").unwrap();
+        std::fs::write(f.out.join("sub").join("topf – Holz.stl"), "solid topf with wood").unwrap();
+        let source = |id: &str, rel: &[&str]| Source {
+            reference: id.into(),
+            root: f.root.clone(),
+            path: rel.iter().fold(f.root.clone(), |p, part| p.join(part)),
+        };
+        let sources = vec![
+            source("lib/Garten/rose.stl", &["Garten", "rose.stl"]),
+            source("lib/Töpfe/topf.stl", &["Töpfe", "topf.stl"]),
+        ];
+        (f, lib, sources)
+    }
+
+    /// One bundle for two sources: the rose's file beside the rose (the bundle's source), the
+    /// pot's beside the pot (its own).
+    fn textured() -> Bundle {
+        Bundle {
+            title: "Holz auf 2 Modellen".into(),
+            next_to: Some("lib/Garten/rose.stl".into()),
+            files: vec![
+                BundleFile {
+                    path: "rose – Holz.3mf".into(),
+                    note: Some("Holz, 0,4 mm tief".into()),
+                    ..BundleFile::default()
+                },
+                BundleFile {
+                    path: "sub/topf – Holz.stl".into(),
+                    next_to: Some("lib/Töpfe/topf.stl".into()),
+                    ..BundleFile::default()
+                },
+            ],
+            tags: vec!["Texturiert".into()],
+            ..Bundle::default()
+        }
+    }
+
+    #[test]
+    fn files_land_loose_beside_their_sources_and_only_they_go_again() {
+        let (f, mut lib, sources) = beside();
+        let (rose, topf) = (f.root.join("Garten").join("rose.stl"), f.root.join("Töpfe").join("topf.stl"));
+        // A name that is taken: the user's file stays, the copy gets a number.
+        let mine = f.root.join("Garten").join("rose – Holz.3mf");
+        std::fs::write(&mine, "my own").unwrap();
+        let resolved = resolve_beside(&textured(), &f.out, &sources, Limits::DEFAULT).unwrap();
+        assert!(resolved.is_loose());
+        let (rose_copy, topf_copy) = (resolved.path_of("rose – Holz.3mf"), resolved.path_of("sub/topf – Holz.stl"));
+        assert_eq!(rose_copy, f.root.join("Garten").join("rose – Holz (2).3mf"));
+        assert_eq!(topf_copy, f.root.join("Töpfe").join("topf – Holz.stl"), "loose: without its folder in /out");
+        let beside: Vec<_> = resolved.files.iter().map(|file| file.beside.as_deref()).collect();
+        assert_eq!(beside, [Some("rose.stl"), Some("topf.stl")]);
+        assert_eq!((&resolved.root, &resolved.to), (&f.root, &f.root.join("Garten")));
+
+        let ops = resolved.ops();
+        assert!(matches!(&ops[..2], [ApplyOp::Copy { folder: false, .. }, ApplyOp::Copy { folder: false, .. }]));
+        let indexed: Vec<_> = ops
+            .iter()
+            .filter_map(|op| match op {
+                ApplyOp::Index { dir, only, seen: true, .. } => Some((dir.clone(), only.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            indexed,
+            [(f.root.join("Garten"), vec![rose_copy.clone()]), (f.root.join("Töpfe"), vec![topf_copy.clone()])],
+            "each folder is looked at for the copies only"
+        );
+
+        let report = lib.apply_change("plugin:texgrove", &resolved.title, &ops).unwrap();
+        assert_eq!(report.skipped, 0, "{report:?}");
+        assert_eq!(std::fs::read(&rose_copy).unwrap(), b"rose with wood");
+        assert_eq!(std::fs::read(&mine).unwrap(), b"my own", "never replaced");
+        assert_eq!(tags(&lib, &rose_copy), ["Texturiert"]);
+        assert_eq!(tags(&lib, &topf_copy), ["Texturiert"]);
+        assert_eq!(lib.notes_of(std::slice::from_ref(&rose_copy)).unwrap().0.as_deref(), Some("Holz, 0,4 mm tief"));
+        assert!(lib.entry_of(&topf_copy).unwrap().is_some());
+        // The files around them were not touched: not hashed, not tagged, not in the inbox.
+        assert_eq!(lib.content_hash_of(&rose).unwrap(), None, "the source was left alone");
+        assert_eq!(lib.content_hash_of(&mine).unwrap(), None);
+        assert!(tags(&lib, &rose).is_empty() && tags(&lib, &topf).is_empty());
+        assert_eq!(lib.inbox_count().unwrap(), 0, "made files count as seen");
+
+        // Undo takes the copies away and nothing else.
+        let undo = lib.undo_change(report.id).unwrap();
+        assert_eq!(undo.kept, 0, "{undo:?}");
+        assert!(!rose_copy.exists() && !topf_copy.exists());
+        assert!(rose.is_file() && topf.is_file() && mine.is_file() && f.root.join("Töpfe").is_dir());
+        assert!(lib.entry_of(&rose_copy).unwrap().is_none() && lib.entry_of(&rose).unwrap().is_some());
+        assert!(lib.all_tags().unwrap().iter().all(|(t, _)| t != "Texturiert"));
+
+        // Redo copies again; a copy the user changed since stays at the next undo.
+        let redo = lib.redo_change(report.id).unwrap();
+        assert_eq!(redo.skipped, 0, "{redo:?}");
+        assert!(rose_copy.is_file() && topf_copy.is_file());
+        std::fs::write(&topf_copy, "solid mine now").unwrap();
+        let undo = lib.undo_change(redo.id).unwrap();
+        assert!(undo.kept >= 1, "{undo:?}");
+        assert!(!rose_copy.exists() && topf_copy.is_file());
+    }
+
+    #[test]
+    fn two_files_of_one_name_and_a_source_in_an_archive() {
+        let (f, _lib, mut sources) = beside();
+        // Two files called the same land beside one source; and a source inside an archive
+        // has its copy beside the archive.
+        std::fs::create_dir_all(f.out.join("a")).unwrap();
+        std::fs::write(f.out.join("a").join("rose – Holz.3mf"), "another").unwrap();
+        std::fs::write(f.root.join("Garten").join("pack.zip"), "PK").unwrap();
+        let member = f.root.join("Garten").join("pack.zip").join("minis").join("orc.stl");
+        sources.push(Source {
+            reference: "lib/Garten/pack.zip/minis/orc.stl".into(),
+            root: f.root.clone(),
+            path: member,
+        });
+        let mut bundle = textured();
+        bundle.files[1].next_to = Some("lib/Garten/pack.zip/minis/orc.stl".into());
+        let resolved = resolve_beside(&bundle, &f.out, &sources, Limits::DEFAULT).unwrap();
+        let names: Vec<String> =
+            resolved.files.iter().map(|file| crate::listing::file_name(file.at.as_ref().unwrap())).collect();
+        assert_eq!(names, ["rose – Holz.3mf", "rose – Holz (2).3mf", "topf – Holz.stl"]);
+        assert!(resolved.files.iter().all(|file| file.at.as_ref().unwrap().parent() == Some(&f.root.join("Garten"))));
+        assert_eq!(resolved.files[2].beside.as_deref(), Some("orc.stl"));
+        // A place taken while the bundle waited in the review ("… (2)"): the next free name.
+        std::fs::write(resolved.path_of("rose – Holz.3mf"), "taken since").unwrap();
+        let later = resolved.clone().at_free_place();
+        let names: Vec<String> =
+            later.files.iter().map(|file| crate::listing::file_name(file.at.as_ref().unwrap())).collect();
+        assert_eq!(names, ["rose – Holz.3mf", "rose – Holz (3).3mf", "topf – Holz.stl"]);
+        // What was resolved before there were loose files still reads.
+        let old = serde_json::json!({"title": "T", "root": "/r", "from": "/s", "to": "/r/T", "seen": true, "bytes": 1,
+            "files": [{"rel": "a.stl", "size": 1, "mtime_ns": 2, "hash": "h"}]});
+        let old: ResolvedBundle = serde_json::from_value(old).unwrap();
+        assert!(!old.is_loose() && old.path_of("a.stl") == Path::new("/r/T/a.stl"));
+        let index: ApplyOp =
+            serde_json::from_str(r#"{"op": "index", "root": "/r", "dir": "/r/T", "seen": true}"#).unwrap();
+        assert!(matches!(index, ApplyOp::Index { only, .. } if only.is_empty()));
+    }
+
+    #[test]
+    fn a_copy_whose_name_was_taken_in_between_is_left_out() {
+        let (f, mut lib, sources) = beside();
+        let resolved = resolve_beside(&textured(), &f.out, &sources, Limits::DEFAULT).unwrap();
+        // Someone puts a file where the rose's copy was to go.
+        let theirs = resolved.path_of("rose – Holz.3mf");
+        std::fs::write(&theirs, "theirs").unwrap();
+        let report = lib.apply_change("plugin:texgrove", &resolved.title, &resolved.ops()).unwrap();
+        assert_eq!(std::fs::read(&theirs).unwrap(), b"theirs");
+        assert!(tags(&lib, &theirs).is_empty(), "their file is not ours to tag");
+        assert_eq!(lib.content_hash_of(&theirs).unwrap(), None, "nor to index");
+        let topf_copy = resolved.path_of("sub/topf – Holz.stl");
+        assert_eq!(tags(&lib, &topf_copy), ["Texturiert"], "the other file went through");
+        // copy, index, tag and note of the rose's file did nothing
+        assert_eq!((report.applied, report.skipped), (3, 4), "{report:?}");
+        lib.undo_change(report.id).unwrap();
+        assert!(theirs.is_file() && !topf_copy.exists());
+    }
+
+    #[test]
+    fn bundles_beside_their_sources_are_checked() {
+        let (f, _lib, sources) = beside();
+        let check = |b: &Bundle, sources: &[Source]| match resolve_beside(b, &f.out, sources, Limits::DEFAULT) {
+            Err(BundleError::Invalid(why)) => why,
+            other => panic!("{other:?}"),
+        };
+        let with_folder = Bundle { folder: Some("Texturen".into()), ..textured() };
+        assert!(check(&with_folder, &sources).contains("next_to and folder do not go together"));
+        let mut no_place = textured();
+        no_place.next_to = None;
+        assert!(check(&no_place, &sources).contains("has no place"), "the rose's file names no source");
+        assert!(check(&textured(), &sources[..1]).contains("was not found"), "a source the host did not find");
+        let mut elsewhere = sources.clone();
+        elsewhere[1].root = f.root.parent().unwrap().join("other");
+        assert!(check(&textured(), &elsewhere).contains("several libraries"));
+        let mut outside = sources.clone();
+        outside[0].path = f.root.parent().unwrap().join("rose.stl");
+        assert!(check(&textured(), &outside).contains("is gone"), "a source outside its library");
+        let mut gone = sources.clone();
+        gone[0].path = f.root.join("Weg").join("rose.stl");
+        std::fs::remove_dir_all(f.root.join("Garten")).unwrap();
+        // The folder is gone: the next one up that is there takes the copy.
+        assert_eq!(
+            resolve_beside(&textured(), &f.out, &gone, Limits::DEFAULT).unwrap().path_of("rose – Holz.3mf"),
+            f.root.join("rose – Holz.3mf")
+        );
+        // The folder kind of bundle does not take next_to, and no bundle takes a job yet.
+        let err = resolve(&textured(), &f.out, &f.root, &f.landing).unwrap_err();
+        assert!(matches!(&err, BundleError::Invalid(why) if why.contains("have to be found first")), "{err}");
+        let job = Bundle {
+            job: Some(meshgrove_plugin_api::BundleJob { kind: "export".into(), ..Default::default() }),
+            ..textured()
+        };
+        assert!(check(&job, &sources).contains("does not start a bundle's job yet"));
+        // The usual checks hold here too.
+        let mut escape = textured();
+        escape.files[0].path = "../rose.3mf".into();
+        assert!(matches!(resolve_beside(&escape, &f.out, &sources, Limits::DEFAULT), Err(BundleError::BadPath(_))));
     }
 
     #[test]

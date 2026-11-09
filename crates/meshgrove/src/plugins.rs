@@ -12,9 +12,9 @@ use meshgrove_core::ai::dispatch::ToolProvider;
 use meshgrove_core::bundle::ResolvedBundle;
 use meshgrove_core::config::Config;
 use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Node, PickInto, View};
-use meshgrove_plugin_api::{Bundle, FileType, HostInfo, MeshData};
+use meshgrove_plugin_api::{FileType, HostInfo, MeshData};
 use meshgrove_plugins::jobs::{JobEvent, JobPool};
-use meshgrove_plugins::{CancelToken, Opened, Plugin, Registry, Settings, StagedBundle, Staging};
+use meshgrove_plugins::{CancelToken, Opened, Plugin, Registry, Settings, StagedBundle};
 
 use crate::library::{Applied, LibraryService};
 use crate::ui::plugin_view::PanelUiState;
@@ -33,13 +33,14 @@ pub enum PanelAction {
         panel: String,
         effect: Effect,
     },
-    /// Files for the library: put in at once (`apply`) or suggested; `staging` holds them.
+    /// Files for the library: put in at once (`apply`) or suggested. `title` is the bundle's;
+    /// `staged` holds it with its files, or why it could not be taken.
     Bundle {
         plugin: String,
         panel: String,
         apply: bool,
-        bundle: Bundle,
-        staging: Result<Staging, String>,
+        title: String,
+        staged: Result<Box<StagedBundle>, String>,
     },
     /// A file opened with a plugin, and what the plugin asks for.
     Opened {
@@ -116,7 +117,7 @@ enum Output {
     Opened { out: PathBuf, tmp: PathBuf },
     View(View),
     Effects(Vec<Effect>),
-    Bundle { apply: bool, bundle: Bundle, staging: Result<Staging, String> },
+    Bundle { apply: bool, title: String, staged: Result<Box<StagedBundle>, String> },
     Mesh { key: String, mesh: Option<MeshData> },
     Failed(String),
 }
@@ -544,9 +545,9 @@ impl PluginHost {
                         panel: p.panel.clone(),
                         effect,
                     })),
-                    Output::Bundle { apply, bundle, staging } => {
+                    Output::Bundle { apply, title, staged } => {
                         let (plugin, panel) = (p.plugin.clone(), p.panel.clone());
-                        actions.push(PanelAction::Bundle { plugin, panel, apply, bundle, staging });
+                        actions.push(PanelAction::Bundle { plugin, panel, apply, title, staged });
                     }
                     Output::Mesh { key, mesh } => {
                         let m = p.meshes.entry(key).or_insert_with(|| {
@@ -795,9 +796,11 @@ fn work(
                         continue;
                     }
                 };
-                // What the panel and its jobs wrote goes with the bundle.
-                let staging = handle.take_output().map_err(|e| e.to_string());
-                send(Output::Bundle { apply, bundle, staging });
+                // What the panel and its jobs wrote goes with the bundle; the files it is put
+                // beside are found here, off the window's thread.
+                let title = bundle.title.clone();
+                let staged = handle.stage(bundle).map(Box::new).map_err(|e| e.to_string());
+                send(Output::Bundle { apply, title, staged });
             }
             if !rest.is_empty() {
                 send(Output::Effects(rest));
@@ -823,6 +826,8 @@ fn work(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meshgrove_plugin_api::Bundle;
+    use meshgrove_plugins::Staging;
 
     /// The example plugin built for tests (`scripts/build-plugins.sh --test-hooks`), if there is one.
     fn test_plugin() -> Option<Vec<u8>> {
@@ -1034,7 +1039,7 @@ mod tests {
         let staging = Staging::new(&dir.path().join("plugins"), "test").unwrap();
         std::fs::write(staging.out().join("a.stl"), "solid a").unwrap();
         let bundle = Bundle { title: "Box".into(), folder: Some("Boxes".into()), ..Bundle::default() };
-        let staged = StagedBundle { plugin: "test".into(), bundle, staging };
+        let staged = StagedBundle::new("test", bundle, staging);
         let config = Config { library_roots: vec![root.clone()], ..Config::default() };
         Scene { db: dir.path().join("library.db"), root, config, staged, _dir: dir }
     }

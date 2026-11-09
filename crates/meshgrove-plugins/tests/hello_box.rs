@@ -17,7 +17,9 @@ use meshgrove_plugin_api::manifest::Receive;
 use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, JobSpec, Node};
 use meshgrove_plugin_api::{MeshData, Permission};
 use meshgrove_plugins::jobs::{JobEvent, JobPool};
-use meshgrove_plugins::{Caller, CancelToken, Error, LibraryAccess, Opened, Plugin, PluginGrants, Settings, Staging};
+use meshgrove_plugins::{
+    Caller, CancelToken, Error, LibraryAccess, Located, Opened, Plugin, PluginGrants, Settings, Staging,
+};
 use serde_json::{Value, json};
 
 fn wasm() -> Option<Vec<u8>> {
@@ -499,6 +501,127 @@ fn a_plugin_reads_models_in_its_own_folders_and_only_there() {
     assert!(opened_width(&panel, &["/tmp/../out/a.stl"]).unwrap_err().contains("plain path"));
 }
 
+/// A library "lib" on disk whose files are all a box of 10 × 20 × 30 mm, and which says where
+/// they are.
+struct Shelf {
+    root: PathBuf,
+}
+
+impl LibraryAccess for Shelf {
+    fn search(&self, _query: &str, _limit: u32, _read: LibraryRead, _caller: Caller) -> Result<Value, String> {
+        Ok(json!([]))
+    }
+
+    fn describe(&self, id: &str, _read: LibraryRead, _caller: Caller) -> Result<Value, String> {
+        Ok(json!({"id": id}))
+    }
+
+    fn triangles(
+        &self,
+        id: &str,
+        _part: Option<usize>,
+        _max: u32,
+        read: LibraryRead,
+        caller: Caller,
+    ) -> Result<MeshData, String> {
+        self.locate(id, read, caller).map(|_| MeshData::cuboid([10.0, 20.0, 30.0]))
+    }
+
+    fn locate(&self, id: &str, _read: LibraryRead, _caller: Caller) -> Result<Located, String> {
+        let unknown = || format!("unknown id: {id}");
+        let path =
+            id.strip_prefix("lib/").ok_or_else(unknown)?.split('/').fold(self.root.clone(), |p, part| p.join(part));
+        if !path.is_file() {
+            return Err(unknown());
+        }
+        Ok(Located { root: self.root.clone(), path })
+    }
+}
+
+/// "Box around this …": the box made for a library model lands beside it, as a loose file
+/// that never replaces one, in one change that takes only the box away again. The plugin
+/// needs no grant to read the library: the user opened the model with it.
+#[test]
+fn a_box_made_for_a_model_lands_beside_it() {
+    let Some(bytes) = wasm() else { return };
+    let (base, dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let root = dir.path().join("lib");
+    let garden = root.join("Garten");
+    std::fs::create_dir_all(&garden).unwrap();
+    std::fs::write(garden.join("rose.stl"), support::stl([10.0, 20.0, 30.0])).unwrap();
+    // The name the box will ask for is taken by a file of the user's.
+    std::fs::write(garden.join("box_14x24x34.stl"), "mine").unwrap();
+    let library: Arc<dyn LibraryAccess> = Arc::new(Shelf { root: root.clone() });
+    let plugin = Arc::new(load(&bytes, Settings { library: Some(library), ..granted(base.path()) }));
+
+    let panel = plugin.open_panel("box", None).unwrap();
+    panel.opened().add(&["lib/Garten/rose.stl".into()]);
+    assert_eq!(opened_width(&panel, &["lib/Garten/rose.stl"]), Ok(14.0));
+    let effects = panel.event(&Event::Click { id: "apply".into() }).unwrap();
+    let [Effect::ApplyBundle { bundle }] = effects.as_slice() else { panic!("{effects:?}") };
+    assert_eq!((bundle.next_to.as_deref(), bundle.folder.as_deref()), (Some("lib/Garten/rose.stl"), None));
+
+    // Handed over: the host finds the model, as the panel may read it.
+    let staged = panel.stage(bundle.clone()).unwrap();
+    assert_eq!(staged.sources.len(), 1);
+    assert_eq!(staged.sources[0].path, garden.join("rose.stl"));
+    // No library is set up for imports, and none is needed: the model's library takes the file.
+    let resolved = staged.resolve_for(&meshgrove_core::config::Config::default()).unwrap();
+    assert!(resolved.is_loose());
+    assert_eq!(resolved.plugin, "hello-box");
+    let landed = resolved.path_of("box_14x24x34.stl");
+    assert_eq!(landed, garden.join("box_14x24x34 (2).stl"), "beside the rose, under a free name");
+    assert_eq!(resolved.files[0].beside.as_deref(), Some("rose.stl"));
+
+    let mut lib = Library::open_in_memory().unwrap();
+    lib.finish_baseline(&root).unwrap();
+    let ops = resolved.ops();
+    assert!(
+        matches!(&ops[..2], [ApplyOp::Copy { folder: false, .. }, ApplyOp::Index { only, .. }] if only == std::slice::from_ref(&landed))
+    );
+    let report = lib.apply_change("plugin:hello-box", &resolved.title, &ops).unwrap();
+    assert_eq!(report.skipped, 0, "{report:?}");
+    assert_eq!(std::fs::metadata(&landed).unwrap().len(), 84 + 12 * 50);
+    assert_eq!(std::fs::read(garden.join("box_14x24x34.stl")).unwrap(), b"mine", "never replaced");
+    assert_eq!(lib.tags_of(std::slice::from_ref(&landed)).unwrap(), [("Hello Box".to_owned(), 1)]);
+    assert_eq!(quantities(&lib, "Hello Box"), [("box_14x24x34 (2).stl".to_owned(), 1)]);
+    lib.undo_change(report.id).unwrap();
+    assert!(!landed.exists() && garden.join("rose.stl").is_file() && garden.join("box_14x24x34.stl").is_file());
+
+    // Beside a file the panel may not read, nothing lands: not one that was not opened with
+    // it, not one that is not there, and no path instead of an id.
+    let beside = |reference: &str| {
+        std::fs::write(panel.out().join("box.stl"), support::stl([1.0, 2.0, 3.0])).unwrap();
+        let bundle =
+            meshgrove_plugin_api::Bundle { title: "Box".into(), next_to: Some(reference.into()), ..Default::default() };
+        let staged = panel.stage(bundle);
+        assert!(panel.out().read_dir().unwrap().next().is_none(), "the files are taken either way");
+        staged
+    };
+    std::fs::write(garden.join("topf.stl"), "topf").unwrap();
+    let err = beside("lib/Garten/topf.stl").unwrap_err();
+    assert!(matches!(&err, Error::Denied(m) if m.contains("has not allowed hello-box to read the library")), "{err}");
+    assert_eq!(Staging::list(base.path(), "hello-box").len(), 1, "only the first bundle's staging folder is left");
+    panel.opened().add(&["lib/Garten/weg.stl".into()]);
+    assert!(matches!(beside("lib/Garten/weg.stl"), Err(Error::Denied(m)) if m.contains("unknown id")));
+    assert!(matches!(beside("/data/picked/box.stl"), Err(Error::Invalid(m)) if m.contains("not a path")));
+    // Beside a part of a file is beside the file.
+    let token = meshgrove_plugins::library::part_token("lib/Garten/rose.stl", 0);
+    assert_eq!(beside(&token).unwrap().sources[0].path, garden.join("rose.stl"));
+
+    // A tool is the AI's: with the grant it may put its files beside what that AI may read.
+    let mut settings = granted(base.path());
+    settings.grants.library_read = LibraryRead::All;
+    settings.library = Some(Arc::new(Shelf { root: root.clone() }));
+    let reader = Arc::new(load(&bytes, settings));
+    let other = reader.open_panel("box", None).unwrap();
+    assert_eq!(opened_width(&other, &["lib/Garten/topf.stl"]), Ok(14.0), "through the grant");
+    let effects = other.event(&Event::Click { id: "apply".into() }).unwrap();
+    let [Effect::ApplyBundle { bundle }] = effects.as_slice() else { panic!("{effects:?}") };
+    let resolved = other.stage(bundle.clone()).unwrap().resolve(Path::new(""), Path::new("")).unwrap();
+    assert_eq!(resolved.files[0].beside.as_deref(), Some("topf.stl"));
+}
+
 /// With the grant, a file outside what the grant shows still reads when the user opened it.
 #[test]
 fn an_opened_file_reads_past_what_ai_may_see() {
@@ -588,6 +711,8 @@ fn a_plugin_built_for_api_0_1_still_runs() {
     let outcome = plugin.call_tool("make_box", &json!({"width": 25, "name": "lid"}), &CancelToken::new()).unwrap();
     let staged = outcome.bundle.expect("a bundle");
     assert!(staged.staging.out().join("lid_25x30x40.stl").is_file());
+    assert_eq!((staged.bundle.next_to.as_ref(), staged.bundle.job.as_ref()), (None, None));
+    assert!(staged.sources.is_empty());
     let panel = plugin.open_panel("box", None).unwrap();
     assert_eq!(number(&panel.render().unwrap().root, "width"), 20.0);
     // It hears of events it has never heard of, and of a host that says more than it knows.

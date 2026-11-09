@@ -104,6 +104,100 @@ impl Opened {
     }
 }
 
+/// How an instance of a plugin reads the library: for whom, with which grant, and which files
+/// the user opened with it. The host asks it before every read, and again for the files a
+/// bundle is put beside.
+#[derive(Clone)]
+pub struct Reading {
+    /// The plugin's id, for what it is told when it may not read.
+    pub plugin: String,
+    pub library: Option<Arc<dyn LibraryAccess>>,
+    /// The user's grant to read the library, where the manifest asks for it too.
+    pub grant: Option<LibraryRead>,
+    pub caller: Caller,
+    pub opened: Opened,
+}
+
+/// How a plugin got at a library file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Through {
+    /// The user lets the plugin read the library.
+    Grant,
+    /// The user opened this very file with the panel.
+    Opening,
+}
+
+impl Reading {
+    /// Nobody reading anything (a plugin being loaded).
+    pub fn nothing(plugin: &str) -> Reading {
+        Reading {
+            plugin: plugin.to_owned(),
+            library: None,
+            grant: None,
+            caller: Caller::User,
+            opened: Opened::default(),
+        }
+    }
+
+    pub fn not_allowed(&self) -> String {
+        format!("the user has not allowed {} to read the library (Meshgrove → Settings → Plugins)", self.plugin)
+    }
+
+    fn library(&self) -> Result<&dyn LibraryAccess, String> {
+        self.library.as_deref().ok_or_else(|| "no library is open here".to_owned())
+    }
+
+    /// Runs `f` on the library as far as the user lets this plugin read it (a search).
+    pub fn all<T>(
+        &self,
+        f: impl FnOnce(&dyn LibraryAccess, LibraryRead, Caller) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let read = self.grant.ok_or_else(|| self.not_allowed())?;
+        f(self.library()?, read, self.caller)
+    }
+
+    /// Runs `f` on library file `id`: as far as the user lets this plugin read the library, and
+    /// where that does not reach the file, because the user opened it with this panel. Such a
+    /// file reads as the user sees it, whatever AI may see.
+    pub fn file<T>(
+        &self,
+        id: &str,
+        f: impl Fn(&dyn LibraryAccess, LibraryRead, Caller) -> Result<T, String>,
+    ) -> Result<(T, Through), String> {
+        let opened = self.opened.contains(id);
+        if self.grant.is_none() && !opened {
+            return Err(self.not_allowed());
+        }
+        let library = self.library()?;
+        let refused = match self.grant {
+            Some(read) => match f(library, read, self.caller) {
+                Ok(value) => return Ok((value, Through::Grant)),
+                Err(e) => e,
+            },
+            None => String::new(),
+        };
+        if !opened {
+            return Err(refused);
+        }
+        f(library, LibraryRead::All, Caller::User).map(|value| (value, Through::Opening))
+    }
+
+    /// Where library file `id` is on this computer, if the plugin may read it. For the host
+    /// only: a plugin never hears of paths.
+    pub fn locate(&self, id: &str) -> Result<Located, String> {
+        self.file(id, |library, read, caller| library.locate(id, read, caller)).map(|(located, _)| located)
+    }
+}
+
+/// A library file on this computer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Located {
+    /// The library it is in.
+    pub root: PathBuf,
+    /// The file itself (also one inside an archive).
+    pub path: PathBuf,
+}
+
 pub trait LibraryAccess: Send + Sync {
     /// Matches for a search as typed in Meshgrove, as JSON (ids, names, sizes).
     fn search(&self, query: &str, limit: u32, read: LibraryRead, caller: Caller) -> Result<Value, String>;
@@ -119,6 +213,11 @@ pub trait LibraryAccess: Send + Sync {
         read: LibraryRead,
         caller: Caller,
     ) -> Result<MeshData, String>;
+    /// Where the file behind an id is, for the host itself (to put a bundle's files beside it,
+    /// to copy a 3MF): never passed on to a plugin.
+    fn locate(&self, _id: &str, _read: LibraryRead, _caller: Caller) -> Result<Located, String> {
+        Err("this library does not say where its files are".into())
+    }
 }
 
 /// Most triangles `library.triangles` hands over; larger models are simplified to it.
@@ -310,6 +409,14 @@ impl LibraryAccess for LibraryReader {
             return Err(format!("{id} has no triangles"));
         }
         Ok(data)
+    }
+
+    fn locate(&self, id: &str, read: LibraryRead, caller: Caller) -> Result<Located, String> {
+        self.with(read, caller, |cx| {
+            let path = cx.resolve(id).map_err(|e| e.to_string())?;
+            let root = cx.scope.root_of(&path).ok_or_else(|| format!("unknown id: {id}"))?.path.clone();
+            Ok(Located { root, path })
+        })
     }
 }
 

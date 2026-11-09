@@ -94,3 +94,16 @@ fn the_grant_reaches_as_far_as_the_user_set_it() {
     assert_eq!(read(LibraryRead::AiScope, local_ai), Ok(12));
     assert!(read(LibraryRead::AiScope, Caller::Ai(AccessClass::Cloud)).unwrap_err().contains("unknown id"));
 }
+
+/// Where a file is, the host learns for itself (to put a bundle's files beside it), by the same
+/// rules a plugin reads it by.
+#[test]
+fn the_host_finds_a_file_as_far_as_the_plugin_may_read_it() {
+    let s = scene();
+    let found = s.reader.locate("lib/Dosen/dose.3mf", ALL.0, ALL.1).unwrap();
+    assert_eq!((found.root, found.path), (s.root.clone(), s.root.join("Dosen").join("dose.3mf")));
+    assert!(s.reader.locate("lib/Dosen/dose.3mf", LibraryRead::AiScope, Caller::User).is_err(), "closed to AI");
+    for bad in ["lib/../config.toml", "/etc/passwd", "elsewhere/a.stl"] {
+        assert!(s.reader.locate(bad, ALL.0, ALL.1).is_err(), "{bad}");
+    }
+}

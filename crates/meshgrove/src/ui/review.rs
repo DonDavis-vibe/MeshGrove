@@ -352,12 +352,34 @@ fn bundle_row(ui: &mut Ui, item: &mut ReviewItem) {
         }
     });
     // Where it lands now: its place may have been taken while it waited.
-    let to = bundle.clone().at_free_place().to;
-    let place = to.strip_prefix(&bundle.root).unwrap_or(&to).display().to_string();
-    ui.label(t!("review.bundle_files", count = bundle.files.len(), path = place));
+    let bundle = bundle.at_free_place();
+    // A folder below its library, as the user knows it; the library itself by its name.
+    let within = |dir: &std::path::Path| match dir.strip_prefix(&bundle.root) {
+        Ok(rel) if !rel.as_os_str().is_empty() => rel.display().to_string(),
+        _ => meshgrove_core::listing::file_name(&bundle.root),
+    };
+    let loose = bundle.is_loose();
+    // Loose files beside what they were made from: beside one file, or each beside its own.
+    let sources: std::collections::BTreeSet<_> =
+        bundle.files.iter().filter_map(|f| Some((f.beside.as_deref()?, f.at.as_ref()?.parent()?))).collect();
+    match (loose, sources.first()) {
+        (true, Some((name, dir))) if sources.len() == 1 => {
+            ui.label(t!("review.bundle_beside", count = bundle.files.len(), name = name, path = within(dir)));
+        }
+        (true, _) => _ = ui.label(t!("review.bundle_beside_each", count = bundle.files.len())),
+        (false, _) => _ = ui.label(t!("review.bundle_files", count = bundle.files.len(), path = within(&bundle.to))),
+    }
     ui.weak(t!("review.bundle_size", size = i18n::file_size(bundle.bytes)));
     for f in bundle.files.iter().take(SHOWN) {
-        let mut line = format!("• {}", f.rel);
+        // A loose file by the name it gets; with several sources, also which one it is beside.
+        let mut line = match (&f.at, &f.beside) {
+            (Some(at), Some(beside)) if sources.len() > 1 => {
+                let beside = t!("review.beside", name = beside, path = at.parent().map(within).unwrap_or_default());
+                format!("• {}  ({beside})", meshgrove_core::listing::file_name(at))
+            }
+            (Some(at), _) => format!("• {}", meshgrove_core::listing::file_name(at)),
+            (None, _) => format!("• {}", f.rel),
+        };
         if !f.tags.is_empty() {
             line += &format!("  🏷 {}", f.tags.join(", "));
         }

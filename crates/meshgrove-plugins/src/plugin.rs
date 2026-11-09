@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use meshgrove_core::bundle::ResolvedBundle;
+use meshgrove_core::bundle::{Limits, ResolvedBundle, Source};
 use meshgrove_core::config::{AccessClass, Config, LibraryRead, PluginConfig, PluginGrants};
 use meshgrove_plugin_api::ui::Effect;
 use meshgrove_plugin_api::{API_VERSION, Bundle, HostInfo, Manifest, Permission, ToolDef, WIT_VERSION};
@@ -13,7 +13,7 @@ use wasmtime::Store;
 use wasmtime::component::{HasSelf, Linker};
 
 use crate::bindings::{MeshgrovePlugin, MeshgrovePluginPre, PluginError};
-use crate::library::{Caller, LibraryAccess, Opened};
+use crate::library::{Caller, LibraryAccess, Opened, Reading};
 use crate::staging::{Staging, new_uid};
 use crate::state::{self, CancelToken, Folders, Progress, Setup, State};
 use crate::{DEFAULT_MEMORY_MB, EVENT_DEADLINE, Error, TOOL_DEADLINE};
@@ -106,13 +106,29 @@ pub struct StagedBundle {
     pub plugin: String,
     pub bundle: Bundle,
     pub staging: Staging,
+    /// The library files the bundle puts its own beside (`next_to`), found when it was handed
+    /// over, as far as whoever handed it over may read the library.
+    pub sources: Vec<Source>,
 }
 
 impl StagedBundle {
+    /// A bundle that goes into a folder of its own.
+    pub fn new(plugin: &str, bundle: Bundle, staging: Staging) -> StagedBundle {
+        StagedBundle { plugin: plugin.to_owned(), bundle, staging, sources: Vec::new() }
+    }
+
     /// Checks the bundle against its files and finds its place in library `root` (by default
-    /// below `landing`).
+    /// below `landing`), or beside the library files it names, wherever those are.
     pub fn resolve(&self, root: &Path, landing: &Path) -> Result<ResolvedBundle, Error> {
-        let mut resolved = meshgrove_core::bundle::resolve(&self.bundle, self.staging.out(), root, landing)?;
+        let mut resolved = match self.bundle.uses_next_to() {
+            true => meshgrove_core::bundle::resolve_beside(
+                &self.bundle,
+                self.staging.out(),
+                &self.sources,
+                Limits::DEFAULT,
+            )?,
+            false => meshgrove_core::bundle::resolve(&self.bundle, self.staging.out(), root, landing)?,
+        };
         resolved.plugin = self.plugin.clone();
         Ok(resolved)
     }
@@ -121,6 +137,8 @@ impl StagedBundle {
     pub fn resolve_for(&self, config: &Config) -> Result<ResolvedBundle, Error> {
         match (config.import_root(), config.landing_dir()) {
             (Some(root), Some(landing)) => self.resolve(root, &landing),
+            // Beside a library file: the library is the one that file is in.
+            _ if self.bundle.uses_next_to() => self.resolve(Path::new(""), Path::new("")),
             _ => Err(Error::Invalid("there is no library to put the files into".into())),
         }
     }
@@ -181,12 +199,7 @@ impl Plugin {
         let dir = self.settings.base.join(".load").join(new_uid());
         let result = (|| {
             let mut store = state::store(Setup {
-                plugin: "(loading)",
-                grants: &PluginGrants::default(),
-                caller: Caller::User,
-                wants_library: false,
-                opened: Opened::default(),
-                library: None,
+                reading: Reading::nothing("(loading)"),
                 info: &self.settings.info,
                 memory_mb: DEFAULT_MEMORY_MB,
                 folders: Folders {
@@ -295,16 +308,26 @@ impl Plugin {
         self.settings.base.join(&self.manifest.id).join("data")
     }
 
+    /// How an instance reads the library for `caller`: with the plugin's grant, and the files
+    /// in `opened`.
+    pub(crate) fn reading(&self, caller: Caller, opened: Opened) -> Reading {
+        Reading {
+            plugin: self.manifest.id.clone(),
+            library: self.settings.library.clone(),
+            grant: self.may(Permission::LibraryRead).then_some(self.settings.grants.library_read),
+            caller,
+            opened,
+        }
+    }
+
     /// A store for one instance, with `out` as `/out` and a fresh `/tmp` (or `tmp`), reading
-    /// the library as `caller` may: with the plugin's grant, and the files in `opened`.
-    #[allow(clippy::too_many_arguments)]
+    /// the library as `reading` says.
     pub(crate) fn store(
         &self,
         out: &Path,
         tmp: Option<&Path>,
         data_writable: bool,
-        caller: Caller,
-        opened: Opened,
+        reading: Reading,
         cancel: CancelToken,
         progress: Option<Progress>,
     ) -> Result<Store<State>, Error> {
@@ -312,18 +335,39 @@ impl Plugin {
         let tmp_exact = tmp.is_some();
         let tmp_base = tmp.map_or_else(|| self.settings.base.join(&self.manifest.id).join("tmp"), Path::to_path_buf);
         state::store(Setup {
-            plugin: &self.manifest.id,
-            grants: &self.settings.grants,
-            caller,
-            wants_library: self.manifest.wants(Permission::LibraryRead),
-            opened,
-            library: self.settings.library.clone(),
+            reading,
             info: &self.settings.info,
             memory_mb: self.memory_mb(),
             folders: Folders { data: &data, data_writable, out, tmp_base: &tmp_base, tmp_exact },
             cancel,
             progress,
         })
+    }
+
+    /// A bundle with the staging folder its files are in, ready to be resolved: the library
+    /// files it puts its own beside are found now, as far as `reading` reaches. When that
+    /// fails the staging folder goes.
+    pub(crate) fn stage(&self, bundle: Bundle, staging: Staging, reading: &Reading) -> Result<StagedBundle, Error> {
+        let sources = (|| {
+            let mut sources = Vec::new();
+            for reference in bundle.sources() {
+                // Beside a part is beside the file it is in.
+                let (id, _) = crate::library::split_part(reference).map_err(Error::Invalid)?;
+                if crate::guest_files::is_guest_path(id) {
+                    return Err(Error::Invalid(format!("next_to takes the id of a library file, not a path ({id})")));
+                }
+                let found = reading.locate(id).map_err(Error::Denied)?;
+                sources.push(Source { reference: reference.to_owned(), root: found.root, path: found.path });
+            }
+            Ok(sources)
+        })();
+        match sources {
+            Ok(sources) => Ok(StagedBundle { plugin: self.manifest.id.clone(), bundle, staging, sources }),
+            Err(e) => {
+                let _ = staging.remove();
+                Err(e)
+            }
+        }
     }
 
     pub(crate) fn instantiate(&self, store: &mut Store<State>) -> Result<MeshgrovePlugin, Error> {
@@ -358,8 +402,9 @@ impl Plugin {
     ) -> Result<ToolOutcome, Error> {
         match self.run_tool(name, args, staging.out(), class, cancel) {
             Ok((result, images, Some(bundle))) => {
-                let plugin = self.manifest.id.clone();
-                Ok(ToolOutcome { result, images, bundle: Some(StagedBundle { plugin, bundle, staging }) })
+                // What a tool puts its files beside, the AI that called it must be able to read.
+                let reading = self.reading(Caller::Ai(class), Opened::default());
+                Ok(ToolOutcome { result, images, bundle: Some(self.stage(bundle, staging, &reading)?) })
             }
             Ok((result, images, None)) => {
                 let _ = staging.remove();
@@ -384,7 +429,8 @@ impl Plugin {
         if !self.tools.iter().any(|t| t.name == name) {
             return Err(Error::Invalid(format!("{} has no tool {name:?}", self.manifest.id)));
         }
-        let mut store = self.store(out, None, false, Caller::Ai(class), Opened::default(), cancel.clone(), None)?;
+        let reading = self.reading(Caller::Ai(class), Opened::default());
+        let mut store = self.store(out, None, false, reading, cancel.clone(), None)?;
         state::arm(&mut store, Some(self.settings.tool_deadline));
         let instance = self.instantiate(&mut store)?;
         let output = instance
@@ -437,7 +483,8 @@ impl Plugin {
         cancel: &CancelToken,
         progress: Option<Progress>,
     ) -> Result<Value, Error> {
-        let mut store = self.store(out, None, true, Caller::User, opened.clone(), cancel.clone(), progress)?;
+        let reading = self.reading(Caller::User, opened.clone());
+        let mut store = self.store(out, None, true, reading, cancel.clone(), progress)?;
         state::arm(&mut store, None);
         let instance = self.instantiate(&mut store)?;
         let text = instance
@@ -456,8 +503,8 @@ impl Plugin {
         }
         let staging = Staging::new(&self.settings.base, &self.manifest.id)?;
         let result = (|| {
-            let (caller, opened) = (Caller::User, Opened::default());
-            let mut store = self.store(staging.out(), None, false, caller, opened, CancelToken::new(), None)?;
+            let reading = self.reading(Caller::User, Opened::default());
+            let mut store = self.store(staging.out(), None, false, reading, CancelToken::new(), None)?;
             state::arm(&mut store, Some(self.settings.tool_deadline));
             let instance = self.instantiate(&mut store)?;
             let text = instance

@@ -9,7 +9,8 @@
 //! - Opens `*.box.json` files (a saved box) in its panel: it gets the file's bytes.
 //! - Opens `*.stl` files with "Box around this …": it gets their library ids in its panel
 //!   (`Event::ModelsOpened`), measures the first one and sizes the box to hold it. Those files it
-//!   may read without the `library_read` permission, because the user opened them with it.
+//!   may read without the `library_read` permission, because the user opened them with it. The
+//!   box then lands next to that model (`Bundle::next_to`), not in a folder of its own.
 //!
 //! With the feature `test-hooks` it has three more tools for Meshgrove's tests: `spin` never
 //! ends, `trap` eats all memory, `describe` passes on what `library.describe` says. Its panel then also answers `HostChanged` with a toast naming the
@@ -76,15 +77,20 @@ impl BoxSpec {
         Ok(rel)
     }
 
-    fn bundle(&self, rel: &str) -> Bundle {
+    /// The bundle for the box written to `rel` below `/out`. It goes into a folder of its own
+    /// ("Hello Box/<name>"), or, made for a library model (`beside`, its id), next to that
+    /// model as a loose file.
+    fn bundle(&self, rel: &str, beside: Option<&str>) -> Bundle {
         let size = format!("{} × {} × {} mm", self.width, self.depth, self.height);
         Bundle {
             title: format!("Box {size}"),
-            folder: Some(format!("Hello Box/{}", self.name.trim())),
+            folder: beside.is_none().then(|| format!("Hello Box/{}", self.name.trim())),
+            next_to: beside.map(str::to_owned),
             files: vec![BundleFile {
                 path: rel.into(),
                 tags: Vec::new(),
                 note: Some(format!("{size}, made by Hello Box")),
+                ..BundleFile::default()
             }],
             tags: vec!["Hello Box".into()],
             lists: vec![BundleList {
@@ -198,7 +204,7 @@ impl Guest for HelloBox {
                 guest::host::progress(0.5, "writing the STL");
                 let rel = spec.write()?;
                 let result = json!({"file": rel, "triangles": spec.mesh().triangles(), "copies": spec.copies});
-                Ok(guest::tool_output(&result, Some(&spec.bundle(&rel))))
+                Ok(guest::tool_output(&result, Some(&spec.bundle(&rel, None))))
             }
             "measure" => {
                 #[derive(Deserialize)]
@@ -358,7 +364,7 @@ impl GuestPanel for BoxPanel {
                 Vec::new()
             }
             Event::Click { id } if id == "apply" => match s.spec.write() {
-                Ok(rel) => vec![Effect::ApplyBundle { bundle: s.spec.bundle(&rel) }],
+                Ok(rel) => vec![Effect::ApplyBundle { bundle: s.spec.bundle(&rel, s.source.as_deref()) }],
                 Err(e) => vec![Effect::Toast { text: message(&e), level: Level::Error }],
             },
             Event::Click { id } if id == "job" => match s.spec.check() {
@@ -374,7 +380,7 @@ impl GuestPanel for BoxPanel {
             Event::JobFinished { result: Some(result), .. } => {
                 s.busy = false;
                 match result.get("file").and_then(|f| f.as_str()) {
-                    Some(rel) => vec![Effect::ApplyBundle { bundle: s.spec.bundle(rel) }],
+                    Some(rel) => vec![Effect::ApplyBundle { bundle: s.spec.bundle(rel, s.source.as_deref()) }],
                     None => Vec::new(),
                 }
             }

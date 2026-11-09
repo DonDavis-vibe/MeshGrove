@@ -81,11 +81,15 @@ pub enum ApplyOp {
     },
     /// The folder `dir` below `root` (what a copy just wrote) into the index right away, its
     /// files hashed, so the steps after it find them. With `seen` their new content does not
-    /// come into the inbox (files Meshgrove's plugins made).
+    /// come into the inbox (files Meshgrove's plugins made). With `only`, just these files of
+    /// `dir` are hashed and looked at for the inbox: copies that landed loose in a folder that
+    /// was there, among the user's own files.
     Index {
         root: PathBuf,
         dir: PathBuf,
         seen: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        only: Vec<PathBuf>,
     },
 }
 
@@ -617,15 +621,26 @@ impl Library {
                     }
                 }
                 ApplyOp::Index { dir, .. } if not_written.iter().any(|p| dir.starts_with(p)) => false,
-                ApplyOp::Index { root, dir, seen } => match self.index_now(root, dir, *seen, now)? {
-                    Some(hashes) => {
-                        if !hashes.is_empty() {
-                            undo.push(UndoOp::Unsee { hashes });
+                // Of the files named, those this change did write; if it wrote none of them,
+                // what is there under their names is someone else's.
+                ApplyOp::Index { only, .. }
+                    if !only.is_empty() && only.iter().all(|p| not_written.contains(&p.as_path())) =>
+                {
+                    false
+                }
+                ApplyOp::Index { root, dir, seen, only } => {
+                    let only: Vec<&Path> =
+                        only.iter().map(PathBuf::as_path).filter(|p| !not_written.contains(p)).collect();
+                    match self.index_now(root, dir, *seen, now, &only)? {
+                        Some(hashes) => {
+                            if !hashes.is_empty() {
+                                undo.push(UndoOp::Unsee { hashes });
+                            }
+                            true
                         }
-                        true
+                        None => false,
                     }
-                    None => false,
-                },
+                }
             };
             if done {
                 report.applied += 1;
@@ -640,19 +655,32 @@ impl Library {
     }
 
     /// Scans `dir` (from the nearest folder above it the index knows, which lists the new ones
-    /// in between) and hashes every file below it. Their contents not seen before go into the
-    /// inbox, as done when `seen`; those are returned. `None` when there is no such folder.
-    fn index_now(&mut self, root: &Path, dir: &Path, seen: bool, now: i64) -> Result<Option<Vec<String>>, Error> {
+    /// in between) and hashes every file below it, or just the files `only` of it. Their
+    /// contents not seen before go into the inbox, as done when `seen`; those are returned.
+    /// `None` when there is no such folder.
+    fn index_now(
+        &mut self,
+        root: &Path,
+        dir: &Path,
+        seen: bool,
+        now: i64,
+        only: &[&Path],
+    ) -> Result<Option<Vec<String>>, Error> {
         if !dir.starts_with(root) || !dir.is_dir() {
             return Ok(None);
         }
-        let start = dir
-            .ancestors()
-            .skip(1)
-            .take_while(|a| a.starts_with(root))
-            .find(|a| self.dir_mtime(a).is_some())
-            .unwrap_or(root)
-            .to_path_buf();
+        // A folder the index knows already got new files: it is listed again itself (its time
+        // may not tell, on a file system that keeps it coarsely).
+        let start = if !only.is_empty() && self.dir_mtime(dir).is_some() {
+            dir.to_path_buf()
+        } else {
+            dir.ancestors()
+                .skip(1)
+                .take_while(|a| a.starts_with(root))
+                .find(|a| self.dir_mtime(a).is_some())
+                .unwrap_or(root)
+                .to_path_buf()
+        };
         let cancel = std::sync::atomic::AtomicBool::new(false);
         if crate::scan::scan(self, root, &start, crate::scan::Force::Start, &cancel).is_err() {
             return Ok(None);
@@ -660,8 +688,8 @@ impl Library {
         // Rebuilt from its parts: the index stores paths with the platform's separator only.
         let dir: PathBuf = dir.components().collect();
         let d = dir.to_string_lossy();
-        let b = crate::db::below_bounds(&d);
-        let files: Vec<(PathBuf, bool)> = {
+        let files: Vec<(PathBuf, bool)> = if only.is_empty() {
+            let b = crate::db::below_bounds(&d);
             let mut stmt = self.conn.prepare(&format!(
                 "SELECT d.path, f.name, f.kind IN ({}) FROM files f JOIN dirs d ON d.id = f.dir_id
                  WHERE d.path = ?1 OR (d.path > ?2 AND d.path < ?3) OR (d.path > ?4 AND d.path < ?5)
@@ -672,6 +700,20 @@ impl Library {
                 Ok((Path::new(&r.get::<_, String>(0)?).join(r.get::<_, String>(1)?), r.get(2)?))
             })?
             .collect::<Result<_, _>>()?
+        } else {
+            // The files named, as far as they are in this very folder and the scan found them.
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT f.kind IN ({}) FROM files f JOIN dirs d ON d.id = f.dir_id WHERE d.path = ?1 AND f.name = ?2",
+                crate::inbox::INBOX_KINDS
+            ))?;
+            let mut files = Vec::new();
+            for path in only.iter().filter(|p| p.parent() == Some(dir.as_path())) {
+                let Some(name) = path.file_name() else { continue };
+                let inbox: Option<bool> =
+                    stmt.query_row(params![d, name.to_string_lossy()], |r| r.get(0)).optional()?;
+                files.extend(inbox.map(|inbox| (dir.join(name), inbox)));
+            }
+            files
         };
         let mut added = Vec::new();
         for (path, inbox) in files {

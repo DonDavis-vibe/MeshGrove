@@ -12,8 +12,8 @@ use egui::{RichText, Ui};
 use meshgrove_core::ai::proposals::{self, Origin, ProposalStore};
 use meshgrove_core::config::{AccessClass, PluginConfig};
 use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Level, PickInto};
-use meshgrove_plugin_api::{Bundle, FileType, HostInfo, Permission, Receive};
-use meshgrove_plugins::{StagedBundle, Staging};
+use meshgrove_plugin_api::{FileType, HostInfo, Permission, Receive};
+use meshgrove_plugins::StagedBundle;
 
 use super::App;
 use crate::plugins::{BundleRoute, PanelAction, settle_bundle};
@@ -181,10 +181,9 @@ impl App {
                 }
                 Err(e) => self.toast(format!("{}: {e}", self.plugin_name(&plugin))),
             },
-            PanelAction::Bundle { plugin, panel, apply, bundle, staging } => {
-                let title = bundle.title.clone();
-                let outcome = match staging {
-                    Ok(staging) => self.plugin_bundle(&plugin, &panel, apply, bundle, staging),
+            PanelAction::Bundle { plugin, panel, apply, title, staged } => {
+                let outcome = match staged {
+                    Ok(staged) => self.settle_staged(&plugin, &panel, apply, *staged),
                     Err(error) => {
                         self.toast(t!("plugins.bundle_failed", error = error).into_owned());
                         Some(BundleOutcome::Failed { error })
@@ -305,23 +304,13 @@ impl App {
 
     /// Files from a panel: into the library now, or into the review. The outcome, or `None`
     /// when the library's thread will answer (see `applied`).
-    fn plugin_bundle(
-        &mut self,
-        plugin: &str,
-        panel: &str,
-        apply: bool,
-        bundle: Bundle,
-        staging: Staging,
-    ) -> Option<BundleOutcome> {
-        let staged = StagedBundle { plugin: plugin.to_owned(), bundle, staging };
-        self.settle_staged(plugin, panel, apply, staged)
-    }
-
     fn settle_staged(&mut self, plugin: &str, panel: &str, apply: bool, staged: StagedBundle) -> Option<BundleOutcome> {
         let allowed = self.plugins.plugin(plugin).is_some_and(|p| p.may(Permission::Bundles));
         // No library yet (a fresh install): ask where the files should go. That folder becomes
         // the library, and the bundle follows once it is chosen.
-        if allowed && self.config.import_root().is_none() && self.plugin_prompt.is_none() {
+        // Files that go beside a library file need no asking: that file is in a library.
+        let placed = staged.bundle.uses_next_to();
+        if allowed && !placed && self.config.import_root().is_none() && self.plugin_prompt.is_none() {
             let input = dirs::document_dir().or_else(dirs::home_dir).unwrap_or_default().join("Meshgrove");
             self.plugin_prompt = Some(PathPrompt::Library {
                 plugin: plugin.to_owned(),

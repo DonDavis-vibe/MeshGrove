@@ -146,6 +146,18 @@ impl PanelHandle {
         Ok(Staging::take_from(&self.out, &self.plugin.settings.base, self.plugin.id())?)
     }
 
+    /// A bundle the panel hands over, with what it and its jobs wrote so far ([`Self::take_output`]).
+    /// The library files it puts its own beside are found as the panel may read them: with
+    /// the plugin's grant, or because the user opened them with it.
+    pub fn stage(&self, bundle: meshgrove_plugin_api::Bundle) -> Result<crate::StagedBundle, Error> {
+        let staging = self.take_output()?;
+        // Not allowed to hand files over: whoever applies it refuses it, nothing is looked up.
+        if !self.plugin.may(meshgrove_plugin_api::Permission::Bundles) {
+            return Ok(crate::StagedBundle::new(self.plugin.id(), bundle, staging));
+        }
+        self.plugin.stage(bundle, staging, &self.plugin.reading(Caller::User, self.opened.clone()))
+    }
+
     fn ask<T>(&self, request: impl FnOnce(Reply<T>) -> Request) -> Result<T, Error> {
         let gone = || Error::Trap("the panel is closed".into());
         let (reply, answer) = crossbeam_channel::bounded(1);
@@ -179,7 +191,8 @@ fn run(
 ) {
     let opened = (|| {
         // A panel reads the library as the user.
-        let mut store = plugin.store(out, Some(tmp), true, Caller::User, opened, CancelToken::new(), None)?;
+        let reading = plugin.reading(Caller::User, opened);
+        let mut store = plugin.store(out, Some(tmp), true, reading, CancelToken::new(), None)?;
         state::arm(&mut store, Some(plugin.settings.event_deadline));
         let instance = plugin.instantiate(&mut store)?;
         let resource = instance
