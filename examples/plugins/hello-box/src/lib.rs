@@ -4,6 +4,10 @@
 //!   bundle (folder "Hello Box/<name>", tag "Hello Box", print list "Hello Box").
 //! - Tool `measure`: the size of a library model, through `library.triangles` (permission
 //!   `library_read`).
+//! - Tool `make_box_later`: the same box, made by a job Meshgrove runs in the background
+//!   (`Bundle::job`); the AI hears at once that it started, the box waits in the review. With
+//!   `around` (a library id) the job sizes the box to hold that model, reading the library as
+//!   the AI that called the tool may.
 //! - Panel "box": a form, a 3D view of the box and two ways to add it to the library: at once,
 //!   or through a background job. With "Tint faces" ticked a click on the box tints the face
 //!   it hit, Shift-click clears it: the 3D view's paint tool `click` (`Event::MeshPick`) and an
@@ -26,8 +30,8 @@ use meshgrove_plugin_api::ui::{
     Effect, Event, FormRow, JobSpec, Level, MeshOverlay, MeshPaint, Node, PaintTool, TextStyle, Unit, View,
 };
 use meshgrove_plugin_api::{
-    API_VERSION, Bundle, BundleFile, BundleItem, BundleList, FileType, ListKind, Manifest, MeshData, PanelDef,
-    Permission, Receive, ToolDef,
+    API_VERSION, Bundle, BundleFile, BundleItem, BundleJob, BundleList, FileType, ListKind, Manifest, MeshData,
+    PanelDef, Permission, Receive, ToolDef,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -179,6 +183,19 @@ impl Guest for HelloBox {
                 bundles: true,
             },
             ToolDef {
+                name: "make_box_later".into(),
+                description: "Makes a box in the background; it waits in Meshgrove's review when done. With \
+                              `around` (a file id) the box is sized to hold that model."
+                    .into(),
+                input_schema: {
+                    let mut schema = box_schema();
+                    schema["properties"]["around"] =
+                        json!({"type": "string", "description": "a file id from search_models"});
+                    schema
+                },
+                bundles: true,
+            },
+            ToolDef {
                 name: "measure".into(),
                 description: "The size of a model in the library, in mm.".into(),
                 input_schema: json!({
@@ -210,6 +227,14 @@ impl Guest for HelloBox {
                 let rel = spec.write()?;
                 let result = json!({"file": rel, "triangles": spec.mesh().triangles(), "copies": spec.copies});
                 Ok(guest::tool_output(&result, Some(&spec.bundle(&rel, None))))
+            }
+            // Nothing is written now: the job makes the box, and its answer brings the bundle.
+            "make_box_later" => {
+                let spec: BoxSpec = guest::parse(&args)?;
+                spec.check()?;
+                let job = BundleJob { kind: "box_bundle".into(), params: serde_json::from_str(&args)? };
+                let bundle = Bundle { title: format!("Box {}", spec.name.trim()), job: Some(job), ..Bundle::default() };
+                Ok(guest::tool_output(&json!({"box": spec.name.trim()}), Some(&bundle)))
             }
             "measure" => {
                 #[derive(Deserialize)]
@@ -253,6 +278,37 @@ impl Guest for HelloBox {
                 let rel = spec.write()?;
                 guest::host::progress(1.0, "done");
                 Ok(guest::json(&json!({"file": rel, "spec": spec})))
+            }
+            // The job of `make_box_later`: the box, sized to `around` if given, and its bundle.
+            "box_bundle" => {
+                #[derive(Deserialize)]
+                struct Extra {
+                    #[serde(default)]
+                    around: Option<String>,
+                    #[cfg(feature = "test-hooks")]
+                    #[serde(default)]
+                    slow: bool,
+                }
+                let mut spec: BoxSpec = guest::parse(&params)?;
+                let extra: Extra = guest::parse(&params)?;
+                // Test hook: a job that runs until it is cancelled.
+                #[cfg(feature = "test-hooks")]
+                while extra.slow {
+                    if guest::host::cancelled() {
+                        return Err(PluginError::Cancelled);
+                    }
+                    guest::host::progress(0.5, "taking its time");
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                if let Some(id) = &extra.around {
+                    guest::host::progress(0.2, "measuring the model");
+                    let (size, _) = measure(id)?;
+                    (spec.width, spec.depth, spec.height) =
+                        (size[0] + 4.0, size[1] + 4.0, size[2] + 4.0);
+                }
+                let rel = spec.write()?;
+                guest::host::progress(1.0, "done");
+                Ok(guest::json(&json!({"file": rel, "bundle": spec.bundle(&rel, None)})))
             }
             // A job reads the files the user opened with its panel, as the panel does.
             #[cfg(feature = "test-hooks")]

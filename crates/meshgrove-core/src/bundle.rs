@@ -73,6 +73,10 @@ pub struct ResolvedBundle {
     pub to: PathBuf,
     /// New content does not wait in the inbox.
     pub seen: bool,
+    /// It waits for the user in the review, whatever they let be accepted by itself: files a
+    /// tool's job made after the AI had its answer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub review: bool,
     pub files: Vec<ResolvedFile>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lists: Vec<ResolvedList>,
@@ -235,6 +239,7 @@ impl Checked {
             from: out.to_path_buf(),
             to,
             seen: true,
+            review: false,
             files: self.files,
             lists: self.lists,
             bytes: self.bytes,

@@ -12,6 +12,7 @@ use meshgrove_core::config::Config;
 use meshgrove_plugin_api::{API_VERSION, HostInfo, Permission, PrinterInfo, ToolDef};
 use serde_json::{Value, json};
 
+use crate::deferred::{DeferredJobs, Deliver};
 use crate::{CancelToken, Image, LibraryAccess, Plugin, Settings};
 
 /// The loaded plugins.
@@ -20,6 +21,8 @@ pub struct Registry {
     plugins: Vec<Arc<Plugin>>,
     /// Enabled plugins that could not be loaded: id and why.
     problems: Vec<(String, String)>,
+    /// The jobs their tools started; shared with the registries loaded before and after.
+    jobs: Arc<DeferredJobs>,
 }
 
 /// What the host tells plugins about itself, from the settings.
@@ -42,7 +45,19 @@ impl Registry {
     /// Loads the enabled plugins of `config` whose file is still the one the user enabled;
     /// installed below `base` ([`crate::default_base`]).
     pub fn load(config: &Config, base: &Path, info: &HostInfo, library: Option<Arc<dyn LibraryAccess>>) -> Registry {
-        let mut registry = Registry::default();
+        Registry::load_with_jobs(config, base, info, library, DeferredJobs::new())
+    }
+
+    /// [`Registry::load`] keeping the tool-started `jobs` of the process (they go on while the
+    /// plugins load anew).
+    pub fn load_with_jobs(
+        config: &Config,
+        base: &Path,
+        info: &HostInfo,
+        library: Option<Arc<dyn LibraryAccess>>,
+        jobs: Arc<DeferredJobs>,
+    ) -> Registry {
+        let mut registry = Registry { jobs, ..Registry::default() };
         for entry in config.plugins.iter().filter(|p| p.enabled) {
             let settings =
                 Settings { library: library.clone(), info: info.clone(), ..Settings::from_config(entry, base) };
@@ -64,6 +79,11 @@ impl Registry {
             }
         }
         registry
+    }
+
+    /// The jobs the plugins' tools started.
+    pub fn jobs(&self) -> &Arc<DeferredJobs> {
+        &self.jobs
     }
 
     pub fn plugins(&self) -> &[Arc<Plugin>] {
@@ -114,7 +134,13 @@ impl Registry {
         };
         let outcome = plugin.call_tool_as(&tool.name, &arguments, origin.class, cancel).map_err(invalid)?;
         let mut answer = json!({});
-        if let Some(staged) = outcome.bundle {
+        let mut bundle = outcome.bundle;
+        if let Some(staged) = bundle.take_if(|s| s.bundle.job.is_some()) {
+            // The files come from a job: it runs now, and they wait in the review when it is done.
+            let job = self.start_job(cx, store, origin, name, tool, plugin, staged)?;
+            answer = json!({"status": "started", "job": job, "arrives": "review"});
+        }
+        if let Some(staged) = bundle {
             let receipt = (|| {
                 if !tool.bundles {
                     return Err(ToolError::Invalid(format!("{name} returned files, but says it makes none")));
@@ -142,6 +168,48 @@ impl Registry {
             answer["pictures"] = json!(outcome.images.len());
         }
         Ok((answer, outcome.images))
+    }
+}
+
+impl Registry {
+    /// Starts the job of a tool's bundle; its id. What it makes is proposed into the store
+    /// `store` is (its file, opened anew then) from `origin`, and always waits in the review.
+    #[allow(clippy::too_many_arguments)]
+    fn start_job(
+        &self,
+        cx: &Context,
+        store: &ProposalStore,
+        origin: &Origin,
+        name: &str,
+        tool: &ToolDef,
+        plugin: &Arc<Plugin>,
+        staged: crate::StagedBundle,
+    ) -> ToolResult<String> {
+        let refuse = |why: String, staged: crate::StagedBundle| {
+            let _ = staged.staging.remove();
+            Err(ToolError::Invalid(why))
+        };
+        if !tool.bundles {
+            return refuse(format!("{name} returned files, but says it makes none"), staged);
+        }
+        let Some(path) = store.path() else {
+            return refuse("there is no suggestion store to put the job's files into".into(), staged);
+        };
+        let (config, from) = (cx.config.clone(), origin.clone());
+        let deliver: Deliver = Box::new(move |staged: crate::StagedBundle| {
+            let proposed = (|| {
+                let mut resolved = staged.resolve_for(&config).map_err(|e| e.to_string())?;
+                resolved.review = true;
+                let mut store = ProposalStore::open(&path).map_err(|e| e.to_string())?;
+                proposals::propose_bundle(&config, &mut store, &from, &resolved).map_err(|e| e.to_string())?;
+                Ok(resolved.title)
+            })();
+            if proposed.is_err() {
+                let _ = staged.staging.remove();
+            }
+            proposed
+        });
+        Ok(self.jobs.start(plugin.clone(), &tool.name, staged, origin.class, deliver))
     }
 }
 

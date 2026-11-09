@@ -426,6 +426,11 @@ impl Plugin {
         cancel: &CancelToken,
     ) -> Result<ToolOutcome, Error> {
         match self.run_tool(name, args, staging.out(), class, cancel) {
+            // Files a job of the plugin is to make: they are staged once it has made them
+            // ([`Plugin::finish_job`]); the staging folder waits for it.
+            Ok((result, images, Some(bundle))) if bundle.job.is_some() => {
+                Ok(ToolOutcome { result, images, bundle: Some(StagedBundle::new(&self.manifest.id, bundle, staging)) })
+            }
             Ok((result, images, Some(bundle))) => {
                 // What a tool puts its files beside, the AI that called it must be able to read.
                 let reading = self.reading(Caller::Ai(class), Opened::default());
@@ -510,7 +515,22 @@ impl Plugin {
         progress: Option<Progress>,
     ) -> Result<Value, Error> {
         let reading = self.reading(Caller::User, opened.clone());
-        let mut store = self.store(out, None, true, reading, cancel.clone(), progress)?;
+        self.run_job_as(kind, params, out, reading, true, cancel, progress)
+    }
+
+    /// Runs job `kind` reading the library as `reading` says, with `/data` writable or not.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn run_job_as(
+        &self,
+        kind: &str,
+        params: &Value,
+        out: &Path,
+        reading: Reading,
+        data_writable: bool,
+        cancel: &CancelToken,
+        progress: Option<Progress>,
+    ) -> Result<Value, Error> {
+        let mut store = self.store(out, None, data_writable, reading, cancel.clone(), progress)?;
         state::arm(&mut store, None);
         let instance = self.instantiate(&mut store)?;
         let text = instance
@@ -519,6 +539,44 @@ impl Plugin {
             .map_err(|e| state::failure(&store, &e))?
             .map_err(plugin_error)?;
         Ok(serde_json::from_str(&text).unwrap_or(Value::String(text)))
+    }
+
+    /// Runs the job a tool's bundle asks for ([`Bundle::job`]) and stages what it made: the
+    /// bundle in its answer's `bundle` member if it has one (else the tool's, without the job),
+    /// with the files it wrote to the bundle's staging folder. The job runs as the tool did: it
+    /// reads the library as the AI of access class `class` that called the tool, `/data` is
+    /// read-only, and there is no deadline; `cancel` stops it. Whatever goes wrong, the staging
+    /// folder goes too.
+    pub fn finish_job(
+        &self,
+        staged: StagedBundle,
+        class: AccessClass,
+        cancel: &CancelToken,
+        progress: Option<Progress>,
+    ) -> Result<StagedBundle, Error> {
+        let StagedBundle { bundle, staging, .. } = staged;
+        let made = (|| {
+            let job = bundle.job.clone().ok_or_else(|| Error::Invalid("the bundle starts no job".into()))?;
+            let reading = self.reading(Caller::Ai(class), Opened::default());
+            let answer = self.run_job_as(&job.kind, &job.params, staging.out(), reading, false, cancel, progress)?;
+            let bundle = match answer.get("bundle") {
+                Some(given) => serde_json::from_value::<Bundle>(given.clone())
+                    .map_err(|e| Error::Failed(format!("the bundle of its job's answer: {e}")))?,
+                None => Bundle { job: None, ..bundle },
+            };
+            if bundle.job.is_some() {
+                return Err(Error::Invalid("a job's bundle cannot start another job".into()));
+            }
+            Ok(bundle)
+        })();
+        match made {
+            // What it puts its files beside, the AI that called the tool must be able to read.
+            Ok(bundle) => self.stage(bundle, staging, &self.reading(Caller::Ai(class), Opened::default()), None),
+            Err(e) => {
+                let _ = staging.remove();
+                Err(e)
+            }
+        }
     }
 
     /// Opens file `name` (one of the manifest's file types) with the plugin: what it asks

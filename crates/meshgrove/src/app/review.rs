@@ -271,6 +271,10 @@ impl App {
 /// files of a plugin the user lets them be accepted by themselves.
 pub(super) fn auto_acceptable(item: &ReviewItem, config: &Config) -> bool {
     if item.proposal.kind == ProposalKind::Bundle {
+        // A tool's job made it after the AI had its answer: the user looks at it first.
+        if item.proposal.payload["review"].as_bool() == Some(true) {
+            return false;
+        }
         let plugin = item.proposal.payload["plugin"].as_str().unwrap_or_default();
         return config.plugin(plugin).is_some_and(|p| p.enabled && p.grants.bundles && p.grants.auto_accept);
     }
@@ -385,6 +389,8 @@ mod tests {
         assert!(!auto_acceptable(&bundle, &config), "waits for the review");
         config.plugins[0].grants.auto_accept = true;
         assert!(auto_acceptable(&bundle, &config));
+        bundle.proposal.payload["review"] = serde_json::json!(true);
+        assert!(!auto_acceptable(&bundle, &config), "a tool's job: always the review");
         config.plugins[0].enabled = false;
         assert!(!auto_acceptable(&bundle, &config), "switched off");
         assert!(!auto_acceptable(&bundle, &Config::default()), "unknown plugin");

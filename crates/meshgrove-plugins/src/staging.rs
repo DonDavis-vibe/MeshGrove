@@ -110,7 +110,9 @@ pub fn sweep(base: &Path, referenced: &dyn Fn(&Path) -> bool, age: std::time::Du
     for plugin in
         dirs(base.to_path_buf()).iter().filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
     {
-        for p in dirs(plugin.join("staging")).iter().filter(|p| old(p) && !referenced(p)) {
+        // A job of a tool may still be writing into one (its marker is fresh).
+        let free = |p: &Path| old(p) && !referenced(p) && !crate::deferred::running_in(p);
+        for p in dirs(plugin.join("staging")).iter().filter(|p| free(p)) {
             remove(p, &mut swept.staging);
         }
         for sub in ["panels", "tmp"] {
@@ -166,5 +168,23 @@ mod tests {
         assert_eq!(swept, Swept { staging: 1, leftovers: 3 });
         assert!(kept.out().is_dir() && !gone.out().exists());
         assert!(!panel.exists() && !tmp.exists() && !load.exists());
+    }
+
+    /// A tool's job writes into a staging folder no change names yet: its marker keeps it.
+    #[test]
+    fn sweeping_leaves_the_folder_of_a_running_job() {
+        let base = tempfile::tempdir().unwrap();
+        let running = Staging::new(base.path(), "texgrove").unwrap();
+        let stale = Staging::new(base.path(), "texgrove").unwrap();
+        let dir = |s: &Staging| s.out().parent().unwrap().to_path_buf();
+        std::fs::write(dir(&running).join(crate::deferred::MARKER), "job").unwrap();
+        // A marker a crash left a long time ago does not keep its folder.
+        let marker = dir(&stale).join(crate::deferred::MARKER);
+        std::fs::write(&marker, "job").unwrap();
+        let long_ago = SystemTime::now() - crate::deferred::MARKER_FRESH - std::time::Duration::from_secs(60);
+        std::fs::File::options().write(true).open(&marker).unwrap().set_modified(long_ago).unwrap();
+        let swept = sweep(base.path(), &|_| false, std::time::Duration::ZERO);
+        assert_eq!(swept.staging, 1);
+        assert!(running.out().is_dir() && !stale.out().exists());
     }
 }

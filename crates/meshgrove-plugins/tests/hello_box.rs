@@ -77,7 +77,7 @@ fn compiles_once_then_comes_from_the_cache() {
         Some((Receive::Ids, Some("box")))
     );
     let tools: Vec<&str> = second.tools().iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(tools, ["make_box", "measure", "spin", "trap", "describe"]);
+    assert_eq!(tools, ["make_box", "make_box_later", "measure", "spin", "trap", "describe"]);
     assert!(second.tools()[0].bundles && second.tools()[0].input_schema["properties"]["width"].is_object());
     assert_eq!(second.memory_mb(), 64, "the manifest's wish");
 
@@ -976,4 +976,150 @@ fn discovery_offers_the_plugin_once_and_not_when_installed() {
     assert_eq!(found[0].path, put.path().join("hello_box.wasm"));
     let installed = [found[0].hash.clone()];
     assert!(discover(&folders, &Settings::new(base.path()), &installed).is_empty());
+}
+
+/// A registry of hello-box as the window or `meshgrove-mcp` loads it, reading `library` with
+/// "what local AI sees", and what a tool call needs: a library to put files into, a
+/// suggestion store in a file.
+struct Deferred {
+    dir: tempfile::TempDir,
+    config: meshgrove_core::config::Config,
+    registry: meshgrove_plugins::Registry,
+    store: meshgrove_core::ai::proposals::ProposalStore,
+}
+
+fn deferred(bytes: &[u8], library: Arc<dyn LibraryAccess>) -> Deferred {
+    use meshgrove_core::config::{Config, PluginGrants};
+    let dir = tempfile::tempdir().unwrap();
+    let (root, base, file) = (dir.path().join("lib"), dir.path().join("plugins"), dir.path().join("hello_box.wasm"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(&file, bytes).unwrap();
+    let hash = Plugin::from_bytes(bytes, Settings::new(&base)).unwrap().hash().to_owned();
+    let grants = PluginGrants { ai_tools: true, bundles: true, auto_accept: true, library_read: LibraryRead::AiScope };
+    let entry = PluginConfig { id: "hello-box".into(), file, blake3: hash, enabled: true, grants, memory_mb: None };
+    let mut config = Config { library_roots: vec![root], plugins: vec![entry], ..Config::default() };
+    // The user lets suggestions be accepted by themselves: a job's files wait all the same.
+    config.ai.enabled = true;
+    config.ai.auto_accept_since = Some(1);
+    let info = Settings::new(&base).info;
+    let registry = meshgrove_plugins::Registry::load(&config, &base, &info, Some(library));
+    assert_eq!(registry.problems(), [], "loads");
+    let store = meshgrove_core::ai::proposals::ProposalStore::open(&dir.path().join("proposals.db")).unwrap();
+    Deferred { dir, config, registry, store }
+}
+
+impl Deferred {
+    /// Calls `make_box_later` as an AI of `class`; the answer.
+    fn call(&mut self, class: AccessClass, args: Value) -> Result<Value, String> {
+        let lib = Library::open_in_memory().unwrap();
+        let cx = meshgrove_core::ai::Context {
+            lib: &lib,
+            scope: meshgrove_core::ai::Scope::whole(&self.config),
+            config: &self.config,
+            thumbs: None,
+            printers: Vec::new(),
+            now: std::time::SystemTime::now(),
+        };
+        let origin = meshgrove_core::ai::proposals::Origin { source: "mcp".into(), client: Some("test".into()), class };
+        let name = "hello-box_make_box_later";
+        let (answer, _) = self
+            .registry
+            .call_ai(&cx, &mut self.store, &origin, name, args, &CancelToken::new())
+            .map_err(|e| e.to_string())?;
+        Ok(answer)
+    }
+
+    /// The batches waiting in the review, and their bundles.
+    fn waiting(&self) -> Vec<meshgrove_core::bundle::ResolvedBundle> {
+        let batches = self.store.batches(None, None, &["pending"], 100).unwrap();
+        batches
+            .iter()
+            .flat_map(|b| self.store.proposals(b.id).unwrap())
+            .map(|p| serde_json::from_value(p.payload).unwrap())
+            .collect()
+    }
+
+    fn staging_folders(&self) -> usize {
+        Staging::list(&self.dir.path().join("plugins"), "hello-box").len()
+    }
+}
+
+/// A tool hands its work to a job: the AI hears at once that it started; the files arrive in
+/// the review when the job is done, and always wait there.
+#[test]
+fn a_tools_job_runs_in_the_background_and_its_files_wait_in_the_review() {
+    let Some(bytes) = wasm() else { return };
+    let mut d = deferred(&bytes, OneBox::shared(Duration::ZERO));
+    let answer = d.call(AccessClass::Local, json!({"name": "later", "width": 25})).unwrap();
+    assert_eq!((answer["status"].as_str(), answer["arrives"].as_str()), (Some("started"), Some("review")), "{answer}");
+    assert_eq!(answer["result"], json!({"box": "later"}));
+    let job = answer["job"].as_str().unwrap().to_owned();
+    assert!(d.registry.jobs().wait_idle(Duration::from_secs(60)));
+    let finished = d.registry.jobs().take_finished();
+    assert_eq!(finished.len(), 1);
+    assert_eq!((finished[0].id.as_str(), finished[0].plugin_name.as_str()), (job.as_str(), "Hello Box"));
+    assert_eq!(finished[0].outcome, Ok("Box 25 × 30 × 40 mm".to_owned()), "the job's own bundle");
+    let waiting = d.waiting();
+    assert_eq!(waiting.len(), 1);
+    assert!(waiting[0].review, "never accepted by itself, though the user lets the plugin's be");
+    assert_eq!(waiting[0].files[0].rel, "later_25x30x40.stl");
+    assert!(waiting[0].from.join("later_25x30x40.stl").is_file(), "the files the job wrote");
+    assert!(!waiting[0].from.parent().unwrap().join(meshgrove_plugins::deferred::MARKER).exists(), "marker gone");
+    assert!(d.registry.jobs().running().is_empty());
+}
+
+/// The job reads the library as the AI that called the tool: a cloud AI's job does not see a
+/// library only local AI may see. It then proposes nothing and leaves no staging folder.
+#[test]
+fn a_tools_job_reads_as_its_caller() {
+    let Some(bytes) = wasm() else { return };
+    let one_box = OneBox::shared(Duration::ZERO);
+    let mut d = deferred(&bytes, one_box.clone());
+    let args = json!({"name": "around", "around": "Eigene/box.stl"});
+    d.call(AccessClass::Cloud, args.clone()).unwrap();
+    assert!(d.registry.jobs().wait_idle(Duration::from_secs(60)));
+    let failed = d.registry.jobs().take_finished();
+    assert!(failed[0].outcome.as_ref().is_err_and(|e| e.contains("unknown id")), "{failed:?}");
+    assert!(d.waiting().is_empty() && d.staging_folders() == 0);
+    assert_eq!(
+        one_box.asked().into_iter().map(|(_, r, c)| (r, c)).collect::<Vec<_>>(),
+        [(LibraryRead::AiScope, Caller::Ai(AccessClass::Cloud))]
+    );
+    // A local AI's job does: the box takes the model's size.
+    d.call(AccessClass::Local, args).unwrap();
+    assert!(d.registry.jobs().wait_idle(Duration::from_secs(60)));
+    assert_eq!(d.registry.jobs().take_finished()[0].outcome, Ok("Box 14 × 24 × 34 mm".to_owned()));
+    assert_eq!(d.waiting()[0].files[0].rel, "around_14x24x34.stl");
+    assert_eq!(one_box.asked()[0].2, Caller::Ai(AccessClass::Local));
+}
+
+/// A job can be cancelled: nothing is proposed and its staging folder goes. While it runs,
+/// its folder carries the marker that keeps cleaning up away.
+#[test]
+fn a_cancelled_tool_job_leaves_nothing() {
+    let Some(bytes) = wasm() else { return };
+    let mut d = deferred(&bytes, OneBox::shared(Duration::ZERO));
+    let answer = d.call(AccessClass::Local, json!({"name": "slow", "slow": true})).unwrap();
+    let job = answer["job"].as_str().unwrap().to_owned();
+    let until = Instant::now() + Duration::from_secs(30);
+    while d.registry.jobs().running().first().is_none_or(|j| j.fraction == 0.0) {
+        assert!(Instant::now() < until, "the job reports");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let running = d.registry.jobs().running();
+    assert_eq!(
+        (running[0].id.as_str(), running[0].message.as_str(), running[0].tool.as_str()),
+        (job.as_str(), "taking its time", "make_box_later")
+    );
+    let staging = Staging::list(&d.dir.path().join("plugins"), "hello-box");
+    let dir = staging[0].1.parent().unwrap().to_path_buf();
+    assert!(meshgrove_plugins::deferred::running_in(&dir));
+    let swept = meshgrove_plugins::staging::sweep(&d.dir.path().join("plugins"), &|_| false, Duration::ZERO);
+    assert_eq!(swept.staging, 0, "a running job's folder stays");
+    assert!(d.registry.jobs().cancel(&job));
+    assert!(d.registry.jobs().wait_idle(Duration::from_secs(30)));
+    let finished = d.registry.jobs().take_finished();
+    assert_eq!(finished[0].outcome, Err("cancelled".to_owned()));
+    assert!(d.waiting().is_empty() && d.staging_folders() == 0 && !dir.exists());
+    assert!(!d.registry.jobs().cancel(&job), "not running any more");
 }

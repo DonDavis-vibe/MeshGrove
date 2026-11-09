@@ -1,5 +1,6 @@
-//! Background jobs a panel starts (`Effect::StartJobs`): each in a fresh instance of the plugin,
-//! several at once on a pool of threads, with progress, results and cancelling. They have no
+//! Background work of plugins on a pool of threads: the jobs a panel starts
+//! (`Effect::StartJobs`; each in a fresh instance of the plugin, several at once, with progress,
+//! results and cancelling) and the jobs a tool hands over ([`crate::deferred`]). They have no
 //! deadline; the user cancels them.
 
 use std::path::{Path, PathBuf};
@@ -29,25 +30,34 @@ struct Job {
     events: Sender<JobEvent>,
 }
 
+/// Work for a thread of the pool.
+type Task = Box<dyn FnOnce() + Send>;
+
 pub struct JobPool {
-    queue: Sender<Job>,
+    queue: Sender<Task>,
     _workers: Vec<JoinHandle<()>>,
 }
 
 impl JobPool {
     /// A pool of `workers` threads; dropping it lets running jobs finish.
     pub fn new(workers: usize) -> JobPool {
-        let (queue, jobs) = crossbeam_channel::unbounded::<Job>();
+        let (queue, tasks) = crossbeam_channel::unbounded::<Task>();
         let workers = (0..workers.max(1))
             .map(|i| {
-                let jobs = jobs.clone();
+                let tasks = tasks.clone();
                 std::thread::Builder::new()
                     .name(format!("plugin-job-{i}"))
-                    .spawn(move || jobs.iter().for_each(run))
+                    .spawn(move || tasks.iter().for_each(|task| task()))
                     .expect("a thread for plugin jobs")
             })
             .collect();
         JobPool { queue, _workers: workers }
+    }
+
+    /// Runs `task` on a thread of the pool, after those queued before it. `false` when the pool
+    /// is gone (then the task is dropped unrun).
+    pub fn spawn(&self, task: impl FnOnce() + Send + 'static) -> bool {
+        self.queue.send(Box::new(task)).is_ok()
     }
 
     /// As many threads as the computer has cores, at most 8.
@@ -70,6 +80,7 @@ impl JobPool {
         for spec in jobs {
             let cancel = CancelToken::new();
             tokens.push((spec.id.clone(), cancel.clone()));
+            let (id, gone) = (spec.id.clone(), events.clone());
             let job = Job {
                 plugin: plugin.clone(),
                 spec,
@@ -78,9 +89,8 @@ impl JobPool {
                 cancel,
                 events: events.clone(),
             };
-            if let Err(e) = self.queue.send(job) {
-                let job = e.into_inner();
-                let _ = job.events.send(JobEvent::Finished { job: job.spec.id, result: Err(Error::Cancelled) });
+            if !self.spawn(move || run(job)) {
+                let _ = gone.send(JobEvent::Finished { job: id, result: Err(Error::Cancelled) });
             }
         }
         tokens

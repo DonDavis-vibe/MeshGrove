@@ -11,12 +11,12 @@
 //! checked by [`meshgrove_core::bundle::resolve`] and applied as one change that can be undone.
 
 mod bindings;
+pub mod deferred;
 mod derive;
 pub mod discovery;
 pub mod engine;
 pub mod folder;
 mod guest_files;
-#[cfg(feature = "panels")]
 pub mod jobs;
 pub mod library;
 #[cfg(feature = "panels")]

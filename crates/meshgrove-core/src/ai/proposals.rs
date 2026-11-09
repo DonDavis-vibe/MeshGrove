@@ -285,6 +285,11 @@ impl ProposalStore {
         Self::init(Connection::open(path)?)
     }
 
+    /// The file the store is in; `None` for one in memory.
+    pub fn path(&self) -> Option<PathBuf> {
+        self.conn.path().filter(|p| !p.is_empty()).map(PathBuf::from)
+    }
+
     pub fn open_in_memory() -> ToolResult<ProposalStore> {
         Self::init(Connection::open_in_memory()?)
     }
@@ -1080,6 +1085,7 @@ pub fn propose_bundle(
     let (_, uid) = store.insert_batch(&batch, &[proposal])?;
     let auto = config.ai.auto_accept_since.is_some()
         && origin.source != "chat"
+        && !bundle.review
         && config.plugin(&bundle.plugin).is_some_and(|p| p.grants.auto_accept);
     let message = if auto { ACCEPTED } else { WAITING };
     Ok(Receipt {
