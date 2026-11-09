@@ -11,6 +11,7 @@
 //! checked by [`meshgrove_core::bundle::resolve`] and applied as one change that can be undone.
 
 mod bindings;
+mod derive;
 pub mod discovery;
 pub mod engine;
 mod guest_files;

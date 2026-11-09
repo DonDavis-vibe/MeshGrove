@@ -13,6 +13,7 @@ use wasmtime::Store;
 use wasmtime::component::{HasSelf, Linker};
 
 use crate::bindings::{MeshgrovePlugin, MeshgrovePluginPre, PluginError};
+use crate::guest_files::GuestDirs;
 use crate::library::{Caller, LibraryAccess, Opened, Reading};
 use crate::staging::{Staging, new_uid};
 use crate::state::{self, CancelToken, Folders, Progress, Setup, State};
@@ -344,11 +345,21 @@ impl Plugin {
         })
     }
 
-    /// A bundle with the staging folder its files are in, ready to be resolved: the library
-    /// files it puts its own beside are found now, as far as `reading` reaches. When that
-    /// fails the staging folder goes.
-    pub(crate) fn stage(&self, bundle: Bundle, staging: Staging, reading: &Reading) -> Result<StagedBundle, Error> {
+    /// A bundle with the staging folder its files are in, ready to be resolved. The files it
+    /// asks the host to make are made now (a 3MF with parts swapped), and the library files it
+    /// puts its own beside are found, both as far as `reading` reaches; `tmp` is the `/tmp`
+    /// of whoever hands it over, if that is still there. When any of it fails the staging
+    /// folder goes.
+    pub(crate) fn stage(
+        &self,
+        bundle: Bundle,
+        staging: Staging,
+        reading: &Reading,
+        tmp: Option<&Path>,
+    ) -> Result<StagedBundle, Error> {
         let sources = (|| {
+            let dirs = GuestDirs { data: self.data_dir(), tmp: tmp.map(Path::to_path_buf) };
+            crate::derive::derive_files(&bundle, staging.out(), reading, &dirs)?;
             let mut sources = Vec::new();
             for reference in bundle.sources() {
                 // Beside a part is beside the file it is in.
@@ -404,7 +415,8 @@ impl Plugin {
             Ok((result, images, Some(bundle))) => {
                 // What a tool puts its files beside, the AI that called it must be able to read.
                 let reading = self.reading(Caller::Ai(class), Opened::default());
-                Ok(ToolOutcome { result, images, bundle: Some(self.stage(bundle, staging, &reading)?) })
+                // Its own /tmp went with its instance.
+                Ok(ToolOutcome { result, images, bundle: Some(self.stage(bundle, staging, &reading, None)?) })
             }
             Ok((result, images, None)) => {
                 let _ = staging.remove();

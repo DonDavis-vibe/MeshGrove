@@ -54,6 +54,35 @@ pub struct BundleFile {
     /// ([`Bundle::next_to`]): one bundle for several sources. From API 0.2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_to: Option<String>,
+    /// The file is not written by the plugin: Meshgrove makes it, as a copy of a 3MF in which
+    /// some objects have a new mesh. From API 0.2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derive_3mf: Option<Derive3mf>,
+}
+
+/// A 3MF to copy to [`BundleFile::path`] with the meshes of some of its parts swapped. All else
+/// stays as the slicer saved it: the other objects, where each one stands, the plates, the
+/// settings and profiles. What the slicer kept for each triangle of a swapped object (painted
+/// colours, supports, seams) goes with its old triangles.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Derive3mf {
+    /// The 3MF: a library file's id or a path below `/tmp` or `/data`, as `library.describe`
+    /// takes it.
+    pub source: String,
+    pub replace: Vec<PartMesh>,
+}
+
+/// A new mesh for one part of a 3MF.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PartMesh {
+    /// The part's `token`, as `library.describe` of the source lists it.
+    pub part: String,
+    /// The mesh the plugin wrote below `/out` ("parts/lid.stl"; STL, 3MF, OBJ or PLY): in
+    /// millimetres and in the part's own coordinates, as `library.triangles` of the token gave
+    /// it. The file is used up: it does not go into the library.
+    pub mesh: String,
 }
 
 /// See [`Bundle::job`].
@@ -183,5 +212,20 @@ mod tests {
         let job: Bundle =
             serde_json::from_str(r#"{"title": "T", "job": {"kind": "export", "params": {"n": 1}}}"#).unwrap();
         assert_eq!(job.job.unwrap().kind, "export");
+    }
+
+    #[test]
+    fn a_file_can_be_a_3mf_with_parts_swapped() {
+        let json = serde_json::json!({"title": "Lid with grooves", "next_to": "Eigene/dose.3mf", "files": [{
+            "path": "dose – grooves.3mf",
+            "derive_3mf": {"source": "Eigene/dose.3mf",
+                "replace": [{"part": "Eigene/dose.3mf\u{0}part=1", "mesh": "parts/lid.stl"}]}
+        }]});
+        let bundle: Bundle = serde_json::from_value(json.clone()).unwrap();
+        let derive = bundle.files[0].derive_3mf.as_ref().unwrap();
+        assert_eq!((derive.source.as_str(), derive.replace[0].mesh.as_str()), ("Eigene/dose.3mf", "parts/lid.stl"));
+        assert_eq!(serde_json::to_value(&bundle).unwrap(), json);
+        // The meshes are no files of the bundle.
+        assert_eq!(bundle.paths(), ["dose – grooves.3mf"]);
     }
 }

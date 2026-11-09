@@ -622,6 +622,123 @@ fn a_box_made_for_a_model_lands_beside_it() {
     assert_eq!(resolved.files[0].beside.as_deref(), Some("topf.stl"));
 }
 
+/// A bundle file that is a copy of a 3MF with one part swapped: the host makes it when the
+/// bundle is handed over, from the mesh the plugin wrote, which does not go into the library.
+#[test]
+fn a_3mf_is_copied_with_the_mesh_of_one_part_swapped() {
+    use meshgrove_core::loaders::threemf::parse_parts;
+    use meshgrove_plugin_api::{Bundle, BundleFile, Derive3mf, PartMesh};
+    use meshgrove_plugins::library::part_token;
+
+    let Some(bytes) = wasm() else { return };
+    let (base, dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let root = dir.path().join("lib");
+    std::fs::create_dir_all(root.join("Dosen")).unwrap();
+    std::fs::write(root.join("Dosen").join("dose.3mf"), support::dose_3mf()).unwrap();
+    std::fs::write(root.join("Dosen").join("zweite.3mf"), support::dose_3mf()).unwrap();
+    std::fs::write(root.join("box.stl"), support::stl([1.0, 2.0, 3.0])).unwrap();
+    let library: Arc<dyn LibraryAccess> = Arc::new(Shelf { root: root.clone() });
+    let plugin = Arc::new(load(&bytes, Settings { library: Some(library), ..granted(base.path()) }));
+    let picked = plugin.data_dir().join("picked");
+    std::fs::create_dir_all(&picked).unwrap();
+    std::fs::write(picked.join("dose.3mf"), support::dose_3mf()).unwrap();
+    let panel = plugin.open_panel("box", None).unwrap();
+    panel.opened().add(&["lib/Dosen/dose.3mf".into(), "lib/box.stl".into()]);
+
+    // A lid of 5 mm instead of 2, as the plugin would write it below /out.
+    let write = |rel: &[&str]| {
+        let path = rel.iter().fold(panel.out().to_path_buf(), |p, part| p.join(part));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, support::stl([40.0, 30.0, 5.0])).unwrap();
+    };
+    let swapped = |source: &str, part: String, mesh: &str| Bundle {
+        title: "Deckel mit Rillen".into(),
+        files: vec![BundleFile {
+            path: "dose – Rillen.3mf".into(),
+            tags: vec!["Texturiert".into()],
+            derive_3mf: Some(Derive3mf { source: source.into(), replace: vec![PartMesh { part, mesh: mesh.into() }] }),
+            ..BundleFile::default()
+        }],
+        ..Bundle::default()
+    };
+    let lid_of = |source: &str| part_token(source, 1);
+    let files_in = |out: &Path| -> Vec<String> {
+        let mut names: Vec<String> =
+            out.read_dir().unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    };
+
+    // From the library, beside its source.
+    let id = "lib/Dosen/dose.3mf";
+    write(&["parts", "deckel.stl"]);
+    let bundle = Bundle { next_to: Some(id.into()), ..swapped(id, lid_of(id), "parts/deckel.stl") };
+    let staged = panel.stage(bundle).unwrap();
+    assert_eq!(files_in(staged.staging.out()), ["dose – Rillen.3mf"], "the mesh is used up, its folder gone");
+    let derived = std::fs::read(staged.staging.out().join("dose – Rillen.3mf")).unwrap();
+    let (before, after) = (parse_parts(&support::dose_3mf()).unwrap(), parse_parts(&derived).unwrap());
+    assert_eq!(after.len(), 2);
+    assert_eq!(after[0].mesh.positions, before[0].mesh.positions, "the box is as it was");
+    assert_eq!(after[0].name.as_deref(), Some("Dose"));
+    assert_eq!(after[1].mesh.bounds().unwrap().size().to_array(), [40.0, 30.0, 5.0], "the lid is the new one");
+    assert_eq!((after[1].name.as_deref(), after[1].instances), (Some("Deckel"), 2), "placed twice as before");
+    assert_eq!(after[1].transform, before[1].transform);
+    let resolved = staged.resolve_for(&meshgrove_core::config::Config::default()).unwrap();
+    assert_eq!(resolved.path_of("dose – Rillen.3mf"), root.join("Dosen").join("dose – Rillen.3mf"));
+    assert_eq!((resolved.files.len(), resolved.files[0].tags.as_slice()), (1, &["Texturiert".to_owned()][..]));
+
+    // From the plugin's own folder (a file the user picked), into a folder of the library.
+    let own = "/data/picked/dose.3mf";
+    write(&["deckel.stl"]);
+    let bundle = Bundle { folder: Some("Texturiert".into()), ..swapped(own, lid_of(own), "deckel.stl") };
+    let staged = panel.stage(bundle).unwrap();
+    assert_eq!(files_in(staged.staging.out()), ["dose – Rillen.3mf"]);
+    let resolved = staged.resolve(&root, &root.join("Import")).unwrap();
+    assert_eq!(resolved.path_of("dose – Rillen.3mf"), root.join("Texturiert").join("dose – Rillen.3mf"));
+    assert_eq!(Staging::list(base.path(), "hello-box").len(), 2);
+
+    // What does not fit is refused, and leaves nothing behind.
+    let refused = |bundle: Bundle| {
+        write(&["parts", "deckel.stl"]);
+        let err = panel.stage(bundle).unwrap_err();
+        assert!(panel.out().read_dir().unwrap().next().is_none(), "the panel's /out is empty again");
+        assert_eq!(Staging::list(base.path(), "hello-box").len(), 2, "no staging folder is left of it: {err}");
+        err
+    };
+    let mesh = "parts/deckel.stl";
+    let err = refused(swapped(id, lid_of("lib/Dosen/zweite.3mf"), mesh));
+    assert!(matches!(&err, Error::Invalid(m) if m.contains("not one of dose.3mf")), "a part of another file: {err}");
+    let err = refused(swapped(id, id.into(), mesh));
+    assert!(matches!(&err, Error::Invalid(m) if m.contains("not one of dose.3mf")), "a file is no part: {err}");
+    let err = refused(swapped(id, part_token(id, 7), mesh));
+    assert!(matches!(&err, Error::Failed(m) if m.contains("has 2 parts")), "{err}");
+    let err = refused(swapped("lib/Dosen/zweite.3mf", lid_of("lib/Dosen/zweite.3mf"), mesh));
+    assert!(matches!(&err, Error::Denied(m) if m.contains("has not allowed")), "not opened with the panel: {err}");
+    let err = refused(swapped("lib/box.stl", lid_of("lib/box.stl"), mesh));
+    assert!(matches!(&err, Error::Invalid(m) if m.contains("is not a 3MF")), "{err}");
+    let err = refused(swapped(&lid_of(id), lid_of(id), mesh));
+    assert!(matches!(&err, Error::Invalid(m) if m.contains("a file, not a part")), "{err}");
+    for outside in ["../deckel.stl", "/out/parts/deckel.stl", "parts/../../x.stl", "parts/missing.stl"] {
+        let err = refused(swapped(id, lid_of(id), outside));
+        assert!(
+            matches!(&err, Error::Invalid(m) if m.contains("plain path") || m.contains("not a file")),
+            "{outside}: {err}"
+        );
+    }
+    let mut taken = swapped(id, lid_of(id), mesh);
+    taken.files[0].path = "parts/deckel.stl".into();
+    let err = refused(taken);
+    assert!(matches!(&err, Error::Invalid(m) if m.contains("is there already")), "{err}");
+    #[cfg(unix)]
+    {
+        let secret = base.path().join("secret.stl");
+        std::fs::write(&secret, support::stl([1.0, 1.0, 1.0])).unwrap();
+        std::os::unix::fs::symlink(&secret, panel.out().join("link.stl")).unwrap();
+        let err = refused(swapped(id, lid_of(id), "link.stl"));
+        assert!(matches!(&err, Error::Invalid(m) if m.contains("leads through a link")), "{err}");
+    }
+}
+
 /// With the grant, a file outside what the grant shows still reads when the user opened it.
 #[test]
 fn an_opened_file_reads_past_what_ai_may_see() {

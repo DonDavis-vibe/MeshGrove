@@ -24,6 +24,53 @@ pub(crate) fn is_guest_path(reference: &str) -> bool {
     reference.starts_with('/')
 }
 
+/// The parts of a `/`-separated path below a folder, if it is a plain one: no `..`, no empty
+/// parts, nothing a system reads as more than a name.
+pub(crate) fn plain_parts(path: &str) -> Option<Vec<&str>> {
+    let parts: Vec<&str> = path.split('/').collect();
+    let plain = |p: &&str| !p.is_empty() && *p != "." && *p != ".." && !p.contains(['\\', '\0', ':']);
+    parts.iter().all(plain).then_some(parts)
+}
+
+/// Opens the file `parts` lead to below `base`: a plain file reached through plain folders.
+/// `shown` is the path as the plugin wrote it, for what it is told.
+pub(crate) fn open_plain(base: &Path, parts: &[&str], shown: &str) -> Result<std::fs::File, String> {
+    let missing = || format!("{shown} is not a file");
+    let mut path = base.to_path_buf();
+    let mut meta = None;
+    for part in parts {
+        path.push(part);
+        let found = path.symlink_metadata().map_err(|_| missing())?;
+        if found.file_type().is_symlink() {
+            return Err(format!("{shown} leads through a link"));
+        }
+        meta = Some(found);
+    }
+    let meta = meta.filter(std::fs::Metadata::is_file).ok_or_else(missing)?;
+    let file = std::fs::File::open(&path).map_err(|e| format!("{shown}: {e}"))?;
+    // Another instance of the plugin may have put a link there since the look above: what
+    // is open now must be the very file that was looked at.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let opened = file.metadata().map_err(|e| format!("{shown}: {e}"))?;
+        if (opened.dev(), opened.ino()) != (meta.dev(), meta.ino()) {
+            return Err(format!("{shown} changed while it was read"));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = meta;
+    Ok(file)
+}
+
+/// The bytes of the file `parts` lead to below `base` ([`open_plain`]).
+pub(crate) fn read_plain(base: &Path, parts: &[&str], shown: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    open_plain(base, parts, shown)?.read_to_end(&mut bytes).map_err(|e| format!("{shown}: {e}"))?;
+    Ok(bytes)
+}
+
 impl GuestDirs {
     /// The folder on this computer and the parts of the path below it.
     fn split<'a>(&self, guest: &'a str) -> Result<(&Path, Vec<&'a str>), String> {
@@ -34,51 +81,15 @@ impl GuestDirs {
                 None => return Err(format!("{guest:?} is neither a library id nor a file below /tmp or /data")),
             },
         };
-        let parts: Vec<&str> = rest.split('/').collect();
-        let plain = |p: &&str| !p.is_empty() && *p != "." && *p != ".." && !p.contains(['\\', '\0', ':']);
-        if !parts.iter().all(plain) {
-            return Err(format!("{guest:?} is not a plain path below /tmp or /data (no '..', no empty parts)"));
-        }
+        let parts = plain_parts(rest)
+            .ok_or_else(|| format!("{guest:?} is not a plain path below /tmp or /data (no '..', no empty parts)"))?;
         Ok((base, parts))
-    }
-
-    /// Opens the file behind `guest`, a plain file reached through plain folders.
-    fn open(&self, guest: &str) -> Result<std::fs::File, String> {
-        let (base, parts) = self.split(guest)?;
-        let missing = || format!("{guest} is not a file");
-        let mut path = base.to_path_buf();
-        let mut meta = None;
-        for part in parts {
-            path.push(part);
-            let found = path.symlink_metadata().map_err(|_| missing())?;
-            if found.file_type().is_symlink() {
-                return Err(format!("{guest} leads through a link"));
-            }
-            meta = Some(found);
-        }
-        let meta = meta.filter(std::fs::Metadata::is_file).ok_or_else(missing)?;
-        let file = std::fs::File::open(&path).map_err(|e| format!("{guest}: {e}"))?;
-        // Another instance of the plugin may have put a link there since the look above: what
-        // is open now must be the very file that was looked at.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            let opened = file.metadata().map_err(|e| format!("{guest}: {e}"))?;
-            if (opened.dev(), opened.ino()) != (meta.dev(), meta.ino()) {
-                return Err(format!("{guest} changed while it was read"));
-            }
-        }
-        #[cfg(not(unix))]
-        let _ = meta;
-        Ok(file)
     }
 
     /// The bytes of the file behind `guest`.
     pub fn read(&self, guest: &str) -> Result<Vec<u8>, String> {
-        use std::io::Read;
-        let mut bytes = Vec::new();
-        self.open(guest)?.read_to_end(&mut bytes).map_err(|e| format!("{guest}: {e}"))?;
-        Ok(bytes)
+        let (base, parts) = self.split(guest)?;
+        read_plain(base, &parts, guest)
     }
 
     /// The model in the file behind `guest`, in millimetres. Files it refers to (glTF buffers,

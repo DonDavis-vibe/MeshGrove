@@ -155,7 +155,8 @@ impl PanelHandle {
         if !self.plugin.may(meshgrove_plugin_api::Permission::Bundles) {
             return Ok(crate::StagedBundle::new(self.plugin.id(), bundle, staging));
         }
-        self.plugin.stage(bundle, staging, &self.plugin.reading(Caller::User, self.opened.clone()))
+        let reading = self.plugin.reading(Caller::User, self.opened.clone());
+        self.plugin.stage(bundle, staging, &reading, Some(&self.tmp))
     }
 
     fn ask<T>(&self, request: impl FnOnce(Reply<T>) -> Request) -> Result<T, Error> {

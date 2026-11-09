@@ -17,7 +17,7 @@ pub mod manifest;
 pub mod mesh;
 pub mod ui;
 
-pub use bundle::{Bundle, BundleFile, BundleItem, BundleJob, BundleList, ListKind};
+pub use bundle::{Bundle, BundleFile, BundleItem, BundleJob, BundleList, Derive3mf, ListKind, PartMesh};
 /// Exports a plugin: `meshgrove_plugin_api::export_plugin!(MyPlugin);` ([`guest`]).
 #[cfg(feature = "guest")]
 pub use guest::export_plugin;
