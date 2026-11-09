@@ -35,6 +35,7 @@ What is marked **from 0.9.0** needs Meshgrove 0.9.0 (plugin API 0.2) or newer; s
 - [Bundles: files for the library](#bundles-files-for-the-library)
 - [Panels](#panels)
 - [Widgets and when they send events](#widgets-and-when-they-send-events)
+- [Painting on a 3D view](#painting-on-a-3d-view)
 - [Effects](#effects)
 - [Jobs](#jobs)
 - [Opening files](#opening-files)
@@ -438,7 +439,10 @@ finished.
 While a panel works, its tab shows ⏳. The window never waits for a plugin.
 
 - **3D views:** `mesh(key)` is asked when a `MeshView`'s `revision` changes. Bump the revision
-  whenever the model changes; the camera stays where the user put it.
+  whenever the model changes; the camera stays where the user put it. Meshgrove prepares and
+  uploads the triangles on the panel's own thread, so even a preview of millions of triangles
+  does not hold up the window (from 0.9.0). From 0.9.0 a 3D view can also be painted on and
+  coloured, see [Painting on a 3D view](#painting-on-a-3d-view).
 - **State:** `snapshot()` returns the panel's state as a string. When the tab is closed or
   Meshgrove quits, Meshgrove keeps it and passes it to `new(id, state)` next time. Panels open
   in the last session open again on start.
@@ -461,7 +465,7 @@ plugin's values count: it may correct or refuse them.
 | `checkbox`, `select`, `radio`, `color` (`#rrggbb[aa]`) | `Changed` at once |
 | `form` (rows of label + node; optional `submit` button) | the rows' own events; `Submit {values}` with every input by id |
 | `table` (columns: title, width, numeric; rows: id + cells; selected; max_height) | `TableSelect {row}`; clicking the selected row again sends `row: null`. Columns without a `width` can be dragged wider by the user; a cell cut short shows its whole text on hover |
-| `mesh_view` (key, revision, height, `bed: [x, y]`, `frame: [min, max]`) | — the bed is drawn under the model, centred; the frame is the space the model is meant to fit (a drawer, a shelf), drawn in blue round it and kept in the picture; the view's *Frame* button hides it (from 0.9.0; older versions ignore it) |
+| `mesh_view` (key, revision, height, `bed: [x, y]`, `frame: [min, max]`, `paint`, `overlay`) | — the bed is drawn under the model, centred; the frame is the space the model is meant to fit (a drawer, a shelf), drawn in blue round it and kept in the picture; the view's *Frame* button hides it (from 0.9.0; older versions ignore it). With `paint` (from 0.9.0): `MeshStroke` and `MeshPick`, see [Painting on a 3D view](#painting-on-a-3d-view) |
 | `grid_editor` | `Grid {change}`, see below |
 | `canvas` | `Canvas {change}` when `interactive`, see below |
 | anything newer | shown as a placeholder |
@@ -496,6 +500,61 @@ plugin's values count: it may correct or refuse them.
   - `Click {x, y, shape}`, where `shape` is the topmost rect with an `id` under the pointer.
   - `Drag {from, to}` in canvas units, at most ~30 per second plus a last one on release;
     `from` is where the button went down.
+
+## Painting on a 3D view
+
+From 0.9.0 a `mesh_view` can let the user paint on the model or pick points on it (`paint`),
+and show colours over it (`overlay`). Meshgrove 0.8 ignores both and shows the model as usual.
+
+```json
+{"type": "mesh_view", "id": "preview", "key": "model", "revision": 4,
+ "paint": {"tool": "brush", "radius_mm": 3.0, "tint": "#ff8000c0"},
+ "overlay": {"key": "mask", "revision": 9, "palette": ["#00000000", "#ff8000", "#3ba3ff80"]}}
+```
+
+**`paint`:** `tool`, `radius_mm` (default 5), `tint` and `erase_tint` (`#rrggbb[aa]`).
+
+| `tool` | The left button | Sends |
+|---|---|---|
+| `brush` (default) | paints dabs: one where the pointer has moved a quarter of the radius on the surface; a circle of the radius shows under the pointer | `MeshStroke`, one hit per dab (its centre); take the triangles within `radius_mm` yourself |
+| `triangles` | paints the triangles it passes, each once per stroke | `MeshStroke`, one hit per triangle |
+| `drag` | follows the pointer on the surface, nothing tinted | `MeshStroke`, a hit every few pixels |
+| `click` | a click (a press that does not travel) | `MeshPick {hit, shift}`; `hit` is null beside the model |
+
+The rules, so a stroke never does what the user did not mean:
+
+- While `paint` is set, the **right** button turns the model, the **middle** one moves it, the
+  wheel zooms. Measuring is off.
+- What a press starts it finishes: another button, Shift or leaving the view change nothing
+  until the button is let go. **Shift held at the press erases** (`erase: true`) for the whole
+  stroke. A press outside the view starts nothing. A double click does not reset the camera.
+- What is painted is tinted at once with `tint` (or `erase_tint`; default: a light orange and
+  the model's grey) until your next overlay arrives. The click and drag tools tint nothing.
+
+**Events:**
+
+```json
+{"type": "mesh_stroke", "id": "preview", "stroke": 3, "phase": "move", "erase": false,
+ "hits": [{"triangle": 1234, "point": [12.5, 3.0, 40.1], "normal": [0.0, -1.0, 0.0]}]}
+{"type": "mesh_pick", "id": "preview", "hit": {"triangle": 7, "point": [0, 0, 20], "normal": [0, 0, 1]}, "shift": true}
+```
+
+- `phase` is `start` (at the press), `move`, then `end` (let go); each brings the hits added
+  since, the end too. `stroke` numbers the strokes of the view.
+- A stroke goes out at most every 50 ms, and **nothing goes out while the panel is busy** with
+  an event: the hits wait and come together. So keep `event` quick; a stroke still comes whole.
+- `triangle` is the index in the triangles you gave (`indices[3 * triangle ..]`), `point` and
+  `normal` are in your coordinates; the normal faces the camera.
+
+**`overlay`:** when its `revision` changes (and whenever the mesh changes), Meshgrove asks
+`mesh(overlay.key)`. Answer with `positions` empty and `indices` holding **one class per
+triangle** of the view's mesh, in its order. Class `k` is drawn in `palette[k]` over the
+model's grey: a transparent entry (or none for that class) shows the grey, a half transparent
+one is mixed with it. An overlay whose length is not the mesh's triangle count (made for a
+mesh that changed since) is left out, and the panel goes on.
+
+hello-box shows the click tool and an overlay: with "Tint faces" ticked, a click tints the face
+of the box it hits.
 
 ## Effects
 
