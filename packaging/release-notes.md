@@ -7,6 +7,12 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 
 ## Highlights
 
+**A plugin's preview shows the space it plans for** (new in 0.9.0)
+
+- A plugin can hand its 3D preview the space the model is meant to fit. [Bingrove 0.5](https://github.com/DonDavis-vibe/Bingrove/releases/tag/v0.5.0) shows the drawer, the shelf or the wall as a blue box round the plate and the bins, and the sides they stick out of turn red: a grid planned larger than its shelf shows before anything is printed.
+
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-plugin-frame.png" alt="Bingrove's panel for a shelf: the grid is 16 mm wider and 12 mm deeper than the board, two warnings say so, and the 3D preview outlines the board in red round the plate and the bins" width="80%">
+
 **Checked on Windows** (new in 0.8.3) – a day in a Windows 11 VM, and what Linux never showed:
 
 - Files Windows marks hidden (`desktop.ini`, `Thumbs.db`) no longer show up as tiles; the two names are left out on every system, NTFS drives on Linux included.
