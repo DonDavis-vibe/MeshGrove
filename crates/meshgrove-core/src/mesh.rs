@@ -136,32 +136,86 @@ impl Mesh {
 /// Distance along the ray (`dir` normalised) to the nearest triangle of a triangle soup
 /// (`[a, b, c, a, b, c, …]`), or `None` if it misses (Möller–Trumbore, both faces).
 pub fn ray_hit(soup: &[[f32; 3]], origin: Vec3, dir: Vec3) -> Option<f32> {
-    let mut best = f32::INFINITY;
-    for tri in soup.as_chunks::<3>().0 {
-        let a = Vec3::from(tri[0]);
-        let (e1, e2) = (Vec3::from(tri[1]) - a, Vec3::from(tri[2]) - a);
-        let p = dir.cross(e2);
-        let det = e1.dot(p);
-        if det == 0.0 {
-            continue;
-        }
-        let inv = 1.0 / det;
-        let s = origin - a;
-        let u = s.dot(p) * inv;
-        if !(0.0..=1.0).contains(&u) {
-            continue;
-        }
-        let q = s.cross(e1);
-        let v = dir.dot(q) * inv;
-        if v < 0.0 || u + v > 1.0 {
-            continue;
-        }
-        let t = e2.dot(q) * inv;
-        if t > 0.0 && t < best {
-            best = t;
+    ray_hit_triangle(soup, origin, dir).map(|(t, _)| t)
+}
+
+/// [`ray_hit`] with the index of the triangle hit. Every triangle is tried: for a few picks on
+/// a small mesh; [`crate::bvh::Bvh`] is the way for many.
+pub fn ray_hit_triangle(soup: &[[f32; 3]], origin: Vec3, dir: Vec3) -> Option<(f32, u32)> {
+    let mut best: Option<(f32, u32)> = None;
+    for (i, tri) in soup.as_chunks::<3>().0.iter().enumerate() {
+        if let Some(t) = ray_triangle(tri, origin, dir)
+            && best.is_none_or(|(b, _)| t < b)
+        {
+            best = Some((t, i as u32));
         }
     }
-    best.is_finite().then_some(best)
+    best
+}
+
+/// Where along the ray (`dir` normalised) it meets triangle `tri`, from either side; `None`
+/// behind the origin or beside the triangle (Möller–Trumbore).
+pub fn ray_triangle(tri: &[[f32; 3]; 3], origin: Vec3, dir: Vec3) -> Option<f32> {
+    let a = Vec3::from(tri[0]);
+    let (e1, e2) = (Vec3::from(tri[1]) - a, Vec3::from(tri[2]) - a);
+    let p = dir.cross(e2);
+    let det = e1.dot(p);
+    if det == 0.0 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    let s = origin - a;
+    let u = s.dot(p) * inv;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = s.cross(e1);
+    let v = dir.dot(q) * inv;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let t = e2.dot(q) * inv;
+    (t > 0.0).then_some(t)
+}
+
+/// The unit normal of a triangle (by its winding); zero for a degenerate one.
+pub fn triangle_normal(tri: &[[f32; 3]; 3]) -> Vec3 {
+    let a = Vec3::from(tri[0]);
+    (Vec3::from(tri[1]) - a).cross(Vec3::from(tri[2]) - a).normalize_or_zero()
+}
+
+/// The point of triangle `tri` nearest to `p` (Ericson, Real-Time Collision Detection 5.1.5).
+pub fn closest_on_triangle(tri: &[[f32; 3]; 3], p: Vec3) -> Vec3 {
+    let (a, b, c) = (Vec3::from(tri[0]), Vec3::from(tri[1]), Vec3::from(tri[2]));
+    let (ab, ac, ap) = (b - a, c - a, p - a);
+    let (d1, d2) = (ab.dot(ap), ac.dot(ap));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return a;
+    }
+    let bp = p - b;
+    let (d3, d4) = (ab.dot(bp), ac.dot(bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return b;
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        return a + ab * (d1 / (d1 - d3));
+    }
+    let cp = p - c;
+    let (d5, d6) = (ab.dot(cp), ac.dot(cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return c;
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        return a + ac * (d2 / (d2 - d6));
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+    }
+    let denom = 1.0 / (va + vb + vc);
+    a + ab * (vb * denom) + ac * (vc * denom)
 }
 
 #[cfg(test)]
