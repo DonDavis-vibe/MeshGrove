@@ -370,7 +370,7 @@ impl ModelViewer {
     pub fn ui(&mut self, ui: &mut Ui, rs: &egui_wgpu::RenderState, renderer: &Renderer) -> Option<String> {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         if self.painting.as_ref().is_some_and(|p| !p.leaving) {
-            self.paint_input(ui, rect, &response, rs);
+            self.paint_input(ui, rect, &response, Some(&rs.queue));
         } else {
             self.handle_input(ui, rect, &response);
         }
@@ -483,23 +483,10 @@ impl ModelViewer {
     }
 
     /// The input while painting: the gesture each press starts ([`Gestures`]), and what it does.
-    fn paint_input(&mut self, ui: &Ui, rect: Rect, response: &egui::Response, rs: &egui_wgpu::RenderState) {
-        let buttons = [
-            (PointerButton::Primary, paint::Button::Primary),
-            (PointerButton::Secondary, paint::Button::Secondary),
-            (PointerButton::Middle, paint::Button::Middle),
-        ];
-        let inside = response.hovered();
-        let frame = ui.input(|i| paint::Frame {
-            pos: i.pointer.latest_pos(),
-            inside,
-            shift: i.modifiers.shift,
-            pressed: buttons.iter().filter(|(b, _)| i.pointer.button_pressed(*b)).map(|(_, p)| *p).collect(),
-            released: buttons.iter().filter(|(b, _)| i.pointer.button_released(*b)).map(|(_, p)| *p).collect(),
-            delta: i.pointer.delta(),
-            scroll: i.smooth_scroll_delta.y,
-            double_clicked: response.double_clicked(),
-        });
+    /// `queue` tints what is painted on the GPU (none: nothing is tinted).
+    fn paint_input(&mut self, ui: &Ui, rect: Rect, response: &egui::Response, queue: Option<&wgpu::Queue>) {
+        let frame = paint_frame(ui, response);
+        let inside = frame.inside;
         let Some(p) = &mut self.painting else { return };
         let tool = p.mode.tool;
         let actions = p.gestures.frame(&frame, tool);
@@ -518,7 +505,7 @@ impl ModelViewer {
                         p.stroke = Some(OpenStroke { erase, last_dab: None, last_screen: None, seen });
                     }
                 }
-                Action::Sample(at) => self.sample(rect, at, &rs.queue),
+                Action::Sample(at) => self.sample(rect, at, queue),
                 Action::StrokeEnd => {
                     if let Some(p) = &mut self.painting {
                         p.outbox.end();
@@ -545,7 +532,7 @@ impl ModelViewer {
 
     /// Paints where the pointer is, by the tool: a dab of the brush where it has moved far
     /// enough, a triangle not passed yet, a point of the drag. Tints what it paints.
-    fn sample(&mut self, rect: Rect, at: Pos2, queue: &wgpu::Queue) {
+    fn sample(&mut self, rect: Rect, at: Pos2, queue: Option<&wgpu::Queue>) {
         let hit = self.hit_at(rect, at);
         let (Some(p), Some(hit)) = (&mut self.painting, hit) else { return };
         let Some(stroke) = &mut p.stroke else { return };
@@ -575,7 +562,7 @@ impl ModelViewer {
         let erase = stroke.erase;
         p.outbox.add(hit);
         let tint = if erase { mode.erase_tint } else { mode.tint };
-        let (Some(color), Some(mesh)) = (tint, &self.mesh) else { return };
+        let (Some(color), Some(mesh), Some(queue)) = (tint, &self.mesh, queue) else { return };
         let triangles = match (mode.tool, &self.picking, &self.source) {
             (Tool::Brush, Some(tree), Some(MeshSource::Memory { soup, .. })) => {
                 tree.sphere(soup, hit.point, mode.radius_mm.max(0.0))
@@ -619,12 +606,12 @@ impl ModelViewer {
                 .map(|n| pos2(rect.center().x + n.x * rect.width() * 0.5, rect.center().y - n.y * rect.height() * 0.5))
         };
         let painter = ui.painter_at(rect);
-        let color =
-            if p.stroke.as_ref().is_some_and(|s| s.erase) || (p.stroke.is_none() && ui.input(|i| i.modifiers.shift)) {
-                Color32::from_rgb(0x3B, 0xA3, 0xFF)
-            } else {
-                Color32::from_rgb(255, 196, 0)
-            };
+        let shift = ui.input(|i| i.modifiers.shift);
+        let color = if p.stroke.as_ref().is_some_and(|s| s.erase) || (p.stroke.is_none() && shift) {
+            Color32::from_rgb(0x3B, 0xA3, 0xFF)
+        } else {
+            Color32::from_rgb(255, 196, 0)
+        };
         if p.mode.tool != Tool::Brush {
             if let Some(at) = to_screen(hit.point) {
                 painter.circle(at, 3.0, color, Stroke::new(1.0, Color32::BLACK));
@@ -925,6 +912,30 @@ impl ModelViewer {
     }
 }
 
+/// What the pointer and keys did this frame, for the paint gestures. Everything that takes the
+/// context's lock (a `Response`'s hover and click state, `ctx` calls) is read before the
+/// input is looked at: egui's lock is not re-entrant, so calling one inside `input(|i| …)`
+/// deadlocks.
+fn paint_frame(ui: &Ui, response: &egui::Response) -> paint::Frame {
+    let buttons = [
+        (PointerButton::Primary, paint::Button::Primary),
+        (PointerButton::Secondary, paint::Button::Secondary),
+        (PointerButton::Middle, paint::Button::Middle),
+    ];
+    let inside = response.hovered();
+    let double_clicked = response.double_clicked();
+    ui.input(|i| paint::Frame {
+        pos: i.pointer.latest_pos(),
+        inside,
+        shift: i.modifiers.shift,
+        pressed: buttons.iter().filter(|(b, _)| i.pointer.button_pressed(*b)).map(|(_, p)| *p).collect(),
+        released: buttons.iter().filter(|(b, _)| i.pointer.button_released(*b)).map(|(_, p)| *p).collect(),
+        delta: i.pointer.delta(),
+        scroll: i.smooth_scroll_delta.y,
+        double_clicked,
+    })
+}
+
 /// `n` points of the circle of `radius` round `centre` in the plane across `normal`.
 fn brush_circle(centre: Vec3, normal: Vec3, radius: f32, n: usize) -> Vec<Vec3> {
     let normal = normal.try_normalize().unwrap_or(Vec3::Z);
@@ -1064,6 +1075,108 @@ mod tests {
         // From the opposite side it is the other three faces.
         let away = frame_faces_away(&frame, |_| Vec3::new(-0.3, -0.6, 0.7).normalize());
         assert_eq!(away, [true, false, true, false, false, true]);
+    }
+
+    /// Paints in a real (headless) egui context: a stroke, a Shift stroke, a double click, a
+    /// turn with the right button. egui's lock is not re-entrant, so reading a `Response` inside
+    /// `input(|i| …)` locks up; this runs on a thread and fails when a frame does not finish.
+    #[test]
+    fn painting_runs_frames_without_locking_up() {
+        let (done, finished) = bounded(1);
+        let worker = std::thread::spawn(move || {
+            let ctx = egui::Context::default();
+            let mut viewer = ModelViewer::new();
+            let mode = PaintMode { tool: Tool::Brush, radius_mm: 2.0, tint: Some([255, 0, 0, 255]), erase_tint: None };
+            viewer.set_paint(Some(mode));
+            // A cube on the GPU when there is one, so the strokes hit something and get tinted.
+            let gpu = meshgrove_render::HeadlessRenderer::new().ok();
+            if let Some(gpu) = &gpu {
+                let (device, _, _) = gpu.parts();
+                let soup: Vec<[f32; 3]> =
+                    meshgrove_core::Mesh::cube(20.0).to_soup().into_iter().map(|p| p.map(|c| c - 10.0)).collect();
+                let bounds = Aabb { min: Vec3::splat(-10.0), max: Vec3::splat(10.0) };
+                let colors = vec![meshgrove_render::default_model_color(); soup.len()];
+                let mesh = meshgrove_render::upload_soup(device, &soup, bounds, Some(&colors));
+                let tree = Arc::new(Bvh::build(&soup));
+                viewer.update_mesh(Arc::new(mesh), MeshSource::Memory { name: "cube".into(), soup: Arc::new(soup) });
+                viewer.set_picking(Some(tree));
+            }
+            let queue = gpu.as_ref().map(|g| g.parts().1);
+            let centre = pos2(150.0, 150.0);
+            let button = |button, pressed, shift| egui::Event::PointerButton {
+                pos: centre,
+                button,
+                pressed,
+                modifiers: egui::Modifiers { shift, ..Default::default() },
+            };
+            let moved = |dx: f32| egui::Event::PointerMoved(centre + vec2(dx, 0.0));
+            let frames: Vec<Vec<egui::Event>> = vec![
+                vec![moved(0.0)],
+                vec![moved(0.0)],
+                vec![button(PointerButton::Primary, true, false)],
+                vec![moved(6.0)],
+                vec![button(PointerButton::Primary, false, false)],
+                vec![button(PointerButton::Primary, true, true)],
+                vec![button(PointerButton::Primary, false, true)],
+                vec![button(PointerButton::Primary, true, false)],
+                vec![button(PointerButton::Primary, false, false)],
+                vec![button(PointerButton::Secondary, true, false)],
+                vec![moved(30.0)],
+                vec![egui::Event::PointerButton {
+                    pos: centre + vec2(30.0, 0.0),
+                    button: PointerButton::Secondary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                }],
+                vec![],
+            ];
+            let mut out = Vec::new();
+            for (n, events) in frames.into_iter().enumerate() {
+                // Shift as the window reports it: down for the second stroke, up after it.
+                let mut events = events;
+                match n {
+                    5 => events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers::SHIFT)),
+                    7 => events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers::NONE)),
+                    _ => {}
+                }
+                let raw = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(300.0, 300.0))),
+                    time: Some(n as f64 * 0.05),
+                    events,
+                    ..Default::default()
+                };
+                let mut output = ctx.run_ui(raw, |ui| {
+                    let (rect, response) = ui.allocate_exact_size(vec2(300.0, 300.0), Sense::click_and_drag());
+                    viewer.paint_input(ui, rect, &response, queue);
+                    if let Some(mesh) = viewer.mesh.clone() {
+                        viewer.paint_brush(ui, &mesh, rect);
+                    }
+                });
+                output.textures_delta.clear();
+                out.extend(viewer.take_paint(false));
+            }
+            let _ = done.send((out, gpu.is_some(), viewer.view));
+            // The mesh goes before the device it lives on.
+            drop(viewer);
+            drop(gpu);
+        });
+        let (out, hit, view) = finished.recv_timeout(std::time::Duration::from_secs(60)).expect("every frame finishes");
+        worker.join().unwrap();
+        let strokes: Vec<(paint::Phase, bool, usize)> = out
+            .iter()
+            .map(|o| match o {
+                paint::Out::Stroke { phase, erase, hits, .. } => (*phase, *erase, hits.len()),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        let starts: Vec<bool> = strokes.iter().filter(|s| s.0 == paint::Phase::Start).map(|s| s.1).collect();
+        assert_eq!(starts, [false, true, false], "three strokes, the second with Shift: {strokes:?}");
+        assert_eq!(strokes.iter().filter(|s| s.0 == paint::Phase::End).count(), 3);
+        if hit {
+            assert!(strokes.iter().map(|s| s.2).sum::<usize>() >= 3, "the cube was hit: {strokes:?}");
+        }
+        assert_ne!(view.azimuth_deg, orbit_view().azimuth_deg, "the right button turned the model");
+        assert_eq!(view.zoom, 1.0, "and the double click left the camera alone");
     }
 
     #[test]
