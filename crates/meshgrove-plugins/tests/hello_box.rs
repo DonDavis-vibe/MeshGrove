@@ -256,6 +256,52 @@ fn panels_render_change_and_show_their_mesh() {
     assert!(!out.exists(), "a closed panel's folder goes");
 }
 
+/// The 3D view's overlay and click tool: a click tints a face, Shift-click clears it.
+#[test]
+fn a_click_on_the_box_tints_a_face_through_the_overlay() {
+    use meshgrove_plugin_api::ui::{MeshHit, PaintTool};
+    let Some(bytes) = wasm() else { return };
+    let base = tempfile::tempdir().unwrap();
+    let plugin = Arc::new(load(&bytes, granted(base.path())));
+    let panel = plugin.open_panel("box", None).unwrap();
+    let preview = |panel: &meshgrove_plugins::panel::PanelHandle| match panel.render().unwrap().root.find("preview") {
+        Some(Node::MeshView { paint, overlay: Some(overlay), .. }) => (paint.clone(), overlay.clone()),
+        other => panic!("{other:?}"),
+    };
+    let (paint, overlay) = preview(&panel);
+    assert_eq!((paint, overlay.key.as_str(), overlay.revision), (None, "tint", 0));
+    let classes = |panel: &meshgrove_plugins::panel::PanelHandle| {
+        let mesh = panel.mesh("tint").unwrap().expect("the overlay");
+        assert!(mesh.positions.is_empty(), "an overlay has no positions");
+        mesh.indices
+    };
+    assert_eq!(classes(&panel), [0; 12]);
+    // Ticking "Tint faces" gives the view the click tool.
+    panel.event(&Event::Changed { id: "tint".into(), value: json!(true) }).unwrap();
+    let (paint, _) = preview(&panel);
+    assert_eq!(paint.map(|p| p.tool), Some(PaintTool::Click));
+    let hit = |triangle| MeshHit { triangle, point: [0.0; 3], normal: [0.0, 0.0, 1.0] };
+    let pick = |triangle, shift| Event::MeshPick { id: "preview".into(), hit: Some(hit(triangle)), shift };
+    panel.event(&pick(5, false)).unwrap();
+    panel.event(&pick(2, false)).unwrap();
+    let (_, overlay) = preview(&panel);
+    assert_eq!(overlay.revision, 2);
+    assert_eq!(classes(&panel), [0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0], "the top and the front");
+    panel.event(&pick(3, true)).unwrap();
+    assert_eq!(classes(&panel), [0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0], "Shift-click cleared the top");
+    // A click beside the box, and a stroke, change nothing.
+    panel.event(&Event::MeshPick { id: "preview".into(), hit: None, shift: false }).unwrap();
+    let stroke = Event::MeshStroke {
+        id: "preview".into(),
+        stroke: 1,
+        phase: meshgrove_plugin_api::ui::StrokePhase::Start,
+        erase: false,
+        hits: vec![hit(0)],
+    };
+    assert_eq!(panel.event(&stroke).unwrap(), []);
+    assert_eq!(preview(&panel).1.revision, 3);
+}
+
 #[test]
 fn jobs_run_in_parallel_into_the_panels_folder() {
     let Some(bytes) = wasm() else { return };

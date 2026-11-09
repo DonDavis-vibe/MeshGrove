@@ -12,11 +12,12 @@ use meshgrove_core::ai::dispatch::ToolProvider;
 use meshgrove_core::bundle::ResolvedBundle;
 use meshgrove_core::config::Config;
 use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Node, PickInto, View};
-use meshgrove_plugin_api::{FileType, HostInfo, MeshData};
+use meshgrove_plugin_api::{FileType, HostInfo};
 use meshgrove_plugins::jobs::{JobEvent, JobPool};
 use meshgrove_plugins::{CancelToken, Opened, Plugin, Registry, Settings, StagedBundle};
 
 use crate::library::{Applied, LibraryService};
+use crate::plugin_mesh::{Gpu, PreparedMesh, overlay_colors, plain_colors, prepare};
 use crate::ui::plugin_view::PanelUiState;
 use crate::ui::settings_plugins::PluginRow;
 use crate::ui::viewer::{MeshSource, ModelViewer};
@@ -114,23 +115,82 @@ enum Input {
 }
 
 enum Output {
-    Opened { out: PathBuf, tmp: PathBuf },
+    Opened {
+        out: PathBuf,
+        tmp: PathBuf,
+    },
     View(View),
     Effects(Vec<Effect>),
-    Bundle { apply: bool, title: String, staged: Result<Box<StagedBundle>, String> },
-    Mesh { key: String, mesh: Option<MeshData> },
+    Bundle {
+        apply: bool,
+        title: String,
+        staged: Result<Box<StagedBundle>, String>,
+    },
+    /// The triangles of a mesh view, prepared (and uploaded, with a GPU) on the worker.
+    Mesh {
+        key: String,
+        mesh: Option<Arc<PreparedMesh>>,
+    },
+    /// The colours of a mesh view's overlay, one per triangle; `written` when the worker put
+    /// them on the GPU already.
+    Overlay {
+        key: String,
+        colors: Arc<Vec<[u8; 4]>>,
+        written: bool,
+    },
     Failed(String),
 }
 
-/// A 3D view of a panel: the viewer and the mesh it shows, uploaded when it arrives.
+/// A 3D view of a panel: the viewer and the mesh it shows, swapped in when it arrives.
 pub struct PanelMesh {
     pub viewer: ModelViewer,
-    arrived: Option<Option<MeshData>>,
+    arrived: Option<Option<Arc<PreparedMesh>>>,
+    /// Colours of an overlay waiting to be shown, and whether they are on the GPU already.
+    overlay: Option<(Arc<Vec<[u8; 4]>>, bool)>,
+    /// What is shown: the mesh and its upload.
+    shown: Option<(Arc<PreparedMesh>, Arc<meshgrove_render::GpuMesh>)>,
     /// The middle of the mesh in the plugin's coordinates: the viewer shows it recentred there.
-    centre: glam::Vec3,
+    pub centre: glam::Vec3,
 }
 
 impl PanelMesh {
+    fn new() -> PanelMesh {
+        let mut viewer = ModelViewer::new();
+        viewer.set_tools(true);
+        PanelMesh { viewer, arrived: None, overlay: None, shown: None, centre: glam::Vec3::ZERO }
+    }
+
+    /// Takes in what arrived: a mesh (prepared on the worker, so this is only a swap unless
+    /// there was no GPU there) and an overlay's colours. Needs the GPU, so done while drawing.
+    fn show_arrived(&mut self, name: &str, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if let Some(arrived) = self.arrived.take() {
+            match arrived {
+                None => {
+                    self.viewer.set_mesh(None);
+                    self.shown = None;
+                }
+                Some(prepared) => {
+                    let gpu = prepared.gpu.clone().unwrap_or_else(|| Arc::new(prepared.upload(device)));
+                    let source = MeshSource::Memory { name: name.to_owned(), soup: prepared.soup.clone() };
+                    self.centre = prepared.centre;
+                    self.viewer.update_mesh(gpu.clone(), source);
+                    self.viewer.set_picking(Some(prepared.tree.clone()));
+                    self.shown = Some((prepared, gpu));
+                }
+            }
+        }
+        if let Some((colors, written)) = self.overlay.take()
+            && let Some((prepared, gpu)) = &self.shown
+            && colors.len() == prepared.triangles()
+        {
+            // Written by the worker only onto its own upload.
+            if !written || prepared.gpu.is_none() {
+                gpu.set_triangle_colors(queue, &colors);
+            }
+            self.viewer.redraw();
+        }
+    }
+
     /// Shows the space the model is meant to fit, given in the plugin's coordinates.
     pub fn set_frame(&mut self, frame: Option<[[f32; 3]; 2]>) {
         let frame = frame.map(|[min, max]| {
@@ -193,29 +253,10 @@ impl OpenPanel {
         self.folders.as_ref().map(|(_, tmp)| tmp.as_path())
     }
 
-    /// Shows the meshes that arrived (needs the GPU, so done while drawing).
-    pub fn upload_meshes(&mut self, device: &wgpu::Device) {
+    /// Shows the meshes and overlays that arrived (needs the GPU, so done while drawing).
+    pub fn upload_meshes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         for (key, m) in &mut self.meshes {
-            let Some(arrived) = m.arrived.take() else { continue };
-            let Some(data) = arrived.filter(|d| d.triangles() > 0) else {
-                m.viewer.set_mesh(None);
-                continue;
-            };
-            let mesh = meshgrove_core::Mesh {
-                positions: data.positions.as_chunks::<3>().0.to_vec(),
-                indices: Some(data.indices.clone()),
-                colors: None,
-                vertex_colors: None,
-            };
-            let (Some(gpu), Some(bounds)) = (meshgrove_render::upload_mesh(device, &mesh), mesh.bounds()) else {
-                continue;
-            };
-            // Measuring works in the uploaded, recentred coordinates.
-            let center = bounds.center();
-            let soup = mesh.to_soup().into_iter().map(|p| (glam::Vec3::from(p) - center).to_array()).collect();
-            let source = MeshSource::Memory { name: key.clone(), soup: Arc::new(soup) };
-            m.centre = center;
-            m.viewer.update_mesh(Arc::new(gpu), source);
+            m.show_arrived(key, device, queue);
         }
     }
 }
@@ -234,6 +275,8 @@ pub struct PluginHost {
     jobs: Option<JobPool>,
     opened: (Sender<PanelAction>, Receiver<PanelAction>),
     ctx: egui::Context,
+    /// The window's GPU, for the panels' workers to upload their meshes with.
+    gpu: Option<Gpu>,
 }
 
 impl PluginHost {
@@ -249,7 +292,13 @@ impl PluginHost {
             jobs: None,
             opened: unbounded(),
             ctx,
+            gpu: None,
         }
+    }
+
+    /// The window's GPU: the panels' workers upload their meshes with it, off the UI thread.
+    pub fn set_gpu(&mut self, device: wgpu::Device, queue: wgpu::Queue) {
+        self.gpu = Some(Gpu { device, queue });
     }
 
     pub fn base(&self) -> &Path {
@@ -381,10 +430,10 @@ impl PluginHost {
         let opened = Opened::load(&self.opened_file(plugin, panel));
         let (inputs, input_rx) = unbounded();
         let (output_tx, outputs) = unbounded();
-        let (name, ctx, reads) = (panel.to_owned(), self.ctx.clone(), opened.clone());
+        let (name, ctx, reads, gpu) = (panel.to_owned(), self.ctx.clone(), opened.clone(), self.gpu.clone());
         std::thread::Builder::new()
             .name(format!("plugin-ui-{plugin}"))
-            .spawn(move || work(&p, &name, state, reads, &input_rx, &output_tx, &ctx))
+            .spawn(move || work(&p, &name, state, reads, gpu, &input_rx, &output_tx, &ctx))
             .map_err(|e| e.to_string())?;
         self.panels.push(OpenPanel {
             plugin: plugin.to_owned(),
@@ -550,12 +599,12 @@ impl PluginHost {
                         actions.push(PanelAction::Bundle { plugin, panel, apply, title, staged });
                     }
                     Output::Mesh { key, mesh } => {
-                        let m = p.meshes.entry(key).or_insert_with(|| {
-                            let mut viewer = ModelViewer::new();
-                            viewer.set_tools(true);
-                            PanelMesh { viewer, arrived: None, centre: glam::Vec3::ZERO }
-                        });
-                        m.arrived = Some(mesh);
+                        p.meshes.entry(key).or_insert_with(PanelMesh::new).arrived = Some(mesh)
+                    }
+                    Output::Overlay { key, colors, written } => {
+                        if let Some(m) = p.meshes.get_mut(&key) {
+                            m.overlay = Some((colors, written));
+                        }
                     }
                     Output::Failed(e) => {
                         p.error = Some(e);
@@ -739,13 +788,25 @@ pub fn bundle_outcome(applied: &Applied) -> Option<((String, String), String, Bu
     }
 }
 
+/// What a panel's worker has shown of its mesh views, by their keys: the revision and prepared
+/// triangles of each, and the overlay (key, revision, palette) last applied to it.
+#[derive(Default)]
+struct Shown {
+    revisions: HashMap<String, u64>,
+    prepared: HashMap<String, Arc<PreparedMesh>>,
+    overlays: HashMap<String, (String, u64, Vec<String>)>,
+}
+
 /// A panel's worker: opens it, then turns each event into effects, a new view and the meshes
-/// whose revision changed.
+/// and overlays whose revision changed. Meshes are prepared (and uploaded, with `gpu`) here,
+/// off the window's thread.
+#[allow(clippy::too_many_arguments)]
 fn work(
     plugin: &Arc<Plugin>,
     panel: &str,
     state: Option<String>,
     opened: Opened,
+    gpu: Option<Gpu>,
     inputs: &Receiver<Input>,
     outputs: &Sender<Output>,
     ctx: &egui::Context,
@@ -759,32 +820,87 @@ fn work(
         Err(e) => return send(Output::Failed(e.to_string())),
     };
     send(Output::Opened { out: handle.out().to_path_buf(), tmp: handle.tmp().to_path_buf() });
-    let mut revisions: HashMap<String, u64> = HashMap::new();
-    let refresh = |revisions: &mut HashMap<String, u64>| match handle.render() {
-        Ok(view) => {
-            let wanted: Vec<(String, u64)> = view
-                .root
-                .walk()
-                .into_iter()
-                .filter_map(|n| match n {
-                    Node::MeshView { key, revision, .. } if revisions.get(key) != Some(revision) => {
-                        Some((key.clone(), *revision))
-                    }
-                    _ => None,
-                })
-                .collect();
-            send(Output::View(view));
-            for (key, revision) in wanted {
+    let mut shown = Shown::default();
+    let refresh = |shown: &mut Shown| {
+        let view = match handle.render() {
+            Ok(view) => view,
+            Err(e) => return send(Output::Failed(e.to_string())),
+        };
+        type Overlay = Option<(String, u64, Vec<String>)>;
+        let views: Vec<(String, u64, Overlay)> = view
+            .root
+            .walk()
+            .into_iter()
+            .filter_map(|n| match n {
+                Node::MeshView { key, revision, overlay, .. } => Some((
+                    key.clone(),
+                    *revision,
+                    overlay.as_ref().map(|o| (o.key.clone(), o.revision, o.palette.clone())),
+                )),
+                _ => None,
+            })
+            .collect();
+        send(Output::View(view));
+        for (key, revision, overlay) in views {
+            let changed = shown.revisions.get(&key) != Some(&revision);
+            if changed {
                 match handle.mesh(&key) {
-                    Ok(mesh) => send(Output::Mesh { key: key.clone(), mesh }),
+                    Ok(mesh) => {
+                        let prepared = mesh.as_ref().and_then(|m| prepare(m, gpu.as_ref())).map(Arc::new);
+                        match &prepared {
+                            Some(p) => shown.prepared.insert(key.clone(), p.clone()),
+                            None => shown.prepared.remove(&key),
+                        };
+                        send(Output::Mesh { key: key.clone(), mesh: prepared });
+                    }
                     Err(e) => return send(Output::Failed(e.to_string())),
                 }
-                revisions.insert(key, revision);
+                shown.revisions.insert(key.clone(), revision);
+            }
+            // A new mesh comes in the model's grey: its overlay is asked for again.
+            let stale = changed || overlay.as_ref() != shown.overlays.get(&key);
+            if !stale {
+                continue;
+            }
+            let Some(prepared) = shown.prepared.get(&key).cloned() else {
+                shown.overlays.remove(&key);
+                continue;
+            };
+            let colors = match &overlay {
+                Some((overlay_key, _, palette)) => match handle.mesh(overlay_key) {
+                    Ok(classes) => {
+                        let classes = classes.filter(|c| c.positions.is_empty()).map(|c| c.indices).unwrap_or_default();
+                        let colors = overlay_colors(&classes, palette, prepared.triangles());
+                        if colors.is_none() {
+                            log::debug!(
+                                "{}/{panel}: overlay {overlay_key} has {} classes for {} triangles, left out",
+                                plugin.id(),
+                                classes.len(),
+                                prepared.triangles()
+                            );
+                        }
+                        colors
+                    }
+                    Err(e) => return send(Output::Failed(e.to_string())),
+                },
+                // The overlay is gone: back to the grey, if one was shown.
+                None if shown.overlays.contains_key(&key) => Some(plain_colors(prepared.triangles())),
+                None => None,
+            };
+            match overlay {
+                Some(o) => shown.overlays.insert(key.clone(), o),
+                None => shown.overlays.remove(&key),
+            };
+            if let Some(colors) = colors {
+                let written = match (&prepared.gpu, &gpu) {
+                    (Some(mesh), Some(gpu)) => mesh.set_triangle_colors(&gpu.queue, &colors),
+                    _ => false,
+                };
+                send(Output::Overlay { key, colors: Arc::new(colors), written });
             }
         }
-        Err(e) => send(Output::Failed(e.to_string())),
     };
-    let on_event = |event: &Event, revisions: &mut HashMap<String, u64>| match handle.event(event) {
+    let on_event = |event: &Event, shown: &mut Shown| match handle.event(event) {
         Ok(effects) => {
             let mut rest = Vec::new();
             for effect in effects {
@@ -805,17 +921,17 @@ fn work(
             if !rest.is_empty() {
                 send(Output::Effects(rest));
             }
-            refresh(revisions);
+            refresh(shown);
         }
         Err(e) => send(Output::Failed(e.to_string())),
     };
     // Once before the first view, so a panel can start right away what takes longer than an
     // event may (a job), with what it is told about the host.
-    on_event(&Event::HostChanged { info: plugin.settings().info.clone() }, &mut revisions);
+    on_event(&Event::HostChanged { info: plugin.settings().info.clone() }, &mut shown);
     for input in inputs {
         match input {
-            Input::Event(event) => on_event(&event, &mut revisions),
-            Input::Render => refresh(&mut revisions),
+            Input::Event(event) => on_event(&event, &mut shown),
+            Input::Render => refresh(&mut shown),
             Input::Snapshot(reply) => {
                 let _ = reply.send(handle.snapshot().map_err(|e| e.to_string()));
             }
@@ -826,7 +942,7 @@ fn work(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meshgrove_plugin_api::Bundle;
+    use meshgrove_plugin_api::{Bundle, MeshData};
     use meshgrove_plugins::Staging;
 
     /// The example plugin built for tests (`scripts/build-plugins.sh --test-hooks`), if there is one.
@@ -891,7 +1007,7 @@ mod tests {
         let (output_tx, outputs) = unbounded();
         let ctx = egui::Context::default();
         let opened = Opened::default();
-        let worker = std::thread::spawn(move || work(&plugin, "box", None, opened, &input_rx, &output_tx, &ctx));
+        let worker = std::thread::spawn(move || work(&plugin, "box", None, opened, None, &input_rx, &output_tx, &ctx));
         let next = || outputs.recv_timeout(Duration::from_secs(60)).expect("the panel answers");
         assert!(matches!(next(), Output::Opened { .. }));
         match next() {
@@ -1021,6 +1137,128 @@ mod tests {
         assert!(panel.opened.contains("Eigene/box.stl") && !panel.opened.contains("Eigene/other.stl"));
         panel.send(Event::ModelsOpened { ids: vec!["Eigene/box.stl".into()] });
         wait(&mut host, 14.0);
+    }
+
+    /// The next output of a panel's worker that `want` picks, skipping the others.
+    fn next_matching<T>(outputs: &Receiver<Output>, mut want: impl FnMut(Output) -> Option<T>) -> T {
+        let until = Instant::now() + Duration::from_secs(60);
+        loop {
+            let left = until.saturating_duration_since(Instant::now());
+            let output = outputs.recv_timeout(left).expect("the panel answers");
+            if let Some(found) = want(output) {
+                return found;
+            }
+        }
+    }
+
+    /// Everything the worker sends until it renders: (overlays, meshes) seen on the way.
+    fn until_view(outputs: &Receiver<Output>) -> (Vec<Arc<Vec<[u8; 4]>>>, usize) {
+        let (mut overlays, mut meshes) = (Vec::new(), 0);
+        // The meshes and overlays come right after the view; the next view ends them.
+        next_matching(outputs, |o| matches!(o, Output::View(_)).then_some(()));
+        let until = Instant::now() + Duration::from_millis(1500);
+        while let Ok(output) = outputs.recv_timeout(until.saturating_duration_since(Instant::now())) {
+            match output {
+                Output::Overlay { colors, written, .. } => {
+                    assert!(!written, "no GPU in this worker");
+                    overlays.push(colors);
+                }
+                Output::Mesh { .. } => meshes += 1,
+                _ => {}
+            }
+        }
+        (overlays, meshes)
+    }
+
+    /// hello-box's 3D view has an overlay: the worker asks for it with the mesh and again when
+    /// its revision changes, and leaves out one of the wrong length.
+    #[test]
+    fn the_worker_brings_the_overlay_and_leaves_out_one_that_does_not_fit() {
+        let Some(bytes) = test_plugin() else { return };
+        let base = tempfile::tempdir().unwrap();
+        let plugin = Arc::new(Plugin::from_bytes(&bytes, Settings::new(base.path())).unwrap());
+        let (inputs, input_rx) = unbounded();
+        let (output_tx, outputs) = unbounded();
+        let ctx = egui::Context::default();
+        let worker = std::thread::spawn(move || {
+            work(&plugin, "box", None, Opened::default(), None, &input_rx, &output_tx, &ctx)
+        });
+        let grey = meshgrove_render::default_model_color();
+        let mesh = next_matching(&outputs, |o| match o {
+            Output::Mesh { key, mesh } if key == "box" => Some(mesh),
+            _ => None,
+        });
+        let mesh = mesh.expect("the box");
+        assert_eq!((mesh.triangles(), mesh.tree.len()), (12, 12));
+        assert!(mesh.gpu.is_none());
+        let colors = next_matching(&outputs, |o| match o {
+            Output::Overlay { key, colors, .. } if key == "box" => Some(colors),
+            _ => None,
+        });
+        assert_eq!(*colors, vec![grey; 12], "nothing tinted yet");
+        // A click on triangle 4 (the front): the overlay comes anew, the front orange.
+        let hit = meshgrove_plugin_api::ui::MeshHit { triangle: 4, point: [1.0, 0.0, 1.0], normal: [0.0, -1.0, 0.0] };
+        inputs.send(Input::Event(Event::MeshPick { id: "preview".into(), hit: Some(hit), shift: false })).unwrap();
+        let (overlays, meshes) = until_view(&outputs);
+        assert_eq!((overlays.len(), meshes), (1, 0), "the box is as it was");
+        let tinted: Vec<usize> = (0..12).filter(|&t| overlays[0][t] != grey).collect();
+        assert_eq!(tinted, [4, 5]);
+        assert_eq!(overlays[0][4], [255, 128, 0, 255]);
+        // An overlay of five classes for twelve triangles: left out, the panel goes on.
+        inputs.send(Input::Event(Event::Click { id: "bad_overlay".into() })).unwrap();
+        let (overlays, _) = until_view(&outputs);
+        assert!(overlays.is_empty(), "{} overlays", overlays.len());
+        // A new box comes in grey and brings its overlay again (still the wrong length here).
+        inputs.send(Input::Event(Event::Changed { id: "width".into(), value: serde_json::json!(33.0) })).unwrap();
+        let (overlays, meshes) = until_view(&outputs);
+        assert_eq!((overlays.len(), meshes), (0, 1));
+        drop(inputs);
+        worker.join().unwrap();
+    }
+
+    /// A preview of two million triangles: prepared and uploaded on the worker, so showing it
+    /// takes the window's thread only a swap, and so does its overlay.
+    #[test]
+    fn a_large_preview_arrives_without_stalling_the_window() {
+        let gpu = match meshgrove_render::HeadlessRenderer::new() {
+            Ok(gpu) => gpu,
+            Err(e) if std::env::var_os("MESHGROVE_REQUIRE_GPU").is_none() => return eprintln!("skipped: {e}"),
+            Err(e) => panic!("{e}"),
+        };
+        let (device, queue, _) = gpu.parts();
+        // A wavy sheet of 1000 × 1000 quads.
+        let n = 1000u32;
+        let positions = (0..=n)
+            .flat_map(|y| (0..=n).map(move |x| [x as f32 * 0.1, y as f32 * 0.1, (x as f32 * 0.05).sin()]))
+            .flatten()
+            .collect();
+        let indices = (0..n)
+            .flat_map(|y| {
+                (0..n).flat_map(move |x| {
+                    let i = y * (n + 1) + x;
+                    [i, i + 1, i + n + 2, i, i + n + 2, i + n + 1]
+                })
+            })
+            .collect();
+        let data = MeshData { positions, indices };
+        assert_eq!(data.triangles(), 2_000_000);
+        let worker_gpu = Gpu { device: device.clone(), queue: queue.clone() };
+        let prepared = Arc::new(prepare(&data, Some(&worker_gpu)).unwrap());
+        assert!(prepared.gpu.is_some(), "uploaded on the worker");
+        let mut m = PanelMesh::new();
+        m.arrived = Some(Some(prepared.clone()));
+        let started = Instant::now();
+        m.show_arrived("big", device, queue);
+        let swap = started.elapsed();
+        assert!(m.shown.is_some());
+        assert!(swap < Duration::from_millis(16), "the window's thread spent {swap:?}");
+        // Its overlay, written on the worker too.
+        let colors = overlay_colors(&vec![1; 2_000_000], &["#00000000".into(), "#ff0000".into()], 2_000_000).unwrap();
+        assert!(prepared.gpu.as_ref().unwrap().set_triangle_colors(queue, &colors));
+        m.overlay = Some((Arc::new(colors), true));
+        let started = Instant::now();
+        m.show_arrived("big", device, queue);
+        assert!(started.elapsed() < Duration::from_millis(16), "{:?}", started.elapsed());
     }
 
     /// A library with one folder and a panel's bundle for it, which holds one file.

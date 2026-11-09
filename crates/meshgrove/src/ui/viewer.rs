@@ -1,5 +1,6 @@
 //! Interactive 3D view of the selected model (orbit, pan, zoom), drawn by the shared renderer,
-//! with standard views, picture export and point-to-point measuring.
+//! with standard views, picture export and point-to-point measuring; for a plugin's mesh view
+//! also painting on the model ([`PaintMode`], gestures in [`super::paint`]).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -7,12 +8,14 @@ use std::sync::Arc;
 use crossbeam_channel::{Receiver, bounded};
 use egui::{Color32, PointerButton, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 use glam::{Vec2, Vec3};
+use meshgrove_core::bvh::Bvh;
 use meshgrove_core::config::PreviewQuality;
 use meshgrove_core::spacemouse::CameraMotion;
 use meshgrove_core::{Aabb, Kind};
 use meshgrove_render::{Framing, GpuMesh, Renderer, ViewParams, project_point, view_ray};
 
 use super::offscreen::{OffscreenView, pixel_size};
+use super::paint::{self, Action, Gestures, Outbox, Tool};
 use crate::i18n;
 
 /// Longer side of an exported picture, in pixels.
@@ -44,6 +47,54 @@ struct Measure {
     points: Vec<Vec3>,
 }
 
+/// Painting on the model: the left button belongs to the tool.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PaintMode {
+    pub tool: Tool,
+    /// Radius of the brush in mm.
+    pub radius_mm: f32,
+    /// What painted triangles are tinted with until the plugin's overlay arrives (sRGB; none:
+    /// no tint).
+    pub tint: Option<[u8; 4]>,
+    pub erase_tint: Option<[u8; 4]>,
+}
+
+/// A point on the model, in the mesh's recentred coordinates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfaceHit {
+    /// The triangle's index in the soup (its order in the plugin's mesh).
+    pub triangle: u32,
+    pub point: Vec3,
+    /// The triangle's normal, turned towards the camera.
+    pub normal: Vec3,
+}
+
+/// Meshes with up to this many triangles are picked on without a tree while it is being built.
+const PICK_WITHOUT_TREE: usize = 100_000;
+
+/// The stroke under way.
+struct OpenStroke {
+    erase: bool,
+    /// Where the last dab of the brush went.
+    last_dab: Option<Vec3>,
+    /// Where the pointer last gave a hit (drag tool).
+    last_screen: Option<Pos2>,
+    /// Triangles this stroke has passed (triangles tool).
+    seen: std::collections::HashSet<u32>,
+}
+
+/// Painting: the mode, the gesture under way and what waits to go to the plugin.
+struct Painting {
+    mode: PaintMode,
+    gestures: Gestures,
+    stroke: Option<OpenStroke>,
+    outbox: Outbox<SurfaceHit>,
+    /// Under the pointer, for the brush circle.
+    hover: Option<SurfaceHit>,
+    /// Switched off with something still on its way: gone once that went out.
+    leaving: bool,
+}
+
 pub struct ModelViewer {
     mesh: Option<Arc<GpuMesh>>,
     source: Option<MeshSource>,
@@ -73,6 +124,9 @@ pub struct ModelViewer {
     frame: Option<Aabb>,
     /// Whether the frame is shown; the toolbar's switch, kept while the plugin sends new meshes.
     frame_shown: bool,
+    painting: Option<Painting>,
+    /// The tree to pick on in the soup of a `MeshSource::Memory`.
+    picking: Option<Arc<Bvh>>,
 }
 
 /// What the 3D mouse did since the last frame, for the viewer that has the focus.
@@ -104,7 +158,67 @@ impl ModelViewer {
             bed: None,
             frame: None,
             frame_shown: true,
+            painting: None,
+            picking: None,
         }
+    }
+
+    /// Draws again (the mesh's colours changed on the GPU).
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    pub fn redraw(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Paints with `mode`, or (`None`) turns the model with the left button again. A stroke
+    /// under way ends.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    pub fn set_paint(&mut self, mode: Option<PaintMode>) {
+        match (&mut self.painting, mode) {
+            (Some(p), Some(mode)) => {
+                p.mode = mode;
+                p.leaving = false;
+            }
+            (painting @ None, Some(mode)) => {
+                self.measure = None;
+                *painting = Some(Painting {
+                    mode,
+                    gestures: Gestures::default(),
+                    stroke: None,
+                    outbox: Outbox::default(),
+                    hover: None,
+                    leaving: false,
+                });
+            }
+            (painting, None) => {
+                // What is still on its way goes out first.
+                if let Some(p) = painting.as_mut() {
+                    p.outbox.end();
+                    if !p.outbox.is_empty() {
+                        (p.gestures, p.stroke, p.hover, p.leaving) = (Gestures::default(), None, None, true);
+                        return;
+                    }
+                }
+                *painting = None;
+            }
+        }
+    }
+
+    /// The tree to pick on in the triangles of the shown `MeshSource::Memory` (built off the UI
+    /// thread); without one small meshes are picked on triangle by triangle.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    pub fn set_picking(&mut self, tree: Option<Arc<Bvh>>) {
+        self.picking = tree;
+    }
+
+    /// Picks and strokes for the plugin, in recentred coordinates; nothing while it is `busy`.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    pub fn take_paint(&mut self, busy: bool) -> Vec<paint::Out<SurfaceHit>> {
+        let Some(p) = &mut self.painting else { return Vec::new() };
+        let out = p.outbox.take(busy, std::time::Instant::now());
+        if p.leaving && p.outbox.is_empty() {
+            self.painting = None;
+        }
+        out
     }
 
     /// A printer bed (x, y in mm) under the model, centred on it; `None`: none.
@@ -176,6 +290,7 @@ impl ModelViewer {
         }
         self.mesh = Some(mesh);
         self.source = Some(source);
+        self.picking = None;
         self.dirty = true;
         if self.measure.is_some() {
             self.measure = Some(Measure::default());
@@ -196,6 +311,7 @@ impl ModelViewer {
         if !same {
             self.mesh = mesh;
             self.source = source;
+            self.picking = None;
             self.reset_view();
             if self.measure.is_some() {
                 self.measure = Some(Measure::default()); // other model: pick again
@@ -253,7 +369,11 @@ impl ModelViewer {
     /// Draws the view and its tool buttons; returns a message for the status bar, if any.
     pub fn ui(&mut self, ui: &mut Ui, rs: &egui_wgpu::RenderState, renderer: &Renderer) -> Option<String> {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
-        self.handle_input(ui, rect, &response);
+        if self.painting.as_ref().is_some_and(|p| !p.leaving) {
+            self.paint_input(ui, rect, &response, rs);
+        } else {
+            self.handle_input(ui, rect, &response);
+        }
         let mut message = self.poll_saving();
         self.poll_triangles();
         let Some(mesh) = self.mesh.clone() else {
@@ -300,6 +420,7 @@ impl ModelViewer {
             }
         }
         self.paint_measure(ui, &mesh, rect);
+        self.paint_brush(ui, &mesh, rect);
         if self.tools
             && let Some(m) = self.toolbar(ui, rect, rs, renderer, &mesh)
         {
@@ -310,39 +431,213 @@ impl ModelViewer {
 
     fn handle_input(&mut self, ui: &Ui, rect: Rect, response: &egui::Response) {
         if response.dragged_by(PointerButton::Primary) {
-            let d = response.drag_delta();
-            if self.free_orbit && ui.input(|i| i.modifiers.ctrl) {
-                // Ctrl+drag rolls: the model follows the pointer round the centre of the view.
-                if let Some(pos) = response.interact_pointer_pos() {
-                    let (now, before) = (pos - rect.center(), pos - d - rect.center());
-                    let turned = (now.y.atan2(now.x) - before.y.atan2(before.x)).rem_euclid(std::f32::consts::TAU);
-                    let turned = if turned > std::f32::consts::PI { turned - std::f32::consts::TAU } else { turned };
-                    self.view.free_turn(0.0, 0.0, turned);
-                }
-            } else if self.free_orbit {
-                self.view.free_turn(-d.x * 0.4f32.to_radians(), -d.y * 0.4f32.to_radians(), 0.0);
-            } else {
-                self.view.azimuth_deg -= d.x * 0.4;
-                self.view.elevation_deg = (self.view.elevation_deg + d.y * 0.4).clamp(-89.5, 89.5);
-            }
-            self.dirty = true;
+            let roll = self.free_orbit && ui.input(|i| i.modifiers.ctrl);
+            self.orbit(rect, response.drag_delta(), response.interact_pointer_pos().filter(|_| roll));
         }
         if response.dragged_by(PointerButton::Secondary) || response.dragged_by(PointerButton::Middle) {
-            let d = response.drag_delta();
-            // Roughly one bounding radius per half view height at zoom 1.
-            let scale = 2.2 / rect.height().max(1.0) / self.view.zoom;
-            self.view.pan += glam::Vec2::new(-d.x, d.y) * scale;
-            self.dirty = true;
+            self.pan(rect, response.drag_delta());
         }
         if response.hovered() {
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-            if scroll != 0.0 {
-                self.view.zoom = (self.view.zoom * (scroll * 0.003).exp()).clamp(0.2, 50.0);
-                self.dirty = true;
-            }
+            self.zoom(ui.input(|i| i.smooth_scroll_delta.y));
         }
         if response.double_clicked() {
             self.reset_view();
+        }
+    }
+
+    /// Turns the model by a drag of `d` points; with `roll_at` (Ctrl in free orbit) the model
+    /// follows the pointer there round the centre of the view.
+    fn orbit(&mut self, rect: Rect, d: egui::Vec2, roll_at: Option<Pos2>) {
+        if d == egui::Vec2::ZERO {
+            return;
+        }
+        if let Some(pos) = roll_at {
+            let (now, before) = (pos - rect.center(), pos - d - rect.center());
+            let turned = (now.y.atan2(now.x) - before.y.atan2(before.x)).rem_euclid(std::f32::consts::TAU);
+            let turned = if turned > std::f32::consts::PI { turned - std::f32::consts::TAU } else { turned };
+            self.view.free_turn(0.0, 0.0, turned);
+        } else if self.free_orbit {
+            self.view.free_turn(-d.x * 0.4f32.to_radians(), -d.y * 0.4f32.to_radians(), 0.0);
+        } else {
+            self.view.azimuth_deg -= d.x * 0.4;
+            self.view.elevation_deg = (self.view.elevation_deg + d.y * 0.4).clamp(-89.5, 89.5);
+        }
+        self.dirty = true;
+    }
+
+    fn pan(&mut self, rect: Rect, d: egui::Vec2) {
+        if d == egui::Vec2::ZERO {
+            return;
+        }
+        // Roughly one bounding radius per half view height at zoom 1.
+        let scale = 2.2 / rect.height().max(1.0) / self.view.zoom;
+        self.view.pan += glam::Vec2::new(-d.x, d.y) * scale;
+        self.dirty = true;
+    }
+
+    fn zoom(&mut self, scroll: f32) {
+        if scroll != 0.0 {
+            self.view.zoom = (self.view.zoom * (scroll * 0.003).exp()).clamp(0.2, 50.0);
+            self.dirty = true;
+        }
+    }
+
+    /// The input while painting: the gesture each press starts ([`Gestures`]), and what it does.
+    fn paint_input(&mut self, ui: &Ui, rect: Rect, response: &egui::Response, rs: &egui_wgpu::RenderState) {
+        let buttons = [
+            (PointerButton::Primary, paint::Button::Primary),
+            (PointerButton::Secondary, paint::Button::Secondary),
+            (PointerButton::Middle, paint::Button::Middle),
+        ];
+        let inside = response.hovered();
+        let frame = ui.input(|i| paint::Frame {
+            pos: i.pointer.latest_pos(),
+            inside,
+            shift: i.modifiers.shift,
+            pressed: buttons.iter().filter(|(b, _)| i.pointer.button_pressed(*b)).map(|(_, p)| *p).collect(),
+            released: buttons.iter().filter(|(b, _)| i.pointer.button_released(*b)).map(|(_, p)| *p).collect(),
+            delta: i.pointer.delta(),
+            scroll: i.smooth_scroll_delta.y,
+            double_clicked: response.double_clicked(),
+        });
+        let Some(p) = &mut self.painting else { return };
+        let tool = p.mode.tool;
+        let actions = p.gestures.frame(&frame, tool);
+        if inside {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+        for action in actions {
+            match action {
+                Action::Orbit(d) => self.orbit(rect, d, None),
+                Action::Pan(d) => self.pan(rect, d),
+                Action::Zoom(scroll) => self.zoom(scroll),
+                Action::StrokeStart { erase } => {
+                    if let Some(p) = &mut self.painting {
+                        p.outbox.start(erase);
+                        let seen = Default::default();
+                        p.stroke = Some(OpenStroke { erase, last_dab: None, last_screen: None, seen });
+                    }
+                }
+                Action::Sample(at) => self.sample(rect, at, &rs.queue),
+                Action::StrokeEnd => {
+                    if let Some(p) = &mut self.painting {
+                        p.outbox.end();
+                        p.stroke = None;
+                    }
+                }
+                Action::Pick { at, shift } => {
+                    let hit = self.hit_at(rect, at);
+                    if let Some(p) = &mut self.painting {
+                        p.outbox.pick(hit, shift);
+                    }
+                }
+            }
+        }
+        // Under the pointer, for the brush circle (also while turning the model).
+        let hover = frame.pos.filter(|_| inside).and_then(|at| self.hit_at(rect, at));
+        if let Some(p) = &mut self.painting {
+            if p.hover != hover {
+                ui.ctx().request_repaint();
+            }
+            p.hover = hover;
+        }
+    }
+
+    /// Paints where the pointer is, by the tool: a dab of the brush where it has moved far
+    /// enough, a triangle not passed yet, a point of the drag. Tints what it paints.
+    fn sample(&mut self, rect: Rect, at: Pos2, queue: &wgpu::Queue) {
+        let hit = self.hit_at(rect, at);
+        let (Some(p), Some(hit)) = (&mut self.painting, hit) else { return };
+        let Some(stroke) = &mut p.stroke else { return };
+        let mode = p.mode;
+        let take = match mode.tool {
+            Tool::Brush => {
+                let step = (mode.radius_mm * 0.25).max(0.05);
+                let far = stroke.last_dab.is_none_or(|last| last.distance(hit.point) >= step);
+                if far {
+                    stroke.last_dab = Some(hit.point);
+                }
+                far
+            }
+            Tool::Triangles => stroke.seen.insert(hit.triangle),
+            Tool::Drag => {
+                let far = stroke.last_screen.is_none_or(|last| last.distance(at) >= 3.0);
+                if far {
+                    stroke.last_screen = Some(at);
+                }
+                far
+            }
+            Tool::Click => false,
+        };
+        if !take {
+            return;
+        }
+        let erase = stroke.erase;
+        p.outbox.add(hit);
+        let tint = if erase { mode.erase_tint } else { mode.tint };
+        let (Some(color), Some(mesh)) = (tint, &self.mesh) else { return };
+        let triangles = match (mode.tool, &self.picking, &self.source) {
+            (Tool::Brush, Some(tree), Some(MeshSource::Memory { soup, .. })) => {
+                tree.sphere(soup, hit.point, mode.radius_mm.max(0.0))
+            }
+            (Tool::Brush | Tool::Triangles, ..) => vec![hit.triangle],
+            _ => Vec::new(),
+        };
+        if !triangles.is_empty() && mesh.tint_triangles(queue, &triangles, color) {
+            self.dirty = true;
+        }
+    }
+
+    /// Where the view's point `at` meets the model: the tree if there is one, else (small
+    /// meshes) every triangle.
+    fn hit_at(&self, rect: Rect, at: Pos2) -> Option<SurfaceHit> {
+        let (Some(mesh), Some(MeshSource::Memory { soup, .. })) = (&self.mesh, &self.source) else { return None };
+        let ndc = Vec2::new(
+            (at.x - rect.center().x) / (rect.width() * 0.5),
+            (rect.center().y - at.y) / (rect.height() * 0.5),
+        );
+        let (origin, dir) = view_ray(&self.fitted(mesh), &self.view, rect.aspect_ratio(), ndc);
+        let (t, triangle) = match &self.picking {
+            Some(tree) => tree.ray(soup, origin, dir)?,
+            None if soup.len() / 3 <= PICK_WITHOUT_TREE => meshgrove_core::mesh::ray_hit_triangle(soup, origin, dir)?,
+            None => return None,
+        };
+        let tri = soup.as_chunks::<3>().0.get(triangle as usize)?;
+        let normal = meshgrove_core::mesh::triangle_normal(tri);
+        let normal = if normal.dot(dir) > 0.0 { -normal } else { normal };
+        Some(SurfaceHit { triangle, point: origin + dir * t, normal })
+    }
+
+    /// The brush's circle on the surface under the pointer (its radius in mm, so it shrinks
+    /// with distance and leans with the surface); a dot for the other tools.
+    fn paint_brush(&self, ui: &Ui, mesh: &GpuMesh, rect: Rect) {
+        let Some(p) = &self.painting else { return };
+        let Some(hit) = p.hover else { return };
+        let bounds = self.fitted(mesh);
+        let to_screen = |v: Vec3| {
+            project_point(&bounds, &self.view, rect.aspect_ratio(), v)
+                .map(|n| pos2(rect.center().x + n.x * rect.width() * 0.5, rect.center().y - n.y * rect.height() * 0.5))
+        };
+        let painter = ui.painter_at(rect);
+        let color =
+            if p.stroke.as_ref().is_some_and(|s| s.erase) || (p.stroke.is_none() && ui.input(|i| i.modifiers.shift)) {
+                Color32::from_rgb(0x3B, 0xA3, 0xFF)
+            } else {
+                Color32::from_rgb(255, 196, 0)
+            };
+        if p.mode.tool != Tool::Brush {
+            if let Some(at) = to_screen(hit.point) {
+                painter.circle(at, 3.0, color, Stroke::new(1.0, Color32::BLACK));
+            }
+            return;
+        }
+        let points: Option<Vec<Pos2>> = brush_circle(hit.point, hit.normal, p.mode.radius_mm, 48)
+            .into_iter()
+            .map(|v| to_screen(hit.point + (v - hit.point) + hit.normal * 0.01))
+            .collect();
+        if let Some(points) = points {
+            painter.add(egui::Shape::closed_line(points.clone(), Stroke::new(2.5, Color32::from_black_alpha(140))));
+            painter.add(egui::Shape::closed_line(points, Stroke::new(1.5, color)));
         }
     }
 
@@ -370,11 +665,13 @@ impl ModelViewer {
                 }
             }
         });
+        // While painting the left button is the tool's: no measuring.
         let measuring = self.measure.is_some();
-        if ui
-            .selectable_label(measuring, RichText::new(format!("📏 {}", t!("viewer.measure"))).small())
-            .on_hover_text(t!("viewer.measure_hint"))
-            .clicked()
+        if self.painting.as_ref().is_none_or(|p| p.leaving)
+            && ui
+                .selectable_label(measuring, RichText::new(format!("📏 {}", t!("viewer.measure"))).small())
+                .on_hover_text(t!("viewer.measure_hint"))
+                .clicked()
         {
             self.measure = if measuring { None } else { Some(Measure::default()) };
         }
@@ -628,6 +925,19 @@ impl ModelViewer {
     }
 }
 
+/// `n` points of the circle of `radius` round `centre` in the plane across `normal`.
+fn brush_circle(centre: Vec3, normal: Vec3, radius: f32, n: usize) -> Vec<Vec3> {
+    let normal = normal.try_normalize().unwrap_or(Vec3::Z);
+    let u = normal.any_orthonormal_vector();
+    let v = normal.cross(u);
+    (0..n)
+        .map(|i| {
+            let a = i as f32 / n as f32 * std::f32::consts::TAU;
+            centre + (u * a.cos() + v * a.sin()) * radius
+        })
+        .collect()
+}
+
 /// The corners of a frame, numbered by bits: 1 = far in x, 2 = far in y, 4 = far in z.
 fn frame_corners(frame: &Aabb) -> [Vec3; 8] {
     std::array::from_fn(|i| {
@@ -754,6 +1064,20 @@ mod tests {
         // From the opposite side it is the other three faces.
         let away = frame_faces_away(&frame, |_| Vec3::new(-0.3, -0.6, 0.7).normalize());
         assert_eq!(away, [true, false, true, false, false, true]);
+    }
+
+    #[test]
+    fn the_brush_circle_lies_on_the_surface_round_the_point() {
+        let centre = Vec3::new(1.0, 2.0, 3.0);
+        for normal in [Vec3::Z, Vec3::new(1.0, 1.0, 0.0), -Vec3::X] {
+            let circle = brush_circle(centre, normal, 4.0, 32);
+            assert_eq!(circle.len(), 32);
+            for p in &circle {
+                assert!(((*p - centre).length() - 4.0).abs() < 1e-4, "{p}");
+                assert!((*p - centre).dot(normal.normalize()).abs() < 1e-4, "across the normal");
+            }
+        }
+        assert_eq!(brush_circle(centre, Vec3::ZERO, 1.0, 8).len(), 8, "a degenerate normal still draws");
     }
 
     #[test]

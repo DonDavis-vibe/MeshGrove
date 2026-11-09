@@ -40,6 +40,8 @@ impl PanelUiState {
 
 /// A 3D view the panel wants: drawn by the caller, who has the meshes and the renderer.
 pub struct MeshViewArgs<'a> {
+    /// The mesh view's id, which its events name.
+    pub id: &'a str,
     pub key: &'a str,
     pub height: f32,
     /// A printer bed (x, y in mm) to show under the model.
@@ -47,6 +49,8 @@ pub struct MeshViewArgs<'a> {
     /// The space the model is meant to fit (minimum and maximum corner, in the coordinates of
     /// the plugin's triangles).
     pub frame: Option<[[f32; 3]; 2]>,
+    /// Painting on the model instead of turning it with the left button.
+    pub paint: Option<&'a meshgrove_plugin_api::ui::MeshPaint>,
 }
 
 /// Draws `view`; `meshes` draws the panel's 3D views. Returns what the user did.
@@ -292,9 +296,9 @@ impl Draw<'_> {
                 let changes = super::canvas::show(ui, canvas);
                 self.events.extend(changes.into_iter().map(|change| Event::Canvas { id: canvas.id.clone(), change }));
             }
-            Node::MeshView { key, height, bed, frame, .. } => {
+            Node::MeshView { id, key, height, bed, frame, paint, .. } => {
                 let height = height.unwrap_or_else(|| ui.available_height().max(200.0));
-                (self.meshes)(ui, MeshViewArgs { key, height, bed: *bed, frame: *frame });
+                (self.meshes)(ui, MeshViewArgs { id, key, height, bed: *bed, frame: *frame, paint: paint.as_ref() });
             }
             Node::Unknown => {
                 ui.label(RichText::new(t!("plugins.unknown_widget")).weak().italics());

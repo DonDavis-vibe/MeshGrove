@@ -447,6 +447,9 @@ impl App {
             config,
             config_error,
         };
+        // The panels' workers prepare and upload their meshes themselves, off the UI thread.
+        #[cfg(feature = "plugins")]
+        app.plugins.set_gpu(rs.device.clone(), rs.queue.clone());
         #[cfg(feature = "plugins")]
         {
             app.reload_plugins();

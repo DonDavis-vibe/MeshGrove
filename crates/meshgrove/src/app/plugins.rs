@@ -367,7 +367,7 @@ impl App {
             ui.weak(t!("plugins.loading"));
             return;
         };
-        open.upload_meshes(&rs.device);
+        open.upload_meshes(&rs.device, &rs.queue);
         if let Some(e) = open.error.clone() {
             ui.colored_label(ui.visuals().error_fg_color, format!("✖ {e}"));
             if ui.button(t!("plugins.reopen")).clicked() {
@@ -407,6 +407,9 @@ impl App {
             });
             return;
         };
+        // Painting on a 3D view waits while the panel works on an event.
+        let busy = open.busy;
+        let mut painted = Vec::new();
         let meshes = &mut open.meshes;
         let mut draw_mesh = |ui: &mut Ui, args: MeshViewArgs| {
             let size = egui::vec2(ui.available_width(), args.height);
@@ -418,6 +421,7 @@ impl App {
             };
             m.viewer.set_bed(args.bed);
             m.set_frame(args.frame);
+            m.viewer.set_paint(args.paint.map(crate::plugin_mesh::paint_mode));
             ui.allocate_ui(size, |ui| {
                 ui.set_min_size(size);
                 if let Some(input) = space {
@@ -425,9 +429,13 @@ impl App {
                 }
                 m.viewer.ui(ui, rs, renderer);
             });
+            let centre = m.centre;
+            painted.extend(
+                m.viewer.take_paint(busy).into_iter().map(|out| crate::plugin_mesh::to_event(args.id, centre, out)),
+            );
         };
         let events = plugin_view::show(ui, &view, &mut open.ui, &mut draw_mesh);
-        for event in events {
+        for event in events.into_iter().chain(painted) {
             open.send(event);
         }
     }

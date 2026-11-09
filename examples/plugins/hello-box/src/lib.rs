@@ -5,7 +5,9 @@
 //! - Tool `measure`: the size of a library model, through `library.triangles` (permission
 //!   `library_read`).
 //! - Panel "box": a form, a 3D view of the box and two ways to add it to the library: at once,
-//!   or through a background job.
+//!   or through a background job. With "Tint faces" ticked a click on the box tints the face
+//!   it hit, Shift-click clears it: the 3D view's paint tool `click` (`Event::MeshPick`) and an
+//!   overlay of one class per triangle.
 //! - Opens `*.box.json` files (a saved box) in its panel: it gets the file's bytes.
 //! - Opens `*.stl` files with "Box around this …": it gets their library ids in its panel
 //!   (`Event::ModelsOpened`), measures the first one and sizes the box to hold it. Those files it
@@ -14,12 +16,15 @@
 //!
 //! With the feature `test-hooks` it has three more tools for Meshgrove's tests: `spin` never
 //! ends, `trap` eats all memory, `describe` passes on what `library.describe` says. Its panel then also answers `HostChanged` with a toast naming the
-//! language, and a click on "future" with an effect no Meshgrove knows.
+//! language, a click on "future" with an effect no Meshgrove knows, and one on "bad_overlay" by
+//! giving an overlay of the wrong length.
 
 use std::cell::RefCell;
 
 use meshgrove_plugin_api::guest::{self, Guest, GuestPanel, PluginError, ToolOutput, library};
-use meshgrove_plugin_api::ui::{Effect, Event, FormRow, JobSpec, Level, Node, TextStyle, Unit, View};
+use meshgrove_plugin_api::ui::{
+    Effect, Event, FormRow, JobSpec, Level, MeshOverlay, MeshPaint, Node, PaintTool, TextStyle, Unit, View,
+};
 use meshgrove_plugin_api::{
     API_VERSION, Bundle, BundleFile, BundleItem, BundleList, FileType, ListKind, Manifest, MeshData, PanelDef,
     Permission, Receive, ToolDef,
@@ -276,6 +281,14 @@ struct PanelState {
     busy: bool,
     /// The library model the box was sized for ("Box around this …"), by its id.
     source: Option<String>,
+    /// A click on the box tints the face it hits.
+    painting: bool,
+    /// The tinted faces: bottom, top, front, right, back, left (two triangles each).
+    tinted: [bool; 6],
+    /// Grows with every change of the tint, so the 3D view asks for the overlay anew.
+    tint_revision: u64,
+    /// Test hook: the overlay has the wrong length.
+    bad_overlay: bool,
 }
 
 struct BoxPanel {
@@ -317,6 +330,12 @@ impl GuestPanel for BoxPanel {
                 ],
                 submit: None,
             },
+            Node::Checkbox {
+                id: "tint".into(),
+                label: "Tint faces (click; Shift-click clears)".into(),
+                checked: s.painting,
+                enabled: true,
+            },
             Node::MeshView {
                 id: "preview".into(),
                 key: "box".into(),
@@ -324,6 +343,12 @@ impl GuestPanel for BoxPanel {
                 height: Some(240.0),
                 bed: None,
                 frame: None,
+                paint: s.painting.then(|| MeshPaint { tool: PaintTool::Click, ..MeshPaint::default() }),
+                overlay: Some(MeshOverlay {
+                    key: "tint".into(),
+                    revision: s.tint_revision,
+                    palette: vec!["#00000000".into(), "#ff8000".into()],
+                }),
             },
             Node::row(vec![
                 Node::Button { id: "apply".into(), label: "Add to library".into(), primary: true, enabled: !s.busy },
@@ -358,9 +383,27 @@ impl GuestPanel for BoxPanel {
                     ("height", Some(v)) => s.spec.height = v,
                     ("copies", Some(v)) => s.spec.copies = v.round().clamp(1.0, 99.0) as u32,
                     ("name", _) => s.spec.name = value.as_str().unwrap_or_default().to_owned(),
+                    ("tint", _) => {
+                        s.painting = value.as_bool().unwrap_or_default();
+                        return guest::effects(&[]);
+                    }
                     _ => {}
                 }
                 s.revision += 1;
+                Vec::new()
+            }
+            // A click on the box: the face it hit, two triangles of the cuboid.
+            Event::MeshPick { hit: Some(hit), shift, .. } => {
+                if let Some(face) = s.tinted.get_mut(hit.triangle as usize / 2) {
+                    *face = !shift;
+                    s.tint_revision += 1;
+                }
+                Vec::new()
+            }
+            #[cfg(feature = "test-hooks")]
+            Event::Click { id } if id == "bad_overlay" => {
+                s.bad_overlay = true;
+                s.tint_revision += 1;
                 Vec::new()
             }
             Event::Click { id } if id == "apply" => match s.spec.write() {
@@ -414,7 +457,17 @@ impl GuestPanel for BoxPanel {
     }
 
     fn mesh(&self, key: String) -> Option<guest::MeshData> {
-        (key == "box").then(|| self.state.borrow().spec.mesh().into())
+        let s = self.state.borrow();
+        match key.as_str() {
+            "box" => Some(s.spec.mesh().into()),
+            // The overlay: no positions, one class per triangle (1: tinted).
+            "tint" => {
+                let triangles = if s.bad_overlay { 5 } else { s.spec.mesh().triangles() };
+                let indices = (0..triangles).map(|t| u32::from(s.tinted[t / 2 % 6])).collect();
+                Some(guest::MeshData { positions: Vec::new(), indices })
+            }
+            _ => None,
+        }
     }
 
     fn snapshot(&self) -> String {
