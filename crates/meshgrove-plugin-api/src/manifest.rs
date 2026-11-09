@@ -126,6 +126,10 @@ pub struct HostInfo {
     /// The API version of the host.
     #[serde(default)]
     pub api: String,
+    /// The user reads lengths in inches (millimetres otherwise). Lengths cross the interface in
+    /// millimetres either way; this is for texts the plugin writes itself. From API 0.2.
+    #[serde(default)]
+    pub imperial: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -134,6 +138,9 @@ pub struct PrinterInfo {
     pub name: String,
     /// Build volume in mm (x, y, z).
     pub bed: [f32; 3],
+    /// Nozzle diameter in mm, when the user set one. From API 0.2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nozzle: Option<f32>,
 }
 
 /// `[a-z][a-z0-9-]{1,30}`.
@@ -252,6 +259,32 @@ mod tests {
         )
         .unwrap();
         assert_eq!(unknown.permissions, [Permission::AiTools, Permission::Unknown]);
+    }
+
+    #[test]
+    fn the_host_says_units_and_nozzles() {
+        let info = HostInfo {
+            language: "en".into(),
+            imperial: true,
+            printers: vec![
+                PrinterInfo { name: "Kobra".into(), bed: [250.0, 250.0, 260.0], nozzle: Some(0.4) },
+                PrinterInfo { name: "Old".into(), bed: [200.0, 200.0, 180.0], nozzle: None },
+            ],
+            ..HostInfo::default()
+        };
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(
+            (json["imperial"].as_bool(), json["printers"][0]["nozzle"].as_f64()),
+            (Some(true), Some(0.4f32 as f64))
+        );
+        assert!(json["printers"][1].get("nozzle").is_none());
+        assert_eq!(serde_json::from_value::<HostInfo>(json).unwrap(), info);
+        // What a Meshgrove 0.8 says: metric, no nozzles.
+        let old: HostInfo = serde_json::from_str(
+            r#"{"language":"de","dark":false,"printers":[{"name":"Kobra","bed":[250,250,260]}],"meshgrove":"0.8.3","api":"0.1.0"}"#,
+        )
+        .unwrap();
+        assert_eq!((old.imperial, old.printers[0].nozzle), (false, None));
     }
 
     #[test]

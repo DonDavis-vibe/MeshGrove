@@ -30,10 +30,11 @@ pub fn host_info(config: &Config, language: &str, dark: bool) -> HostInfo {
         printers: config
             .printers_in_order()
             .into_iter()
-            .map(|p| PrinterInfo { name: p.name, bed: [p.x, p.y, p.z] })
+            .map(|p| PrinterInfo { name: p.name, bed: [p.x, p.y, p.z], nozzle: p.nozzle })
             .collect(),
         meshgrove: env!("CARGO_PKG_VERSION").into(),
         api: API_VERSION.into(),
+        imperial: config.display_units == meshgrove_core::config::DisplayUnits::Imperial,
     }
 }
 
@@ -183,5 +184,34 @@ impl ToolProvider for Registry {
 
     fn needs_review(&self, name: &str) -> bool {
         self.tool(name).is_some_and(|(p, _)| !p.settings().grants.auto_accept)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use meshgrove_core::config::DisplayUnits;
+    use meshgrove_core::printer::Printer;
+
+    #[test]
+    fn the_host_tells_units_and_nozzles() {
+        let printer = |name: &str, nozzle| Printer {
+            name: name.into(),
+            x: 250.0,
+            y: 250.0,
+            z: 260.0,
+            nozzle,
+            materials: Vec::new(),
+            gcode_names: Vec::new(),
+        };
+        let printers = Some(vec![printer("Kobra", Some(0.6)), printer("Old", None)]);
+        let mut config = Config { printers, ..Config::default() };
+        let info = host_info(&config, "de", true);
+        assert!(!info.imperial && info.dark);
+        assert_eq!(info.api, API_VERSION);
+        let nozzles: Vec<Option<f32>> = info.printers.iter().map(|p| p.nozzle).collect();
+        assert!(nozzles.contains(&Some(0.6)) && nozzles.contains(&None), "{nozzles:?}");
+        config.display_units = DisplayUnits::Imperial;
+        assert!(host_info(&config, "de", true).imperial);
     }
 }
