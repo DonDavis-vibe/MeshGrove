@@ -100,7 +100,8 @@ pub enum Node {
         text: String,
     },
     Separator,
-    /// A picture: PNG or JPEG, base64.
+    /// A picture: PNG or JPEG, base64. With an `id` it can be clicked, for a gallery to pick
+    /// from.
     Image {
         data: String,
         #[serde(default = "png")]
@@ -109,6 +110,13 @@ pub enum Node {
         width: Option<f32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         alt: Option<String>,
+        /// A click on the picture sends [`Event::Click`] with this id. From API 0.2.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// Drawn as the one that is chosen (a frame round it); for pictures with an `id`.
+        /// From API 0.2.
+        #[serde(default, skip_serializing_if = "is_false")]
+        selected: bool,
     },
     Notice {
         #[serde(default)]
@@ -814,6 +822,7 @@ impl Node {
             | Node::MeshView { id, .. } => Some(id),
             Node::GridEditor(g) => Some(&g.id),
             Node::Canvas(c) => Some(&c.id),
+            Node::Image { id, .. } => id.as_deref(),
             _ => None,
         }
     }
@@ -960,6 +969,24 @@ mod tests {
             "frame": [[0.0, 0.0, 0.0], [250.0, 305.0, 100.0]]}))
         .unwrap();
         assert!(matches!(with, Node::MeshView { frame: Some([_, [250.0, 305.0, 100.0]]), .. }), "{with:?}");
+    }
+
+    #[test]
+    fn a_picture_can_be_one_to_click() {
+        // As an API 0.1 plugin sends it: a picture to look at.
+        let plain: Node = serde_json::from_value(json!({"type": "image", "data": "aGk="})).unwrap();
+        assert!(matches!(&plain, Node::Image { id: None, selected: false, mime, .. } if mime == "image/png"));
+        assert_eq!(plain.id(), None);
+        let json = serde_json::to_value(&plain).unwrap();
+        assert!(json.get("id").is_none() && json.get("selected").is_none(), "{json}");
+        let pick = json!({"type": "image", "data": "aGk=", "mime": "image/png", "width": 64.0,
+            "alt": "Honeycomb", "id": "texture:honeycomb", "selected": true});
+        let node: Node = serde_json::from_value(pick.clone()).unwrap();
+        assert!(matches!(&node, Node::Image { selected: true, .. }));
+        assert_eq!(node.id(), Some("texture:honeycomb"));
+        assert_eq!(serde_json::to_value(&node).unwrap(), pick);
+        let gallery = Node::row(vec![plain, node]);
+        assert!(gallery.find("texture:honeycomb").is_some());
     }
 
     #[test]

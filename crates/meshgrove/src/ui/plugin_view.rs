@@ -186,7 +186,9 @@ impl Draw<'_> {
             Node::Separator => {
                 ui.separator();
             }
-            Node::Image { data, width, alt, .. } => self.image(ui, data, *width, alt.as_deref()),
+            Node::Image { data, width, alt, id, selected, .. } => {
+                self.image(ui, data, *width, alt.as_deref(), id.as_deref(), *selected);
+            }
             Node::Notice { level, text } => {
                 let color = level_color(ui, *level);
                 egui::Frame::new()
@@ -389,7 +391,16 @@ impl Draw<'_> {
         ui.advance_cursor_after_rect(rect);
     }
 
-    fn image(&mut self, ui: &mut Ui, data: &str, width: Option<f32>, alt: Option<&str>) {
+    /// A picture; with an `id` one to click, framed when it is the `selected` one.
+    fn image(
+        &mut self,
+        ui: &mut Ui,
+        data: &str,
+        width: Option<f32>,
+        alt: Option<&str>,
+        id: Option<&str>,
+        selected: bool,
+    ) {
         let key = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -417,7 +428,25 @@ impl Draw<'_> {
         };
         let mut image = egui::Image::from_texture(egui::load::SizedTexture::from_handle(texture));
         image = image.max_width(width.unwrap_or_else(|| ui.available_width()));
-        let r = ui.add(image);
+        let r = match id {
+            None => ui.add(image),
+            Some(id) => {
+                // The frame is always there, so choosing a picture moves nothing.
+                let color = if selected { ui.visuals().selection.bg_fill } else { Color32::TRANSPARENT };
+                let frame =
+                    egui::Frame::new().inner_margin(2.0).corner_radius(4.0).stroke(egui::Stroke::new(2.0, color));
+                let framed = frame.show(ui, |ui| ui.add(image.sense(Sense::click())));
+                let r = framed.inner.on_hover_cursor(egui::CursorIcon::PointingHand);
+                if r.hovered() && !selected {
+                    let stroke = ui.visuals().widgets.hovered.bg_stroke;
+                    ui.painter().rect_stroke(framed.response.rect, 4.0, stroke, egui::StrokeKind::Inside);
+                }
+                if r.clicked() {
+                    self.events.push(Event::Click { id: id.to_owned() });
+                }
+                r
+            }
+        };
         if let Some(alt) = alt {
             r.on_hover_text(alt);
         }
@@ -744,6 +773,46 @@ mod tests {
 
     fn key(key: egui::Key) -> egui::Event {
         egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }
+    }
+
+    /// A PNG of one colour, base64, as a plugin sends pictures.
+    fn picture(color: [u8; 3]) -> String {
+        let img = image::RgbImage::from_pixel(96, 96, image::Rgb(color));
+        let mut png = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        base64::engine::general_purpose::STANDARD.encode(png.into_inner())
+    }
+
+    /// A gallery to pick from: a picture with an id is clicked like a button, one without is not.
+    #[test]
+    fn a_picture_with_an_id_is_clicked() {
+        let gallery = serde_json::json!({"v": 1, "root": {"type": "row", "children": [
+            {"type": "image", "data": picture([200, 60, 60]), "width": 64.0, "alt": "Holz", "id": "texture:holz", "selected": true},
+            {"type": "image", "data": picture([60, 60, 200]), "width": 64.0, "alt": "Wabe", "id": "texture:wabe"},
+            {"type": "image", "data": picture([60, 200, 60]), "width": 64.0, "alt": "nur ein Bild"}]}});
+        let view: View = serde_json::from_value(gallery).unwrap();
+        // Where the pictures are: the meshes of the three textures, left to right.
+        let (_, shapes) = drive(&view, 400.0, |_| Vec::new());
+        let mut pictures: Vec<Rect> = Vec::new();
+        fn walk(shape: &egui::Shape, out: &mut Vec<Rect>) {
+            match shape {
+                egui::Shape::Rect(r) if r.fill_texture_id() != egui::TextureId::default() => out.push(r.rect),
+                egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default() => out.push(m.calc_bounds()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        shapes.iter().for_each(|s| walk(&s.shape, &mut pictures));
+        pictures.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        assert_eq!(pictures.len(), 3, "{pictures:?}");
+        assert!((pictures[0].width() - 64.0).abs() < 1.0, "as wide as asked for: {:?}", pictures[0]);
+        assert_eq!(click_at(&view, pictures[1].center()), [Event::Click { id: "texture:wabe".into() }]);
+        assert_eq!(
+            click_at(&view, pictures[0].center()),
+            [Event::Click { id: "texture:holz".into() }],
+            "the chosen one too"
+        );
+        assert_eq!(click_at(&view, pictures[2].center()), [], "a picture without an id is only looked at");
     }
 
     /// Clicks through egui: a frame with the press, one with the release; the events the view sent.
