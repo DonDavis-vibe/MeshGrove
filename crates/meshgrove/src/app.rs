@@ -1380,8 +1380,9 @@ impl App {
             Action::Preview => self.open_preview(),
             Action::OpenWithPlugin(id) => {
                 #[cfg(feature = "plugins")]
-                if let [path] = self.selected_paths().as_slice() {
-                    self.open_with_plugin(&id, path);
+                {
+                    let paths = self.selected_paths();
+                    self.open_with_plugin(&id, &paths);
                 }
                 #[cfg(not(feature = "plugins"))]
                 let _ = id;

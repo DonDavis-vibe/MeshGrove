@@ -74,6 +74,36 @@ pub struct FileType {
     pub pattern: String,
     #[serde(default)]
     pub description: String,
+    /// The entry in the gallery's context menu ("Apply a texture …"); none: "Open with
+    /// <plugin>". From API 0.2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// What the plugin gets of the files. From API 0.2.
+    #[serde(default, skip_serializing_if = "Receive::is_bytes")]
+    pub receive: Receive,
+    /// With [`Receive::Ids`]: the panel (one of the manifest's) the files are opened in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<String>,
+}
+
+/// How files opened with a plugin reach it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum Receive {
+    /// One file, its name and bytes, through `open-file`.
+    #[default]
+    Bytes,
+    /// The files' library ids, as [`crate::ui::Event::ModelsOpened`] to [`FileType::panel`]: one
+    /// file or a whole selection. The panel and its jobs may read exactly these files through
+    /// `library`, with or without the `library_read` permission.
+    Ids,
+}
+
+impl Receive {
+    fn is_bytes(&self) -> bool {
+        *self == Receive::Bytes
+    }
 }
 
 impl FileType {
@@ -189,7 +219,26 @@ impl Manifest {
         if let Some(f) = self.file_types.iter().find(|f| f.pattern.trim().is_empty() || f.pattern == "*") {
             return Err(format!("file type pattern {:?} is too wide", f.pattern));
         }
+        for f in self.file_types.iter().filter(|f| f.receive == Receive::Ids) {
+            if !f.panel.as_ref().is_some_and(|id| self.panels.iter().any(|p| p.id == *id)) {
+                return Err(format!("file type {:?} receives ids, so it must name one of the panels", f.pattern));
+            }
+        }
         Ok(())
+    }
+
+    /// The file type a selection of files (by their names) opens with, if the plugin opens it:
+    /// for one file the first type that matches; for several, each file's first match must
+    /// take ids ([`Receive::Ids`]) in one and the same panel.
+    pub fn opener(&self, names: &[&str]) -> Option<&FileType> {
+        let of = |name: &str| self.file_types.iter().find(|t| t.matches(name));
+        let (first, rest) = names.split_first()?;
+        let opener = of(first)?;
+        if rest.is_empty() {
+            return Some(opener);
+        }
+        let same = |t: &FileType| t.receive == Receive::Ids && t.panel == opener.panel;
+        (same(opener) && rest.iter().all(|n| of(n).is_some_and(same))).then_some(opener)
     }
 
     pub fn wants(&self, permission: Permission) -> bool {
@@ -232,7 +281,7 @@ mod tests {
             api: crate::API_VERSION.into(),
             permissions: vec![Permission::AiTools, Permission::Bundles],
             panels: vec![PanelDef { id: "box".into(), title: "Box".into() }],
-            file_types: vec![FileType { pattern: "*.box.json".into(), description: String::new() }],
+            file_types: vec![FileType { pattern: "*.box.json".into(), ..FileType::default() }],
             ..Manifest::default()
         }
     }
@@ -289,10 +338,61 @@ mod tests {
 
     #[test]
     fn file_types_match_by_pattern() {
-        let t = FileType { pattern: "*.Gridfinity.json".into(), description: String::new() };
+        let t = FileType { pattern: "*.Gridfinity.json".into(), ..FileType::default() };
         assert!(t.matches("Schublade.gridfinity.json") && !t.matches("x.json"));
-        let t = FileType { pattern: "plan-*.txt".into(), description: String::new() };
+        let t = FileType { pattern: "plan-*.txt".into(), ..FileType::default() };
         assert!(t.matches("plan-1.txt") && !t.matches("xplan-1.txt"));
+    }
+
+    #[test]
+    fn file_types_default_to_bytes_and_ids_need_a_panel() {
+        // What an API 0.1 plugin says: the file's bytes, the usual menu entry.
+        let old: FileType = serde_json::from_str(r#"{"pattern": "*.box.json", "description": "A saved box"}"#).unwrap();
+        assert_eq!((old.receive, &old.label, &old.panel), (Receive::Bytes, &None, &None));
+        let json = serde_json::to_value(&old).unwrap();
+        assert_eq!(json, serde_json::json!({"pattern": "*.box.json", "description": "A saved box"}), "nothing new");
+        let ids = FileType {
+            pattern: "*.stl".into(),
+            label: Some("Measure …".into()),
+            receive: Receive::Ids,
+            panel: Some("box".into()),
+            ..FileType::default()
+        };
+        let json = serde_json::to_value(&ids).unwrap();
+        assert_eq!((json["receive"].as_str(), json["panel"].as_str()), (Some("ids"), Some("box")));
+        assert_eq!(serde_json::from_value::<FileType>(json).unwrap(), ids);
+        assert_eq!(Manifest { file_types: vec![ids.clone()], ..manifest() }.check(), Ok(()));
+        for panel in [None, Some("nope".to_owned())] {
+            let bad = Manifest { file_types: vec![FileType { panel, ..ids.clone() }], ..manifest() };
+            assert!(bad.check().unwrap_err().contains("must name one of the panels"));
+        }
+    }
+
+    #[test]
+    fn a_selection_opens_when_every_file_fits() {
+        let ids = |pattern: &str, panel: &str| FileType {
+            pattern: pattern.into(),
+            receive: Receive::Ids,
+            panel: Some(panel.into()),
+            ..FileType::default()
+        };
+        let m = Manifest {
+            file_types: vec![
+                FileType { pattern: "*.box.json".into(), ..FileType::default() },
+                ids("*.stl", "box"),
+                ids("*.3mf", "box"),
+                ids("*.step", "other"),
+            ],
+            ..manifest()
+        };
+        assert_eq!(m.opener(&[]), None);
+        assert_eq!(m.opener(&["a.box.json"]).map(|t| t.receive), Some(Receive::Bytes));
+        assert_eq!(m.opener(&["A.STL"]).map(|t| t.pattern.as_str()), Some("*.stl"));
+        assert_eq!(m.opener(&["a.stl", "b.3mf", "c.stl"]).map(|t| t.pattern.as_str()), Some("*.stl"));
+        assert_eq!(m.opener(&["a.stl", "notes.txt"]), None, "one file does not fit");
+        assert_eq!(m.opener(&["a.box.json", "b.box.json"]), None, "bytes are one file at a time");
+        assert_eq!(m.opener(&["a.stl", "b.step"]), None, "two panels");
+        assert_eq!(m.opener(&["a.txt"]), None);
     }
 
     #[test]

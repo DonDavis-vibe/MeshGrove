@@ -21,7 +21,7 @@ pub use bundle::{Bundle, BundleFile, BundleItem, BundleList, ListKind};
 /// Exports a plugin: `meshgrove_plugin_api::export_plugin!(MyPlugin);` ([`guest`]).
 #[cfg(feature = "guest")]
 pub use guest::export_plugin;
-pub use manifest::{FileType, HostInfo, Manifest, PanelDef, Permission, PrinterInfo, ToolDef};
+pub use manifest::{FileType, HostInfo, Manifest, PanelDef, Permission, PrinterInfo, Receive, ToolDef};
 pub use mesh::MeshData;
 
 /// The WIT world `meshgrove:plugin/meshgrove-plugin`.

@@ -13,7 +13,7 @@ use wasmtime::Store;
 use wasmtime::component::{HasSelf, Linker};
 
 use crate::bindings::{MeshgrovePlugin, MeshgrovePluginPre, PluginError};
-use crate::library::LibraryAccess;
+use crate::library::{Caller, LibraryAccess, Opened};
 use crate::staging::{Staging, new_uid};
 use crate::state::{self, CancelToken, Folders, Progress, Setup, State};
 use crate::{DEFAULT_MEMORY_MB, EVENT_DEADLINE, Error, TOOL_DEADLINE};
@@ -183,8 +183,9 @@ impl Plugin {
             let mut store = state::store(Setup {
                 plugin: "(loading)",
                 grants: &PluginGrants::default(),
-                class: AccessClass::Local,
+                caller: Caller::User,
                 wants_library: false,
+                opened: Opened::default(),
                 library: None,
                 info: &self.settings.info,
                 memory_mb: DEFAULT_MEMORY_MB,
@@ -295,14 +296,15 @@ impl Plugin {
     }
 
     /// A store for one instance, with `out` as `/out` and a fresh `/tmp` (or `tmp`), reading
-    /// the library (if granted) as `class` would.
+    /// the library as `caller` may: with the plugin's grant, and the files in `opened`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn store(
         &self,
         out: &Path,
         tmp: Option<&Path>,
         data_writable: bool,
-        class: AccessClass,
+        caller: Caller,
+        opened: Opened,
         cancel: CancelToken,
         progress: Option<Progress>,
     ) -> Result<Store<State>, Error> {
@@ -312,8 +314,9 @@ impl Plugin {
         state::store(Setup {
             plugin: &self.manifest.id,
             grants: &self.settings.grants,
-            class,
+            caller,
             wants_library: self.manifest.wants(Permission::LibraryRead),
+            opened,
             library: self.settings.library.clone(),
             info: &self.settings.info,
             memory_mb: self.memory_mb(),
@@ -381,7 +384,7 @@ impl Plugin {
         if !self.tools.iter().any(|t| t.name == name) {
             return Err(Error::Invalid(format!("{} has no tool {name:?}", self.manifest.id)));
         }
-        let mut store = self.store(out, None, false, class, cancel.clone(), None)?;
+        let mut store = self.store(out, None, false, Caller::Ai(class), Opened::default(), cancel.clone(), None)?;
         state::arm(&mut store, Some(self.settings.tool_deadline));
         let instance = self.instantiate(&mut store)?;
         let output = instance
@@ -421,7 +424,20 @@ impl Plugin {
         cancel: &CancelToken,
         progress: Option<Progress>,
     ) -> Result<Value, Error> {
-        let mut store = self.store(out, None, true, AccessClass::Local, cancel.clone(), progress)?;
+        self.run_job_with(kind, params, out, &Opened::default(), cancel, progress)
+    }
+
+    /// [`Plugin::run_job`] for a panel: the job reads the files in `opened` as the panel does.
+    pub fn run_job_with(
+        &self,
+        kind: &str,
+        params: &Value,
+        out: &Path,
+        opened: &Opened,
+        cancel: &CancelToken,
+        progress: Option<Progress>,
+    ) -> Result<Value, Error> {
+        let mut store = self.store(out, None, true, Caller::User, opened.clone(), cancel.clone(), progress)?;
         state::arm(&mut store, None);
         let instance = self.instantiate(&mut store)?;
         let text = instance
@@ -440,7 +456,8 @@ impl Plugin {
         }
         let staging = Staging::new(&self.settings.base, &self.manifest.id)?;
         let result = (|| {
-            let mut store = self.store(staging.out(), None, false, AccessClass::Local, CancelToken::new(), None)?;
+            let (caller, opened) = (Caller::User, Opened::default());
+            let mut store = self.store(staging.out(), None, false, caller, opened, CancelToken::new(), None)?;
             state::arm(&mut store, Some(self.settings.tool_deadline));
             let instance = self.instantiate(&mut store)?;
             let text = instance

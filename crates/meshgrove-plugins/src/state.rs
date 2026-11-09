@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use meshgrove_core::config::{AccessClass, LibraryRead, PluginGrants};
+use meshgrove_core::config::{LibraryRead, PluginGrants};
 use meshgrove_plugin_api::HostInfo;
 use wasmtime::component::ResourceTable;
 use wasmtime::{ResourceLimiter, Store, UpdateDeadline};
@@ -14,7 +14,7 @@ use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::Error;
 use crate::bindings::meshgrove::plugin::{host, library, types};
-use crate::library::LibraryAccess;
+use crate::library::{Caller, LibraryAccess, Opened};
 
 /// Stops a call or job: the plugin sees `host.cancelled()`, and is interrupted at the next tick
 /// if it does not look.
@@ -86,10 +86,12 @@ pub(crate) struct State {
     pub limits: Limits,
     pub plugin: String,
     pub grants: PluginGrants,
-    /// Who the call is for, as far as reading the library goes (the user locally, or an AI).
-    pub class: AccessClass,
+    /// Who the call is for, as far as reading the library goes (the user, or an AI).
+    pub caller: Caller,
     /// The manifest asks for `library_read`.
     pub wants_library: bool,
+    /// The library files the user opened with this panel (or the panel that started this job).
+    pub opened: Opened,
     pub library: Option<Arc<dyn LibraryAccess>>,
     pub info: HostInfo,
     pub cancel: CancelToken,
@@ -123,8 +125,9 @@ pub(crate) struct Folders<'a> {
 pub(crate) struct Setup<'a> {
     pub plugin: &'a str,
     pub grants: &'a PluginGrants,
-    pub class: AccessClass,
+    pub caller: Caller,
     pub wants_library: bool,
+    pub opened: Opened,
     pub library: Option<Arc<dyn LibraryAccess>>,
     pub info: &'a HostInfo,
     pub memory_mb: u32,
@@ -162,8 +165,9 @@ pub(crate) fn store(setup: Setup) -> Result<Store<State>, Error> {
         limits: Limits { memory_mb: setup.memory_mb, hit: false },
         plugin: setup.plugin.to_owned(),
         grants: setup.grants.clone(),
-        class: setup.class,
+        caller: setup.caller,
         wants_library: setup.wants_library,
+        opened: setup.opened,
         library: setup.library,
         info: setup.info.clone(),
         cancel: setup.cancel,
@@ -242,42 +246,101 @@ impl host::Host for State {
     }
 }
 
+/// How an instance got at a library file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Through {
+    /// The user lets the plugin read the library.
+    Grant,
+    /// The user opened this very file with the panel.
+    Opening,
+}
+
 impl State {
-    /// Runs `f` on the library as far as the user lets this plugin read it. The time it takes
-    /// is the host's, not the plugin's: the deadline moves on by as much.
-    fn with_library<T>(
-        &mut self,
-        f: impl FnOnce(&dyn LibraryAccess, LibraryRead, AccessClass) -> Result<T, String>,
-    ) -> Result<T, String> {
-        if !self.wants_library || self.grants.library_read == LibraryRead::None {
-            return Err(format!(
-                "the user has not allowed {} to read the library (Meshgrove → Settings → Plugins)",
-                self.plugin
-            ));
-        }
+    /// The user's grant to read the library, if the manifest asks for it too.
+    fn granted(&self) -> Option<LibraryRead> {
+        (self.wants_library && self.grants.library_read != LibraryRead::None).then_some(self.grants.library_read)
+    }
+
+    fn not_allowed(&self) -> String {
+        format!("the user has not allowed {} to read the library (Meshgrove → Settings → Plugins)", self.plugin)
+    }
+
+    /// Runs `f` on the library with the host's clock stopped: the time it takes is the host's,
+    /// not the plugin's, so the deadline moves on by as much.
+    fn on_library<T>(&mut self, f: impl FnOnce(&Self, &dyn LibraryAccess) -> Result<T, String>) -> Result<T, String> {
         let library = self.library.clone().ok_or("no library is open here")?;
         let started = Instant::now();
-        let result = f(library.as_ref(), self.grants.library_read, self.class);
+        let result = f(self, library.as_ref());
         if let Some((until, limit)) = &mut self.deadline {
             *until += started.elapsed();
             *limit += started.elapsed();
         }
         result
     }
+
+    /// Runs `f` on the library as far as the user lets this plugin read it.
+    fn with_library<T>(
+        &mut self,
+        f: impl FnOnce(&dyn LibraryAccess, LibraryRead, Caller) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let read = self.granted().ok_or_else(|| self.not_allowed())?;
+        let caller = self.caller;
+        self.on_library(|_, library| f(library, read, caller))
+    }
+
+    /// Runs `f` on library file `id`: as far as the user lets this plugin read the library, and
+    /// where that does not reach the file, because the user opened it with this panel. Such a
+    /// file reads as the user sees it, whatever AI may see.
+    fn with_file<T>(
+        &mut self,
+        id: &str,
+        f: impl Fn(&dyn LibraryAccess, LibraryRead, Caller) -> Result<T, String>,
+    ) -> Result<(T, Through), String> {
+        let (granted, opened) = (self.granted(), self.opened.contains(id));
+        if granted.is_none() && !opened {
+            return Err(self.not_allowed());
+        }
+        let caller = self.caller;
+        self.on_library(|_, library| {
+            let refused = match granted {
+                Some(read) => match f(library, read, caller) {
+                    Ok(value) => return Ok((value, Through::Grant)),
+                    Err(e) => e,
+                },
+                None => String::new(),
+            };
+            if !opened {
+                return Err(refused);
+            }
+            f(library, LibraryRead::All, Caller::User).map(|value| (value, Through::Opening))
+        })
+    }
+}
+
+/// Facts of a file the plugin reads only because the user opened it: without what they say
+/// about other files (its copies, the G-code beside it, the folder's readme).
+fn only_this_file(mut facts: serde_json::Value) -> serde_json::Value {
+    if let Some(map) = facts.as_object_mut() {
+        for key in ["copies", "related_gcode", "folder_readme_untrusted"] {
+            map.remove(key);
+        }
+    }
+    facts
 }
 
 impl library::Host for State {
     fn search(&mut self, query: String, limit: u32) -> Result<String, String> {
-        self.with_library(|l, read, class| l.search(&query, limit.min(500), read, class)).map(|v| v.to_string())
+        self.with_library(|l, read, caller| l.search(&query, limit.min(500), read, caller)).map(|v| v.to_string())
     }
 
     fn describe(&mut self, id: String) -> Result<String, String> {
-        self.with_library(|l, read, class| l.describe(&id, read, class)).map(|v| v.to_string())
+        let (facts, through) = self.with_file(&id, |l, read, caller| l.describe(&id, read, caller))?;
+        Ok(if through == Through::Opening { only_this_file(facts) } else { facts }.to_string())
     }
 
     fn triangles(&mut self, id: String, max_triangles: u32) -> Result<types::MeshData, String> {
-        let mesh =
-            self.with_library(|l, read, class| l.triangles(&id, max_triangles.clamp(1, 2_000_000), read, class))?;
+        let max = max_triangles.clamp(1, 2_000_000);
+        let (mesh, _) = self.with_file(&id, |l, read, caller| l.triangles(&id, max, read, caller))?;
         mesh.check()?;
         Ok(types::MeshData { positions: mesh.positions, indices: mesh.indices })
     }

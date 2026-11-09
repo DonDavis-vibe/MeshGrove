@@ -29,11 +29,23 @@ pub struct Scope {
 impl Scope {
     /// Nothing is visible while AI is switched off.
     pub fn new(config: &Config, class: AccessClass) -> Scope {
+        Scope::open_to(config, class, config.ai.enabled)
+    }
+
+    /// What a plugin's panels and jobs see when the user lets it read "what local AI sees": the
+    /// libraries open to `class`, also while AI is switched off. There the user works themself
+    /// and no AI reads along, so the switch for AI does not count; what each library is open
+    /// to still does.
+    pub fn for_plugin(config: &Config, class: AccessClass) -> Scope {
+        Scope::open_to(config, class, true)
+    }
+
+    fn open_to(config: &Config, class: AccessClass, enabled: bool) -> Scope {
         let mut roots = Vec::new();
         let mut hidden = Vec::new();
         for (path, alias) in aliases(&config.library_roots) {
             let library = config.ai.library(&path);
-            if config.ai.enabled && library.access.allows(class) {
+            if enabled && library.access.allows(class) {
                 roots.push(ScopedRoot { alias, path, images: library.images });
             } else {
                 hidden.push(path);
@@ -216,6 +228,11 @@ mod tests {
         );
         let off = Config { ai: crate::config::AiConfig { enabled: false, ..c.ai.clone() }, ..c.clone() };
         assert!(Scope::new(&off, AccessClass::Local).is_empty(), "switched off: nothing");
+        // A plugin's panel is the user at work, not an AI: the switch does not count for it,
+        // what each library is open to does.
+        assert_eq!(aliases(&Scope::for_plugin(&off, AccessClass::Local)), ["eigene", "kunden"]);
+        assert_eq!(aliases(&Scope::for_plugin(&off, AccessClass::Cloud)), ["eigene"]);
+        assert_eq!(Scope::for_plugin(&c, AccessClass::Local), local);
         let unlisted = Config { library_roots: vec!["/lib/neu".into()], ..c };
         assert!(Scope::new(&unlisted, AccessClass::Local).is_empty(), "new libraries start hidden");
     }

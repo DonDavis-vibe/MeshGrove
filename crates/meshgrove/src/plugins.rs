@@ -12,9 +12,9 @@ use meshgrove_core::ai::dispatch::ToolProvider;
 use meshgrove_core::bundle::ResolvedBundle;
 use meshgrove_core::config::Config;
 use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Node, View};
-use meshgrove_plugin_api::{Bundle, HostInfo, MeshData};
+use meshgrove_plugin_api::{Bundle, FileType, HostInfo, MeshData};
 use meshgrove_plugins::jobs::{JobEvent, JobPool};
-use meshgrove_plugins::{CancelToken, Plugin, Registry, Settings, StagedBundle, Staging};
+use meshgrove_plugins::{CancelToken, Opened, Plugin, Registry, Settings, StagedBundle, Staging};
 
 use crate::library::{Applied, LibraryService};
 use crate::ui::plugin_view::PanelUiState;
@@ -98,6 +98,8 @@ pub struct OpenPanel {
     outputs: Receiver<Output>,
     /// The panel's `/out` and `/tmp`, once it is open.
     folders: Option<(PathBuf, PathBuf)>,
+    /// The library files the user opened with the panel: it and its jobs may read these.
+    pub opened: Opened,
     pub view: Option<View>,
     pub error: Option<String>,
     pub ui: PanelUiState,
@@ -259,13 +261,16 @@ impl PluginHost {
         out
     }
 
-    /// The loaded plugins that open a file named `name`: (id, name).
-    pub fn openers(&self, name: &str) -> Vec<(String, String)> {
+    /// The loaded plugins that open the files named `names` (one file, or a selection every
+    /// file of which fits): (id, name, the file type that takes them).
+    pub fn openers(&self, names: &[&str]) -> Vec<(String, String, FileType)> {
         self.registry
             .plugins()
             .iter()
-            .filter(|p| p.manifest().file_types.iter().any(|t| t.matches(name)))
-            .map(|p| (p.id().to_owned(), p.manifest().name.clone()))
+            .filter_map(|p| {
+                let opener = p.manifest().opener(names)?;
+                Some((p.id().to_owned(), p.manifest().name.clone(), opener.clone()))
+            })
             .collect()
     }
 
@@ -281,6 +286,25 @@ impl PluginHost {
         self.base.join(plugin).join("state").join(format!("{panel}.json"))
     }
 
+    /// Where the ids of the library files opened with a panel are kept.
+    fn opened_file(&self, plugin: &str, panel: &str) -> PathBuf {
+        self.base.join(plugin).join("state").join(format!("{panel}.opened.json"))
+    }
+
+    /// Hands library files the user opened with a plugin (by their ids) to its panel, opening
+    /// it if need be. From now on the panel and its jobs may read exactly these files.
+    pub fn open_models(&mut self, plugin: &str, panel: &str, ids: Vec<String>) -> Result<(), String> {
+        self.open(plugin, panel, None)?;
+        let file = self.opened_file(plugin, panel);
+        let open = self.find(plugin, panel).ok_or("the panel is closed")?;
+        open.opened.add(&ids);
+        if let Err(e) = open.opened.save(&file) {
+            log::warn!("keeping what was opened with {plugin}/{panel}: {e}");
+        }
+        open.send(Event::ModelsOpened { ids });
+        Ok(())
+    }
+
     /// Opens a panel with `state`, or as it was closed last; one already open starts again
     /// with `state` (a file opened with it), or stays as it is.
     pub fn open(&mut self, plugin: &str, panel: &str, state: Option<String>) -> Result<(), String> {
@@ -294,12 +318,14 @@ impl PluginHost {
         let title = p.manifest().panels.iter().find(|d| d.id == panel).map(|d| d.title.clone());
         let title = title.ok_or_else(|| format!("{plugin} has no panel {panel}"))?;
         let state = state.or_else(|| std::fs::read_to_string(self.state_file(plugin, panel)).ok());
+        // What the user opened with the panel before stays readable for it.
+        let opened = Opened::load(&self.opened_file(plugin, panel));
         let (inputs, input_rx) = unbounded();
         let (output_tx, outputs) = unbounded();
-        let (name, ctx) = (panel.to_owned(), self.ctx.clone());
+        let (name, ctx, reads) = (panel.to_owned(), self.ctx.clone(), opened.clone());
         std::thread::Builder::new()
             .name(format!("plugin-ui-{plugin}"))
-            .spawn(move || work(&p, &name, state, &input_rx, &output_tx, &ctx))
+            .spawn(move || work(&p, &name, state, reads, &input_rx, &output_tx, &ctx))
             .map_err(|e| e.to_string())?;
         self.panels.push(OpenPanel {
             plugin: plugin.to_owned(),
@@ -308,6 +334,7 @@ impl PluginHost {
             inputs,
             outputs,
             folders: None,
+            opened,
             view: None,
             error: None,
             ui: PanelUiState::default(),
@@ -363,7 +390,7 @@ impl PluginHost {
         let Some((out, _)) = open.folders.clone() else { return };
         let labels: Vec<(String, String)> =
             jobs.iter().map(|j| (j.id.clone(), j.label.clone().unwrap_or_else(|| j.kind.clone()))).collect();
-        for (id, cancel) in pool.start(&p, jobs, &out, &open.job_events.0) {
+        for (id, cancel) in pool.start(&p, jobs, &out, &open.opened, &open.job_events.0) {
             let label = labels.iter().find(|(j, _)| *j == id).map(|(_, l)| l.clone()).unwrap_or_default();
             open.jobs.push(RunningJob { id, label, fraction: 0.0, message: String::new(), cancel });
         }
@@ -633,6 +660,7 @@ fn work(
     plugin: &Arc<Plugin>,
     panel: &str,
     state: Option<String>,
+    opened: Opened,
     inputs: &Receiver<Input>,
     outputs: &Sender<Output>,
     ctx: &egui::Context,
@@ -641,7 +669,7 @@ fn work(
         let _ = outputs.send(o);
         ctx.request_repaint();
     };
-    let handle = match plugin.open_panel(panel, state) {
+    let handle = match plugin.open_panel_with(panel, state, opened) {
         Ok(h) => h,
         Err(e) => return send(Output::Failed(e.to_string())),
     };
@@ -736,7 +764,8 @@ mod tests {
         let (inputs, input_rx) = unbounded();
         let (output_tx, outputs) = unbounded();
         let ctx = egui::Context::default();
-        let worker = std::thread::spawn(move || work(&plugin, "box", None, &input_rx, &output_tx, &ctx));
+        let opened = Opened::default();
+        let worker = std::thread::spawn(move || work(&plugin, "box", None, opened, &input_rx, &output_tx, &ctx));
         let next = || outputs.recv_timeout(Duration::from_secs(60)).expect("the panel answers");
         assert!(matches!(next(), Output::Opened { .. }));
         match next() {
@@ -748,6 +777,123 @@ mod tests {
         assert!(matches!(next(), Output::View(_)), "then its first view");
         drop(inputs);
         worker.join().unwrap();
+    }
+
+    /// A library of one box, whoever asks.
+    struct OneBox;
+
+    impl meshgrove_plugins::LibraryAccess for OneBox {
+        fn search(
+            &self,
+            _query: &str,
+            _limit: u32,
+            _read: meshgrove_plugins::LibraryRead,
+            _caller: meshgrove_plugins::Caller,
+        ) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!([]))
+        }
+
+        fn describe(
+            &self,
+            id: &str,
+            _read: meshgrove_plugins::LibraryRead,
+            _caller: meshgrove_plugins::Caller,
+        ) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!({"id": id}))
+        }
+
+        fn triangles(
+            &self,
+            _id: &str,
+            _max: u32,
+            _read: meshgrove_plugins::LibraryRead,
+            _caller: meshgrove_plugins::Caller,
+        ) -> Result<MeshData, String> {
+            Ok(MeshData::cuboid([10.0, 20.0, 30.0]))
+        }
+    }
+
+    /// What a panel shows as the width of its box, once it has a view.
+    fn width(host: &mut PluginHost) -> Option<f64> {
+        host.poll();
+        match host.find("hello-box", "box")?.view.as_ref()?.root.find("width")? {
+            Node::NumberInput { value, .. } => Some(*value),
+            _ => None,
+        }
+    }
+
+    /// Files opened with a plugin reach its panel as ids, which it may read from then on, also
+    /// after Meshgrove was closed in between; nothing was granted.
+    #[test]
+    fn files_opened_with_a_panel_stay_readable_after_a_restart() {
+        let Some(bytes) = test_plugin() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let (base, file) = (dir.path().join("plugins"), dir.path().join("hello_box.wasm"));
+        std::fs::write(&file, &bytes).unwrap();
+        let blake3 = Plugin::from_bytes(&bytes, Settings::new(&base)).unwrap().hash().to_owned();
+        let entry = meshgrove_core::config::PluginConfig {
+            id: "hello-box".into(),
+            file,
+            blake3,
+            enabled: true,
+            grants: Default::default(),
+            memory_mb: None,
+        };
+        let config = Config { plugins: vec![entry], ..Config::default() };
+        let start = || {
+            let mut host = PluginHost::new(egui::Context::default());
+            host.base = base.clone();
+            let info = Settings::new(&base).info;
+            host.registry = Arc::new(Registry::load(&config, &base, &info, Some(Arc::new(OneBox))));
+            assert_eq!(host.registry.problems(), [], "the plugin loads");
+            host
+        };
+        let wait = |host: &mut PluginHost, wanted: f64| {
+            let until = Instant::now() + Duration::from_secs(60);
+            while width(host) != Some(wanted) {
+                assert!(Instant::now() < until, "the panel shows {:?}, not {wanted}", width(host));
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+
+        let mut host = start();
+        let names = ["a.stl", "b.stl"];
+        let openers = host.openers(&names);
+        assert_eq!(openers.len(), 1, "a selection of models opens with the plugin");
+        assert_eq!(openers[0].2.label.as_deref(), Some("Box around this …"));
+        assert!(host.openers(&["a.stl", "notes.txt"]).is_empty() && host.openers(&[]).is_empty());
+        // Opening hands the ids over, and the panel reads the first file: 10 mm and air.
+        host.open_models("hello-box", "box", vec!["Eigene/box.stl".into()]).unwrap();
+        wait(&mut host, 14.0);
+        let kept = base.join("hello-box").join("state").join("box.opened.json");
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), r#"["Eigene/box.stl"]"#);
+        // A file nobody opened with it stays closed: the panel says so and keeps its box.
+        host.find("hello-box", "box").unwrap().send(Event::ModelsOpened { ids: vec!["Eigene/other.stl".into()] });
+        let until = Instant::now() + Duration::from_secs(60);
+        let refusal = loop {
+            assert!(Instant::now() < until, "no answer from the panel");
+            let (actions, _) = host.poll();
+            let toast = actions.into_iter().find_map(|a| match a {
+                PanelAction::Effect { effect: Effect::Toast { text, .. }, .. } if !text.starts_with("host:") => {
+                    Some(text)
+                }
+                _ => None,
+            });
+            match toast {
+                Some(text) => break text,
+                None => std::thread::sleep(Duration::from_millis(5)),
+            }
+        };
+        assert!(refusal.contains("has not allowed hello-box to read the library"), "{refusal}");
+        drop(host);
+
+        // The next run: the panel opens with what was opened before.
+        let mut host = start();
+        host.open("hello-box", "box", None).unwrap();
+        let panel = host.find("hello-box", "box").unwrap();
+        assert!(panel.opened.contains("Eigene/box.stl") && !panel.opened.contains("Eigene/other.stl"));
+        panel.send(Event::ModelsOpened { ids: vec!["Eigene/box.stl".into()] });
+        wait(&mut host, 14.0);
     }
 
     /// A library with one folder and a panel's bundle for it, which holds one file.

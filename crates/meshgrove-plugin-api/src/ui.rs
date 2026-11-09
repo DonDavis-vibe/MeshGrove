@@ -545,6 +545,13 @@ pub enum Event {
         title: String,
         outcome: BundleOutcome,
     },
+    /// Library files the user opened with this panel, by their ids (a file type that receives
+    /// ids, [`crate::manifest::Receive::Ids`]): one file or a whole selection. The panel and the
+    /// jobs it starts may read exactly these through `library` from now on, whether or not the
+    /// user lets the plugin read the library. From API 0.2.
+    ModelsOpened {
+        ids: Vec<String>,
+    },
     /// An event of a newer API than this crate's: nothing to do.
     #[serde(other)]
     Unknown,
@@ -952,6 +959,7 @@ mod tests {
             Event::JobFinished { job: "j1".into(), result: None, error: Some("broke".into()) },
             Event::FilePicked { id: "photo".into(), name: "a.png".into(), path: "/tmp/picked/a.png".into() },
             Event::HostChanged { info: HostInfo { language: "de".into(), ..HostInfo::default() } },
+            Event::ModelsOpened { ids: vec!["Eigene/box.stl".into(), "Eigene/lid.3mf".into()] },
         ];
         events.iter().for_each(round_trip);
         assert_eq!(serde_json::to_value(&events[0]).unwrap(), json!({"type": "click", "id": "apply"}));

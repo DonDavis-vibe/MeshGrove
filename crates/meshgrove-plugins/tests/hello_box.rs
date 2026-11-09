@@ -4,17 +4,18 @@
 //! (as in CI).
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use meshgrove_core::bundle::{BundleError, BundleItem, BundleList, BundleListKind, Limits};
 use meshgrove_core::changes::ApplyOp;
 use meshgrove_core::config::{AccessClass, LibraryRead, PluginConfig};
 use meshgrove_core::db::Library;
+use meshgrove_plugin_api::manifest::Receive;
 use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, JobSpec, Node};
 use meshgrove_plugin_api::{MeshData, Permission};
 use meshgrove_plugins::jobs::{JobEvent, JobPool};
-use meshgrove_plugins::{CancelToken, Error, LibraryAccess, Plugin, PluginGrants, Settings, Staging};
+use meshgrove_plugins::{Caller, CancelToken, Error, LibraryAccess, Opened, Plugin, PluginGrants, Settings, Staging};
 use serde_json::{Value, json};
 
 fn wasm() -> Option<Vec<u8>> {
@@ -67,6 +68,10 @@ fn compiles_once_then_comes_from_the_cache() {
     assert_eq!(m.permissions, [Permission::AiTools, Permission::Bundles, Permission::LibraryRead]);
     assert_eq!(m.panels[0].id, "box");
     assert!(m.file_types[0].matches("Deckel.box.json"));
+    assert_eq!(
+        m.opener(&["a.stl", "b.STL"]).map(|t| (t.receive, t.panel.as_deref())),
+        Some((Receive::Ids, Some("box")))
+    );
     let tools: Vec<&str> = second.tools().iter().map(|t| t.name.as_str()).collect();
     assert_eq!(tools, ["make_box", "measure", "spin", "trap"]);
     assert!(second.tools()[0].bundles && second.tools()[0].input_schema["properties"]["width"].is_object());
@@ -262,7 +267,7 @@ fn jobs_run_in_parallel_into_the_panels_folder() {
         label: None,
     };
     let jobs = vec![spec("a", "left"), spec("b", "right"), JobSpec { kind: "nope".into(), ..spec("c", "x") }];
-    let tokens = pool.start(&plugin, jobs, panel.out(), &events);
+    let tokens = pool.start(&plugin, jobs, panel.out(), panel.opened(), &events);
     assert_eq!(tokens.len(), 3);
     let (mut finished, mut progress) = (Vec::new(), 0);
     while finished.len() < 3 {
@@ -281,25 +286,45 @@ fn jobs_run_in_parallel_into_the_panels_folder() {
     }
 }
 
-/// A library of one box, for `measure`, which cloud AI may not see; it takes `slow` to answer.
+/// A library of one box, for `measure`, which cloud AI may not see; it takes `slow` to answer,
+/// and notes who asked for triangles, and how far they may read.
+#[derive(Default)]
 struct OneBox {
     slow: Duration,
+    asked: Mutex<Vec<(String, LibraryRead, Caller)>>,
+}
+
+impl OneBox {
+    fn shared(slow: Duration) -> Arc<OneBox> {
+        Arc::new(OneBox { slow, ..OneBox::default() })
+    }
+
+    /// Who asked since the last look.
+    fn asked(&self) -> Vec<(String, LibraryRead, Caller)> {
+        std::mem::take(&mut self.asked.lock().unwrap())
+    }
 }
 
 impl LibraryAccess for OneBox {
-    fn search(&self, _query: &str, _limit: u32, _read: LibraryRead, _class: AccessClass) -> Result<Value, String> {
+    fn search(&self, _query: &str, _limit: u32, _read: LibraryRead, _caller: Caller) -> Result<Value, String> {
         Ok(json!([{"id": "Eigene/box.stl"}]))
     }
 
-    fn describe(&self, id: &str, _read: LibraryRead, _class: AccessClass) -> Result<Value, String> {
-        Ok(json!({"id": id}))
+    fn describe(&self, id: &str, _read: LibraryRead, _caller: Caller) -> Result<Value, String> {
+        Ok(json!({"id": id, "copies": ["Kunden/geheim.stl"], "tags": ["Box"]}))
     }
 
-    fn triangles(&self, id: &str, _max: u32, read: LibraryRead, class: AccessClass) -> Result<MeshData, String> {
-        assert_eq!(read, LibraryRead::AiScope, "the host passes on what the user granted");
+    fn triangles(&self, id: &str, _max: u32, read: LibraryRead, caller: Caller) -> Result<MeshData, String> {
+        self.asked.lock().unwrap().push((id.to_owned(), read, caller));
         std::thread::sleep(self.slow);
-        match (id, class) {
-            ("Eigene/box.stl", AccessClass::Local) => Ok(MeshData::cuboid([10.0, 20.0, 30.0])),
+        // The box is in a library only local AI may see; "Kunden" is closed to all AI.
+        let seen = match (read, caller) {
+            (LibraryRead::All, _) => true,
+            (LibraryRead::AiScope, caller) => id.starts_with("Eigene/") && caller.class() == AccessClass::Local,
+            (LibraryRead::None, _) => false,
+        };
+        match id {
+            "Eigene/box.stl" | "Kunden/geheim.stl" if seen => Ok(MeshData::cuboid([10.0, 20.0, 30.0])),
             _ => Err(format!("unknown id: {id}")),
         }
     }
@@ -309,7 +334,8 @@ impl LibraryAccess for OneBox {
 fn reading_the_library_needs_the_grant() {
     let Some(bytes) = wasm() else { return };
     let base = tempfile::tempdir().unwrap();
-    let library: Option<Arc<dyn LibraryAccess>> = Some(Arc::new(OneBox { slow: Duration::ZERO }));
+    let one_box = OneBox::shared(Duration::ZERO);
+    let library: Option<Arc<dyn LibraryAccess>> = Some(one_box.clone());
     let args = json!({"id": "Eigene/box.stl"});
     let without = load(&bytes, Settings { library: library.clone(), ..granted(base.path()) });
     let err = without.call_tool("measure", &args, &CancelToken::new()).unwrap_err();
@@ -327,6 +353,98 @@ fn reading_the_library_needs_the_grant() {
     // Called by a cloud AI, it reads what that AI may see.
     let err = with.call_tool_as("measure", &args, AccessClass::Cloud, &CancelToken::new()).unwrap_err();
     assert!(matches!(&err, Error::Denied(m) if m.contains("unknown id")), "{err}");
+    let asked: Vec<(LibraryRead, Caller)> =
+        one_box.asked().into_iter().map(|(_, read, caller)| (read, caller)).collect();
+    let (local, cloud) = (Caller::Ai(AccessClass::Local), Caller::Ai(AccessClass::Cloud));
+    assert_eq!(asked, [(LibraryRead::AiScope, local), (LibraryRead::AiScope, local), (LibraryRead::AiScope, cloud)]);
+}
+
+/// The width of the box in the panel's view after it was told about `ids`, or what it says instead.
+fn opened_width(panel: &meshgrove_plugins::panel::PanelHandle, ids: &[&str]) -> Result<f64, String> {
+    let ids = ids.iter().map(|id| (*id).to_owned()).collect();
+    match panel.event(&Event::ModelsOpened { ids }).unwrap().as_slice() {
+        [Effect::Toast { text, .. }] if !text.contains("files:") => Err(text.clone()),
+        _ => Ok(number(&panel.render().unwrap().root, "width")),
+    }
+}
+
+/// Files the user opened with a panel are readable there without "read the library", and
+/// nothing else is: not another file, not a search, not the same file through a tool.
+#[test]
+fn a_panel_reads_what_was_opened_with_it_and_nothing_else() {
+    let Some(bytes) = wasm() else { return };
+    let base = tempfile::tempdir().unwrap();
+    let one_box = OneBox::shared(Duration::ZERO);
+    // Tools and bundles granted, reading the library not.
+    let plugin = Arc::new(load(&bytes, Settings { library: Some(one_box.clone()), ..granted(base.path()) }));
+    let opened = Opened::default();
+    let panel = plugin.open_panel_with("box", None, opened.clone()).unwrap();
+
+    // Not opened: the panel is refused, and the library is not even asked.
+    let err = opened_width(&panel, &["Eigene/box.stl"]).unwrap_err();
+    assert!(err.contains("has not allowed hello-box to read the library"), "{err}");
+    assert_eq!(one_box.asked(), []);
+
+    // The user opens the box with the panel (what "Box around this …" does): readable, as the
+    // user sees it, whatever AI may see. The box takes its size (10 mm and 2 mm of air a side).
+    opened.add(&["Eigene/box.stl".into()]);
+    assert_eq!(opened_width(&panel, &["Eigene/box.stl"]), Ok(14.0));
+    assert_eq!(one_box.asked(), [("Eigene/box.stl".to_owned(), LibraryRead::All, Caller::User)]);
+    assert_eq!(opened_width(&panel, &["Eigene/box.stl", "Eigene/other.stl"]), Ok(14.0), "the first of several");
+
+    // Any other file stays closed, a neighbour and a look-alike included.
+    for other in ["Kunden/geheim.stl", "Eigene/box.stl/../../Kunden/geheim.stl", "Eigene"] {
+        let err = opened_width(&panel, &[other]).unwrap_err();
+        assert!(err.contains("has not allowed hello-box to read the library"), "{other:?}: {err}");
+    }
+    assert_eq!(one_box.asked().len(), 1, "only the opened file was read, once more");
+
+    // The jobs of the panel read what it reads; a job of another panel does not.
+    let pool = JobPool::new(1);
+    let (events, received) = crossbeam_channel::unbounded();
+    let job = |id: &str| JobSpec {
+        id: id.into(),
+        kind: "measure".into(),
+        params: json!({"id": "Eigene/box.stl"}),
+        label: None,
+    };
+    pool.start(&plugin, vec![job("mine")], panel.out(), panel.opened(), &events);
+    pool.start(&plugin, vec![job("other")], panel.out(), &Opened::default(), &events);
+    let mut finished = Vec::new();
+    while finished.len() < 2 {
+        if let JobEvent::Finished { job, result } = received.recv_timeout(Duration::from_secs(30)).expect("jobs finish")
+        {
+            finished.push((job, result));
+        }
+    }
+    finished.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(finished[0].1.as_ref().unwrap()["size_mm"], json!([10.0, 20.0, 30.0]));
+    assert!(matches!(&finished[1].1, Err(Error::Denied(m)) if m.contains("has not allowed")), "{:?}", finished[1].1);
+
+    // A tool call is the AI's, not the panel's: what was opened there does not count.
+    let args = json!({"id": "Eigene/box.stl"});
+    let err = plugin.call_tool("measure", &args, &CancelToken::new()).unwrap_err();
+    assert!(matches!(&err, Error::Denied(m) if m.contains("read the library")), "{err}");
+}
+
+/// With the grant, a file outside what the grant shows still reads when the user opened it.
+#[test]
+fn an_opened_file_reads_past_what_ai_may_see() {
+    let Some(bytes) = wasm() else { return };
+    let base = tempfile::tempdir().unwrap();
+    let one_box = OneBox::shared(Duration::ZERO);
+    let mut settings = granted(base.path());
+    settings.grants.library_read = LibraryRead::AiScope;
+    settings.library = Some(one_box.clone());
+    let plugin = Arc::new(load(&bytes, settings));
+    let panel = plugin.open_panel("box", None).unwrap();
+    assert_eq!(opened_width(&panel, &["Eigene/box.stl"]), Ok(14.0), "through the grant");
+    assert_eq!(one_box.asked(), [("Eigene/box.stl".to_owned(), LibraryRead::AiScope, Caller::User)]);
+    assert!(opened_width(&panel, &["Kunden/geheim.stl"]).unwrap_err().contains("unknown id"), "closed to AI");
+    panel.opened().add(&["Kunden/geheim.stl".into()]);
+    assert_eq!(opened_width(&panel, &["Kunden/geheim.stl"]), Ok(14.0), "opened by the user");
+    let asked: Vec<LibraryRead> = one_box.asked().into_iter().map(|(_, read, _)| read).collect();
+    assert_eq!(asked, [LibraryRead::AiScope, LibraryRead::AiScope, LibraryRead::All], "the grant first");
 }
 
 #[test]
@@ -335,7 +453,7 @@ fn time_spent_reading_the_library_is_not_the_plugins() {
     let base = tempfile::tempdir().unwrap();
     let mut settings = granted(base.path());
     settings.grants.library_read = LibraryRead::AiScope;
-    settings.library = Some(Arc::new(OneBox { slow: Duration::from_millis(600) }));
+    settings.library = Some(OneBox::shared(Duration::from_millis(600)));
     settings.tool_deadline = Duration::from_millis(400);
     let plugin = load(&bytes, settings);
     let outcome = plugin.call_tool("measure", &json!({"id": "Eigene/box.stl"}), &CancelToken::new());
@@ -393,11 +511,17 @@ fn a_plugin_built_for_api_0_1_still_runs() {
     let plugin = Arc::new(load(API_0_1, granted(base.path())));
     assert_eq!(plugin.manifest().api, "0.1.0");
     assert_ne!(plugin.manifest().api, meshgrove_plugin_api::API_VERSION, "the fixture is the old one");
+    let file_type = &plugin.manifest().file_types[0];
+    assert_eq!((file_type.receive, &file_type.label, &file_type.panel), (Receive::Bytes, &None, &None));
     let outcome = plugin.call_tool("make_box", &json!({"width": 25, "name": "lid"}), &CancelToken::new()).unwrap();
     let staged = outcome.bundle.expect("a bundle");
     assert!(staged.staging.out().join("lid_25x30x40.stl").is_file());
     let panel = plugin.open_panel("box", None).unwrap();
     assert_eq!(number(&panel.render().unwrap().root, "width"), 20.0);
+    // It hears of events it has never heard of, and of a host that says more than it knows.
+    assert_eq!(panel.event(&Event::ModelsOpened { ids: vec!["Eigene/box.stl".into()] }).unwrap(), []);
+    let info = meshgrove_plugin_api::HostInfo { language: "de".into(), imperial: true, ..Default::default() };
+    assert!(panel.event(&Event::HostChanged { info }).is_ok());
     assert_eq!(panel.mesh("box").unwrap().expect("triangles").triangles(), 12);
     let job = plugin.run_job("box", &json!({"name": "left"}), panel.out(), &CancelToken::new(), None).unwrap();
     assert_eq!(job["file"], "left_20x30x40.stl");

@@ -16,6 +16,7 @@ use wasmtime::component::ResourceAny;
 
 use crate::Error;
 use crate::bindings::MeshgrovePlugin;
+use crate::library::{Caller, Opened};
 use crate::plugin::Plugin;
 use crate::staging::{Staging, new_uid};
 use crate::state::{self, CancelToken, State};
@@ -40,11 +41,23 @@ pub struct PanelHandle {
     out: PathBuf,
     /// The panel's `/tmp`.
     tmp: PathBuf,
+    opened: Opened,
 }
 
 impl Plugin {
     /// Opens panel `panel` of the manifest, restoring `state` (an earlier snapshot).
     pub fn open_panel(self: &Arc<Self>, panel: &str, state: Option<String>) -> Result<PanelHandle, Error> {
+        self.open_panel_with(panel, state, Opened::default())
+    }
+
+    /// [`Plugin::open_panel`] with the library files the user opened with the panel so far; what
+    /// is added to `opened` later counts at once.
+    pub fn open_panel_with(
+        self: &Arc<Self>,
+        panel: &str,
+        state: Option<String>,
+        opened: Opened,
+    ) -> Result<PanelHandle, Error> {
         if !self.manifest().panels.iter().any(|p| p.id == panel) {
             return Err(Error::Invalid(format!("{} has no panel {panel:?}", self.id())));
         }
@@ -52,12 +65,13 @@ impl Plugin {
         let (out, tmp) = (dir.join("out"), dir.join("tmp"));
         std::fs::create_dir_all(&out)?;
         let (requests, queue) = crossbeam_channel::unbounded();
-        let (ready, opened) = crossbeam_channel::bounded(1);
+        let (ready, is_open) = crossbeam_channel::bounded(1);
         let thread = {
             let (plugin, panel, out, tmp) = (self.clone(), panel.to_owned(), out.clone(), tmp.clone());
+            let opened = opened.clone();
             std::thread::Builder::new()
                 .name(format!("plugin-panel-{}", self.id()))
-                .spawn(move || run(&plugin, &panel, state, (&out, &tmp), &ready, &queue))?
+                .spawn(move || run(&plugin, &panel, state, (&out, &tmp), opened, &ready, &queue))?
         };
         let handle = PanelHandle {
             plugin: self.clone(),
@@ -66,8 +80,9 @@ impl Plugin {
             thread: Some(thread),
             out,
             tmp,
+            opened,
         };
-        match opened.recv() {
+        match is_open.recv() {
             Ok(Ok(())) => Ok(handle),
             Ok(Err(e)) => Err(e),
             Err(_) => Err(Error::Trap("the panel's thread ended".into())),
@@ -119,6 +134,12 @@ impl PanelHandle {
         &self.tmp
     }
 
+    /// The library files the user opened with the panel: it reads exactly these without the
+    /// grant, and so do the jobs it starts ([`crate::jobs::JobPool::start`]).
+    pub fn opened(&self) -> &Opened {
+        &self.opened
+    }
+
     /// What the panel and its jobs wrote so far, moved into a staging folder of its own (for
     /// a bundle); the panel's `/out` is empty again.
     pub fn take_output(&self) -> Result<Staging, Error> {
@@ -152,13 +173,13 @@ fn run(
     panel: &str,
     snapshot: Option<String>,
     (out, tmp): (&Path, &Path),
+    opened: Opened,
     ready: &Sender<Result<(), Error>>,
     queue: &Receiver<Request>,
 ) {
     let opened = (|| {
-        // A panel reads the library as the user, locally.
-        let mut store =
-            plugin.store(out, Some(tmp), true, meshgrove_core::config::AccessClass::Local, CancelToken::new(), None)?;
+        // A panel reads the library as the user.
+        let mut store = plugin.store(out, Some(tmp), true, Caller::User, opened, CancelToken::new(), None)?;
         state::arm(&mut store, Some(plugin.settings.event_deadline));
         let instance = plugin.instantiate(&mut store)?;
         let resource = instance

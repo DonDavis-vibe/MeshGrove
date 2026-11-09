@@ -12,7 +12,7 @@ use egui::{RichText, Ui};
 use meshgrove_core::ai::proposals::{self, Origin, ProposalStore};
 use meshgrove_core::config::{AccessClass, PluginConfig};
 use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Level};
-use meshgrove_plugin_api::{Bundle, HostInfo, Permission};
+use meshgrove_plugin_api::{Bundle, FileType, HostInfo, Permission, Receive};
 use meshgrove_plugins::{StagedBundle, Staging};
 
 use super::App;
@@ -156,13 +156,10 @@ impl App {
                 Ok(()) => self.layout.focus_plugin(plugin, &id),
                 Err(e) => self.toast(format!("{name}: {e}")),
             },
-            Effect::SelectModel { id } => {
-                let scope = meshgrove_core::ai::Scope::new(&self.config, AccessClass::Local);
-                match scope.resolve(&id) {
-                    Some(path) => self.reveal(&path),
-                    None => self.toast(t!("plugins.unknown_model", id = id).into_owned()),
-                }
-            }
+            Effect::SelectModel { id } => match self.plugin_model(plugin, panel, &id) {
+                Some(path) => self.reveal(&path),
+                None => self.toast(t!("plugins.unknown_model", id = id).into_owned()),
+            },
             effect => {
                 let Some(panel) = panel else { return };
                 match effect {
@@ -194,6 +191,25 @@ impl App {
                 }
             }
         }
+    }
+
+    /// The library file behind an id a plugin named, as far as the plugin may know of it: a
+    /// file the user opened with that panel, one its grant to read the library shows, or (as
+    /// before there were grants) one local AI may see.
+    fn plugin_model(&mut self, plugin: &str, panel: Option<&str>, id: &str) -> Option<PathBuf> {
+        use meshgrove_core::ai::Scope;
+        use meshgrove_plugins::{Caller, LibraryRead};
+        let opened = panel.and_then(|panel| self.plugins.find(plugin, panel)).is_some_and(|p| p.opened.contains(id));
+        if opened && let Some(path) = Scope::whole(&self.config).resolve(id) {
+            return Some(path);
+        }
+        let read = match self.plugins.plugin(plugin) {
+            Some(p) if p.may(Permission::LibraryRead) => p.settings().grants.library_read,
+            _ => LibraryRead::None,
+        };
+        meshgrove_plugins::library::scope(&self.config, read, Caller::User)
+            .and_then(|scope| scope.resolve(id))
+            .or_else(|| Scope::new(&self.config, AccessClass::Local).resolve(id))
     }
 
     /// Files from a panel: into the library now, or into the review. The outcome, or `None`
@@ -463,17 +479,58 @@ impl App {
         Ok(())
     }
 
-    /// Opens a library file with a plugin.
-    pub(super) fn open_with_plugin(&mut self, plugin: &str, path: &Path) {
-        self.plugins.open_file(plugin, path);
+    /// Opens the selected files with a plugin: one file as its bytes, or (a file type that
+    /// receives ids) the selection as library ids in the plugin's panel.
+    pub(super) fn open_with_plugin(&mut self, plugin: &str, paths: &[PathBuf]) {
+        let Some((_, _, opener)) = self.plugin_openers_of(paths).into_iter().find(|(id, ..)| id == plugin) else {
+            return;
+        };
+        match (opener.receive, opener.panel) {
+            (Receive::Bytes, _) => self.plugins.open_file(plugin, &paths[0]),
+            (Receive::Ids, Some(panel)) => {
+                let scope = meshgrove_core::ai::Scope::whole(&self.config);
+                let ids = paths.iter().filter_map(|p| scope.id_of(p)).collect();
+                match self.plugins.open_models(plugin, &panel, ids) {
+                    Ok(()) => self.layout.focus_plugin(plugin, &panel),
+                    Err(e) => self.toast(format!("{}: {e}", self.plugin_name(plugin))),
+                }
+            }
+            // A manifest that is checked names a panel.
+            (Receive::Ids, None) => {}
+        }
     }
 
-    /// The plugins that open the one selected file: (id, name).
-    pub(super) fn plugin_openers(&self, paths: &[PathBuf]) -> Vec<(String, String)> {
-        match paths {
-            [p] if p.is_file() => self.plugins.openers(&meshgrove_core::listing::file_name(p)),
-            _ => Vec::new(),
+    /// The plugins that open the selection, with the file type that takes it: (id, name, type).
+    /// Bytes are one file on disk; ids are files of the library (also inside archives), any
+    /// number of them.
+    fn plugin_openers_of(&self, paths: &[PathBuf]) -> Vec<(String, String, FileType)> {
+        if paths.is_empty() || paths.iter().any(|p| p.is_dir()) {
+            return Vec::new();
         }
+        let names: Vec<String> = paths.iter().map(|p| meshgrove_core::listing::file_name(p)).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut openers = self.plugins.openers(&names);
+        if openers.is_empty() {
+            return openers;
+        }
+        let scope = meshgrove_core::ai::Scope::whole(&self.config);
+        let in_library = paths.iter().all(|p| scope.id_of(p).is_some());
+        openers.retain(|(_, _, opener)| match opener.receive {
+            Receive::Bytes => paths[0].is_file(),
+            Receive::Ids => in_library,
+        });
+        openers
+    }
+
+    /// The plugins that open the selection: (id, the entry in the context menu).
+    pub(super) fn plugin_openers(&self, paths: &[PathBuf]) -> Vec<(String, String)> {
+        self.plugin_openers_of(paths)
+            .into_iter()
+            .map(|(id, name, opener)| {
+                let entry = opener.label.unwrap_or_else(|| t!("menu.open_with_plugin", name = name).into_owned());
+                (id, entry)
+            })
+            .collect()
     }
 
     /// A change on the settings' plugins page; `true`: the plugins load again.

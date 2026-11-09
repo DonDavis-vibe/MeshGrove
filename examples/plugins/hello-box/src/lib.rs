@@ -6,7 +6,10 @@
 //!   `library_read`).
 //! - Panel "box": a form, a 3D view of the box and two ways to add it to the library: at once,
 //!   or through a background job.
-//! - Opens `*.box.json` files (a saved box) in its panel.
+//! - Opens `*.box.json` files (a saved box) in its panel: it gets the file's bytes.
+//! - Opens `*.stl` files with "Box around this …": it gets their library ids in its panel
+//!   (`Event::ModelsOpened`), measures the first one and sizes the box to hold it. Those files it
+//!   may read without the `library_read` permission, because the user opened them with it.
 //!
 //! With the feature `test-hooks` it has two more tools for Meshgrove's tests: `spin` never ends,
 //! `trap` eats all memory. Its panel then also answers `HostChanged` with a toast naming the
@@ -15,10 +18,10 @@
 use std::cell::RefCell;
 
 use meshgrove_plugin_api::guest::{self, Guest, GuestPanel, PluginError, ToolOutput, library};
-use meshgrove_plugin_api::ui::{Effect, Event, FormRow, JobSpec, Level, Node, Unit, View};
+use meshgrove_plugin_api::ui::{Effect, Event, FormRow, JobSpec, Level, Node, TextStyle, Unit, View};
 use meshgrove_plugin_api::{
     API_VERSION, Bundle, BundleFile, BundleItem, BundleList, FileType, ListKind, Manifest, MeshData, PanelDef,
-    Permission, ToolDef,
+    Permission, Receive, ToolDef,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -94,6 +97,13 @@ impl BoxSpec {
     }
 }
 
+/// The size of library model `id` in mm (x, y, z) and its triangles.
+fn measure(id: &str) -> Result<([f32; 3], usize), PluginError> {
+    let mesh: MeshData = library::triangles(id, 50_000).map_err(PluginError::Denied)?.into();
+    let (lo, hi) = mesh.bounds().ok_or_else(|| PluginError::Failed("the model has no triangles".into()))?;
+    Ok(([hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]], mesh.triangles()))
+}
+
 fn message(e: &PluginError) -> String {
     match e {
         PluginError::Invalid(m) | PluginError::Failed(m) | PluginError::Denied(m) => m.clone(),
@@ -127,7 +137,21 @@ impl Guest for HelloBox {
             license: Some("MIT OR Apache-2.0".into()),
             permissions: vec![Permission::AiTools, Permission::Bundles, Permission::LibraryRead],
             panels: vec![PanelDef { id: "box".into(), title: "Hello Box".into() }],
-            file_types: vec![FileType { pattern: "*.box.json".into(), description: "A saved box".into() }],
+            file_types: vec![
+                FileType {
+                    pattern: "*.box.json".into(),
+                    description: "A saved box".into(),
+                    ..FileType::default()
+                },
+                // Library ids instead of bytes: one model or a whole selection, opened in the panel.
+                FileType {
+                    pattern: "*.stl".into(),
+                    description: "A model to make a box for".into(),
+                    label: Some("Box around this …".into()),
+                    receive: Receive::Ids,
+                    panel: Some("box".into()),
+                },
+            ],
             memory_mb: Some(64),
             ..Manifest::default()
         })
@@ -182,10 +206,8 @@ impl Guest for HelloBox {
                     id: String,
                 }
                 let args: Args = guest::parse(&args)?;
-                let mesh: MeshData = library::triangles(&args.id, 50_000).map_err(PluginError::Denied)?.into();
-                let (lo, hi) = mesh.bounds().ok_or_else(|| PluginError::Failed("the model has no triangles".into()))?;
-                let size: Vec<f32> = (0..3).map(|a| hi[a] - lo[a]).collect();
-                Ok(guest::tool_output(&json!({"size_mm": size, "triangles": mesh.triangles()}), None))
+                let (size, triangles) = measure(&args.id)?;
+                Ok(guest::tool_output(&json!({"size_mm": size, "triangles": triangles}), None))
             }
             #[cfg(feature = "test-hooks")]
             "spin" => {
@@ -214,6 +236,13 @@ impl Guest for HelloBox {
                 guest::host::progress(1.0, "done");
                 Ok(guest::json(&json!({"file": rel, "spec": spec})))
             }
+            // A job reads the files the user opened with its panel, as the panel does.
+            #[cfg(feature = "test-hooks")]
+            "measure" => {
+                let id = serde_json::from_str::<serde_json::Value>(&params)?["id"].as_str().unwrap_or_default().to_owned();
+                let (size, _) = measure(&id)?;
+                Ok(guest::json(&json!({"size_mm": size})))
+            }
             _ => Err(PluginError::Invalid(format!("no job {kind:?}"))),
         }
     }
@@ -232,6 +261,8 @@ struct PanelState {
     /// Grows with every change, so the 3D view asks for the box anew.
     revision: u64,
     busy: bool,
+    /// The library model the box was sized for ("Box around this …"), by its id.
+    source: Option<String>,
 }
 
 struct BoxPanel {
@@ -257,8 +288,11 @@ impl GuestPanel for BoxPanel {
             decimals: Some(0),
             enabled: true,
         };
-        let mut children = vec![
-            Node::heading("Hello Box"),
+        let mut children = vec![Node::heading("Hello Box")];
+        if let Some(source) = &s.source {
+            children.push(Node::Label { text: format!("Sized to hold {source}"), style: TextStyle::Weak });
+        }
+        children.extend([
             Node::Form {
                 id: "size".into(),
                 rows: vec![
@@ -287,7 +321,7 @@ impl GuestPanel for BoxPanel {
                     enabled: !s.busy,
                 },
             ]),
-        ];
+        ]);
         if s.busy {
             children.push(Node::Progress { fraction: None, text: Some("Making the box …".into()) });
         }
@@ -341,6 +375,22 @@ impl GuestPanel for BoxPanel {
                 s.busy = false;
                 vec![Effect::Toast { text: error, level: Level::Error }]
             }
+            // "Box around this …" in the gallery: the ids of the files the user picked. The box
+            // takes the size of the first one, with 2 mm of air around it.
+            Event::ModelsOpened { ids } => match ids.first().map(|id| (id, measure(id))) {
+                Some((id, Ok((size, _)))) => {
+                    let fit = |mm: f32| (mm + 4.0).clamp(1.0, 500.0);
+                    (s.spec.width, s.spec.depth, s.spec.height) = (fit(size[0]), fit(size[1]), fit(size[2]));
+                    s.source = Some(id.clone());
+                    s.revision += 1;
+                    match ids.len() {
+                        1 => Vec::new(),
+                        n => vec![Effect::Toast { text: format!("{n} files: sized for the first"), level: Level::Info }],
+                    }
+                }
+                Some((_, Err(e))) => vec![Effect::Toast { text: message(&e), level: Level::Error }],
+                None => Vec::new(),
+            },
             #[cfg(feature = "test-hooks")]
             Event::HostChanged { info } => {
                 vec![Effect::Toast { text: format!("host: {}", info.language), level: Level::Info }]

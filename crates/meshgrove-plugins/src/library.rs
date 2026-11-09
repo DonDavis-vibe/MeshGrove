@@ -1,10 +1,13 @@
 //! The library as plugins may read it (`library` in the WIT world): search, facts and triangles
 //! of files by their ids, never paths or bytes. What a plugin sees is what the user granted
 //! (`library_read`): what AI of the caller's access class may see (a panel or job reads as the
-//! user, locally; a tool call as the AI that called it), or every library. The host has checked
-//! that the grant exists before any of these is called.
+//! user, locally, also while AI is switched off; a tool call as the AI that called it), or every
+//! library. Beside the grant there are the files the user opened with a panel ([`Opened`]): the
+//! panel and its jobs read exactly those, grant or not. The host has checked which of the two
+//! applies before any of these is called.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use meshgrove_core::ai::types::ModelFilter;
 use meshgrove_core::ai::{Context, Scope, read};
@@ -14,19 +17,96 @@ use meshgrove_core::{Kind, Mesh, archive, listing, loaders};
 use meshgrove_plugin_api::MeshData;
 use serde_json::Value;
 
+/// Who an instance of a plugin works for, as far as reading the library goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Caller {
+    /// The user, in a panel or one of its jobs. With the grant "what local AI sees" it reads
+    /// the libraries open to local AI, also while AI is switched off: no AI reads along.
+    User,
+    /// An AI of this access class, through a tool call.
+    Ai(AccessClass),
+}
+
+impl Caller {
+    /// The access class the caller reads as.
+    pub fn class(self) -> AccessClass {
+        match self {
+            Caller::User => AccessClass::Local,
+            Caller::Ai(class) => class,
+        }
+    }
+}
+
+/// What a plugin sees of the libraries in `config` with grant `read`, asked by `caller`; `None`
+/// where that is nothing (no grant, or an AI while AI is switched off).
+pub fn scope(config: &Config, read: LibraryRead, caller: Caller) -> Option<Scope> {
+    match (read, caller) {
+        (LibraryRead::None, _) => None,
+        (LibraryRead::All, _) => Some(Scope::whole(config)),
+        (LibraryRead::AiScope, Caller::User) => Some(Scope::for_plugin(config, AccessClass::Local)),
+        (LibraryRead::AiScope, Caller::Ai(class)) => config.ai.enabled.then(|| Scope::new(config, class)),
+    }
+}
+
+/// The library files the user opened with a panel (a file type that receives ids), newest
+/// last: the panel and its jobs may read exactly these, whatever the plugin is granted. Shared
+/// between the window, the panel's instance and its jobs; the window keeps it across restarts.
+#[derive(Debug, Clone, Default)]
+pub struct Opened(Arc<Mutex<Vec<String>>>);
+
+impl Opened {
+    /// How many files a panel keeps: the oldest go first.
+    pub const MAX: usize = 512;
+
+    /// An id as it is compared: without blanks around it and without the `meshgrove:` of a
+    /// copied reference.
+    fn key(id: &str) -> &str {
+        id.trim().trim_start_matches("meshgrove:")
+    }
+
+    pub fn add(&self, ids: &[String]) {
+        let mut list = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        for id in ids.iter().map(|id| Opened::key(id)).filter(|id| !id.is_empty()) {
+            list.retain(|known| known != id);
+            list.push(id.to_owned());
+        }
+        let over = list.len().saturating_sub(Opened::MAX);
+        list.drain(..over);
+    }
+
+    pub fn contains(&self, id: &str) -> bool {
+        let id = Opened::key(id);
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|known| known == id)
+    }
+
+    pub fn ids(&self) -> Vec<String> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// What `file` holds (a JSON list of ids); nothing when it is missing or broken.
+    pub fn load(file: &Path) -> Opened {
+        let opened = Opened::default();
+        if let Some(ids) = std::fs::read(file).ok().and_then(|b| serde_json::from_slice::<Vec<String>>(&b).ok()) {
+            opened.add(&ids);
+        }
+        opened
+    }
+
+    pub fn save(&self, file: &Path) -> std::io::Result<()> {
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(file, serde_json::to_vec(&self.ids()).unwrap_or_default())
+    }
+}
+
 pub trait LibraryAccess: Send + Sync {
     /// Matches for a search as typed in Meshgrove, as JSON (ids, names, sizes).
-    fn search(&self, query: &str, limit: u32, read: LibraryRead, class: AccessClass) -> Result<Value, String>;
+    fn search(&self, query: &str, limit: u32, read: LibraryRead, caller: Caller) -> Result<Value, String>;
     /// Facts of one file by its id, as JSON.
-    fn describe(&self, id: &str, read: LibraryRead, class: AccessClass) -> Result<Value, String>;
+    fn describe(&self, id: &str, read: LibraryRead, caller: Caller) -> Result<Value, String>;
     /// The model's triangles, simplified to at most `max_triangles`.
-    fn triangles(
-        &self,
-        id: &str,
-        max_triangles: u32,
-        read: LibraryRead,
-        class: AccessClass,
-    ) -> Result<MeshData, String>;
+    fn triangles(&self, id: &str, max_triangles: u32, read: LibraryRead, caller: Caller) -> Result<MeshData, String>;
 }
 
 /// The user's library: the index and the settings, read afresh on every call (so what the
@@ -54,23 +134,24 @@ impl LibraryReader {
     fn with<T>(
         &self,
         read: LibraryRead,
-        class: AccessClass,
+        caller: Caller,
         f: impl FnOnce(&Context) -> Result<T, String>,
     ) -> Result<T, String> {
         let config = self.config()?;
         let mut lib = Library::open_reader(&self.db).ok_or("the library is not indexed yet")?;
         lib.set_printers(&config.printers_in_order()).map_err(|e| e.to_string())?;
-        let cx = match read {
-            LibraryRead::None => return Err("not allowed to read the library".into()),
-            LibraryRead::AiScope => Context::new(&lib, &config, class, None).map_err(|e| e.to_string())?,
-            LibraryRead::All => Context {
-                lib: &lib,
-                scope: Scope::whole(&config),
-                config: &config,
-                thumbs: None,
-                printers: config.printers_in_order(),
-                now: std::time::SystemTime::now(),
-            },
+        let scope = match scope(&config, read, caller) {
+            Some(scope) => scope,
+            None if read == LibraryRead::None => return Err("not allowed to read the library".into()),
+            None => return Err(meshgrove_core::ai::ToolError::Disabled.to_string()),
+        };
+        let cx = Context {
+            lib: &lib,
+            scope,
+            config: &config,
+            thumbs: None,
+            printers: config.printers_in_order(),
+            now: std::time::SystemTime::now(),
         };
         f(&cx)
     }
@@ -93,8 +174,8 @@ fn without_paths(mut value: Value) -> Value {
 }
 
 impl LibraryAccess for LibraryReader {
-    fn search(&self, query: &str, limit: u32, read: LibraryRead, class: AccessClass) -> Result<Value, String> {
-        self.with(read, class, |cx| {
+    fn search(&self, query: &str, limit: u32, read: LibraryRead, caller: Caller) -> Result<Value, String> {
+        self.with(read, caller, |cx| {
             let filter =
                 ModelFilter { q: Some(query.to_owned()), limit: Some(limit as usize), ..ModelFilter::default() };
             let page = read::search_models(cx, &filter).map_err(|e| e.to_string())?;
@@ -102,22 +183,16 @@ impl LibraryAccess for LibraryReader {
         })
     }
 
-    fn describe(&self, id: &str, read: LibraryRead, class: AccessClass) -> Result<Value, String> {
-        self.with(read, class, |cx| {
+    fn describe(&self, id: &str, read: LibraryRead, caller: Caller) -> Result<Value, String> {
+        self.with(read, caller, |cx| {
             let (detail, _) = read::get_model(cx, id, false).map_err(|e| e.to_string())?;
             Ok(without_paths(serde_json::to_value(detail).map_err(|e| e.to_string())?))
         })
     }
 
-    fn triangles(
-        &self,
-        id: &str,
-        max_triangles: u32,
-        read: LibraryRead,
-        class: AccessClass,
-    ) -> Result<MeshData, String> {
+    fn triangles(&self, id: &str, max_triangles: u32, read: LibraryRead, caller: Caller) -> Result<MeshData, String> {
         let (path, units) =
-            self.with(read, class, |cx| Ok((cx.resolve(id).map_err(|e| e.to_string())?, cx.config.model_units)))?;
+            self.with(read, caller, |cx| Ok((cx.resolve(id).map_err(|e| e.to_string())?, cx.config.model_units)))?;
         meshgrove_core::config::set_model_units(units);
         let data = simplify(&load(&path)?, max_triangles as usize);
         if data.triangles() == 0 {
@@ -257,6 +332,53 @@ mod tests {
         let (min, max) = data.bounds().unwrap();
         assert!((max[0] - min[0] - 40.0).abs() < 3.0, "{min:?} {max:?}");
         assert!(simplify(&mesh, 50).triangles() <= 50);
+    }
+
+    #[test]
+    fn opened_files_are_kept_in_order_and_survive_a_restart() {
+        let opened = Opened::default();
+        opened.add(&["Eigene/a.stl".into(), " meshgrove:Eigene/b.3mf ".into(), String::new()]);
+        assert!(opened.contains("Eigene/a.stl") && opened.contains("meshgrove:Eigene/a.stl"));
+        assert!(opened.contains("Eigene/b.3mf") && !opened.contains("Eigene/c.stl") && !opened.contains(""));
+        assert!(!opened.contains("Eigene/a.stl/../b.stl") && !opened.contains("Eigene"), "the ids as they are");
+        opened.add(&["Eigene/a.stl".into()]);
+        assert_eq!(opened.ids(), ["Eigene/b.3mf", "Eigene/a.stl"], "opened again: the newest");
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("state").join("box.opened.json");
+        opened.save(&file).unwrap();
+        assert_eq!(Opened::load(&file).ids(), opened.ids());
+        assert!(Opened::load(&dir.path().join("missing.json")).ids().is_empty());
+        std::fs::write(&file, "not json").unwrap();
+        assert!(Opened::load(&file).ids().is_empty());
+        // A panel keeps the newest; a clone is the same list.
+        let shared = opened.clone();
+        let many: Vec<String> = (0..Opened::MAX + 3).map(|i| format!("Eigene/{i}.stl")).collect();
+        shared.add(&many);
+        assert_eq!(opened.ids().len(), Opened::MAX);
+        assert!(!opened.contains("Eigene/2.stl") && opened.contains("Eigene/3.stl"));
+    }
+
+    #[test]
+    fn a_panel_reads_with_the_grant_while_ai_is_off() {
+        use meshgrove_core::config::{AiAccess, LibraryAi};
+        let mut config =
+            Config { library_roots: vec!["/lib/eigene".into(), "/lib/kunden".into()], ..Config::default() };
+        config.ai.libraries = vec![
+            LibraryAi { root: "/lib/eigene".into(), access: AiAccess::Cloud, images: false },
+            LibraryAi { root: "/lib/kunden".into(), access: AiAccess::LocalOnly, images: false },
+        ];
+        let seen = |config: &Config, read, caller| {
+            scope(config, read, caller).map(|s| s.roots().iter().map(|r| r.alias.clone()).collect::<Vec<_>>())
+        };
+        let (local, cloud) = (Caller::Ai(AccessClass::Local), Caller::Ai(AccessClass::Cloud));
+        assert!(!config.ai.enabled);
+        assert_eq!(seen(&config, LibraryRead::AiScope, Caller::User), Some(vec!["eigene".into(), "kunden".into()]));
+        assert_eq!(seen(&config, LibraryRead::AiScope, local), None, "no AI reads while AI is off");
+        assert_eq!(seen(&config, LibraryRead::All, cloud).map(|r| r.len()), Some(2));
+        assert_eq!(seen(&config, LibraryRead::None, Caller::User), None);
+        config.ai.enabled = true;
+        assert_eq!(seen(&config, LibraryRead::AiScope, cloud), Some(vec!["eigene".into()]));
+        assert_eq!(seen(&config, LibraryRead::AiScope, local).map(|r| r.len()), Some(2));
     }
 
     #[test]

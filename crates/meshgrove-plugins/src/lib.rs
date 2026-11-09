@@ -25,7 +25,7 @@ mod state;
 
 use std::time::Duration;
 
-pub use library::{LibraryAccess, LibraryReader};
+pub use library::{Caller, LibraryAccess, LibraryReader, Opened};
 pub use meshgrove_core::config::{LibraryRead, PluginGrants};
 pub use plugin::{Image, Plugin, Settings, StagedBundle, ToolOutcome};
 pub use registry::Registry;
