@@ -76,7 +76,12 @@ pub fn replace_parts<W: Write + Seek>(bytes: &[u8], replacements: &[Replacement]
             writer.raw_copy_file(file).map_err(zip_error)?;
             continue;
         }
+        // The same on every system: "made by Unix", read and write for the owner, read for the
+        // others. Left to the writer, Windows would say DOS, and the same input would give other
+        // bytes there.
         let mut options = zip::write::SimpleFileOptions::default()
+            .system(zip::System::Unix)
+            .unix_permissions(0o644)
             .compression_method(zip::CompressionMethod::Deflated)
             .large_file(swapped.is_some_and(|meshes| meshes.values().any(|m| m.is_huge())));
         if let Some(time) = file.last_modified() {
@@ -415,6 +420,9 @@ mod tests {
         let new = replaced(&pkg, &[Replacement { part: 1, mesh: &lid }]).unwrap();
 
         assert_eq!(names(&new), names(&pkg), "the same files in the same order");
+        // What is written anew says "made by Unix, rw-r--r--" on every system.
+        let mut zip = zip::ZipArchive::new(Cursor::new(&new)).unwrap();
+        assert_eq!(zip.by_name("3D/3dmodel.model").unwrap().unix_mode(), Some(0o100644));
         for kept in ["[Content_Types].xml", "Metadata/notes.txt"] {
             assert_eq!(file(&new, kept), file(&pkg, kept), "{kept}");
         }
