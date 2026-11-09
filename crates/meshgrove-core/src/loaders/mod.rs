@@ -35,15 +35,25 @@ pub fn load_mesh(kind: crate::Kind, bytes: &[u8]) -> Result<crate::Mesh, LoadErr
 
 /// Like [`load_mesh`], with the files next to the model for materials, textures and buffers.
 pub fn load_mesh_with(kind: crate::Kind, bytes: &[u8], sibling: Sibling) -> Result<crate::Mesh, LoadError> {
-    let mesh = match kind {
+    Ok(in_file_units(kind, parse(kind, bytes, sibling)?))
+}
+
+/// Geometry of a model file a program wrote in millimetres (a plugin's): the unit the user set
+/// for their own STL, OBJ and PLY files does not count for it.
+pub fn load_mesh_mm(kind: crate::Kind, bytes: &[u8]) -> Result<crate::Mesh, LoadError> {
+    parse(kind, bytes, &|_| None)
+}
+
+/// The mesh as the file's numbers say.
+fn parse(kind: crate::Kind, bytes: &[u8], sibling: Sibling) -> Result<crate::Mesh, LoadError> {
+    match kind {
         crate::Kind::Stl => stl::parse(bytes),
         crate::Kind::ThreeMf => Ok(threemf::parse(bytes)?.mesh),
         crate::Kind::Obj => obj::parse(bytes, sibling),
         crate::Kind::Ply => ply::parse(bytes),
         crate::Kind::Gltf => gltf::parse(bytes, sibling),
         other => Err(LoadError::Malformed(format!("{other:?} is not a mesh format"))),
-    }?;
-    Ok(in_file_units(kind, mesh))
+    }
 }
 
 /// STL, OBJ and PLY carry no unit: they are read in the unit of the settings
@@ -80,5 +90,24 @@ mod tests {
         assert!((inch.bounds().unwrap().size().x - 254.0).abs() < 1e-3);
         assert_eq!(obj, inch);
         assert_eq!(threemf, cube, "3MF declares its own unit");
+    }
+
+    /// A file a program wrote in millimetres reads as written, whatever the user's files are in.
+    #[test]
+    fn a_programs_stl_is_millimetres() {
+        let mut stl = vec![0u8; 80];
+        stl.extend(1u32.to_le_bytes());
+        for value in [0.0f32, 0.0, 1.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0] {
+            stl.extend(value.to_le_bytes());
+        }
+        stl.extend([0, 0]);
+        let mesh = load_mesh_mm(Kind::Stl, &stl).unwrap();
+        assert_eq!(mesh.bounds().unwrap().size().to_array(), [10.0, 10.0, 0.0]);
+        assert_eq!(
+            in_units(Kind::Stl, mesh, ModelUnits::Inches).bounds().unwrap().size().x,
+            254.0,
+            "the user's is not"
+        );
+        assert!(load_mesh_mm(Kind::Step, &stl).is_err());
     }
 }

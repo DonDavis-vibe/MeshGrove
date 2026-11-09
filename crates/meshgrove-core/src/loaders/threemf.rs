@@ -15,6 +15,8 @@ use super::texture::NEUTRAL;
 use super::{LoadError, paint};
 use crate::mesh::Mesh;
 
+pub mod edit;
+
 const START_PART: &str = "3D/3dmodel.model";
 const REL_MODEL: &str = "http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel";
 const REL_THUMBNAIL: &str = "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail";
@@ -194,15 +196,24 @@ pub struct Part {
 /// The objects of the model with triangles of their own, each once, in their own coordinates:
 /// what [`parse`] puts together, apart. Of a multi-plate project those of the first plate;
 /// supports, modifiers and negative volumes are no parts. Their order is that of the build
-/// items and stays the same for the same file, so a part can be named by its index.
+/// items and stays the same for the same file, so a part can be named by its index
+/// ([`edit::replace_parts`] takes them that way).
 pub fn parse_parts(bytes: &[u8]) -> Result<Vec<Part>, LoadError> {
     let mut package = Package::open(bytes)?;
     Ok(package.parts()?.into_iter().map(|found| found.part).collect())
 }
 
-/// A part as the walk through the package found it.
+/// A part and what changing it has to know.
 struct Found {
     part: Part,
+    /// The build item's object it was reached through: slicers key their settings by it.
+    build_object: u32,
+    /// The factor from the file's unit to millimetres.
+    unit_scale: f32,
+    /// The triangles the object has in the file (the part's mesh may leave some out).
+    file_triangles: usize,
+    /// PrusaSlicer volumes (triangle ranges) the object's mesh is cut into, modifiers included.
+    volumes: usize,
 }
 
 /// The package's main preview (slicer plate image or CAD thumbnail), shrunk to fit `max`,
@@ -284,15 +295,16 @@ impl Package {
         Ok(Package { zip, names, models: HashMap::new() })
     }
 
-    /// Reads a part by OPC name ("/3D/x.model", case-insensitive, percent-encoding tolerated).
-    fn read(&mut self, name: &str) -> Result<Vec<u8>, LoadError> {
+    /// The name in the archive of the part with OPC name `name` ("/3D/x.model",
+    /// case-insensitive, percent-encoding tolerated).
+    fn real_name(&self, name: &str) -> Option<&String> {
         let key = normalize(name);
-        let real = self
-            .names
-            .get(&key)
-            .or_else(|| self.names.get(&percent_decode(&key)))
-            .cloned()
-            .ok_or_else(|| LoadError::Malformed(format!("missing part {name}")))?;
+        self.names.get(&key).or_else(|| self.names.get(&percent_decode(&key)))
+    }
+
+    /// Reads a part by OPC name.
+    fn read(&mut self, name: &str) -> Result<Vec<u8>, LoadError> {
+        let real = self.real_name(name).cloned().ok_or_else(|| LoadError::Malformed(format!("missing part {name}")))?;
         let mut file = self.zip.by_name(&real).map_err(|e| LoadError::Malformed(e.to_string()))?;
         let mut data = Vec::with_capacity(file.size() as usize);
         file.read_to_end(&mut data)?;
@@ -443,7 +455,7 @@ impl Package {
         let mut found = Vec::new();
         for item in items {
             let path = item.path.clone().unwrap_or_else(|| start.clone());
-            let top = Top { assign: assignments.get(&item.object), unit_scale };
+            let top = Top { build_object: item.object, assign: assignments.get(&item.object), unit_scale };
             self.collect(&path, item.object, item.transform, 0, &top, &mut found)?;
         }
         if found.is_empty() {
@@ -503,6 +515,10 @@ impl Package {
                             transform,
                             instances: 1,
                         },
+                        build_object: top.build_object,
+                        unit_scale: top.unit_scale,
+                        file_triangles: mesh.triangles.len(),
+                        volumes: top.assign.filter(|_| own).map_or(0, |a| a.volumes.len() + a.hidden_volumes.len()),
                     });
                 }
             }
@@ -589,6 +605,7 @@ impl ObjectMesh {
 
 /// The build item a walk for parts started at.
 struct Top<'a> {
+    build_object: u32,
     assign: Option<&'a Assign>,
     unit_scale: f32,
 }
