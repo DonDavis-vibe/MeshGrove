@@ -14,7 +14,8 @@ use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::Error;
 use crate::bindings::meshgrove::plugin::{host, library, types};
-use crate::library::{Caller, LibraryAccess, Opened};
+use crate::guest_files::{self, GuestDirs};
+use crate::library::{self as lib, Caller, LibraryAccess, Opened};
 
 /// Stops a call or job: the plugin sees `host.cancelled()`, and is interrupted at the next tick
 /// if it does not look.
@@ -99,6 +100,8 @@ pub(crate) struct State {
     pub deadline: Option<(Instant, Duration)>,
     pub interrupted: Option<Interrupt>,
     pub progress: Option<Progress>,
+    /// Where `/data` and `/tmp` are on this computer.
+    dirs: GuestDirs,
     _tmp: TempFolder,
 }
 
@@ -174,6 +177,7 @@ pub(crate) fn store(setup: Setup) -> Result<Store<State>, Error> {
         deadline: None,
         interrupted: None,
         progress: setup.progress,
+        dirs: GuestDirs { data: folders.data.to_path_buf(), tmp: Some(tmp.0.clone()) },
         _tmp: tmp,
     };
     let mut store = Store::new(crate::engine::engine(), state);
@@ -328,19 +332,62 @@ fn only_this_file(mut facts: serde_json::Value) -> serde_json::Value {
     facts
 }
 
+impl State {
+    /// Runs `f` with the host's clock stopped, like [`State::on_library`], for work on the
+    /// plugin's own files.
+    fn on_host<T>(&mut self, f: impl FnOnce(&GuestDirs) -> Result<T, String>) -> Result<T, String> {
+        let started = Instant::now();
+        let result = f(&self.dirs);
+        if let Some((until, limit)) = &mut self.deadline {
+            *until += started.elapsed();
+            *limit += started.elapsed();
+        }
+        result
+    }
+}
+
 impl library::Host for State {
     fn search(&mut self, query: String, limit: u32) -> Result<String, String> {
         self.with_library(|l, read, caller| l.search(&query, limit.min(500), read, caller)).map(|v| v.to_string())
     }
 
-    fn describe(&mut self, id: String) -> Result<String, String> {
-        let (facts, through) = self.with_file(&id, |l, read, caller| l.describe(&id, read, caller))?;
+    fn describe(&mut self, reference: String) -> Result<String, String> {
+        // A part is described with the file it is in.
+        let (reference, _) = lib::split_part(&reference)?;
+        if guest_files::is_guest_path(reference) {
+            let facts = self.on_host(|dirs| {
+                let bytes = dirs.read(reference)?;
+                let name = guest_files::file_name(reference);
+                let mut facts = lib::mesh_facts(name, bytes.len(), &dirs.load(reference)?);
+                if meshgrove_core::Kind::from_file_name(name) == meshgrove_core::Kind::ThreeMf {
+                    facts["parts"] = lib::parts_json(&bytes, reference).into();
+                }
+                Ok(facts)
+            })?;
+            return Ok(facts.to_string());
+        }
+        let (facts, through) = self.with_file(reference, |l, read, caller| l.describe(reference, read, caller))?;
         Ok(if through == Through::Opening { only_this_file(facts) } else { facts }.to_string())
     }
 
-    fn triangles(&mut self, id: String, max_triangles: u32) -> Result<types::MeshData, String> {
-        let max = max_triangles.clamp(1, 2_000_000);
-        let (mesh, _) = self.with_file(&id, |l, read, caller| l.triangles(&id, max, read, caller))?;
+    fn triangles(&mut self, reference: String, max_triangles: u32) -> Result<types::MeshData, String> {
+        let max = max_triangles.clamp(1, lib::MAX_TRIANGLES);
+        let (reference, part) = lib::split_part(&reference)?;
+        let mesh = if guest_files::is_guest_path(reference) {
+            self.on_host(|dirs| {
+                let mesh = match part {
+                    Some(part) => lib::part_mesh(&dirs.read(reference)?, part)?,
+                    None => dirs.load(reference)?,
+                };
+                let data = lib::simplify(&mesh, max as usize);
+                if data.triangles() == 0 {
+                    return Err(format!("{reference} has no triangles"));
+                }
+                Ok(data)
+            })?
+        } else {
+            self.with_file(reference, |l, read, caller| l.triangles(reference, part, max, read, caller))?.0
+        };
         mesh.check()?;
         Ok(types::MeshData { positions: mesh.positions, indices: mesh.indices })
     }

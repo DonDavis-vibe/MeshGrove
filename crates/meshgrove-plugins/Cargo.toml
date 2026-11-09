@@ -42,3 +42,5 @@ required-features = ["runner"]
 
 [dev-dependencies]
 tempfile = "3"
+# 3MF files for the tests.
+zip.workspace = true

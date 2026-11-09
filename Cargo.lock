@@ -3403,6 +3403,7 @@ dependencies = [
  "tokio",
  "wasmtime",
  "wasmtime-wasi",
+ "zip",
 ]
 
 [[package]]

@@ -13,6 +13,7 @@
 mod bindings;
 pub mod discovery;
 pub mod engine;
+mod guest_files;
 #[cfg(feature = "panels")]
 pub mod jobs;
 pub mod library;

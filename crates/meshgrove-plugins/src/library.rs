@@ -5,6 +5,10 @@
 //! library. Beside the grant there are the files the user opened with a panel ([`Opened`]): the
 //! panel and its jobs read exactly those, grant or not. The host has checked which of the two
 //! applies before any of these is called.
+//!
+//! `describe` and `triangles` take a reference: a library id, a path in the plugin's own folders
+//! (`/tmp/…`, `/data/…`; the host reads those itself, [`crate::guest_files`]), or either with
+//! a part of a 3MF named after it ([`part_token`]).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -103,10 +107,95 @@ impl Opened {
 pub trait LibraryAccess: Send + Sync {
     /// Matches for a search as typed in Meshgrove, as JSON (ids, names, sizes).
     fn search(&self, query: &str, limit: u32, read: LibraryRead, caller: Caller) -> Result<Value, String>;
-    /// Facts of one file by its id, as JSON.
+    /// Facts of one file by its id, as JSON; of a 3MF with its `parts` ([`parts_json`]).
     fn describe(&self, id: &str, read: LibraryRead, caller: Caller) -> Result<Value, String>;
-    /// The model's triangles, simplified to at most `max_triangles`.
-    fn triangles(&self, id: &str, max_triangles: u32, read: LibraryRead, caller: Caller) -> Result<MeshData, String>;
+    /// The model's triangles, or those of its part `part` (a 3MF's, in the part's own
+    /// coordinates), simplified to at most `max_triangles`.
+    fn triangles(
+        &self,
+        id: &str,
+        part: Option<usize>,
+        max_triangles: u32,
+        read: LibraryRead,
+        caller: Caller,
+    ) -> Result<MeshData, String>;
+}
+
+/// Most triangles `library.triangles` hands over; larger models are simplified to it.
+pub const MAX_TRIANGLES: u32 = 8_000_000;
+
+/// What stands between a reference and the number of the part that is meant. A NUL cannot be
+/// in a file name or an id, so no reference is mistaken for a token.
+const PART_MARK: &str = "\0part=";
+
+/// The reference of part `part` of the 3MF `reference` (an id or a path): what `describe` gives
+/// as a part's `token`, and `triangles` and a bundle's `derive_3mf` take.
+pub fn part_token(reference: &str, part: usize) -> String {
+    format!("{reference}{PART_MARK}{part}")
+}
+
+/// A reference and the part it names, if it is a [`part_token`].
+pub fn split_part(reference: &str) -> Result<(&str, Option<usize>), String> {
+    match reference.split_once(PART_MARK) {
+        None if reference.contains('\0') => Err("not a reference: it holds a NUL".into()),
+        None => Ok((reference, None)),
+        Some((base, part)) => {
+            let part = part.parse().map_err(|_| "not a part token (they come from describe)".to_owned())?;
+            Ok((base, Some(part)))
+        }
+    }
+}
+
+/// Part `part` of the 3MF in `bytes`, in its own coordinates and millimetres.
+pub fn part_mesh(bytes: &[u8], part: usize) -> Result<Mesh, String> {
+    let mut parts = loaders::threemf::parse_parts(bytes).map_err(|e| e.to_string())?;
+    if part >= parts.len() {
+        return Err(format!("the file has {} parts, there is no part {part}", parts.len()));
+    }
+    Ok(parts.swap_remove(part).mesh)
+}
+
+/// The parts of the 3MF in `bytes` as `describe` lists them, each with the `token` that names
+/// it (after `reference`), its name, its triangles, the corners of its box in its own
+/// coordinates (`min`, `max`, mm), how often it is placed (`instances`) and where first
+/// (`transform`: twelve numbers as in 3MF, the three axes and then the shift, so a point `p` of
+/// the part stands at `x·p.x + y·p.y + z·p.z + shift`). Empty when the file cannot be read.
+pub fn parts_json(bytes: &[u8], reference: &str) -> Vec<Value> {
+    let Ok(parts) = loaders::threemf::parse_parts(bytes) else { return Vec::new() };
+    parts
+        .iter()
+        .enumerate()
+        .map(|(i, part)| {
+            let m = part.transform.matrix3;
+            let axes = [m.x_axis, m.y_axis, m.z_axis, part.transform.translation];
+            let transform: Vec<f32> = axes.iter().flat_map(|a| a.to_array()).collect();
+            let (min, max) = part.mesh.bounds().map_or(([0.0; 3], [0.0; 3]), |b| (b.min.to_array(), b.max.to_array()));
+            serde_json::json!({
+                "token": part_token(reference, i),
+                "name": part.name,
+                "triangles": part.mesh.triangle_count(),
+                "min": min,
+                "max": max,
+                "transform": transform,
+                "instances": part.instances,
+            })
+        })
+        .collect()
+}
+
+/// Facts of a model that is in no library (a file in a plugin's folder): its name, kind, size
+/// in bytes and, of the mesh, its size in mm and its triangles.
+pub fn mesh_facts(name: &str, file_size: usize, mesh: &Mesh) -> Value {
+    let mut facts = serde_json::json!({
+        "name": name,
+        "kind": Kind::from_file_name(name).as_str(),
+        "file_size": file_size,
+        "triangles": mesh.triangle_count(),
+    });
+    if let Some(bounds) = mesh.bounds() {
+        facts["size_mm"] = serde_json::json!(bounds.size().to_array());
+    }
+    facts
 }
 
 /// The user's library: the index and the settings, read afresh on every call (so what the
@@ -184,17 +273,39 @@ impl LibraryAccess for LibraryReader {
     }
 
     fn describe(&self, id: &str, read: LibraryRead, caller: Caller) -> Result<Value, String> {
-        self.with(read, caller, |cx| {
+        let (mut facts, path) = self.with(read, caller, |cx| {
             let (detail, _) = read::get_model(cx, id, false).map_err(|e| e.to_string())?;
-            Ok(without_paths(serde_json::to_value(detail).map_err(|e| e.to_string())?))
-        })
+            let path = PathBuf::from(&detail.path);
+            Ok((without_paths(serde_json::to_value(detail).map_err(|e| e.to_string())?), path))
+        })?;
+        // A 3MF also says what it is put together from.
+        if Kind::from_file_name(&listing::file_name(&path)) == Kind::ThreeMf
+            && let Ok(bytes) = archive::read(&path)
+        {
+            let parts = parts_json(&bytes, id.trim());
+            if !parts.is_empty() {
+                facts["parts"] = Value::Array(parts);
+            }
+        }
+        Ok(facts)
     }
 
-    fn triangles(&self, id: &str, max_triangles: u32, read: LibraryRead, caller: Caller) -> Result<MeshData, String> {
+    fn triangles(
+        &self,
+        id: &str,
+        part: Option<usize>,
+        max_triangles: u32,
+        read: LibraryRead,
+        caller: Caller,
+    ) -> Result<MeshData, String> {
         let (path, units) =
             self.with(read, caller, |cx| Ok((cx.resolve(id).map_err(|e| e.to_string())?, cx.config.model_units)))?;
         meshgrove_core::config::set_model_units(units);
-        let data = simplify(&load(&path)?, max_triangles as usize);
+        let mesh = match part {
+            Some(part) => part_mesh(&archive::read(&path).map_err(|e| e.to_string())?, part)?,
+            None => load_file(&path)?,
+        };
+        let data = simplify(&mesh, max_triangles as usize);
         if data.triangles() == 0 {
             return Err(format!("{id} has no triangles"));
         }
@@ -202,8 +313,8 @@ impl LibraryAccess for LibraryReader {
     }
 }
 
-/// The model in a file (or inside an archive), in millimetres.
-fn load(path: &Path) -> Result<Mesh, String> {
+/// The model in a file (or inside an archive), in millimetres. It needs no library.
+pub fn load_file(path: &Path) -> Result<Mesh, String> {
     let kind = Kind::from_file_name(&listing::file_name(path));
     if kind == Kind::Step {
         return loaders::step::load(path).map_err(|e| e.to_string());
@@ -379,6 +490,19 @@ mod tests {
         config.ai.enabled = true;
         assert_eq!(seen(&config, LibraryRead::AiScope, cloud), Some(vec!["eigene".into()]));
         assert_eq!(seen(&config, LibraryRead::AiScope, local).map(|r| r.len()), Some(2));
+    }
+
+    #[test]
+    fn part_tokens_name_a_part_of_a_reference() {
+        let token = part_token("Eigene/dose.3mf", 3);
+        assert_eq!(split_part(&token), Ok(("Eigene/dose.3mf", Some(3))));
+        assert_eq!(split_part("Eigene/dose.3mf"), Ok(("Eigene/dose.3mf", None)));
+        assert_eq!(split_part(&part_token("/data/picked/dose.3mf", 0)), Ok(("/data/picked/dose.3mf", Some(0))));
+        // A file may be called anything, a token it is not.
+        assert_eq!(split_part("Eigene/part=2.3mf"), Ok(("Eigene/part=2.3mf", None)));
+        for bad in ["Eigene/dose.3mf\0part=x", "Eigene/dose.3mf\0part=-1", "Eigene/dose.3mf\0", "a\0b"] {
+            assert!(split_part(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

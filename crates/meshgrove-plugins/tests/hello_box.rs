@@ -3,6 +3,8 @@
 //! Without the file each test passes with a note on stderr, unless MESHGROVE_REQUIRE_PLUGIN=1
 //! (as in CI).
 
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -73,7 +75,7 @@ fn compiles_once_then_comes_from_the_cache() {
         Some((Receive::Ids, Some("box")))
     );
     let tools: Vec<&str> = second.tools().iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(tools, ["make_box", "measure", "spin", "trap"]);
+    assert_eq!(tools, ["make_box", "measure", "spin", "trap", "describe"]);
     assert!(second.tools()[0].bundles && second.tools()[0].input_schema["properties"]["width"].is_object());
     assert_eq!(second.memory_mb(), 64, "the manifest's wish");
 
@@ -314,7 +316,14 @@ impl LibraryAccess for OneBox {
         Ok(json!({"id": id, "copies": ["Kunden/geheim.stl"], "tags": ["Box"]}))
     }
 
-    fn triangles(&self, id: &str, _max: u32, read: LibraryRead, caller: Caller) -> Result<MeshData, String> {
+    fn triangles(
+        &self,
+        id: &str,
+        _part: Option<usize>,
+        _max: u32,
+        read: LibraryRead,
+        caller: Caller,
+    ) -> Result<MeshData, String> {
         self.asked.lock().unwrap().push((id.to_owned(), read, caller));
         std::thread::sleep(self.slow);
         // The box is in a library only local AI may see; "Kunden" is closed to all AI.
@@ -425,6 +434,69 @@ fn a_panel_reads_what_was_opened_with_it_and_nothing_else() {
     let args = json!({"id": "Eigene/box.stl"});
     let err = plugin.call_tool("measure", &args, &CancelToken::new()).unwrap_err();
     assert!(matches!(&err, Error::Denied(m) if m.contains("read the library")), "{err}");
+}
+
+/// A plugin reads models in its own folders through the host, which needs no library and no
+/// grant: what it could read itself. Paths that leave the folders are refused.
+#[test]
+fn a_plugin_reads_models_in_its_own_folders_and_only_there() {
+    let Some(bytes) = wasm() else { return };
+    let base = tempfile::tempdir().unwrap();
+    let plugin = Arc::new(load(&bytes, granted(base.path())));
+    let picked = plugin.data_dir().join("picked");
+    std::fs::create_dir_all(&picked).unwrap();
+    std::fs::write(picked.join("box.stl"), support::stl([10.0, 20.0, 30.0])).unwrap();
+    std::fs::write(picked.join("dose.3mf"), support::dose_3mf()).unwrap();
+    // Beside the plugin's folders, where it has no business.
+    std::fs::write(base.path().join("hello-box").join("secret.stl"), support::stl([1.0, 2.0, 3.0])).unwrap();
+    let ask = |tool: &str, reference: &str| {
+        plugin.call_tool(tool, &json!({"id": reference}), &CancelToken::new()).map(|o| o.result)
+    };
+
+    assert_eq!(ask("measure", "/data/picked/box.stl").unwrap()["size_mm"], json!([10.0, 20.0, 30.0]));
+    let facts = ask("describe", "/data/picked/box.stl").unwrap();
+    assert_eq!(
+        (facts["name"].as_str(), facts["kind"].as_str(), facts["triangles"].as_u64()),
+        (Some("box.stl"), Some("stl"), Some(12))
+    );
+    assert_eq!(facts["size_mm"], json!([10.0, 20.0, 30.0]));
+
+    // A 3MF says its parts; a part's token gives the part by itself.
+    let facts = ask("describe", "/data/picked/dose.3mf").unwrap();
+    let parts = facts["parts"].as_array().expect("parts");
+    assert_eq!(parts.iter().map(|p| p["name"].as_str().unwrap()).collect::<Vec<_>>(), ["Dose", "Deckel"]);
+    assert_eq!(ask("measure", "/data/picked/dose.3mf").unwrap()["size_mm"], json!([140.0, 30.0, 20.0]));
+    let lid = parts[1]["token"].as_str().unwrap();
+    assert_eq!(ask("measure", lid).unwrap(), json!({"size_mm": [40.0, 30.0, 2.0], "triangles": 12}));
+    assert_eq!(ask("describe", lid).unwrap()["parts"], facts["parts"], "a part is described with its file");
+    let err = ask("measure", &lid.replace("part=1", "part=7")).unwrap_err();
+    assert!(matches!(&err, Error::Denied(m) if m.contains("has 2 parts")), "{err}");
+
+    for outside in
+        ["/data/../secret.stl", "/data/picked/../../secret.stl", "/tmp/../secret.stl", "/data//picked/box.stl"]
+    {
+        let err = ask("measure", outside).unwrap_err();
+        assert!(matches!(&err, Error::Denied(m) if m.contains("plain path")), "{outside}: {err}");
+    }
+    for elsewhere in ["/out/box.stl", "/etc/passwd", "/"] {
+        let err = ask("measure", elsewhere).unwrap_err();
+        assert!(matches!(&err, Error::Denied(m) if m.contains("neither a library id")), "{elsewhere}: {err}");
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("../../secret.stl", picked.join("link.stl")).unwrap();
+        let err = ask("measure", "/data/picked/link.stl").unwrap_err();
+        assert!(matches!(&err, Error::Denied(m) if m.contains("leads through a link")), "{err}");
+    }
+    // A library id is still what it was: nothing without the grant.
+    let err = ask("measure", "Eigene/box.stl").unwrap_err();
+    assert!(matches!(&err, Error::Denied(m) if m.contains("has not allowed")), "{err}");
+
+    // A panel's /tmp, where picked files land.
+    let panel = plugin.open_panel("box", None).unwrap();
+    std::fs::write(panel.tmp().join("a.stl"), support::stl([10.0, 20.0, 30.0])).unwrap();
+    assert_eq!(opened_width(&panel, &["/tmp/a.stl"]), Ok(14.0));
+    assert!(opened_width(&panel, &["/tmp/../out/a.stl"]).unwrap_err().contains("plain path"));
 }
 
 /// With the grant, a file outside what the grant shows still reads when the user opened it.

@@ -805,6 +805,7 @@ mod tests {
         fn triangles(
             &self,
             _id: &str,
+            _part: Option<usize>,
             _max: u32,
             _read: meshgrove_plugins::LibraryRead,
             _caller: meshgrove_plugins::Caller,

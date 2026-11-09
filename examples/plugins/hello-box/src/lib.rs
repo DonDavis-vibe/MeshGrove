@@ -11,8 +11,8 @@
 //!   (`Event::ModelsOpened`), measures the first one and sizes the box to hold it. Those files it
 //!   may read without the `library_read` permission, because the user opened them with it.
 //!
-//! With the feature `test-hooks` it has two more tools for Meshgrove's tests: `spin` never ends,
-//! `trap` eats all memory. Its panel then also answers `HostChanged` with a toast naming the
+//! With the feature `test-hooks` it has three more tools for Meshgrove's tests: `spin` never
+//! ends, `trap` eats all memory, `describe` passes on what `library.describe` says. Its panel then also answers `HostChanged` with a toast naming the
 //! language, and a click on "future" with an effect no Meshgrove knows.
 
 use std::cell::RefCell;
@@ -179,7 +179,7 @@ impl Guest for HelloBox {
             },
         ];
         #[cfg(feature = "test-hooks")]
-        for name in ["spin", "trap"] {
+        for name in ["spin", "trap", "describe"] {
             let description = format!("Test hook: {name}");
             tools.push(ToolDef {
                 name: name.into(),
@@ -215,6 +215,13 @@ impl Guest for HelloBox {
                 loop {
                     n = std::hint::black_box(n.wrapping_add(1));
                 }
+            }
+            // What `library.describe` says of a reference (an id, a path, a part's token).
+            #[cfg(feature = "test-hooks")]
+            "describe" => {
+                let reference = serde_json::from_str::<serde_json::Value>(&args)?["id"].as_str().unwrap_or_default().to_owned();
+                let facts = library::describe(&reference).map_err(PluginError::Denied)?;
+                Ok(guest::tool_output(&serde_json::from_str::<serde_json::Value>(&facts)?, None))
             }
             #[cfg(feature = "test-hooks")]
             "trap" => {
