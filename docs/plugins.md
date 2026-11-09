@@ -8,16 +8,22 @@ four kinds of things:
 - **tools** for the AI: the chat, and AI apps through `meshgrove-mcp`
 - **panels**: tabs in Meshgrove's window, drawn from a widget tree the plugin sends
 - **jobs**: background work a panel starts
-- **file handlers**: "Open with <plugin>" for the plugin's file types
+- **file handlers**: "Open with <plugin>" for the plugin's file types, one file or a whole
+  selection
 
 Plugins never write into the library directly. They hand over a **bundle**: files plus tags,
 notes and print lists, which Meshgrove applies as one change the user can undo. A plugin may
-read the library only when the user allows it, and then by file ids, never by paths.
+read the library only when the user allows it, or the very files the user opened with it, and
+always by file ids, never by paths.
 
 The interface is the crate [`meshgrove-plugin-api`](../crates/meshgrove-plugin-api). It is MIT
 OR Apache-2.0: **plugins may use any licence**, open or closed (Meshgrove itself is GPL-3.0).
 [`examples/plugins/hello-box`](../examples/plugins/hello-box) is a complete example: a tool, a
-panel with a form and a 3D view, a job, a file handler and a bundle.
+panel with a form and a 3D view, a job, two file handlers (one for bytes, one for library ids)
+and bundles, into a folder of their own and beside a library file.
+
+What is marked **from 0.9.0** needs Meshgrove 0.9.0 (plugin API 0.2) or newer; see
+[API versions](#api-versions) for what an older Meshgrove does with it.
 
 ## Contents
 
@@ -160,10 +166,10 @@ PATH="$(dirname "$(rustup which --toolchain stable cargo)"):$PATH" cargo build -
 |---|---|
 | `id` | `[a-z][a-z0-9-]{1,30}`, unique among installed plugins; the AI sees tools as `<id>_<tool>` |
 | `name`, `version`, `description`, `authors`, `license`, `homepage` | shown in Settings → Plugins |
-| `api` | the API version it was built for: `meshgrove_plugin_api::API_VERSION` |
+| `api` | the API version it was built for: `meshgrove_plugin_api::API_VERSION` (see [API versions](#api-versions)) |
 | `permissions` | what it asks for (below); the user grants each one |
 | `panels` | `{id, title}` of each panel it can open |
-| `file_types` | `{pattern, description}`, e.g. `*.gridfinity.json`; `*` alone is refused |
+| `file_types` | `{pattern, description}`, e.g. `*.gridfinity.json`; `*` alone is refused. From 0.9.0 also `label`, `receive` and `panel`, see [Opening files](#opening-files) |
 | `memory_mb` | memory one instance needs; default 1024, between 16 and 4096 (the user's setting wins) |
 
 **Permissions:**
@@ -178,12 +184,17 @@ Without a grant, the matching call fails with a message the plugin can pass on, 
 "the user has not allowed bingrove to read the library (Meshgrove → Settings → Plugins)".
 Grants are checked on every call.
 
+Two things a plugin reads without `library_read` (from 0.9.0): the library files the user
+opened with one of its panels ([Opening files](#opening-files)), and model files in its own
+folders. See [Talking to Meshgrove](#talking-to-meshgrove).
+
 ## Running in the sandbox
 
 - **Folders:**
   - `/data` is the plugin's own folder. It is writable for panels and jobs, read-only for tool calls.
   - `/out` is a staging folder for the files of a bundle. A panel and the jobs it starts share one.
-  - `/tmp` is fresh for each instance (a panel keeps its own; picked files land there).
+  - `/tmp` is fresh for each instance (a panel keeps its own; picked files land there, or in
+    `/data/picked` when the plugin asks for that).
 - **No network, no environment variables.** Stderr goes to Meshgrove's log (for panics and debug output).
 - **Instances:** every tool call and every job gets a fresh instance. An open panel keeps its
   instance on a thread of its own as long as its tab is open.
@@ -208,21 +219,64 @@ Grants are checked on every call.
 - `info()`: JSON `HostInfo`, with the language (`de`/`en`), dark theme, printers with their
   build volumes (main one first), and Meshgrove's and the API's version. Panels get
   `Event::HostChanged` when any of it changes, and once right after they open.
+  From 0.9.0 it also says `imperial` (the user reads lengths in inches; lengths still cross
+  the interface in millimetres) and each printer's `nozzle` diameter in mm, where one is set.
 
-**`library` (with `library_read`):**
+**`library`:**
 
 - `search(query, limit)`: a page of matches for a search as typed in Meshgrove, for example
-  `rose tag:Garten ext:stl`, as JSON with ids, names, sizes and tags.
-- `describe(id)`: facts of one file as JSON (size in mm, tags, note, lists, printability).
-- `triangles(id, max_triangles)`: the model's triangles in millimetres (STL, 3MF, OBJ, PLY,
-  glTF, STEP, also inside archives). It is simplified to the budget by vertex clustering:
-  outlines and proportions stay, small details may go.
+  `rose tag:Garten ext:stl`, as JSON with ids, names, sizes and tags. Needs `library_read`.
+- `describe(reference)`: facts of one file as JSON (size in mm, tags, note, lists, printability).
+- `triangles(reference, max_triangles)`: the model's triangles in millimetres (STL, 3MF, OBJ,
+  PLY, glTF, STEP, also inside archives). It is simplified to the budget by vertex clustering:
+  outlines and proportions stay, small details may go. A model within the budget comes whole,
+  equal corners shared. The budget is at most 8 million triangles (2 million before 0.9.0).
 
-What the plugin can see depends on the grant and on who is calling:
+A **reference** is one of these (the last three from 0.9.0; before, only library ids):
 
-- **"What local AI sees":** a panel or a job reads as the user, locally. A tool call reads as the
-  AI that called it: a cloud AI does not see local-only libraries.
+| Reference | Needs | Reads |
+|---|---|---|
+| a library id (`Garten/Rankhilfe/rose.stl`) | `library_read`, as far as it reaches | the file in the library |
+| the id of a file opened with the panel | nothing: the user opened it | that file, as the user sees it |
+| a path below `/tmp` or `/data` (`/data/picked/lid.stl`) | nothing: the plugin could read it itself | the plugin's own file, through Meshgrove's loaders |
+| a part token (`<reference>\0part=<n>`, from `describe`) | what its reference needs | one object of a 3MF |
+
+**What the grant shows** depends on who is calling:
+
+- **"What local AI sees":** a panel or a job reads as the user: the libraries opened to local
+  AI, from 0.9.0 also while AI is switched off (no AI is reading there). A tool call reads as
+  the AI that called it: a cloud AI does not see local-only libraries, and nothing at all
+  while AI is switched off.
 - **"Everything":** every library.
+
+**Files opened with a panel** (from 0.9.0) are the ids of `Event::ModelsOpened`. The panel
+and the jobs it starts read exactly those, with or without `library_read`, also after a
+restart; Meshgrove keeps the newest 512 for each panel. A tool call gets none of this. Their
+facts come without what they say about other files (copies, G-code beside them, the folder's
+readme). `select_model` shows them too.
+
+**The plugin's own files** (from 0.9.0): a path must be plain. One with `..`, or one that
+leads through a link, is refused, and nothing outside `/tmp` and `/data` is read (not `/out`).
+`describe` of such a file gives its name, kind, size in bytes and mm, and triangles. Files a
+model refers to (glTF buffers) are read from beside it by the same rules.
+
+**The parts of a 3MF** (from 0.9.0): `describe` of a 3MF lists the objects it is put together
+from, as `parts`:
+
+```json
+{"token": "Eigene/dose.3mf\u0000part=1", "name": "Deckel", "triangles": 4200,
+ "min": [0, 0, 0], "max": [40, 30, 2],
+ "transform": [1, 0, 0,  0, 1, 0,  0, 0, 1,  50, 0, 0], "instances": 2}
+```
+
+- A part is an object with triangles of its own; the same object placed several times is one
+  part (`instances`). Of a slicer project with several plates, the parts are those of the
+  first plate. Supports, modifiers and negative volumes are no parts.
+- `triangles(token, …)` gives that object alone, **in its own coordinates** and millimetres.
+  `min` and `max` are its box there.
+- `transform` says where it stands (its first placement): twelve numbers as in 3MF, the three
+  axes and then the shift, so a point `p` of the part is at `x·p.x + y·p.y + z·p.z + shift`.
+- Treat the token as opaque: pass it back to `triangles`, or to a bundle's `derive_3mf`.
 
 Answers never contain paths. Ids look like `Garten/Rankhilfe/rose.stl`.
 
@@ -271,11 +325,77 @@ Write the files below `/out`, then describe them:
 - **Every file below `/out` goes along**, not only those named in the bundle.
 - **Where it lands:** `folder` inside the library imports go to. Without one, it lands in the
   import folder under the title. A taken name gets " (2)". Nothing is ever replaced.
+  Or beside a library file, see below.
 - **Limits:** at most 2000 files and 2 GiB; 8 tags per file; 8 lists; quantities 1–999.
 - **One change:** the copy, its indexing (the files count as seen, not new in the inbox), tags,
   notes and lists form a single change in Meshgrove's history. Undo removes the files (but keeps
   the ones the user edited since) and the lists. Redo copies again from the staging folder,
   which Meshgrove keeps while anything refers to it.
+
+**Beside a library file (from 0.9.0).** For files made from a library file (a textured copy of
+a model), name that file instead of a folder:
+
+```json
+{
+  "title": "Wood on 2 models",
+  "next_to": "Garten/Rankhilfe/rose.stl",
+  "files": [
+    {"path": "rose – wood.3mf", "note": "wood, 0.4 mm deep"},
+    {"path": "topf – wood.3mf", "next_to": "Garten/Töpfe/topf.stl"}
+  ],
+  "tags": ["Textured"]
+}
+```
+
+- Each file lands **loose** in the folder of its source, under its own name; a folder it had
+  below `/out` is dropped. A taken name gets a number (`rose – wood (2).3mf`). The source is
+  never touched.
+- `next_to` on the bundle is the source of every file; a file's own `next_to` wins. So one
+  bundle serves a whole batch and is one step in the history. Every file needs a source.
+- The sources are library ids the plugin may read: opened with the panel, or within
+  `library_read`. For a tool call, what the AI that called it may see. A source inside an
+  archive puts the file beside the archive.
+- All sources of one bundle are in one library, and `next_to` does not go with `folder`. Both
+  are refused with a message.
+- Undo removes exactly these files (not ones the user changed since). The files around them
+  are not touched: Meshgrove indexes only the new ones.
+- The review card says "beside <file>".
+
+**A 3MF with some objects swapped (from 0.9.0).** When the source is a slicer project with
+several objects, plates and settings, a plugin that changed one object should not hand back a
+bare mesh. It writes only the new mesh and lets Meshgrove make the file:
+
+```json
+{
+  "title": "Lid with grooves",
+  "next_to": "Eigene/dose.3mf",
+  "files": [{
+    "path": "dose – grooves.3mf",
+    "derive_3mf": {
+      "source": "Eigene/dose.3mf",
+      "replace": [{"part": "Eigene/dose.3mf\u0000part=1", "mesh": "parts/lid.stl"}]
+    }
+  }]
+}
+```
+
+- `source` is the 3MF: a library id or a path below `/tmp` or `/data`, as `describe` takes it.
+- `replace` names parts by their tokens (from `describe` of that same source) and, for each, a
+  mesh the plugin wrote below `/out` (STL, 3MF, OBJ or PLY): in millimetres and **in the
+  part's own coordinates**, as `triangles(token)` gave it. Corners at the same place become
+  one vertex, so an STL comes out closed.
+- Meshgrove copies the 3MF to `path` and swaps only those objects' meshes. Everything else
+  stays as the slicer saved it: the other objects, where each one stands, plates, profiles and
+  settings (Bambu Studio, OrcaSlicer, Anycubic Slicer Next and PrusaSlicer projects included).
+- What the slicer kept for each triangle of a swapped object goes with the old triangles:
+  painted colours, supports, seams. The pictures of the plates are emptied, since they show
+  the model as it was.
+- The mesh files are used up and do not reach the library. The copy is a file of the bundle
+  like any other: tags, notes, lists, `next_to`.
+- An object PrusaSlicer cuts into several volumes within one mesh cannot be swapped.
+
+`job` on a bundle is reserved for tools that start background work; this Meshgrove refuses a
+bundle that carries one.
 
 **How a bundle is applied:**
 
@@ -332,7 +452,8 @@ plugin's values count: it may correct or refuse them.
 |---|---|
 | `column`, `row`, `group` (title, collapsible), `scroll` (max_height), `split` (vertical, ratio; the user can drag the border) | — |
 | `tabs` | `Changed {value: index}` when another tab is picked |
-| `label` (style: body, heading, strong, small, weak, mono), `markdown`, `separator`, `notice` (info, success, warn, error), `progress` (`fraction`; none = busy), `image` (base64 PNG/JPEG) | — |
+| `label` (style: body, heading, strong, small, weak, mono), `markdown`, `separator`, `notice` (info, success, warn, error), `progress` (`fraction`; none = busy) | — |
+| `image` (base64 PNG/JPEG, `width`: at most that wide, `alt`: shown on hover) | — ; with an `id` (from 0.9.0) `Click`, like a button. `selected` draws a frame round the one that is chosen: a gallery to pick from. Older versions show the picture and ignore clicks |
 | `button` (primary, enabled) | `Click` |
 | `text_input` | `Changed {value: text}` on Enter or when the field loses focus, not per keystroke |
 | `number_input` (min, max, step, decimals, unit) | `Changed {value: number}` once a typed number is done (Enter, Tab or leaving the field; Escape drops it), or when a drag is let go. With `unit: mm` it shows the user's unit (inches when imperial) but **always sends millimetres** |
@@ -385,11 +506,15 @@ plugin's values count: it may correct or refuse them.
 | `cancel_job {job}` | cancels it |
 | `apply_bundle {bundle}` | applies what the panel and its jobs wrote to `/out` (needs `bundles`) |
 | `propose_bundle {bundle}` | the same, into the review |
-| `save_file {path, name}` | offers a file below `/out` or `/tmp` for saving (asks for the place) |
-| `open_file_dialog {id, title, extensions}` | asks for a file, copies it into the panel's `/tmp`, sends `FilePicked {id, name, path}` |
+| `save_file {path, name}` | offers a file below `/out` or `/tmp` for saving, with the system's file dialog (before 0.9.0: a field to type the path into) |
+| `open_file_dialog {id, title, extensions, multiple, into}` | asks for a file with the system's file dialog, copies it into the panel's `/tmp` and sends `FilePicked {id, name, path}` (`path`: `/tmp/<name>`). From 0.9.0: `multiple: true` lets the user pick several, one `FilePicked` each; `into: "data"` copies to `/data/picked/<name>` instead, where the file stays and the panel's jobs can read it. A file of that name with other content is kept there and the new one gets a number, so use the `path` of the event |
 | `open_panel {panel, state}` | opens (or, with a state, re-opens) a panel |
-| `select_model {id}` | shows that library file in the gallery |
+| `select_model {id}` | shows that library file in the gallery, if the plugin may read it |
 | `repaint_after {ms}` | renders the panel again after that long |
+
+An effect Meshgrove does not know (from a newer API) is skipped and the others are done (from
+0.9.0; an older Meshgrove drops the whole answer, so do not send it effects it cannot know:
+`host.info().api` says what it speaks).
 
 ## Jobs
 
@@ -410,9 +535,33 @@ For a file matching one of the manifest's `file_types`, the gallery's context me
 "Open with <plugin>". Meshgrove calls `open_file(name, bytes)` (up to 64 MiB), and the plugin
 answers with effects, usually `open_panel` with the file's content as state.
 
+**By id (from 0.9.0).** A plugin that works on models wants neither 64 MiB of bytes nor one
+file at a time. A file type may say so:
+
+```json
+{"pattern": "*.stl", "description": "A model to texture",
+ "label": "Apply a texture …", "receive": "ids", "panel": "texture"}
+```
+
+| Field | Meaning |
+|---|---|
+| `label` | the entry in the context menu; without one it is "Open with <plugin>" |
+| `receive` | `"bytes"` (the default): `open_file`, one file. `"ids"`: the files' library ids, to a panel |
+| `panel` | with `"ids"`: the panel that takes them, one of the manifest's (required) |
+
+- The entry shows for **one file or a whole selection**: every selected file has to match a
+  file type of the plugin that receives ids in the same panel. Files outside the libraries
+  have no ids and get no entry; files inside archives do.
+- Meshgrove opens the panel (or brings it to the front) and sends it
+  `Event::ModelsOpened {ids}`. `open_file` is not called.
+- From then on the panel and its jobs may read exactly these files through `library`, whether
+  or not the user granted `library_read` (see [Talking to Meshgrove](#talking-to-meshgrove)),
+  and may put a bundle's files beside them (`next_to`).
+- For several patterns, list several file types with the same `panel`.
+
 ## Testing with meshgrove-plugin-run
 
-`meshgrove-plugin-run` runs a plugin without Meshgrove and without a library. Build it with
+`meshgrove-plugin-run` runs a plugin without Meshgrove. Build it with
 `cargo build -p meshgrove-plugins --bin meshgrove-plugin-run`, then:
 
 ```sh
@@ -422,10 +571,21 @@ meshgrove-plugin-run my_plugin.wasm call make_box '{"width": 30}' --out out/
 meshgrove-plugin-run my_plugin.wasm job box '{}' --out out/
 meshgrove-plugin-run my_plugin.wasm open drawer.gridfinity.json
 meshgrove-plugin-run my_plugin.wasm mcp --out out/      # an MCP server with the plugin's tools
+meshgrove-plugin-run my_plugin.wasm call measure '{"id": "models/Garten/rose.stl"}' --library ~/models
 ```
 
-Options: `--memory MB`, `--no-cache`. The `mcp` mode can be added to an AI app like any MCP
-server, to try the tools from there. Meshgrove's own tests run `examples/plugins/hello-box`
+Options:
+
+- `--library DIR` (from 0.9.0): the plugin reads that folder as a library, all of it, without
+  Meshgrove's index or settings. Ids start with the folder's name (`models/Garten/rose.stl`);
+  `search` matches words against them (and `ext:stl`). A bundle with `next_to` is printed
+  with the places its files would land (`would_land`); nothing is copied there.
+- `--data DIR` (from 0.9.0): the folder the plugin sees as `/data`, in place of its own in
+  Meshgrove's plugins folder. Put test files there to read them by path.
+- `--memory MB`, `--no-cache`.
+
+Without `--library` the plugin has no library. The `mcp` mode can be added to an AI app like
+any MCP server, to try the tools from there. Meshgrove's own tests run `examples/plugins/hello-box`
 (`scripts/build-plugins.sh --test-hooks`; `MESHGROVE_TEST_PLUGIN` names another file).
 
 ## Installing and granting
@@ -465,17 +625,47 @@ library_read = "none"   # "ai-scope" or "all"
 
 ## API versions
 
-The WIT package is `meshgrove:plugin@<API_VERSION>`. Meshgrove runs a plugin when it was built for
-**the same major version and a minor version no newer than its own**: a Meshgrove with API 0.2
-runs plugins built for 0.1. A plugin built for a newer minor asks the user to update Meshgrove.
-One built for another major version is refused, with a message saying which Meshgrove it needs.
-Widgets Meshgrove does not know show as placeholders, so a panel still works on a slightly older
-Meshgrove.
+The interface has two versions, in `meshgrove_plugin_api`:
 
-Events go the other way, so a newer Meshgrove can send a kind your plugin has never heard of. It
-reads as `Event::Unknown`; with an older `meshgrove-plugin-api`, parsing it fails instead. Either
-way, answer with no effects, as hello-box does, and never `unwrap()` the parse: a panic ends the
-panel.
+| | Is | Now | Changes |
+|---|---|---|---|
+| `WIT_VERSION` | the WIT package `meshgrove:plugin@…`: the functions a plugin imports and exports, which it is **linked** against | `0.1.0` | not within 0.x |
+| `API_VERSION` | the JSON shapes: manifest, widgets, events, effects, bundles, and what the host functions take | `0.2.0` (Meshgrove 0.9.0) | with new fields and variants |
+
+**The rule: within 0.x nothing is added to the WIT world**, no import and no export. A
+component that imports a function the host lacks does not load at all, so a new function
+would stop every installed plugin on an older Meshgrove, and a changed package version would
+stop every older plugin on a new one. Everything new is JSON: a field with a default, a new
+variant of an enum, a new kind of reference a function takes. That is why a plugin built for
+API 0.1 (Meshgrove 0.8) runs unchanged on 0.9.0.
+
+| | Plugin API | Meshgrove |
+|---|---|---|
+| 0.1 | the first | 0.8.0 – 0.8.3 |
+| 0.2 | everything marked "from 0.9.0" in this document | 0.9.0 |
+
+**What Meshgrove checks.** The plugin's manifest names the API it was built for (`api`). It
+runs when that is **the same major version and a minor version no newer than Meshgrove's**:
+
+- A Meshgrove with API 0.2 runs plugins built for 0.1.
+- A plugin built for a newer minor version is refused with "built for plugin API 0.2.0, newer
+  than this Meshgrove's 0.1.0: update Meshgrove". A plugin that uses anything from 0.9.0 should
+  say `api: "0.2.0"`, which `API_VERSION` of the crate it was built with does by itself.
+- One built for another major version is refused, with a message saying which Meshgrove it
+  needs.
+
+**What each side does with what it does not know:**
+
+| A newer … | meets an older … | which |
+|---|---|---|
+| widget | Meshgrove | shows a placeholder, the rest of the panel works |
+| field of a widget, an effect or a bundle | Meshgrove | ignores it |
+| effect | Meshgrove 0.9.0 or newer | skips it and does the others (0.8: drops the whole answer) |
+| event | plugin | reads it as `Event::Unknown` (with `meshgrove-plugin-api` 0.1: fails to parse it) |
+| field of `HostInfo` or of an event | plugin | ignores it |
+
+So a newer Meshgrove can send a kind of event your plugin has never heard of. Answer with no
+effects, as hello-box does, and never `unwrap()` the parse: a panic ends the panel.
 
 ```rust
 let Ok(event) = serde_json::from_str::<Event>(&event) else { return guest::effects(&[]) };
