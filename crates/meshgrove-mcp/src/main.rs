@@ -139,6 +139,10 @@ fn setup(mode: Mode, args: &[String]) -> Result<bool, String> {
     Ok(ok)
 }
 
+/// How long the process waits for running plugin jobs once stdin is closed.
+#[cfg(feature = "plugins")]
+const JOBS_AT_EXIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
 fn main() -> ExitCode {
     // Logs go to stderr: stdout carries the protocol.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
@@ -185,11 +189,19 @@ fn main() -> ExitCode {
         }
     };
     let server = Meshgrove::new(args.paths, args.class, args.client);
+    #[cfg(feature = "plugins")]
+    let jobs = server.clone();
     let result = runtime.block_on(async move {
         let running = server.serve(rmcp::transport::stdio()).await.map_err(|e| e.to_string())?;
         running.waiting().await.map_err(|e| e.to_string())?;
         Ok::<(), String>(())
     });
+    // Jobs the plugins' tools started go on after the AI app let go, so their files still reach
+    // the review; but not for ever.
+    #[cfg(feature = "plugins")]
+    if !jobs.wait_for_jobs(JOBS_AT_EXIT) {
+        log::error!("plugin jobs still running after {JOBS_AT_EXIT:?}: they are cut off");
+    }
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

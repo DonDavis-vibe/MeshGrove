@@ -648,6 +648,7 @@ mod plugins {
     use meshgrove_core::ai::{Context, ToolError};
     use meshgrove_core::cache::ThumbCache;
     use meshgrove_core::config::Config;
+    use meshgrove_plugins::deferred::DeferredJobs;
     use meshgrove_plugins::registry::host_info;
     use meshgrove_plugins::{CancelToken, Registry};
     use rmcp::model::{CallToolRequestParams, CallToolResult, Tool, ToolAnnotations};
@@ -662,8 +663,10 @@ mod plugins {
     /// The plugins as last loaded, and the config.toml they were loaded for (by its time).
     type Loaded = Option<(Option<SystemTime>, Arc<Registry>)>;
 
+    /// The plugins, and the jobs their tools started, which run in this process and go on while
+    /// the plugins load anew.
     #[derive(Clone, Default)]
-    pub(super) struct Plugins(Arc<Mutex<Loaded>>);
+    pub(super) struct Plugins(Arc<Mutex<Loaded>>, Arc<DeferredJobs>);
 
     impl Meshgrove {
         fn config_path(&self) -> Option<std::path::PathBuf> {
@@ -685,9 +688,21 @@ mod plugins {
             let library: Arc<dyn meshgrove_plugins::LibraryAccess> =
                 Arc::new(meshgrove_plugins::LibraryReader::new(self.paths.db.clone(), self.paths.config.clone()));
             let info = host_info(config, &language, false);
-            let registry = Arc::new(Registry::load(config, &base, &info, Some(library)));
+            let registry =
+                Arc::new(Registry::load_with_jobs(config, &base, &info, Some(library), self.plugins.1.clone()));
             *loaded = Some((stamp, registry.clone()));
             registry
+        }
+
+        /// Waits until the jobs the plugins' tools started are done, at most `timeout` (the AI
+        /// app closed the connection: their files still reach the review). Whether they are.
+        pub fn wait_for_jobs(&self, timeout: std::time::Duration) -> bool {
+            let running = self.plugins.1.running();
+            if running.is_empty() {
+                return true;
+            }
+            log::warn!("waiting up to {timeout:?} for {} plugin job(s) to finish", running.len());
+            self.plugins.1.wait_idle(timeout)
         }
 
         fn tool_of(registry: &Registry, name: &str) -> Option<Tool> {

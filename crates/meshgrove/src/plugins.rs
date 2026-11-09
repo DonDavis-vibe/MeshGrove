@@ -13,6 +13,7 @@ use meshgrove_core::bundle::ResolvedBundle;
 use meshgrove_core::config::Config;
 use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Node, PickInto, View};
 use meshgrove_plugin_api::{FileType, HostInfo};
+use meshgrove_plugins::deferred::DeferredJobs;
 use meshgrove_plugins::jobs::{JobEvent, JobPool};
 use meshgrove_plugins::{CancelToken, Opened, Plugin, Registry, Settings, StagedBundle};
 
@@ -277,6 +278,8 @@ pub struct PluginHost {
     ctx: egui::Context,
     /// The window's GPU, for the panels' workers to upload their meshes with.
     gpu: Option<Gpu>,
+    /// The jobs the plugins' tools started; they go on while the plugins load anew.
+    deferred: Arc<DeferredJobs>,
 }
 
 impl PluginHost {
@@ -293,6 +296,7 @@ impl PluginHost {
             opened: unbounded(),
             ctx,
             gpu: None,
+            deferred: DeferredJobs::new(),
         }
     }
 
@@ -310,19 +314,24 @@ impl PluginHost {
     pub fn reload(&mut self, config: &Config, info: HostInfo, db: &Path) {
         self.info = Some(info.clone());
         let (tx, rx) = bounded(1);
-        let (config, base, ctx) = (config.clone(), self.base.clone(), self.ctx.clone());
+        let (config, base, ctx, jobs) = (config.clone(), self.base.clone(), self.ctx.clone(), self.deferred.clone());
         let library: Arc<dyn meshgrove_plugins::LibraryAccess> =
             Arc::new(meshgrove_plugins::LibraryReader::new(db.to_path_buf(), None));
         std::thread::Builder::new()
             .name("plugins".into())
             .spawn(move || {
-                let registry = Registry::load(&config, &base, &info, Some(library));
+                let registry = Registry::load_with_jobs(&config, &base, &info, Some(library), jobs);
                 let rows = rows(&config, &base, &registry);
                 let _ = tx.send((Arc::new(registry), rows));
                 ctx.request_repaint();
             })
             .expect("a thread for loading plugins");
         self.loading = Some(rx);
+    }
+
+    /// The jobs the plugins' tools started (for the status bar).
+    pub fn deferred(&self) -> &Arc<DeferredJobs> {
+        &self.deferred
     }
 
     /// What the plugins were last told about the host.

@@ -11,7 +11,8 @@
 //! Options: `--out <dir>` (default `./plugin-out`), `--library <dir>`, `--data <dir>`,
 //! `--memory <MiB>`, `--no-cache`.
 //! The plugin may offer tools and hand over bundles here (the bundle is printed, its files stay
-//! in the output folder). With `--library` it reads that folder as a library, all of it, by ids
+//! in the output folder). A tool that hands its work to a job (`Bundle::job`) waits here for the
+//! job, which runs as Meshgrove would run it, and prints the bundle it ends with. With `--library` it reads that folder as a library, all of it, by ids
 //! that start with the folder's name (`models/Garten/rose.stl`); without, it has none. `--data`
 //! is the folder it sees as `/data` (by default its own in Meshgrove's plugins folder).
 
@@ -127,6 +128,7 @@ fn run(args: Args) -> Result<(), String> {
             let outcome = plugin
                 .call_tool_in(tool, &json_arg(2)?, staging, AccessClass::Local, &CancelToken::new())
                 .map_err(|e| e.to_string())?;
+            let outcome = finish_job(&plugin, outcome).map_err(|e| e.to_string())?;
             print(&outcome_json(&outcome, &args.out));
         }
         (Some("job"), Some(kind)) => {
@@ -148,6 +150,19 @@ fn run(args: Args) -> Result<(), String> {
         _ => return Err(USAGE.into()),
     }
     Ok(())
+}
+
+/// A tool's answer with the job its bundle names run to the end (synchronously, progress on
+/// stderr): the bundle is then the one the job ended with.
+fn finish_job(plugin: &Plugin, mut outcome: ToolOutcome) -> Result<ToolOutcome, meshgrove_plugins::Error> {
+    if let Some(staged) = outcome.bundle.take_if(|s| s.bundle.job.is_some()) {
+        let job = staged.bundle.job.as_ref().map(|j| j.kind.clone()).unwrap_or_default();
+        eprintln!("running its job {job:?} …");
+        let progress: meshgrove_plugins::Progress =
+            Arc::new(|fraction, message: &str| eprintln!("{:3.0} % {message}", fraction * 100.0));
+        outcome.bundle = Some(plugin.finish_job(staged, AccessClass::Local, &CancelToken::new(), Some(progress))?);
+    }
+    Ok(outcome)
 }
 
 /// A tool's answer as JSON: the result, the bundle and where its files are. A bundle that
@@ -217,7 +232,8 @@ impl ServerHandler for Runner {
         let (plugin, out) = (self.plugin.clone(), self.out.clone());
         let outcome = tokio::task::spawn_blocking(move || {
             let staging = Staging::at(&out).map_err(meshgrove_plugins::Error::from)?;
-            plugin.call_tool_in(&tool, &args, staging, AccessClass::Local, &CancelToken::new()).map(|o| (o, out))
+            let outcome = plugin.call_tool_in(&tool, &args, staging, AccessClass::Local, &CancelToken::new())?;
+            finish_job(&plugin, outcome).map(|o| (o, out))
         })
         .await
         .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;

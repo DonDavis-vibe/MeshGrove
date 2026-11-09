@@ -123,6 +123,17 @@ impl App {
             self.plugins.host_changed(&info);
             self.plugins.reload(&self.config, info, &self.db_path);
         }
+        // Jobs the plugins' tools started: done ones say so, running ones keep the status bar fresh.
+        for done in self.plugins.deferred().take_finished() {
+            let name = done.plugin_name;
+            match done.outcome {
+                Ok(title) => self.toast(t!("plugins.job_done", name = name, title = title).into_owned()),
+                Err(error) => self.toast(t!("plugins.job_failed", name = name, error = error).into_owned()),
+            }
+        }
+        if !self.plugins.deferred().running().is_empty() {
+            self.egui_ctx.request_repaint_after(Duration::from_millis(250));
+        }
         let (actions, reloaded) = self.plugins.poll();
         if reloaded {
             // The panels of the last run (kept in the layout) open again.
@@ -357,6 +368,24 @@ impl App {
             _ => {}
         }
         outcome
+    }
+
+    /// The status bar's entries for the jobs plugins' tools started: name, progress and a
+    /// button to cancel each.
+    pub(super) fn plugin_jobs_status(&mut self, ui: &mut Ui) {
+        for job in self.plugins.deferred().running() {
+            ui.separator();
+            let text = match job.message.is_empty() {
+                true => job.plugin_name.clone(),
+                false => format!("{}: {}", job.plugin_name, job.message),
+            };
+            ui.add(egui::ProgressBar::new(job.fraction.clamp(0.0, 1.0)).desired_width(90.0).desired_height(10.0))
+                .on_hover_text(t!("plugins.job_hint", tool = job.tool.as_str()));
+            ui.label(text);
+            if ui.small_button("✕").on_hover_text(t!("plugins.cancel_job")).clicked() {
+                self.plugins.deferred().cancel(&job.id);
+            }
+        }
     }
 
     /// The tab of a plugin panel.

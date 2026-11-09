@@ -2401,6 +2401,8 @@ impl App {
             ));
             ui.separator();
             ui.label(t!("status.models", count = i18n::count(models)));
+            #[cfg(feature = "plugins")]
+            self.plugin_jobs_status(ui);
             let (done, total) = self.thumbs.progress();
             let rate = self.rate.sample(done);
             if total > 0 && done < total {
