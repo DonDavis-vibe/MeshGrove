@@ -37,6 +37,8 @@ pub struct Settings {
     pub base: PathBuf,
     /// Keep compiled code in `<base>/.cache`.
     pub cache: bool,
+    /// The plugin's own folder (`/data`); `None`: `<base>/<id>/data`.
+    pub data: Option<PathBuf>,
     pub library: Option<Arc<dyn LibraryAccess>>,
     pub info: HostInfo,
     /// How long a tool call may take ([`TOOL_DEADLINE`]).
@@ -56,6 +58,7 @@ impl Settings {
             memory_mb: None,
             base: base.to_path_buf(),
             cache: true,
+            data: None,
             library: None,
             info: HostInfo {
                 language: "en".into(),
@@ -209,6 +212,7 @@ impl Plugin {
                     out: &dir.join("out"),
                     tmp_base: &dir,
                     tmp_exact: false,
+                    scratch: &dir,
                 },
                 cancel: CancelToken::new(),
                 progress: None,
@@ -306,7 +310,16 @@ impl Plugin {
 
     /// The plugin's own folder (`/data`).
     pub fn data_dir(&self) -> PathBuf {
-        self.settings.base.join(&self.manifest.id).join("data")
+        match &self.settings.data {
+            Some(data) => data.clone(),
+            None => self.settings.base.join(&self.manifest.id).join("data"),
+        }
+    }
+
+    /// The plugin's temporary folders: a `/tmp` for each instance that has none of its own, and
+    /// what the host puts on disk for it.
+    fn scratch_dir(&self) -> PathBuf {
+        self.settings.base.join(&self.manifest.id).join("tmp")
     }
 
     /// How an instance reads the library for `caller`: with the plugin's grant, and the files
@@ -332,14 +345,14 @@ impl Plugin {
         cancel: CancelToken,
         progress: Option<Progress>,
     ) -> Result<Store<State>, Error> {
-        let data = self.data_dir();
+        let (data, scratch) = (self.data_dir(), self.scratch_dir());
         let tmp_exact = tmp.is_some();
-        let tmp_base = tmp.map_or_else(|| self.settings.base.join(&self.manifest.id).join("tmp"), Path::to_path_buf);
+        let tmp_base = tmp.map_or_else(|| scratch.clone(), Path::to_path_buf);
         state::store(Setup {
             reading,
             info: &self.settings.info,
             memory_mb: self.memory_mb(),
-            folders: Folders { data: &data, data_writable, out, tmp_base: &tmp_base, tmp_exact },
+            folders: Folders { data: &data, data_writable, out, tmp_base: &tmp_base, tmp_exact, scratch: &scratch },
             cancel,
             progress,
         })
@@ -358,7 +371,8 @@ impl Plugin {
         tmp: Option<&Path>,
     ) -> Result<StagedBundle, Error> {
         let sources = (|| {
-            let dirs = GuestDirs { data: self.data_dir(), tmp: tmp.map(Path::to_path_buf) };
+            let dirs =
+                GuestDirs { data: self.data_dir(), tmp: tmp.map(Path::to_path_buf), scratch: self.scratch_dir() };
             crate::derive::derive_files(&bundle, staging.out(), reading, &dirs)?;
             let mut sources = Vec::new();
             for reference in bundle.sources() {

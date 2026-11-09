@@ -14,6 +14,7 @@ mod bindings;
 mod derive;
 pub mod discovery;
 pub mod engine;
+pub mod folder;
 mod guest_files;
 #[cfg(feature = "panels")]
 pub mod jobs;

@@ -16,6 +16,9 @@ pub(crate) struct GuestDirs {
     pub data: PathBuf,
     /// `/tmp`; a tool call's is gone once it has answered.
     pub tmp: Option<PathBuf>,
+    /// A folder of the host's own for what it has to put on disk for the plugin (the plugin's
+    /// temporary folders, which Meshgrove clears when it starts); the plugin does not see it.
+    pub scratch: PathBuf,
 }
 
 /// Whether `reference` is meant as a path in the plugin's folders (library ids never start
@@ -110,8 +113,7 @@ impl GuestDirs {
     /// named by its content and with a fixed time, so the same file meshes once.
     fn load_step(&self, bytes: &[u8]) -> Result<Mesh, String> {
         let hash = blake3::hash(bytes).to_hex();
-        // Beside `/data`: the plugin's temporary folders, which Meshgrove clears when it starts.
-        let dir = self.data.parent().unwrap_or(&self.data).join("tmp").join(format!("step-{}", &hash[..32]));
+        let dir = self.scratch.join(format!("step-{}", &hash[..32]));
         let copy = dir.join("model.step");
         let write = || -> std::io::Result<()> {
             if copy.is_file() {
@@ -138,7 +140,7 @@ mod tests {
     use super::*;
 
     fn dirs(base: &Path) -> GuestDirs {
-        let dirs = GuestDirs { data: base.join("data"), tmp: Some(base.join("tmp")) };
+        let dirs = GuestDirs { data: base.join("data"), tmp: Some(base.join("tmp")), scratch: base.join("scratch") };
         std::fs::create_dir_all(dirs.data.join("picked")).unwrap();
         std::fs::create_dir_all(dirs.tmp.as_ref().unwrap()).unwrap();
         dirs

@@ -739,6 +739,42 @@ fn a_3mf_is_copied_with_the_mesh_of_one_part_swapped() {
     }
 }
 
+/// What `meshgrove-plugin-run --library DIR --data DIR` sets up: a plain folder as the
+/// library, another as the plugin's `/data`.
+#[test]
+fn a_plugin_runs_on_a_folder_as_its_library() {
+    use meshgrove_plugins::folder::FolderLibrary;
+    let Some(bytes) = wasm() else { return };
+    let (base, dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (models, data) = (dir.path().join("models"), dir.path().join("data"));
+    std::fs::create_dir_all(models.join("Dosen")).unwrap();
+    std::fs::create_dir_all(data.join("picked")).unwrap();
+    std::fs::write(models.join("Dosen").join("dose.3mf"), support::dose_3mf()).unwrap();
+    std::fs::write(data.join("picked").join("box.stl"), support::stl([10.0, 20.0, 30.0])).unwrap();
+    let mut settings = granted(base.path());
+    settings.library = Some(Arc::new(FolderLibrary::new(&models).unwrap()));
+    settings.grants.library_read = LibraryRead::All;
+    settings.data = Some(data.clone());
+    let plugin = load(&bytes, settings);
+    assert_eq!(plugin.data_dir(), data);
+    let ask = |tool: &str, reference: &str| {
+        plugin.call_tool(tool, &json!({"id": reference}), &CancelToken::new()).map(|o| o.result)
+    };
+    assert_eq!(ask("measure", "models/Dosen/dose.3mf").unwrap()["size_mm"], json!([140.0, 30.0, 20.0]));
+    let facts = ask("describe", "models/Dosen/dose.3mf").unwrap();
+    let lid = facts["parts"][1]["token"].as_str().unwrap();
+    assert_eq!(ask("measure", lid).unwrap()["size_mm"], json!([40.0, 30.0, 2.0]));
+    assert_eq!(
+        ask("measure", "/data/picked/box.stl").unwrap()["size_mm"],
+        json!([10.0, 20.0, 30.0]),
+        "the given /data"
+    );
+    assert!(
+        matches!(ask("measure", "models/../data/picked/box.stl"), Err(Error::Denied(m)) if m.contains("unknown id"))
+    );
+    assert!(!base.path().join("hello-box").join("data").exists(), "its usual folder is not made");
+}
+
 /// With the grant, a file outside what the grant shows still reads when the user opened it.
 #[test]
 fn an_opened_file_reads_past_what_ai_may_see() {

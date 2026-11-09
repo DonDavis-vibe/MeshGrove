@@ -1,5 +1,5 @@
-//! meshgrove-plugin-run: runs a Meshgrove plugin without Meshgrove and without a library — for
-//! plugin authors, scripts and other programs that want the same `.wasm`.
+//! meshgrove-plugin-run: runs a Meshgrove plugin without Meshgrove — for plugin authors, scripts
+//! and other programs that want the same `.wasm`.
 //!
 //!   meshgrove-plugin-run <plugin.wasm> manifest
 //!   meshgrove-plugin-run <plugin.wasm> tools
@@ -8,9 +8,12 @@
 //!   meshgrove-plugin-run <plugin.wasm> open <file>
 //!   meshgrove-plugin-run <plugin.wasm> mcp                      its tools as an MCP server (stdio)
 //!
-//! Options: `--out <dir>` (default `./plugin-out`), `--memory <MiB>`, `--no-cache`.
+//! Options: `--out <dir>` (default `./plugin-out`), `--library <dir>`, `--data <dir>`,
+//! `--memory <MiB>`, `--no-cache`.
 //! The plugin may offer tools and hand over bundles here (the bundle is printed, its files stay
-//! in the output folder); it cannot read a library.
+//! in the output folder). With `--library` it reads that folder as a library, all of it, by ids
+//! that start with the folder's name (`models/Garten/rose.stl`); without, it has none. `--data`
+//! is the folder it sees as `/data` (by default its own in Meshgrove's plugins folder).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -18,7 +21,8 @@ use std::sync::Arc;
 
 use base64::Engine;
 use meshgrove_core::config::AccessClass;
-use meshgrove_plugins::{CancelToken, Plugin, PluginGrants, Settings, Staging, ToolOutcome};
+use meshgrove_plugins::folder::FolderLibrary;
+use meshgrove_plugins::{CancelToken, LibraryRead, Plugin, PluginGrants, Settings, Staging, ToolOutcome};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation, ListToolsResult,
     PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
@@ -28,23 +32,30 @@ use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Value, json};
 
 const USAGE: &str = "usage: meshgrove-plugin-run <plugin.wasm> (manifest | tools | call <tool> [json] | job <kind> [json] | open <file> | mcp)
-                            [--out <dir>] [--memory <MiB>] [--no-cache]";
+                            [--out <dir>] [--library <dir>] [--data <dir>] [--memory <MiB>] [--no-cache]";
 
+#[derive(Debug, PartialEq)]
 struct Args {
     wasm: PathBuf,
     command: Vec<String>,
     out: PathBuf,
+    /// A folder the plugin reads as a library.
+    library: Option<PathBuf>,
+    /// The folder the plugin sees as `/data`.
+    data: Option<PathBuf>,
     memory_mb: Option<u32>,
     cache: bool,
 }
 
-fn parse_args() -> Result<Args, String> {
-    let mut args = std::env::args().skip(1);
+fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut positional = Vec::new();
     let (mut out, mut memory_mb, mut cache) = (PathBuf::from("plugin-out"), None, true);
+    let (mut library, mut data) = (None, None);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--out" => out = args.next().ok_or("--out needs a folder")?.into(),
+            "--library" => library = Some(args.next().ok_or("--library needs a folder")?.into()),
+            "--data" => data = Some(args.next().ok_or("--data needs a folder")?.into()),
             "--memory" => {
                 memory_mb = Some(args.next().and_then(|m| m.parse().ok()).ok_or("--memory needs MiB")?);
             }
@@ -57,12 +68,33 @@ fn parse_args() -> Result<Args, String> {
         return Err(USAGE.into());
     }
     let wasm = positional.remove(0).into();
-    Ok(Args { wasm, command: positional, out, memory_mb, cache })
+    Ok(Args { wasm, command: positional, out, library, data, memory_mb, cache })
+}
+
+/// How the plugin runs here: its tools and bundles allowed; with `--library`, that folder to
+/// read, all of it.
+fn settings(args: &Args, base: &Path) -> Result<Settings, String> {
+    let mut settings = Settings {
+        grants: PluginGrants { ai_tools: true, bundles: true, ..PluginGrants::default() },
+        memory_mb: args.memory_mb,
+        cache: args.cache,
+        ..Settings::new(base)
+    };
+    if let Some(dir) = &args.library {
+        let library = FolderLibrary::new(dir).map_err(|e| format!("--library {}: {e}", dir.display()))?;
+        settings.library = Some(Arc::new(library));
+        settings.grants.library_read = LibraryRead::All;
+    }
+    if let Some(dir) = &args.data {
+        std::fs::create_dir_all(dir).map_err(|e| format!("--data {}: {e}", dir.display()))?;
+        settings.data = Some(dir.canonicalize().map_err(|e| format!("--data {}: {e}", dir.display()))?);
+    }
+    Ok(settings)
 }
 
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    let args = match parse_args() {
+    let args = match parse_args(std::env::args().skip(1)) {
         Ok(args) => args,
         Err(e) => {
             eprintln!("{e}");
@@ -80,13 +112,8 @@ fn main() -> ExitCode {
 
 fn run(args: Args) -> Result<(), String> {
     let base = meshgrove_plugins::default_base().ok_or("no data folder")?;
-    let settings = Settings {
-        grants: PluginGrants { ai_tools: true, bundles: true, ..PluginGrants::default() },
-        memory_mb: args.memory_mb,
-        cache: args.cache,
-        ..Settings::new(&base)
-    };
-    let plugin = Plugin::load(&args.wasm, settings).map_err(|e| format!("{}: {e}", args.wasm.display()))?;
+    let plugin =
+        Plugin::load(&args.wasm, settings(&args, &base)?).map_err(|e| format!("{}: {e}", args.wasm.display()))?;
     let arg = |i: usize| args.command.get(i).map(String::as_str);
     let json_arg = |i: usize| -> Result<Value, String> {
         arg(i).map_or(Ok(json!({})), |text| serde_json::from_str(text).map_err(|e| format!("arguments: {e}")))
@@ -123,12 +150,19 @@ fn run(args: Args) -> Result<(), String> {
     Ok(())
 }
 
-/// A tool's answer as JSON: the result, the bundle and where its files are.
+/// A tool's answer as JSON: the result, the bundle and where its files are. A bundle that
+/// puts its files beside library files also says where they would land.
 fn outcome_json(outcome: &ToolOutcome, out: &Path) -> Value {
     let mut value = json!({"result": outcome.result, "images": outcome.images.len()});
     if let Some(staged) = &outcome.bundle {
         value["bundle"] = serde_json::to_value(&staged.bundle).unwrap_or_default();
         value["files_in"] = json!(out.display().to_string());
+        if staged.bundle.uses_next_to() {
+            value["would_land"] = match staged.resolve(Path::new(""), Path::new("")) {
+                Ok(resolved) => resolved.files.iter().filter_map(|f| f.at.as_ref()).map(|p| json!(p)).collect(),
+                Err(e) => json!(e.to_string()),
+            };
+        }
     }
     value
 }
@@ -209,4 +243,50 @@ fn serve(plugin: Arc<Plugin>, out: PathBuf) -> Result<(), String> {
         running.waiting().await.map_err(|e| e.to_string())?;
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(line: &str) -> Result<Args, String> {
+        parse_args(line.split_whitespace().map(str::to_owned))
+    }
+
+    #[test]
+    fn arguments_are_read() {
+        let a = args("box.wasm call measure {} --library models --data scratch/data --out o --memory 64 --no-cache")
+            .unwrap();
+        assert_eq!(a.wasm, PathBuf::from("box.wasm"));
+        assert_eq!(a.command, ["call", "measure", "{}"]);
+        assert_eq!((a.library, a.data), (Some("models".into()), Some("scratch/data".into())));
+        assert_eq!((a.out, a.memory_mb, a.cache), (PathBuf::from("o"), Some(64), false));
+        let plain = args("box.wasm tools").unwrap();
+        assert_eq!(
+            (plain.library, plain.data, plain.out, plain.cache),
+            (None, None, PathBuf::from("plugin-out"), true)
+        );
+        for bad in ["box.wasm", "box.wasm tools --library", "box.wasm tools --data", "--help"] {
+            assert!(args(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// `--library` gives the plugin a folder to read, all of it; `--data` its own folder.
+    #[test]
+    fn a_folder_serves_as_the_library_and_another_as_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let (models, data) = (dir.path().join("models"), dir.path().join("data"));
+        std::fs::create_dir_all(&models).unwrap();
+        let mut a = args("box.wasm tools").unwrap();
+        let none = settings(&a, dir.path()).unwrap();
+        assert!(none.library.is_none() && none.data.is_none());
+        assert_eq!(none.grants.library_read, LibraryRead::None, "no library, nothing to read");
+        (a.library, a.data) = (Some(models), Some(data.clone()));
+        let with = settings(&a, dir.path()).unwrap();
+        assert!(with.library.is_some() && with.grants.library_read == LibraryRead::All);
+        assert_eq!(with.data, Some(data.canonicalize().unwrap()), "made if it was missing");
+        assert!(with.grants.ai_tools && with.grants.bundles);
+        a.library = Some(dir.path().join("missing"));
+        assert!(settings(&a, dir.path()).is_err_and(|e| e.contains("--library")));
+    }
 }

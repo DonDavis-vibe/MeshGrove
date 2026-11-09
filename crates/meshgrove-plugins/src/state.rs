@@ -115,6 +115,8 @@ pub(crate) struct Folders<'a> {
     pub tmp_base: &'a Path,
     /// `tmp_base` is the `/tmp` itself (a panel's, which the host copies picked files into).
     pub tmp_exact: bool,
+    /// For what the host puts on disk for the plugin without showing it ([`GuestDirs::scratch`]).
+    pub scratch: &'a Path,
 }
 
 /// What a store is for: who, with which rights, seeing what.
@@ -161,7 +163,11 @@ pub(crate) fn store(setup: Setup) -> Result<Store<State>, Error> {
         deadline: None,
         interrupted: None,
         progress: setup.progress,
-        dirs: GuestDirs { data: folders.data.to_path_buf(), tmp: Some(tmp.0.clone()) },
+        dirs: GuestDirs {
+            data: folders.data.to_path_buf(),
+            tmp: Some(tmp.0.clone()),
+            scratch: folders.scratch.to_path_buf(),
+        },
         _tmp: tmp,
     };
     let mut store = Store::new(crate::engine::engine(), state);
