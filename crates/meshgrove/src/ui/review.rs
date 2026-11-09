@@ -364,10 +364,20 @@ fn bundle_row(ui: &mut Ui, item: &mut ReviewItem) {
         bundle.files.iter().filter_map(|f| Some((f.beside.as_deref()?, f.at.as_ref()?.parent()?))).collect();
     match (loose, sources.first()) {
         (true, Some((name, dir))) if sources.len() == 1 => {
-            ui.label(t!("review.bundle_beside", count = bundle.files.len(), name = name, path = within(dir)));
+            let (count, path) = (bundle.files.len(), within(dir));
+            ui.label(match count {
+                1 => t!("review.bundle_beside_one", name = name, path = path),
+                _ => t!("review.bundle_beside", count = count, name = name, path = path),
+            });
         }
         (true, _) => _ = ui.label(t!("review.bundle_beside_each", count = bundle.files.len())),
-        (false, _) => _ = ui.label(t!("review.bundle_files", count = bundle.files.len(), path = within(&bundle.to))),
+        (false, _) => {
+            let (count, path) = (bundle.files.len(), within(&bundle.to));
+            ui.label(match count {
+                1 => t!("review.bundle_files_one", path = path),
+                _ => t!("review.bundle_files", count = count, path = path),
+            });
+        }
     }
     ui.weak(t!("review.bundle_size", size = i18n::file_size(bundle.bytes)));
     for f in bundle.files.iter().take(SHOWN) {
