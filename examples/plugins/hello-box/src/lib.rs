@@ -10,7 +10,7 @@
 //!
 //! With the feature `test-hooks` it has two more tools for Meshgrove's tests: `spin` never ends,
 //! `trap` eats all memory. Its panel then also answers `HostChanged` with a toast naming the
-//! language.
+//! language, and a click on "future" with an effect no Meshgrove knows.
 
 use std::cell::RefCell;
 
@@ -296,6 +296,11 @@ impl GuestPanel for BoxPanel {
 
     fn event(&self, event: String) -> String {
         let Ok(event) = serde_json::from_str::<Event>(&event) else { return guest::effects(&[]) };
+        // An effect no Meshgrove knows yet, then one every Meshgrove knows: the first is skipped.
+        #[cfg(feature = "test-hooks")]
+        if matches!(&event, Event::Click { id } if id == "future") {
+            return r#"[{"type": "hologram", "depth": 3}, {"type": "toast", "text": "still here"}]"#.into();
+        }
         let mut s = self.state.borrow_mut();
         let effects = match event {
             Event::Changed { id, value } => {

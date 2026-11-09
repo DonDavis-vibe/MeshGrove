@@ -679,6 +679,9 @@ pub enum Effect {
     RepaintAfter {
         ms: u32,
     },
+    /// An effect of a newer API than this Meshgrove's: it is skipped, the others are done.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -969,5 +972,13 @@ mod tests {
         effects.iter().for_each(round_trip);
         let toast: Effect = serde_json::from_str(r#"{"type":"toast","text":"hi"}"#).unwrap();
         assert_eq!(toast, Effect::Toast { text: "hi".into(), level: Level::Info });
+    }
+
+    #[test]
+    fn effects_of_a_newer_api_do_not_spoil_the_list() {
+        let effects: Vec<Effect> =
+            serde_json::from_str(r#"[{"type": "hologram", "depth": 3}, {"type": "toast", "text": "still here"}]"#)
+                .unwrap();
+        assert_eq!(effects, [Effect::Unknown, Effect::Toast { text: "still here".into(), level: Level::Info }]);
     }
 }

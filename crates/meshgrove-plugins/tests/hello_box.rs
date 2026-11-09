@@ -382,17 +382,58 @@ fn cancel_stops_a_running_call() {
     assert!(started.elapsed() < Duration::from_secs(10), "long before the 60 s deadline");
 }
 
-/// The host a minor version on (0.2) still loads hello-box (0.1); a host of another major
-/// version refuses it and says why.
+/// hello-box as Meshgrove 0.8.3 shipped it: built against plugin API 0.1 (see fixtures/README.md).
+const API_0_1: &[u8] = include_bytes!("fixtures/hello_box_api_0_1.wasm");
+
+/// The world a plugin links against did not change with API 0.2, so what was installed before
+/// keeps running: its manifest, tools, panel, job and file handler.
 #[test]
-fn plugins_of_an_older_minor_api_still_load() {
+fn a_plugin_built_for_api_0_1_still_runs() {
+    let base = tempfile::tempdir().unwrap();
+    let plugin = Arc::new(load(API_0_1, granted(base.path())));
+    assert_eq!(plugin.manifest().api, "0.1.0");
+    assert_ne!(plugin.manifest().api, meshgrove_plugin_api::API_VERSION, "the fixture is the old one");
+    let outcome = plugin.call_tool("make_box", &json!({"width": 25, "name": "lid"}), &CancelToken::new()).unwrap();
+    let staged = outcome.bundle.expect("a bundle");
+    assert!(staged.staging.out().join("lid_25x30x40.stl").is_file());
+    let panel = plugin.open_panel("box", None).unwrap();
+    assert_eq!(number(&panel.render().unwrap().root, "width"), 20.0);
+    assert_eq!(panel.mesh("box").unwrap().expect("triangles").triangles(), 12);
+    let job = plugin.run_job("box", &json!({"name": "left"}), panel.out(), &CancelToken::new(), None).unwrap();
+    assert_eq!(job["file"], "left_20x30x40.stl");
+    let effects = plugin.open_file("lid.box.json", br#"{"width": 50}"#).unwrap();
+    assert!(matches!(effects.as_slice(), [Effect::OpenPanel { .. }]), "{effects:?}");
+}
+
+/// The manifest names the API of the JSON shapes: a host one minor version on (0.3) still loads
+/// hello-box (0.2); one of the version before (0.1, Meshgrove 0.8) asks for an update, and a
+/// host of another major version says which Meshgrove the plugin needs.
+#[test]
+fn the_manifests_api_decides_not_the_worlds() {
     let Some(bytes) = wasm() else { return };
     let base = tempfile::tempdir().unwrap();
-    let later = load(&bytes, Settings { host_api: "0.2.0".into(), ..granted(base.path()) });
+    let later = load(&bytes, Settings { host_api: "0.3.0".into(), ..granted(base.path()) });
     assert!(later.call_tool("make_box", &json!({}), &CancelToken::new()).is_ok());
+    let older = Plugin::from_bytes(&bytes, Settings { host_api: "0.1.0".into(), ..granted(base.path()) });
+    let Err(Error::Load(why)) = older else { panic!("loaded by a 0.1 host") };
+    assert!(why.contains("built for plugin API 0.2.0") && why.contains("update Meshgrove"), "{why}");
     let other = Plugin::from_bytes(&bytes, Settings { host_api: "1.0.0".into(), ..granted(base.path()) });
     let Err(Error::Load(why)) = other else { panic!("loaded by a 1.0 host") };
-    assert!(why.contains("built for plugin API 0.1.0") && why.contains("an older Meshgrove"), "{why}");
+    assert!(why.contains("built for plugin API 0.2.0") && why.contains("an older Meshgrove"), "{why}");
+    // The old plugin on a host that says it is the old one, as on Meshgrove 0.8.
+    assert!(Plugin::from_bytes(API_0_1, Settings { host_api: "0.1.0".into(), ..granted(base.path()) }).is_ok());
+}
+
+/// An effect of a newer API is left out; the rest of the answer is done.
+#[test]
+fn an_unknown_effect_is_skipped() {
+    let Some(bytes) = wasm() else { return };
+    let base = tempfile::tempdir().unwrap();
+    let plugin = Arc::new(load(&bytes, granted(base.path())));
+    let panel = plugin.open_panel("box", None).unwrap();
+    let effects = panel.event(&Event::Click { id: "future".into() }).unwrap();
+    assert!(matches!(effects.as_slice(), [Effect::Toast { text, .. }] if text == "still here"), "{effects:?}");
+    assert!(panel.render().is_ok(), "and the panel goes on");
 }
 
 #[test]

@@ -7,7 +7,7 @@ use std::time::Duration;
 use meshgrove_core::bundle::ResolvedBundle;
 use meshgrove_core::config::{AccessClass, Config, LibraryRead, PluginConfig, PluginGrants};
 use meshgrove_plugin_api::ui::Effect;
-use meshgrove_plugin_api::{API_VERSION, Bundle, HostInfo, Manifest, Permission, ToolDef};
+use meshgrove_plugin_api::{API_VERSION, Bundle, HostInfo, Manifest, Permission, ToolDef, WIT_VERSION};
 use serde_json::Value;
 use wasmtime::Store;
 use wasmtime::component::{HasSelf, Linker};
@@ -42,7 +42,8 @@ pub struct Settings {
     pub tool_deadline: Duration,
     /// How long a panel may take for one event ([`EVENT_DEADLINE`]).
     pub event_deadline: Duration,
-    /// The plugin API this host offers ([`API_VERSION`]; tests pretend to be another).
+    /// The plugin API this host offers ([`API_VERSION`]; tests pretend to be another). The
+    /// manifest is checked against it; the world the plugin exports against [`WIT_VERSION`].
     pub host_api: String,
 }
 
@@ -148,8 +149,10 @@ impl Plugin {
     pub fn from_bytes(bytes: &[u8], settings: Settings) -> Result<Plugin, Error> {
         let cache = settings.cache.then(|| settings.base.join(".cache"));
         let compiled = crate::engine::compile(bytes, cache.as_deref())?;
+        // The world it links against has its own version, which no 0.x API changes; what the
+        // plugin needs of the JSON shapes its manifest says (checked below).
         match crate::engine::exported_api(&compiled.component) {
-            Some(v) => meshgrove_plugin_api::api_check(&settings.host_api, &v).map_err(Error::Load)?,
+            Some(v) => meshgrove_plugin_api::api_check(WIT_VERSION, &v).map_err(Error::Load)?,
             None => return Err(Error::Load("not a Meshgrove plugin: it exports no meshgrove:plugin/plugin".into())),
         }
         let mut linker = Linker::new(crate::engine::engine());
@@ -200,6 +203,15 @@ impl Plugin {
             let api = instance.meshgrove_plugin_plugin();
             let manifest = api.call_manifest(&mut store).map_err(|e| state::failure(&store, &e))?;
             let tools = api.call_list_tools(&mut store).map_err(|e| state::failure(&store, &e))?;
+            // The API it was built for first: a manifest of a newer one may hold what this
+            // Meshgrove cannot read, and then "update Meshgrove" is the answer, not a parse error.
+            #[derive(serde::Deserialize)]
+            struct Api {
+                api: String,
+            }
+            if let Ok(Api { api }) = serde_json::from_str(&manifest) {
+                meshgrove_plugin_api::api_check(&self.settings.host_api, &api).map_err(Error::Load)?;
+            }
             let manifest: Manifest =
                 serde_json::from_str(&manifest).map_err(|e| Error::Load(format!("its manifest: {e}")))?;
             let tools: Vec<ToolDef> =
@@ -436,9 +448,26 @@ impl Plugin {
                 .call_open_file(&mut store, name, bytes)
                 .map_err(|e| state::failure(&store, &e))?
                 .map_err(plugin_error)?;
-            serde_json::from_str(&text).map_err(|e| Error::Failed(format!("its effects: {e}")))
+            effects(&self.manifest.id, &text)
         })();
         let _ = staging.remove();
         result
     }
+}
+
+/// The effects a plugin answered with (JSON). Those this Meshgrove does not know (from a newer
+/// API) are logged and left out; the others are done.
+pub(crate) fn effects(plugin: &str, text: &str) -> Result<Vec<Effect>, Error> {
+    let mut effects: Vec<Effect> =
+        serde_json::from_str(text).map_err(|e| Error::Failed(format!("its effects: {e}")))?;
+    let before = effects.len();
+    effects.retain(|e| *e != Effect::Unknown);
+    if effects.len() < before {
+        log::warn!(
+            target: "plugin",
+            "{plugin}: skipped {} effect(s) this Meshgrove does not know (the plugin is built for a newer one)",
+            before - effects.len()
+        );
+    }
+    Ok(effects)
 }

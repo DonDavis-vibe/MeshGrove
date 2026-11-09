@@ -239,6 +239,9 @@ mod tests {
         assert!(Manifest { id: "Hello".into(), ..manifest() }.check().is_err());
         assert!(Manifest { id: "h".into(), ..manifest() }.check().is_err());
         assert!(Manifest { api: "0.9.0".into(), ..manifest() }.check().unwrap_err().contains("0.9.0"));
+        assert_eq!(Manifest { api: "0.1.0".into(), ..manifest() }.check(), Ok(()), "a 0.1 plugin still runs");
+        let newer = manifest().check_for("0.1.0").unwrap_err();
+        assert!(newer.contains("update Meshgrove"), "a 0.2 plugin on a 0.1 host: {newer}");
         let one = Manifest { api: "1.0.0".into(), ..manifest() };
         assert!(one.check_for("0.2.0").unwrap_err().contains("built for plugin API 1.0.0"));
         assert_eq!(manifest().check_for("0.2.0"), Ok(()), "a 0.2 host runs 0.1 plugins");

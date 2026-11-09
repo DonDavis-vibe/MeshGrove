@@ -193,9 +193,9 @@ fn run(
                 let _ = reply.send(view);
             }
             Request::Event(event, reply) => {
-                let effects = open.call(|s, p, r| p.call_event(s, r, &event)).and_then(|text| {
-                    serde_json::from_str(&text).map_err(|e| Error::Failed(format!("its effects: {e}")))
-                });
+                let effects = open
+                    .call(|s, p, r| p.call_event(s, r, &event))
+                    .and_then(|text| crate::plugin::effects(plugin.id(), &text));
                 let _ = reply.send(effects);
             }
             Request::Mesh(key, reply) => {

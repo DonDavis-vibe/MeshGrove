@@ -1,8 +1,9 @@
 [package]
 name = "meshgrove-plugin-api"
 description = "Plugin interface of Meshgrove: the WIT world, the JSON types of manifests, tools, panels and bundles, and helpers for plugins"
-# The API has its own version: the WIT package is meshgrove:plugin@0.1.0.
-version = "0.1.0"
+# The API has its own version (API_VERSION, the JSON shapes); the WIT package stays
+# meshgrove:plugin@0.1.0 (WIT_VERSION).
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 # Not Meshgrove's GPL: plugins built on this crate may use any license.

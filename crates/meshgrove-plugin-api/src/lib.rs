@@ -27,8 +27,15 @@ pub use mesh::MeshData;
 /// The WIT world `meshgrove:plugin/meshgrove-plugin`.
 pub const WIT: &str = include_str!("../wit/meshgrove-plugin.wit");
 
-/// Version of the WIT package and of the JSON shapes in this crate.
-pub const API_VERSION: &str = "0.1.0";
+/// Version of the WIT package: the functions a plugin imports and exports. A plugin links
+/// against exactly these, so nothing is added to the world within 0.x; a plugin built against any
+/// 0.x API runs on every later 0.x Meshgrove.
+pub const WIT_VERSION: &str = "0.1.0";
+
+/// Version of the JSON shapes in this crate (manifests, widgets, events, effects, bundles), which
+/// is what a plugin names in [`Manifest::api`]. It grows by new fields with defaults and new
+/// variants; what a host does not know it skips ([`ui::Node::Unknown`], [`ui::Effect::Unknown`]).
+pub const API_VERSION: &str = "0.2.0";
 
 /// Whether a plugin built against API `version` runs on this one ([`api_check`]).
 pub fn api_compatible(version: &str) -> bool {
@@ -67,8 +74,12 @@ mod tests {
     #[test]
     fn api_versions() {
         assert!(api_compatible("0.1.0") && api_compatible("0.1.7") && api_compatible("0.1"));
-        assert!(!api_compatible("0.2.0") && !api_compatible("1.0.0") && !api_compatible("x"));
-        assert!(WIT.contains(&format!("package meshgrove:plugin@{API_VERSION};")));
+        assert!(api_compatible("0.2.0") && api_compatible(API_VERSION), "plugins of this API and the one before");
+        assert!(!api_compatible("0.3.0") && !api_compatible("1.0.0") && !api_compatible("x"));
+        // The world a plugin links against has a version of its own, which stays through 0.x.
+        assert!(WIT.contains(&format!("package meshgrove:plugin@{WIT_VERSION};")));
+        assert_eq!(WIT_VERSION, "0.1.0", "a new WIT version would stop every installed plugin from loading");
+        assert_eq!(api_check(API_VERSION, WIT_VERSION), Ok(()));
     }
 
     /// A host a minor version on still runs the plugins of before; another major version does not.
