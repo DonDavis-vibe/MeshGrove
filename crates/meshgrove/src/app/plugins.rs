@@ -11,7 +11,7 @@ use std::time::Duration;
 use egui::{RichText, Ui};
 use meshgrove_core::ai::proposals::{self, Origin, ProposalStore};
 use meshgrove_core::config::{AccessClass, PluginConfig};
-use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Level};
+use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Level, PickInto};
 use meshgrove_plugin_api::{Bundle, FileType, HostInfo, Permission, Receive};
 use meshgrove_plugins::{StagedBundle, Staging};
 
@@ -20,12 +20,8 @@ use crate::plugins::{BundleRoute, PanelAction, settle_bundle};
 use crate::ui::plugin_view::{self, MeshViewArgs};
 use crate::ui::settings::SettingsChange;
 
-/// A path the user is asked for (the app has no system file dialogs).
+/// A path the user is asked for by typing it.
 pub(super) enum PathPrompt {
-    /// A file for a panel (`Effect::OpenFileDialog`).
-    Open { plugin: String, panel: String, id: String, title: String, input: String, extensions: Vec<String> },
-    /// Where to save a file a plugin wrote (`Effect::SaveFile`).
-    Save { from: PathBuf, input: String },
     /// Where the files of a plugin go while there is no library yet: that folder becomes one.
     /// `title` is the question, `bundle_title` goes back to the panel with the outcome.
     Library {
@@ -39,18 +35,58 @@ pub(super) enum PathPrompt {
     },
 }
 
-/// The system's file dialog for picking a plugin (rfd: the desktop portal on Linux). It is asked
-/// from the UI thread and its answer polled each frame, so the window keeps drawing meanwhile.
+/// What the system's file dialog was opened for.
+enum DialogFor {
+    /// A plugin's file, to install it.
+    Install,
+    /// Files for a panel (`Effect::OpenFileDialog`).
+    Pick { plugin: String, panel: String, id: String, extensions: Vec<String>, into: PickInto },
+    /// Where to save a file a plugin wrote (`Effect::SaveFile`).
+    Save { from: PathBuf },
+}
+
+/// What the user picked in a dialog; nothing when they closed it.
+type Picked = Pin<Box<dyn Future<Output = Vec<PathBuf>>>>;
+
+/// The system's file dialog (rfd: the desktop portal on Linux), for installing a plugin and for
+/// what panels ask (a file to open, a place to save). It is asked from the UI thread and its
+/// answer polled each frame, so the window keeps drawing meanwhile. One is open at a time;
+/// those asked for meanwhile follow.
 pub(super) struct PluginDialog {
     /// Set up with the window as its parent.
     base: rfd::AsyncFileDialog,
-    open: Option<Pin<Box<dyn Future<Output = Option<rfd::FileHandle>>>>>,
+    open: Option<(DialogFor, Picked)>,
+    waiting: std::collections::VecDeque<(DialogFor, Box<dyn FnOnce() -> Picked>)>,
 }
 
 impl PluginDialog {
     pub(super) fn new(cc: &eframe::CreationContext<'_>) -> PluginDialog {
-        PluginDialog { base: rfd::AsyncFileDialog::new().set_parent(cc), open: None }
+        let base = rfd::AsyncFileDialog::new().set_parent(cc);
+        PluginDialog { base, open: None, waiting: std::collections::VecDeque::new() }
     }
+
+    /// Opens a dialog (`start` does), or queues it behind the one that is open.
+    fn ask(&mut self, what: DialogFor, start: impl FnOnce() -> Picked + 'static) {
+        match self.open {
+            None => self.open = Some((what, start())),
+            Some(_) => self.waiting.push_back((what, Box::new(start))),
+        }
+    }
+
+    /// The answer of the open dialog, once it is there; the next one waiting opens then.
+    fn answer(&mut self, ctx: &egui::Context) -> Option<(DialogFor, Vec<PathBuf>)> {
+        let (_, picked) = self.open.as_mut()?;
+        let waker = Waker::from(Arc::new(Repaint(ctx.clone())));
+        let Poll::Ready(files) = picked.as_mut().poll(&mut Context::from_waker(&waker)) else { return None };
+        let (what, _) = self.open.take()?;
+        self.open = self.waiting.pop_front().map(|(what, start)| (what, start()));
+        Some((what, files))
+    }
+}
+
+/// The paths of what a dialog answered.
+fn paths(files: impl IntoIterator<Item = rfd::FileHandle>) -> Vec<PathBuf> {
+    files.into_iter().map(|f| f.path().to_path_buf()).collect()
 }
 
 /// Wakes the UI when the dialog answers.
@@ -78,14 +114,8 @@ impl App {
 
     /// Takes in what the plugins did since the last frame.
     pub(super) fn poll_plugins(&mut self) {
-        if let Some(open) = &mut self.plugin_dialog.open {
-            let waker = Waker::from(Arc::new(Repaint(self.egui_ctx.clone())));
-            if let Poll::Ready(picked) = open.as_mut().poll(&mut Context::from_waker(&waker)) {
-                self.plugin_dialog.open = None;
-                if let Some(file) = picked {
-                    self.apply_settings(vec![SettingsChange::InstallPlugin(file.path().to_path_buf())]);
-                }
-            }
+        if let Some((what, files)) = self.plugin_dialog.answer(&self.egui_ctx) {
+            self.dialog_answered(what, files);
         }
         // Language, theme or printers changed: the plugins hear of it (tools load anew with it).
         let info = self.plugin_info();
@@ -113,6 +143,25 @@ impl App {
         }
     }
 
+    /// Does what a file dialog was opened for, with what the user picked there.
+    fn dialog_answered(&mut self, what: DialogFor, files: Vec<PathBuf>) {
+        let Some(first) = files.first().cloned() else { return };
+        match what {
+            DialogFor::Install => self.apply_settings(vec![SettingsChange::InstallPlugin(first)]),
+            DialogFor::Pick { plugin, panel, id, extensions, into } => {
+                // Copied on a thread; each file comes back as `PanelAction::Picked`.
+                if let Err(e) = self.plugins.pick_files((&plugin, &panel), &id, files, extensions, into) {
+                    self.toast(format!("{}: {e}", self.plugin_name(&plugin)));
+                }
+            }
+            // The dialog has asked before it names a file that is there.
+            DialogFor::Save { from } => match std::fs::copy(&from, &first) {
+                Ok(_) => self.toast(t!("plugins.saved", path = first.display().to_string()).into_owned()),
+                Err(e) => self.toast(format!("{}: {e}", first.display())),
+            },
+        }
+    }
+
     fn plugin_name(&self, id: &str) -> String {
         self.plugins.plugin(id).map_or_else(|| id.to_owned(), |p| p.manifest().name.clone())
     }
@@ -122,6 +171,14 @@ impl App {
             PanelAction::Effect { plugin, panel, effect } => self.plugin_effect(&plugin, Some(&panel), effect),
             PanelAction::Opened { plugin, effects } => match effects {
                 Ok(effects) => effects.into_iter().for_each(|e| self.plugin_effect(&plugin, None, e)),
+                Err(e) => self.toast(format!("{}: {e}", self.plugin_name(&plugin))),
+            },
+            PanelAction::Picked { plugin, panel, id, file } => match file {
+                Ok((name, path)) => {
+                    if let Some(open) = self.plugins.find(&plugin, &panel) {
+                        open.send(Event::FilePicked { id, name, path });
+                    }
+                }
                 Err(e) => self.toast(format!("{}: {e}", self.plugin_name(&plugin))),
             },
             PanelAction::Bundle { plugin, panel, apply, bundle, staging } => {
@@ -172,20 +229,54 @@ impl App {
                         let from = self.plugins.find(plugin, panel).and_then(|p| p.host_path(&path));
                         match from.filter(|f| f.is_file()) {
                             Some(from) => {
-                                let dir = dirs::download_dir().or_else(dirs::home_dir).unwrap_or_default();
                                 let file =
                                     meshgrove_core::fsops::check_name(&file).map_or("plugin-file".into(), |()| file);
-                                let input = dir.join(file).display().to_string();
-                                self.plugin_prompt = Some(PathPrompt::Save { from, input });
+                                let mut dialog = self
+                                    .plugin_dialog
+                                    .base
+                                    .clone()
+                                    .set_title(t!("plugins.save_as"))
+                                    .set_file_name(file);
+                                if let Some(dir) = dirs::download_dir().or_else(dirs::home_dir) {
+                                    dialog = dialog.set_directory(dir);
+                                }
+                                self.plugin_dialog.ask(DialogFor::Save { from }, move || {
+                                    Box::pin(async move { paths(dialog.save_file().await) })
+                                });
                             }
                             None => self.toast(format!("{name}: {}", t!("plugins.no_such_file", path = path))),
                         }
                     }
-                    Effect::OpenFileDialog { id, title, extensions } => {
-                        let input = self.nav.current().display().to_string();
+                    Effect::OpenFileDialog { id, title, extensions, multiple, into } => {
                         let title = title.unwrap_or_else(|| t!("plugins.pick_file").into_owned());
-                        let (plugin, panel) = (plugin.to_owned(), panel.to_owned());
-                        self.plugin_prompt = Some(PathPrompt::Open { plugin, panel, id, title, input, extensions });
+                        let mut dialog = self.plugin_dialog.base.clone().set_title(title);
+                        if !extensions.is_empty() {
+                            // Linux dialogs match the pattern by case.
+                            let cases: Vec<String> =
+                                extensions.iter().flat_map(|e| [e.to_lowercase(), e.to_uppercase()]).collect();
+                            let shown: Vec<String> = extensions.iter().map(|e| format!("*.{e}")).collect();
+                            dialog = dialog.add_filter(shown.join(", "), &cases);
+                        }
+                        // Where the user is looking now, if that is a folder on disk.
+                        let here = self.nav.current().to_path_buf();
+                        if here.is_dir() {
+                            dialog = dialog.set_directory(here);
+                        }
+                        let what = DialogFor::Pick {
+                            plugin: plugin.to_owned(),
+                            panel: panel.to_owned(),
+                            id,
+                            extensions,
+                            into,
+                        };
+                        self.plugin_dialog.ask(what, move || {
+                            Box::pin(async move {
+                                match multiple {
+                                    true => paths(dialog.pick_files().await.unwrap_or_default()),
+                                    false => paths(dialog.pick_file().await),
+                                }
+                            })
+                        });
                     }
                     _ => {}
                 }
@@ -385,22 +476,14 @@ impl App {
     pub(super) fn plugin_prompt_modal(&mut self, ctx: &egui::Context) {
         let Some(prompt) = &mut self.plugin_prompt else { return };
         let mut decision = None;
+        let PathPrompt::Library { title, input, .. } = prompt;
         if let Some(path) = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf())) {
-            match prompt {
-                PathPrompt::Open { input, .. } | PathPrompt::Save { input, .. } | PathPrompt::Library { input, .. } => {
-                    *input = path.display().to_string();
-                }
-            }
+            *input = path.display().to_string();
         }
         egui::Modal::new(egui::Id::unique("plugin_prompt")).show(ctx, |ui| {
             ui.set_max_width(520.0);
-            let (title, hint, input) = match prompt {
-                PathPrompt::Open { title, input, .. } => (title.clone(), t!("plugins.path_hint"), input),
-                PathPrompt::Save { input, .. } => (t!("plugins.save_as").into_owned(), t!("plugins.path_hint"), input),
-                PathPrompt::Library { title, input, .. } => (title.clone(), t!("plugins.pick_library_hint"), input),
-            };
-            ui.heading(title);
-            ui.weak(hint);
+            ui.heading(title.as_str());
+            ui.weak(t!("plugins.pick_library_hint"));
             let r = ui.add(egui::TextEdit::singleline(input).desired_width(500.0));
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 decision = Some(true);
@@ -423,12 +506,11 @@ impl App {
             }
             Some(false) => {
                 // A bundle nobody wants a place for stays out; its panel hears why.
-                if let Some(PathPrompt::Library { plugin, panel, staged, bundle_title, .. }) = self.plugin_prompt.take()
-                {
-                    let _ = staged.staging.remove();
-                    let error = t!("plugins.no_library").into_owned();
-                    self.plugins.bundle_finished(&plugin, &panel, bundle_title, BundleOutcome::Failed { error });
-                }
+                let PathPrompt::Library { plugin, panel, staged, bundle_title, .. } =
+                    self.plugin_prompt.take().expect("asked above");
+                let _ = staged.staging.remove();
+                let error = t!("plugins.no_library").into_owned();
+                self.plugins.bundle_finished(&plugin, &panel, bundle_title, BundleOutcome::Failed { error });
             }
             None => {}
         }
@@ -453,27 +535,6 @@ impl App {
                 if let Some(outcome) = self.settle_staged(&plugin, &panel, apply, *staged) {
                     self.plugins.bundle_finished(&plugin, &panel, bundle_title, outcome);
                 }
-            }
-            PathPrompt::Save { from, input } => {
-                let to = PathBuf::from(input.trim());
-                if to.exists() {
-                    return Err(t!("plugins.exists", path = to.display().to_string()).into_owned());
-                }
-                std::fs::copy(&from, &to).map_err(|e| e.to_string())?;
-                self.toast(t!("plugins.saved", path = to.display().to_string()).into_owned());
-            }
-            PathPrompt::Open { plugin, panel, id, input, extensions, .. } => {
-                let from = PathBuf::from(input.trim());
-                let name = meshgrove_core::listing::file_name(&from);
-                let ext_ok = extensions.is_empty()
-                    || extensions.iter().any(|e| name.to_lowercase().ends_with(&format!(".{}", e.to_lowercase())));
-                if !from.is_file() || !ext_ok {
-                    return Err(t!("plugins.not_a_file").into_owned());
-                }
-                let open = self.plugins.find(&plugin, &panel).ok_or("the panel is closed")?;
-                let tmp = open.tmp().ok_or("the panel is not open yet")?.to_path_buf();
-                std::fs::copy(&from, tmp.join(&name)).map_err(|e| e.to_string())?;
-                open.send(Event::FilePicked { id, path: format!("/tmp/{name}"), name });
             }
         }
         Ok(())
@@ -564,7 +625,8 @@ impl App {
                     if let Some(dir) = start {
                         dialog = dialog.set_directory(dir);
                     }
-                    self.plugin_dialog.open = Some(Box::pin(dialog.pick_file()));
+                    self.plugin_dialog
+                        .ask(DialogFor::Install, move || Box::pin(async move { paths(dialog.pick_file().await) }));
                 }
                 return false;
             }

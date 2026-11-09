@@ -529,7 +529,8 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    /// The file the user picked after [`Effect::OpenFileDialog`], copied to `path` (below `/tmp`).
+    /// A file the user picked after [`Effect::OpenFileDialog`], copied to `path` (below `/tmp`,
+    /// or `/data/picked` when the effect asked for it); `name` is the file's own.
     FilePicked {
         id: String,
         name: String,
@@ -664,7 +665,7 @@ pub enum Effect {
         path: String,
         name: String,
     },
-    /// Ask for a file; it arrives as [`Event::FilePicked`].
+    /// Ask for a file with the system's file dialog; it arrives as [`Event::FilePicked`].
     OpenFileDialog {
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -672,6 +673,13 @@ pub enum Effect {
         /// Without the dot ("json", "png").
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         extensions: Vec<String>,
+        /// Several files may be picked: each arrives as a [`Event::FilePicked`] of its own.
+        /// From API 0.2.
+        #[serde(default, skip_serializing_if = "is_false")]
+        multiple: bool,
+        /// Where the copies go. From API 0.2.
+        #[serde(default, skip_serializing_if = "PickInto::is_tmp")]
+        into: PickInto,
     },
     OpenPanel {
         panel: String,
@@ -689,6 +697,26 @@ pub enum Effect {
     /// An effect of a newer API than this Meshgrove's: it is skipped, the others are done.
     #[serde(other)]
     Unknown,
+}
+
+/// Where a file the user picked is copied to ([`Effect::OpenFileDialog`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PickInto {
+    /// The panel's `/tmp`, as `/tmp/<name>`: gone when the panel closes, and jobs do not see it
+    /// (each has a `/tmp` of its own).
+    #[default]
+    Tmp,
+    /// The plugin's `/data`, as `/data/picked/<name>`: it stays, and the panel's jobs read it
+    /// too. A file of that name with other content is kept; the new one gets a number.
+    Data,
+}
+
+impl PickInto {
+    fn is_tmp(&self) -> bool {
+        *self == PickInto::Tmp
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -972,7 +1000,13 @@ mod tests {
             Effect::ApplyBundle { bundle: Bundle { title: "Box".into(), ..Bundle::default() } },
             Effect::ProposeBundle { bundle: Bundle { title: "Box".into(), ..Bundle::default() } },
             Effect::SaveFile { path: "/out/box.stl".into(), name: "box.stl".into() },
-            Effect::OpenFileDialog { id: "photo".into(), title: None, extensions: vec!["png".into()] },
+            Effect::OpenFileDialog {
+                id: "photo".into(),
+                title: None,
+                extensions: vec!["png".into()],
+                multiple: true,
+                into: PickInto::Data,
+            },
             Effect::OpenPanel { panel: "box".into(), state: None },
             Effect::SelectModel { id: "Eigene/box.stl".into() },
             Effect::RepaintAfter { ms: 100 },
@@ -980,6 +1014,18 @@ mod tests {
         effects.iter().for_each(round_trip);
         let toast: Effect = serde_json::from_str(r#"{"type":"toast","text":"hi"}"#).unwrap();
         assert_eq!(toast, Effect::Toast { text: "hi".into(), level: Level::Info });
+        // As an API 0.1 plugin asks for a file: one, into /tmp.
+        let dialog: Effect = serde_json::from_str(r#"{"type":"open_file_dialog","id":"photo"}"#).unwrap();
+        let plain = Effect::OpenFileDialog {
+            id: "photo".into(),
+            title: None,
+            extensions: vec![],
+            multiple: false,
+            into: PickInto::Tmp,
+        };
+        assert_eq!(dialog, plain);
+        assert_eq!(serde_json::to_value(&plain).unwrap(), json!({"type": "open_file_dialog", "id": "photo"}));
+        assert_eq!(serde_json::to_value(&effects[6]).unwrap()["into"], "data");
     }
 
     #[test]

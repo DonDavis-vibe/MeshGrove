@@ -11,7 +11,7 @@ use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use meshgrove_core::ai::dispatch::ToolProvider;
 use meshgrove_core::bundle::ResolvedBundle;
 use meshgrove_core::config::Config;
-use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Node, View};
+use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Node, PickInto, View};
 use meshgrove_plugin_api::{Bundle, FileType, HostInfo, MeshData};
 use meshgrove_plugins::jobs::{JobEvent, JobPool};
 use meshgrove_plugins::{CancelToken, Opened, Plugin, Registry, Settings, StagedBundle, Staging};
@@ -46,6 +46,64 @@ pub enum PanelAction {
         plugin: String,
         effects: Result<Vec<Effect>, String>,
     },
+    /// A file the user picked for a panel (`Effect::OpenFileDialog`), copied into its folders:
+    /// its name and where the plugin finds it, or why it could not be taken.
+    Picked {
+        plugin: String,
+        panel: String,
+        id: String,
+        file: Result<(String, String), String>,
+    },
+}
+
+/// Whether file `name` has one of `extensions` (given without the dot; case does not matter).
+/// None given: every file fits.
+pub fn extension_fits(name: &str, extensions: &[String]) -> bool {
+    let name = name.to_lowercase();
+    extensions.is_empty() || extensions.iter().any(|e| name.ends_with(&format!(".{}", e.to_lowercase())))
+}
+
+/// Copies a file the user picked into a panel's `/tmp` (as it is called; one of that name there
+/// is replaced) or below the plugin's `/data` (into `picked`, where a file of that name with
+/// other content stays and the new one gets a number). The file's name and the path the plugin
+/// finds the copy at.
+pub fn take_picked(
+    from: &Path,
+    extensions: &[String],
+    into: PickInto,
+    tmp: &Path,
+    data: &Path,
+) -> Result<(String, String), String> {
+    let name = meshgrove_core::listing::file_name(from);
+    if !from.is_file() || name.is_empty() || !extension_fits(&name, extensions) {
+        return Err(t!("plugins.not_a_file").into_owned());
+    }
+    let io = |e: std::io::Error| format!("{name}: {e}");
+    match into {
+        PickInto::Tmp => {
+            std::fs::create_dir_all(tmp).map_err(io)?;
+            std::fs::copy(from, tmp.join(&name)).map_err(io)?;
+            Ok((name.clone(), format!("/tmp/{name}")))
+        }
+        PickInto::Data => {
+            let dir = data.join("picked");
+            std::fs::create_dir_all(&dir).map_err(io)?;
+            let same = |there: &Path| {
+                let sizes = (there.metadata().map(|m| m.len()).ok(), from.metadata().map(|m| m.len()).ok());
+                sizes.0.is_some() && sizes.0 == sizes.1 && std::fs::read(there).ok() == std::fs::read(from).ok()
+            };
+            // Picked before: the copy that is there serves.
+            let target = match dir.join(&name) {
+                there if same(&there) => there,
+                _ => {
+                    let free = meshgrove_core::import::free_target(&dir, &name, &[]);
+                    std::fs::copy(from, &free).map_err(io)?;
+                    free
+                }
+            };
+            Ok((name, format!("/data/picked/{}", meshgrove_core::listing::file_name(&target))))
+        }
+    }
 }
 
 enum Input {
@@ -409,6 +467,32 @@ impl PluginHost {
         }
     }
 
+    /// Copies files the user picked for a panel into its folders, on a thread (they may be
+    /// large); each comes back with [`PluginHost::poll`] as [`PanelAction::Picked`].
+    pub fn pick_files(
+        &mut self,
+        (plugin, panel): (&str, &str),
+        id: &str,
+        files: Vec<PathBuf>,
+        extensions: Vec<String>,
+        into: PickInto,
+    ) -> Result<(), String> {
+        let data = self.registry.get(plugin).ok_or("the plugin is not loaded")?.data_dir();
+        let open = self.find(plugin, panel).ok_or("the panel is closed")?;
+        let tmp = open.tmp().ok_or("the panel is not open yet")?.to_path_buf();
+        let (tx, ctx) = (self.opened.0.clone(), self.ctx.clone());
+        let (plugin, panel, id) = (plugin.to_owned(), panel.to_owned(), id.to_owned());
+        std::thread::spawn(move || {
+            for from in files {
+                let file = take_picked(&from, &extensions, into, &tmp, &data);
+                let (plugin, panel, id) = (plugin.clone(), panel.clone(), id.clone());
+                let _ = tx.send(PanelAction::Picked { plugin, panel, id, file });
+                ctx.request_repaint();
+            }
+        });
+        Ok(())
+    }
+
     /// Opens a library file with a plugin, on a thread; the effects come with [`PluginHost::poll`].
     pub fn open_file(&self, plugin: &str, path: &Path) {
         let Some(p) = self.registry.get(plugin).cloned() else { return };
@@ -752,6 +836,43 @@ mod tests {
             }
             Err(_) => None,
         }
+    }
+
+    #[test]
+    fn picked_files_are_copied_where_the_plugin_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tmp, data) = (dir.path().join("tmp"), dir.path().join("data"));
+        let from = dir.path().join("Wabe.PNG");
+        std::fs::write(&from, "wabe").unwrap();
+        let png = vec!["png".to_owned(), "jpg".to_owned()];
+        let pick = |from: &Path, into| take_picked(from, &png, into, &tmp, &data);
+
+        assert_eq!(pick(&from, PickInto::Tmp), Ok(("Wabe.PNG".into(), "/tmp/Wabe.PNG".into())));
+        assert_eq!(std::fs::read(tmp.join("Wabe.PNG")).unwrap(), b"wabe");
+        // Into /data it stays, where the panel's jobs read it too; picked again, it is the same.
+        let kept = Ok(("Wabe.PNG".into(), "/data/picked/Wabe.PNG".into()));
+        assert_eq!(pick(&from, PickInto::Data), kept);
+        assert_eq!(pick(&from, PickInto::Data), kept);
+        assert_eq!(std::fs::read_dir(data.join("picked")).unwrap().count(), 1);
+        // Another file of that name does not replace it.
+        let other = dir.path().join("other").join("Wabe.PNG");
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        std::fs::write(&other, "holz").unwrap();
+        assert_eq!(pick(&other, PickInto::Data), Ok(("Wabe.PNG".into(), "/data/picked/Wabe (2).PNG".into())));
+        assert_eq!(std::fs::read(data.join("picked").join("Wabe.PNG")).unwrap(), b"wabe");
+        assert_eq!(std::fs::read(data.join("picked").join("Wabe (2).PNG")).unwrap(), b"holz");
+        // In /tmp the newest counts, as it always did.
+        assert_eq!(pick(&other, PickInto::Tmp), Ok(("Wabe.PNG".into(), "/tmp/Wabe.PNG".into())));
+        assert_eq!(std::fs::read(tmp.join("Wabe.PNG")).unwrap(), b"holz");
+
+        // What does not fit is not taken: another kind of file, a folder, nothing.
+        let text = dir.path().join("notes.txt");
+        std::fs::write(&text, "x").unwrap();
+        for bad in [text.as_path(), dir.path(), &dir.path().join("missing.png")] {
+            assert!(pick(bad, PickInto::Data).is_err(), "{}", bad.display());
+        }
+        assert!(take_picked(&text, &[], PickInto::Tmp, &tmp, &data).is_ok(), "no extensions asked for: any file");
+        assert!(extension_fits("a.tar.GZ", &["tar.gz".into()]) && !extension_fits("png", &png));
     }
 
     #[test]
