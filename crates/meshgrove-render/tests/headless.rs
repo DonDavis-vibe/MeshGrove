@@ -78,3 +78,54 @@ fn coloured_triangles_keep_their_colours() {
     let plain = gpu.render(&Mesh::cube(20.0), 128, &view).unwrap();
     assert!(plain.pixels().any(|p| p[3] > 250 && p[1] > p[0].saturating_add(40)));
 }
+
+/// Counts of clearly red, clearly blue and grey (model coloured) pixels of a picture.
+fn tally(img: &image::RgbaImage) -> (usize, usize, usize) {
+    let (mut red, mut blue, mut grey) = (0, 0, 0);
+    for p in img.pixels().filter(|p| p[3] > 250) {
+        let [r, g, b, _] = p.0;
+        if r > g.saturating_add(40) && r > b.saturating_add(40) {
+            red += 1;
+        } else if b > r.saturating_add(40) && b > g.saturating_add(40) {
+            blue += 1;
+        } else if r.abs_diff(g) < 20 && g.abs_diff(b) < 30 {
+            grey += 1;
+        }
+    }
+    (red, blue, grey)
+}
+
+/// A soup uploaded with colours can be coloured anew, all of it or a few triangles: what an
+/// overlay and the tint of a brush do.
+#[test]
+fn triangle_colours_change_after_the_upload() {
+    use meshgrove_render::{default_model_color, upload_soup};
+    let Some(gpu) = gpu() else { return };
+    let (device, queue, renderer) = gpu.parts();
+    let cube = Mesh::cube(20.0);
+    let bounds = cube.bounds().unwrap();
+    let centre = bounds.center();
+    let soup: Vec<[f32; 3]> = cube.to_soup().into_iter().map(|p| (glam::Vec3::from(p) - centre).to_array()).collect();
+    let bounds = meshgrove_core::Aabb { min: bounds.min - centre, max: bounds.max - centre };
+    let plain = vec![default_model_color(); soup.len()];
+    let mesh = upload_soup(device, &soup, bounds, Some(&plain));
+    assert_eq!(mesh.triangle_count, 12);
+    let view = ViewParams::default();
+    let picture = |mesh| renderer.render_image(device, queue, mesh, &view, 128, 128).unwrap();
+    let (red, blue, grey) = tally(&picture(&mesh));
+    assert!(red == 0 && blue == 0 && grey > 1000, "model coloured: {red} {blue} {grey}");
+    // Every triangle red.
+    assert!(mesh.set_triangle_colors(queue, &[[230, 30, 30, 255]; 12]));
+    let (red, _, grey) = tally(&picture(&mesh));
+    assert!(red > 1000 && grey == 0, "{red} {grey}");
+    // The wrong length changes nothing.
+    assert!(!mesh.set_triangle_colors(queue, &[[30, 30, 230, 255]; 11]));
+    assert_eq!(tally(&picture(&mesh)).1, 0);
+    // A run of triangles blue: the top and the front (4..8), seen from above at the front.
+    assert!(mesh.tint_triangles(queue, &[4, 5, 6, 7], [30, 30, 230, 255]));
+    let (red, blue, _) = tally(&picture(&mesh));
+    assert!(red > 100 && blue > 500, "{red} {blue}");
+    // A mesh uploaded without colours has none to change.
+    let bare = upload_soup(device, &soup, bounds, None);
+    assert!(!bare.set_triangle_colors(queue, &[[230, 30, 30, 255]; 12]) && !bare.tint_triangles(queue, &[0], [0; 4]));
+}

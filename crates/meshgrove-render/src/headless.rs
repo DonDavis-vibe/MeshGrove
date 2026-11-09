@@ -56,6 +56,11 @@ impl HeadlessRenderer {
         Ok(HeadlessRenderer { device, queue, renderer, adapter_info: adapter.get_info() })
     }
 
+    /// The device, its queue and the renderer, for uploading and drawing meshes directly.
+    pub fn parts(&self) -> (&wgpu::Device, &wgpu::Queue, &Renderer) {
+        (&self.device, &self.queue, &self.renderer)
+    }
+
     /// Renders `mesh` into a `size`×`size` image with straight (non-premultiplied) alpha.
     pub fn render(&self, mesh: &Mesh, size: u32, view: &ViewParams) -> Result<RgbaImage, RenderError> {
         let gpu_mesh = self.renderer.upload(&self.device, mesh).ok_or(RenderError::EmptyMesh)?;

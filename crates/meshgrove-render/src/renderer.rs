@@ -73,9 +73,18 @@ struct Uniforms {
 /// A mesh uploaded to the GPU, recentred on its bounding-box centre for float precision.
 pub struct GpuMesh {
     chunks: Vec<Chunk>,
+    /// Vertices in each chunk but the last (a multiple of three).
+    per_chunk: usize,
     /// Bounds relative to the uploaded (recentred) coordinates.
     pub bounds: Aabb,
     pub triangle_count: usize,
+}
+
+/// The model colour of [`ViewParams::default`] as sRGB bytes: what a mesh with colours of its
+/// own shows where it has none to show (a triangle no overlay class covers).
+pub fn default_model_color() -> [u8; 4] {
+    let [r, g, b] = ViewParams::default().model_color.map(|c| (c * 255.0).round() as u8);
+    [r, g, b, 255]
 }
 
 /// One vertex buffer of positions, plus one of sRGB colours for coloured meshes.
@@ -94,6 +103,56 @@ impl GpuMesh {
     /// Whether the mesh brings its own colours (and ignores `ViewParams::model_color`).
     pub fn is_colored(&self) -> bool {
         self.chunks.iter().any(|c| c.colors.is_some())
+    }
+
+    /// Gives every triangle the colour of its entry (sRGB): an overlay over the whole mesh.
+    /// Only for a mesh uploaded with colours; `false` (and nothing changes) when it has none,
+    /// or `colors` is not one per triangle. Needs only the queue, so it can run on a thread.
+    pub fn set_triangle_colors(&self, queue: &wgpu::Queue, colors: &[[u8; 4]]) -> bool {
+        if colors.len() != self.triangle_count || !self.is_colored() {
+            return false;
+        }
+        let per_vertex: Vec<[u8; 4]> = colors.iter().flat_map(|&c| [c; 3]).collect();
+        for (chunk, part) in self.chunks.iter().zip(per_vertex.chunks(self.per_chunk)) {
+            if let Some(buffer) = &chunk.colors {
+                queue.write_buffer(buffer, 0, bytemuck::cast_slice(part));
+            }
+        }
+        true
+    }
+
+    /// Gives triangles `triangles` (indices, ascending) the colour `color` (sRGB), writing only
+    /// those: a few hundred where a brush passes. `false` for a mesh without colours.
+    pub fn tint_triangles(&self, queue: &wgpu::Queue, triangles: &[u32], color: [u8; 4]) -> bool {
+        if !self.is_colored() {
+            return false;
+        }
+        let per_chunk_tris = self.per_chunk / 3;
+        let mut i = 0;
+        while i < triangles.len() {
+            let first = triangles[i] as usize;
+            if first >= self.triangle_count {
+                break;
+            }
+            // A run of neighbours in one chunk is one write.
+            let chunk = first / per_chunk_tris;
+            let mut last = first;
+            while i + 1 < triangles.len()
+                && triangles[i + 1] as usize == last + 1
+                && (last + 1) / per_chunk_tris == chunk
+                && last + 1 < self.triangle_count
+            {
+                i += 1;
+                last += 1;
+            }
+            if let Some(buffer) = &self.chunks[chunk].colors {
+                let start = (first - chunk * per_chunk_tris) * 3;
+                let run = vec![color; (last - first + 1) * 3];
+                queue.write_buffer(buffer, (start * 4) as u64, bytemuck::cast_slice(&run));
+            }
+            i += 1;
+        }
+        true
     }
 }
 
@@ -349,31 +408,34 @@ pub fn upload_mesh(device: &wgpu::Device, mesh: &Mesh) -> Option<GpuMesh> {
     let center = bounds.center();
     let soup: Vec<[f32; 3]> = mesh.to_soup().into_iter().map(|p| (Vec3::from(p) - center).to_array()).collect();
     let colors = mesh.soup_colors().filter(|c| c.len() == soup.len());
-    let verts_per_chunk = (MAX_CHUNK_BYTES / 12) / 3 * 3;
-    let buffer = |label, contents: &[u8]| {
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(label),
-            contents,
-            usage: wgpu::BufferUsages::VERTEX,
-        })
+    let bounds = Aabb { min: bounds.min - center, max: bounds.max - center };
+    Some(upload_soup(device, &soup, bounds, colors.as_deref()))
+}
+
+/// Uploads a triangle soup that is already recentred, with `bounds` in those coordinates, and
+/// one sRGB colour per vertex if it has them. Colours can be changed later
+/// ([`GpuMesh::set_triangle_colors`]). For a caller that keeps the soup (to pick on it): one
+/// soup serves the GPU and the picking.
+pub fn upload_soup(device: &wgpu::Device, soup: &[[f32; 3]], bounds: Aabb, colors: Option<&[[u8; 4]]>) -> GpuMesh {
+    let colors = colors.filter(|c| c.len() == soup.len());
+    let per_chunk = (MAX_CHUNK_BYTES / 12) / 3 * 3;
+    let buffer = |label, contents: &[u8], usage| {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents, usage })
     };
     let chunks = soup
-        .chunks(verts_per_chunk)
+        .chunks(per_chunk)
         .enumerate()
         .map(|(i, chunk)| Chunk {
-            positions: buffer("meshgrove mesh vertices", bytemuck::cast_slice(chunk)),
-            colors: colors.as_ref().map(|c| {
-                let start = i * verts_per_chunk;
-                buffer("meshgrove mesh colours", bytemuck::cast_slice(&c[start..start + chunk.len()]))
+            positions: buffer("meshgrove mesh vertices", bytemuck::cast_slice(chunk), wgpu::BufferUsages::VERTEX),
+            colors: colors.map(|c| {
+                let start = i * per_chunk;
+                let usage = wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST;
+                buffer("meshgrove mesh colours", bytemuck::cast_slice(&c[start..start + chunk.len()]), usage)
             }),
             vertices: chunk.len() as u32,
         })
         .collect();
-    Some(GpuMesh {
-        chunks,
-        bounds: Aabb { min: bounds.min - center, max: bounds.max - center },
-        triangle_count: mesh.triangle_count(),
-    })
+    GpuMesh { chunks, per_chunk, bounds, triangle_count: soup.len() / 3 }
 }
 
 struct Camera {
