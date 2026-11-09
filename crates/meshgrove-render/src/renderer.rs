@@ -265,8 +265,22 @@ impl Renderer {
         mesh: &GpuMesh,
         view: &ViewParams,
     ) {
+        self.draw_fitted(queue, encoder, target, mesh, &mesh.bounds, view);
+    }
+
+    /// Like [`Renderer::draw`], with the camera fitted to `bounds` instead of the mesh's own:
+    /// for a view that keeps more than the mesh in the picture.
+    pub fn draw_fitted(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &RenderTarget,
+        mesh: &GpuMesh,
+        bounds: &Aabb,
+        view: &ViewParams,
+    ) {
         let aspect = target.width as f32 / target.height as f32;
-        let camera = Camera::fit(&mesh.bounds, view, aspect);
+        let camera = Camera::fit(bounds, view, aspect);
         queue.write_buffer(&target.uniforms, 0, bytemuck::bytes_of(&camera.uniforms(view)));
 
         let [r, g, b, a] = view.background;

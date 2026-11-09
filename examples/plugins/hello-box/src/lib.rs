@@ -276,6 +276,7 @@ impl GuestPanel for BoxPanel {
                 revision: s.revision,
                 height: Some(240.0),
                 bed: None,
+                frame: None,
             },
             Node::row(vec![
                 Node::Button { id: "apply".into(), label: "Add to library".into(), primary: true, enabled: !s.busy },

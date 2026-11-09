@@ -226,6 +226,11 @@ pub enum Node {
         /// A printer bed to show under the model (x, y in mm).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bed: Option<[f32; 2]>,
+        /// The space the model is meant to fit (its minimum and maximum corner, in the
+        /// coordinates of the triangles), drawn as a coloured frame round the model and kept in
+        /// the picture; a rectangle when it has no extent along one axis.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame: Option<[[f32; 3]; 2]>,
     },
 
     /// A widget this Meshgrove does not know.
@@ -864,6 +869,7 @@ mod tests {
                     revision: 3,
                     height: Some(240.0),
                     bed: None,
+                    frame: Some([[0.0, 0.0, 0.0], [84.0, 42.0, 21.0]]),
                 }),
             },
             Node::Canvas(Canvas {
@@ -903,6 +909,19 @@ mod tests {
         assert!(json["root"]["children"][6].get("enabled").is_none(), "defaults stay out of the JSON");
         assert_eq!(view.root.find("width").and_then(Node::id), Some("width"));
         assert!(matches!(view.root.find("grid"), Some(Node::GridEditor(_))));
+    }
+
+    #[test]
+    fn a_mesh_view_reads_with_and_without_a_frame() {
+        // What a plugin built against an older API sends: no frame.
+        let old: Node =
+            serde_json::from_value(json!({"type": "mesh_view", "id": "v", "key": "k", "revision": 1})).unwrap();
+        assert!(matches!(old, Node::MeshView { frame: None, bed: None, .. }), "{old:?}");
+        assert!(!serde_json::to_string(&old).unwrap().contains("frame"));
+        let with: Node = serde_json::from_value(json!({"type": "mesh_view", "id": "v", "key": "k", "revision": 1,
+            "frame": [[0.0, 0.0, 0.0], [250.0, 305.0, 100.0]]}))
+        .unwrap();
+        assert!(matches!(with, Node::MeshView { frame: Some([_, [250.0, 305.0, 100.0]]), .. }), "{with:?}");
     }
 
     #[test]

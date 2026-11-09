@@ -34,10 +34,22 @@ impl OffscreenView {
     }
 
     pub fn render(&self, rs: &egui_wgpu::RenderState, renderer: &Renderer, mesh: &GpuMesh, view: &ViewParams) {
+        self.render_fitted(rs, renderer, mesh, &mesh.bounds, view);
+    }
+
+    /// Like `render`, with the camera fitted to `bounds` instead of the mesh's own.
+    pub fn render_fitted(
+        &self,
+        rs: &egui_wgpu::RenderState,
+        renderer: &Renderer,
+        mesh: &GpuMesh,
+        bounds: &meshgrove_core::Aabb,
+        view: &ViewParams,
+    ) {
         let Some((target, _)) = &self.target else { return };
         let mut encoder =
             rs.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("meshgrove offscreen") });
-        renderer.draw(&rs.queue, &mut encoder, target, mesh, view);
+        renderer.draw_fitted(&rs.queue, &mut encoder, target, mesh, bounds, view);
         rs.queue.submit([encoder.finish()]);
     }
 

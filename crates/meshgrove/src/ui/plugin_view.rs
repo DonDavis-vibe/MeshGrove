@@ -44,6 +44,9 @@ pub struct MeshViewArgs<'a> {
     pub height: f32,
     /// A printer bed (x, y in mm) to show under the model.
     pub bed: Option<[f32; 2]>,
+    /// The space the model is meant to fit (minimum and maximum corner, in the coordinates of
+    /// the plugin's triangles).
+    pub frame: Option<[[f32; 3]; 2]>,
 }
 
 /// Draws `view`; `meshes` draws the panel's 3D views. Returns what the user did.
@@ -287,9 +290,9 @@ impl Draw<'_> {
                 let changes = super::canvas::show(ui, canvas);
                 self.events.extend(changes.into_iter().map(|change| Event::Canvas { id: canvas.id.clone(), change }));
             }
-            Node::MeshView { key, height, bed, .. } => {
+            Node::MeshView { key, height, bed, frame, .. } => {
                 let height = height.unwrap_or_else(|| ui.available_height().max(200.0));
-                (self.meshes)(ui, MeshViewArgs { key, height, bed: *bed });
+                (self.meshes)(ui, MeshViewArgs { key, height, bed: *bed, frame: *frame });
             }
             Node::Unknown => {
                 ui.label(RichText::new(t!("plugins.unknown_widget")).weak().italics());

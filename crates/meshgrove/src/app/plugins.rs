@@ -321,6 +321,7 @@ impl App {
                 return;
             };
             m.viewer.set_bed(args.bed);
+            m.set_frame(args.frame);
             ui.allocate_ui(size, |ui| {
                 ui.set_min_size(size);
                 if let Some(input) = space {

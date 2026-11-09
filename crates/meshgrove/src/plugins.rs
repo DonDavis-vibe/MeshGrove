@@ -67,6 +67,19 @@ enum Output {
 pub struct PanelMesh {
     pub viewer: ModelViewer,
     arrived: Option<Option<MeshData>>,
+    /// The middle of the mesh in the plugin's coordinates: the viewer shows it recentred there.
+    centre: glam::Vec3,
+}
+
+impl PanelMesh {
+    /// Shows the space the model is meant to fit, given in the plugin's coordinates.
+    pub fn set_frame(&mut self, frame: Option<[[f32; 3]; 2]>) {
+        let frame = frame.map(|[min, max]| {
+            let (min, max) = (glam::Vec3::from(min), glam::Vec3::from(max));
+            meshgrove_core::Aabb { min: min.min(max) - self.centre, max: min.max(max) - self.centre }
+        });
+        self.viewer.set_frame(frame);
+    }
 }
 
 pub struct RunningJob {
@@ -140,6 +153,7 @@ impl OpenPanel {
             let center = bounds.center();
             let soup = mesh.to_soup().into_iter().map(|p| (glam::Vec3::from(p) - center).to_array()).collect();
             let source = MeshSource::Memory { name: key.clone(), soup: Arc::new(soup) };
+            m.centre = center;
             m.viewer.update_mesh(Arc::new(gpu), source);
         }
     }
@@ -427,7 +441,7 @@ impl PluginHost {
                         let m = p.meshes.entry(key).or_insert_with(|| {
                             let mut viewer = ModelViewer::new();
                             viewer.set_tools(true);
-                            PanelMesh { viewer, arrived: None }
+                            PanelMesh { viewer, arrived: None, centre: glam::Vec3::ZERO }
                         });
                         m.arrived = Some(mesh);
                     }

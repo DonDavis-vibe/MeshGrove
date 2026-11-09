@@ -7,9 +7,9 @@ use std::sync::Arc;
 use crossbeam_channel::{Receiver, bounded};
 use egui::{Color32, PointerButton, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 use glam::{Vec2, Vec3};
-use meshgrove_core::Kind;
 use meshgrove_core::config::PreviewQuality;
 use meshgrove_core::spacemouse::CameraMotion;
+use meshgrove_core::{Aabb, Kind};
 use meshgrove_render::{Framing, GpuMesh, Renderer, ViewParams, project_point, view_ray};
 
 use super::offscreen::{OffscreenView, pixel_size};
@@ -68,6 +68,9 @@ pub struct ModelViewer {
     free_orbit: bool,
     /// A printer bed (x, y in mm) drawn under the model, centred.
     bed: Option<[f32; 2]>,
+    /// The space the model is meant to fit, in the mesh's recentred coordinates: drawn as a
+    /// coloured frame and kept in the picture.
+    frame: Option<Aabb>,
 }
 
 /// What the 3D mouse did since the last frame, for the viewer that has the focus.
@@ -97,6 +100,7 @@ impl ModelViewer {
             free_orbit: false,
             tools: true,
             bed: None,
+            frame: None,
         }
     }
 
@@ -104,6 +108,24 @@ impl ModelViewer {
     #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
     pub fn set_bed(&mut self, bed: Option<[f32; 2]>) {
         self.bed = bed.filter(|b| b[0] > 0.0 && b[1] > 0.0);
+    }
+
+    /// The space the model is meant to fit (in the mesh's recentred coordinates), drawn as a
+    /// coloured frame round it; `None`: none. The camera keeps model and frame in the picture.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    pub fn set_frame(&mut self, frame: Option<Aabb>) {
+        if self.frame != frame {
+            self.frame = frame;
+            self.dirty = true;
+        }
+    }
+
+    /// What the camera keeps in the picture: the model, and the frame round it.
+    fn fitted(&self, mesh: &GpuMesh) -> Aabb {
+        match self.frame {
+            Some(f) => Aabb { min: mesh.bounds.min.min(f.min), max: mesh.bounds.max.max(f.max) },
+            None => mesh.bounds,
+        }
     }
 
     /// Shows or hides the buttons over the view.
@@ -254,10 +276,12 @@ impl ModelViewer {
         }
         // Only re-render when something changed; the texture keeps the last frame.
         if std::mem::take(&mut self.dirty) {
-            self.offscreen.render(rs, renderer, &mesh, &self.view);
+            self.offscreen.render_fitted(rs, renderer, &mesh, &self.fitted(&mesh), &self.view);
         }
         self.paint_bed(ui, &mesh, rect);
+        self.paint_frame(ui, &mesh, rect, false);
         self.offscreen.paint(ui.painter(), rect);
+        self.paint_frame(ui, &mesh, rect, true);
 
         if response.clicked() && self.measure.is_some() {
             self.pick(&mesh, rect, response.interact_pointer_pos());
@@ -432,13 +456,14 @@ impl ModelViewer {
 
     /// Puts a measuring point where the click hits the model.
     fn pick(&mut self, mesh: &GpuMesh, rect: Rect, pointer: Option<Pos2>) {
+        let bounds = self.fitted(mesh);
         let (Some(measure), Some(pos)) = (&mut self.measure, pointer) else { return };
         let Some(soup) = &measure.triangles else { return };
         let ndc = Vec2::new(
             (pos.x - rect.center().x) / (rect.width() * 0.5),
             (rect.center().y - pos.y) / (rect.height() * 0.5),
         );
-        let (origin, dir) = view_ray(&mesh.bounds, &self.view, rect.aspect_ratio(), ndc);
+        let (origin, dir) = view_ray(&bounds, &self.view, rect.aspect_ratio(), ndc);
         let Some(t) = meshgrove_core::mesh::ray_hit(soup, origin, dir) else { return };
         if measure.points.len() >= 2 {
             measure.points.clear();
@@ -450,8 +475,9 @@ impl ModelViewer {
     fn paint_bed(&self, ui: &Ui, mesh: &GpuMesh, rect: Rect) {
         let Some([bx, by]) = self.bed else { return };
         let z = mesh.bounds.min.z;
+        let bounds = self.fitted(mesh);
         let to_screen = |x: f32, y: f32| {
-            project_point(&mesh.bounds, &self.view, rect.aspect_ratio(), Vec3::new(x, y, z))
+            project_point(&bounds, &self.view, rect.aspect_ratio(), Vec3::new(x, y, z))
                 .map(|n| pos2(rect.center().x + n.x * rect.width() * 0.5, rect.center().y - n.y * rect.height() * 0.5))
         };
         let (hx, hy) = (bx / 2.0, by / 2.0);
@@ -478,12 +504,81 @@ impl ModelViewer {
         }
     }
 
+    /// The frame round the model. Called twice: before the picture of the model for what lies
+    /// behind it (`front` false: the faces and edges turned away from the camera), and after it
+    /// for what is in front. Sides the model sticks out of are red, and their edges always drawn
+    /// over the model, so a model too large for its space shows from any direction.
+    fn paint_frame(&self, ui: &Ui, mesh: &GpuMesh, rect: Rect, front: bool) {
+        let Some(frame) = self.frame else { return };
+        let (bounds, aspect) = (self.fitted(mesh), rect.aspect_ratio());
+        let to_screen = |p: Vec3| {
+            project_point(&bounds, &self.view, aspect, p)
+                .map(|n| pos2(rect.center().x + n.x * rect.width() * 0.5, rect.center().y - n.y * rect.height() * 0.5))
+        };
+        // The direction the camera looks along at a point.
+        let towards = |p: Vec3| {
+            let ndc = project_point(&bounds, &self.view, aspect, p).unwrap_or(Vec2::ZERO);
+            view_ray(&bounds, &self.view, aspect, ndc).1
+        };
+        let painter = ui.painter_at(rect);
+        let (fits, over) = (Color32::from_rgb(0x3B, 0xA3, 0xFF), Color32::from_rgb(0xFF, 0x4D, 0x4D));
+        let corners = frame_corners(&frame);
+        let quad = |ids: [usize; 4]| ids.into_iter().map(|i| to_screen(corners[i])).collect::<Option<Vec<Pos2>>>();
+        let flat = (0..3).find(|&a| frame.size()[a] < 1e-3);
+        let mut exceeded = frame_exceeded(&frame, &mesh.bounds);
+        let away = match flat {
+            // A rectangle: all of it is behind the model when the camera looks at it from the
+            // model's side. What stands on it does not stick out of it.
+            Some(axis) => {
+                (exceeded[2 * axis], exceeded[2 * axis + 1]) = (false, false);
+                let normal = Vec3::AXES[axis];
+                let side = normal.dot(mesh.bounds.center() - frame.min);
+                [side * normal.dot(-towards(frame.center())) >= 0.0; 6]
+            }
+            None => frame_faces_away(&frame, towards),
+        };
+        for (face, ids) in FRAME_FACES.iter().enumerate() {
+            // Of a rectangle only the one face; of a box the far faces lightly, and red panes
+            // where the model comes through.
+            let shown = match flat {
+                Some(axis) => face == 2 * axis,
+                None => away[face] || exceeded[face],
+            };
+            if shown
+                && away[face] != front
+                && let Some(points) = quad(*ids)
+            {
+                let fill = if exceeded[face] { over.gamma_multiply(0.16) } else { fits.gamma_multiply(0.10) };
+                painter.add(egui::Shape::convex_polygon(points, fill, Stroke::NONE));
+            }
+        }
+        for (ends, faces) in frame_edges() {
+            // Of a rectangle, not the edges across its thickness.
+            if flat.is_some_and(|axis| faces.iter().all(|f| f / 2 != axis)) {
+                continue;
+            }
+            let red = faces.iter().any(|&f| exceeded[f]);
+            let behind = away[faces[0]] && away[faces[1]] && !red;
+            if behind != front
+                && let (Some(a), Some(b)) = (to_screen(corners[ends[0]]), to_screen(corners[ends[1]]))
+            {
+                let stroke = match (red, front) {
+                    (true, _) => Stroke::new(2.0, over),
+                    (false, true) => Stroke::new(1.5, fits),
+                    (false, false) => Stroke::new(1.0, fits.gamma_multiply(0.7)),
+                };
+                painter.line_segment([a, b], stroke);
+            }
+        }
+    }
+
     fn paint_measure(&self, ui: &Ui, mesh: &GpuMesh, rect: Rect) {
         let Some(measure) = &self.measure else { return };
         let painter = ui.painter_at(rect);
         let accent = Color32::from_rgb(255, 196, 0);
+        let bounds = self.fitted(mesh);
         let to_screen = |p: Vec3| {
-            project_point(&mesh.bounds, &self.view, rect.aspect_ratio(), p)
+            project_point(&bounds, &self.view, rect.aspect_ratio(), p)
                 .map(|n| pos2(rect.center().x + n.x * rect.width() * 0.5, rect.center().y - n.y * rect.height() * 0.5))
         };
         let screen: Vec<Pos2> = measure.points.iter().filter_map(|&p| to_screen(p)).collect();
@@ -514,6 +609,52 @@ impl ModelViewer {
         painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand(5.0), 5.0, Color32::from_black_alpha(170));
         painter.galley(pos, galley, Color32::WHITE);
     }
+}
+
+/// The corners of a frame, numbered by bits: 1 = far in x, 2 = far in y, 4 = far in z.
+fn frame_corners(frame: &Aabb) -> [Vec3; 8] {
+    std::array::from_fn(|i| {
+        let pick = |axis: usize| if i >> axis & 1 == 1 { frame.max[axis] } else { frame.min[axis] };
+        Vec3::new(pick(0), pick(1), pick(2))
+    })
+}
+
+/// The corners of a frame's faces, in order round each: face `2 * axis` is the near one along
+/// that axis, `2 * axis + 1` the far one.
+const FRAME_FACES: [[usize; 4]; 6] =
+    [[0, 2, 6, 4], [1, 3, 7, 5], [0, 1, 5, 4], [2, 3, 7, 6], [0, 1, 3, 2], [4, 5, 7, 6]];
+
+/// The twelve edges of a frame: the two corners each joins and the two faces it lies between.
+fn frame_edges() -> impl Iterator<Item = ([usize; 2], [usize; 2])> {
+    (0..3).flat_map(|along| {
+        let (b, c) = ((along + 1) % 3, (along + 2) % 3);
+        (0..4).map(move |k| {
+            let (far_b, far_c) = (k & 1, k >> 1);
+            let start = far_b << b | far_c << c;
+            ([start, start | 1 << along], [2 * b + far_b, 2 * c + far_c])
+        })
+    })
+}
+
+/// Which faces of a frame are turned away from a camera that looks along `towards(point)` at
+/// a point: what lies on them is behind whatever stands in the frame.
+fn frame_faces_away(frame: &Aabb, towards: impl Fn(Vec3) -> Vec3) -> [bool; 6] {
+    let centre = frame.center();
+    std::array::from_fn(|face| {
+        let (axis, far) = (face / 2, face % 2 == 1);
+        let mut on_face = centre;
+        on_face[axis] = if far { frame.max[axis] } else { frame.min[axis] };
+        let outward = if far { Vec3::AXES[axis] } else { -Vec3::AXES[axis] };
+        outward.dot(towards(on_face)) > 0.0
+    })
+}
+
+/// The faces of a frame the model sticks out of (by more than a twentieth of a millimetre).
+fn frame_exceeded(frame: &Aabb, model: &Aabb) -> [bool; 6] {
+    std::array::from_fn(|face| {
+        let (axis, far) = (face / 2, face % 2 == 1);
+        if far { model.max[axis] > frame.max[axis] + 0.05 } else { model.min[axis] < frame.min[axis] - 0.05 }
+    })
 }
 
 /// Standard views: (label key, azimuth, elevation).
@@ -562,6 +703,41 @@ fn orbit_view() -> ViewParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frame_has_its_far_side_behind_the_model_and_its_near_side_in_front() {
+        let frame = Aabb { min: Vec3::new(-1.0, -2.0, -3.0), max: Vec3::new(1.0, 2.0, 3.0) };
+        // Every corner is on three faces, every edge joins two corners that differ along one
+        // axis, and lies on the two faces its corners share.
+        let corners = frame_corners(&frame);
+        let on = |face: usize, corner: usize| FRAME_FACES[face].contains(&corner);
+        let edges: Vec<_> = frame_edges().collect();
+        assert_eq!(edges.len(), 12);
+        for (ends, faces) in &edges {
+            let d = corners[ends[1]] - corners[ends[0]];
+            assert_eq!([d.x, d.y, d.z].iter().filter(|v| **v != 0.0).count(), 1, "{ends:?}");
+            assert!(faces.iter().all(|&f| on(f, ends[0]) && on(f, ends[1])), "{ends:?} on {faces:?}");
+        }
+        for (face, ids) in FRAME_FACES.iter().enumerate() {
+            let (axis, far) = (face / 2, face % 2 == 1);
+            let at = if far { frame.max[axis] } else { frame.min[axis] };
+            assert!(ids.iter().all(|&i| corners[i][axis] == at), "face {face}");
+        }
+        // Looking down and along +y from the front left: the bottom, the back (far y) and the
+        // right (far x) are turned away, and three edges lie between two of them.
+        let towards = |_: Vec3| Vec3::new(0.3, 0.6, -0.7).normalize();
+        let away = frame_faces_away(&frame, towards);
+        assert_eq!(away, [false, true, false, true, true, false]);
+        let behind = edges.iter().filter(|(_, f)| away[f[0]] && away[f[1]]).count();
+        assert_eq!(behind, 3);
+        // A model wider than the frame on its near x side and taller than it: those two faces.
+        let model = Aabb { min: Vec3::new(-1.5, -2.0, -3.0), max: Vec3::new(1.0, 1.0, 3.2) };
+        assert_eq!(frame_exceeded(&frame, &model), [true, false, false, false, false, true]);
+        assert_eq!(frame_exceeded(&frame, &frame), [false; 6]);
+        // From the opposite side it is the other three faces.
+        let away = frame_faces_away(&frame, |_| Vec3::new(-0.3, -0.6, 0.7).normalize());
+        assert_eq!(away, [true, false, true, false, false, true]);
+    }
 
     #[test]
     fn the_3d_mouse_moves_the_camera_and_stays_within_limits() {
