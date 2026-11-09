@@ -9,7 +9,8 @@
 //! separated by `|` follow half a second apart, `{enter}`, `{down}` and `{esc}` press those keys,
 //! `{click x,y}` clicks there (to click after typing), `{rclick x,y}` right-clicks, `{wheel dy}` turns
 //! the wheel at the pointer, `{copy}`, `{cut}` and `{paste}` are Ctrl+C, Ctrl+X and Ctrl+V;
-//! `{press x,y}`, `{move x,y}` and `{release}` drag with the left button.
+//! `{press x,y}`, `{move x,y}` and `{release}` drag with the left button, `{rpress x,y}` instead
+//! with the right one, `{spress x,y}` with the left one and Shift held until the release.
 //! `MESHGROVE_MEASURE=fx,fy;fx,fy` measures between those points (fractions of the view) in the
 //! first model window that opens, which the hook's input cannot reach; `MESHGROVE_WINDOW_VIEW=top`
 //! (or `front`, `left` …) starts that window in a standard view.
@@ -31,6 +32,8 @@ pub struct ScreenshotHook {
     /// The button to let go next frame, and whether Shift is let go the frame after (a hand
     /// lets go of the key after the button).
     release: Option<(egui::Pos2, egui::PointerButton, bool)>,
+    /// The button a `{press}` step holds down, and whether Shift is held with it.
+    held: Option<(egui::PointerButton, bool)>,
     unshift: bool,
     started: Instant,
     pressed: bool,
@@ -81,6 +84,7 @@ impl ScreenshotHook {
             clicks,
             next_click: 0,
             release: None,
+            held: None,
             unshift: false,
             typing: std::env::var("MESHGROVE_TYPE")
                 .map(|s| s.split('|').map(str::to_owned).collect())
@@ -194,7 +198,16 @@ impl ScreenshotHook {
             };
             let click = step.strip_prefix("{click ").and_then(point);
             let right_click = step.strip_prefix("{rclick ").and_then(point);
-            let press_at = step.strip_prefix("{press ").and_then(point);
+            let (press_at, held) = match (
+                step.strip_prefix("{press ").and_then(point),
+                step.strip_prefix("{rpress ").and_then(point),
+                step.strip_prefix("{spress ").and_then(point),
+            ) {
+                (Some(at), ..) => (Some(at), (egui::PointerButton::Primary, false)),
+                (_, Some(at), _) => (Some(at), (egui::PointerButton::Secondary, false)),
+                (.., Some(at)) => (Some(at), (egui::PointerButton::Primary, true)),
+                _ => (None, (egui::PointerButton::Primary, false)),
+            };
             let move_to = step.strip_prefix("{move ").and_then(point);
             let wheel =
                 step.strip_prefix("{wheel ").and_then(|s| s.strip_suffix('}')).and_then(|s| s.trim().parse().ok());
@@ -219,13 +232,21 @@ impl ScreenshotHook {
                     let pos = press_at.unwrap_or_default();
                     self.pointer = Some(pos);
                     raw.events.push(egui::Event::PointerMoved(pos));
-                    raw.events.push(button(pos, true));
+                    if held.1 {
+                        raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+                    }
+                    raw.events.push(press(pos, held.0, true));
+                    self.held = Some(held);
                 }
                 // The pointer goes there in steps, as a hand would move it.
                 _ if move_to.is_some() => self.glide = move_to,
                 _ if step == "{release}" => {
+                    let (which, shift) = self.held.take().unwrap_or((egui::PointerButton::Primary, false));
                     if let Some(pos) = self.pointer {
-                        raw.events.push(button(pos, false));
+                        raw.events.push(press(pos, which, false));
+                    }
+                    if shift {
+                        raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
                     }
                 }
                 _ if step == "{copy}" => raw.events.push(egui::Event::Copy),
