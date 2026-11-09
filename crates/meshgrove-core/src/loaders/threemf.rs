@@ -170,6 +170,41 @@ fn load(bytes: &[u8], plate: Option<usize>, split_paint: bool) -> Result<ThreeMf
     Ok(ThreeMf { mesh: out, title, designer, application, plates, plate: shown, filaments, triangles: tally.triangles })
 }
 
+/// One object of a 3MF that has triangles of its own, as the package stores it: a build item's
+/// mesh, or one of the parts a slicer project puts an object together from. The same object
+/// placed several times is one part.
+#[derive(Debug, Clone)]
+pub struct Part {
+    /// The model part of the package the object is in (lower case, no leading slash).
+    pub model: String,
+    /// Its id there.
+    pub object_id: u32,
+    /// The name the slicer shows for it (Bambu/Orca/Anycubic and PrusaSlicer settings), else
+    /// the object's own `name`.
+    pub name: Option<String>,
+    /// The object's own triangles in millimetres, in its own coordinates.
+    pub mesh: Mesh,
+    /// From the object's coordinates to the plate's, in millimetres, for the first time it is
+    /// placed.
+    pub transform: Affine3A,
+    /// How often it is placed.
+    pub instances: usize,
+}
+
+/// The objects of the model with triangles of their own, each once, in their own coordinates:
+/// what [`parse`] puts together, apart. Of a multi-plate project those of the first plate;
+/// supports, modifiers and negative volumes are no parts. Their order is that of the build
+/// items and stays the same for the same file, so a part can be named by its index.
+pub fn parse_parts(bytes: &[u8]) -> Result<Vec<Part>, LoadError> {
+    let mut package = Package::open(bytes)?;
+    Ok(package.parts()?.into_iter().map(|found| found.part).collect())
+}
+
+/// A part as the walk through the package found it.
+struct Found {
+    part: Part,
+}
+
 /// The package's main preview (slicer plate image or CAD thumbnail), shrunk to fit `max`,
 /// or `None` if there is none or it is blank (headless slicing leaves empty plate images).
 pub fn embedded_thumbnail(bytes: &[u8], max: u32) -> Option<RgbaImage> {
@@ -394,6 +429,94 @@ impl Package {
         objects
     }
 
+    /// The mesh objects of the shown plate ([`parse_parts`]).
+    fn parts(&mut self) -> Result<Vec<Found>, LoadError> {
+        let assignments = self.assignments();
+        let plate_objects = self.plate_objects();
+        let wanted = plate_objects.values().next();
+        let start = self.start_part();
+        let root = self.model(&start)?;
+        let (unit_scale, build) = (root.unit_scale, root.build.clone());
+        let on_plate: Vec<&BuildItem> =
+            build.iter().filter(|i| wanted.is_none_or(|ids| ids.contains(&i.object))).collect();
+        let items: Vec<&BuildItem> = if on_plate.is_empty() { build.iter().collect() } else { on_plate };
+        let mut found = Vec::new();
+        for item in items {
+            let path = item.path.clone().unwrap_or_else(|| start.clone());
+            let top = Top { assign: assignments.get(&item.object), unit_scale };
+            self.collect(&path, item.object, item.transform, 0, &top, &mut found)?;
+        }
+        if found.is_empty() {
+            return Err(LoadError::Empty);
+        }
+        Ok(found)
+    }
+
+    /// Adds object `id` of model part `path` to `found` if it has a mesh (or counts it once more
+    /// if it is there), then its components.
+    fn collect(
+        &mut self,
+        path: &str,
+        id: u32,
+        transform: Affine3A,
+        depth: usize,
+        top: &Top,
+        found: &mut Vec<Found>,
+    ) -> Result<(), LoadError> {
+        if depth > MAX_DEPTH {
+            return Err(LoadError::Malformed("component tree too deep (cyclic?)".into()));
+        }
+        let model = normalize(path);
+        let object = self
+            .model(path)?
+            .objects
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| LoadError::Malformed(format!("object {id} missing in {path}")))?;
+        if !object.printable {
+            return Ok(());
+        }
+        if let Some(mesh) = &*object.mesh {
+            match found.iter_mut().find(|f| f.part.model == model && f.part.object_id == id) {
+                Some(known) => known.part.instances += 1,
+                None => {
+                    // The object itself carries the build object's volumes; a component does not.
+                    let own = depth == 0;
+                    let hidden: &[(u32, u32)] = match top.assign {
+                        Some(a) if own => &a.hidden_volumes,
+                        _ => &[],
+                    };
+                    let name = top
+                        .assign
+                        .and_then(|a| if own { a.name.clone() } else { a.part_names.get(&id).cloned() })
+                        .or_else(|| object.name.clone())
+                        .or_else(|| top.assign.and_then(|a| a.name.clone()))
+                        .filter(|n| !n.trim().is_empty());
+                    let mut transform = transform;
+                    transform.translation *= top.unit_scale;
+                    found.push(Found {
+                        part: Part {
+                            model,
+                            object_id: id,
+                            name,
+                            mesh: mesh.local(top.unit_scale, hidden),
+                            transform,
+                            instances: 1,
+                        },
+                    });
+                }
+            }
+        }
+        for c in &object.components {
+            if top.assign.is_some_and(|a| a.hidden_parts.contains(&c.object)) {
+                continue;
+            }
+            let sub_path = c.path.clone().unwrap_or_else(|| path.to_owned());
+            self.collect(&sub_path, c.object, transform * c.transform, depth + 1, top, found)?;
+        }
+        Ok(())
+    }
+
     /// Appends object `id` of model part `path`, transformed, to `out` (recursing into components).
     #[allow(clippy::too_many_arguments)]
     fn emit(
@@ -445,6 +568,31 @@ struct ObjectMesh {
     paint: Vec<(u32, String)>,
 }
 
+impl ObjectMesh {
+    /// The mesh by itself, scaled by `scale`: the triangles as the file has them, without those
+    /// that point past the vertices and without the ranges in `hidden` (first, last).
+    fn local(&self, scale: f32, hidden: &[(u32, u32)]) -> Mesh {
+        let positions = self.vertices.iter().map(|v| (Vec3::from(*v) * scale).to_array()).collect();
+        let indices = self
+            .triangles
+            .iter()
+            .enumerate()
+            .filter(|(i, t)| {
+                t.iter().all(|&v| (v as usize) < self.vertices.len())
+                    && !hidden.iter().any(|&(first, last)| (first..=last).contains(&(*i as u32)))
+            })
+            .flat_map(|(_, t)| *t)
+            .collect();
+        Mesh { positions, indices: Some(indices), colors: None, vertex_colors: None }
+    }
+}
+
+/// The build item a walk for parts started at.
+struct Top<'a> {
+    assign: Option<&'a Assign>,
+    unit_scale: f32,
+}
+
 /// Colour sources of a whole package.
 struct Style {
     filaments: Vec<([u8; 4], Option<String>)>,
@@ -469,6 +617,10 @@ impl Style {
 /// Filament assignment of one build object (by its id in the start part).
 #[derive(Debug, Default)]
 struct Assign {
+    /// The object's name in the slicer.
+    name: Option<String>,
+    /// Component object id → the part's name (Bambu/Orca parts).
+    part_names: HashMap<u32, String>,
     filament: Option<u32>,
     /// Component object id → filament (Bambu/Orca parts).
     parts: HashMap<u32, u32>,
@@ -579,18 +731,29 @@ fn read_bambu_assignments(config: &[u8], objects: &mut HashMap<u32, Assign>) {
                     }
                     "metadata" => {
                         let Some(o) = object else { continue };
-                        if attr(e, "key").as_deref() != Some("extruder") {
-                            continue;
-                        }
-                        let value = attr(e, "value").and_then(|v| v.trim().parse::<u32>().ok()).filter(|&v| v > 0);
-                        let entry = objects.entry(o).or_default();
-                        match part {
-                            Some(p) => {
-                                if let Some(v) = value {
-                                    entry.parts.insert(p, v);
+                        match attr(e, "key").as_deref() {
+                            Some("extruder") => {
+                                let value =
+                                    attr(e, "value").and_then(|v| v.trim().parse::<u32>().ok()).filter(|&v| v > 0);
+                                let entry = objects.entry(o).or_default();
+                                match part {
+                                    Some(p) => {
+                                        if let Some(v) = value {
+                                            entry.parts.insert(p, v);
+                                        }
+                                    }
+                                    None => entry.filament = value,
                                 }
                             }
-                            None => entry.filament = value,
+                            Some("name") => {
+                                let Some(name) = attr(e, "value") else { continue };
+                                let entry = objects.entry(o).or_default();
+                                match part {
+                                    Some(p) => _ = entry.part_names.insert(p, name),
+                                    None => entry.name = Some(name),
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     _ => {}
@@ -626,6 +789,7 @@ fn read_prusa_assignments(config: &[u8], objects: &mut HashMap<u32, Assign>) {
                     (None, "extruder") => {
                         objects.entry(o).or_default().filament = value.trim().parse().ok().filter(|&x: &u32| x > 0)
                     }
+                    (None, "name") => objects.entry(o).or_default().name = Some(value),
                     _ => {}
                 }
             }
@@ -666,6 +830,8 @@ struct Component {
 
 #[derive(Debug, Clone)]
 struct Object {
+    /// The `name` attribute.
+    name: Option<String>,
     /// Support structures and "other" helper objects are not part of the printed model.
     printable: bool,
     /// Shared so cloning an object while walking the component tree stays cheap.
@@ -740,7 +906,12 @@ impl ModelFile {
                         });
                         current = Some((
                             id,
-                            Object { printable, mesh: Default::default(), components: Vec::new() },
+                            Object {
+                                name: attr(e, "name"),
+                                printable,
+                                mesh: Default::default(),
+                                components: Vec::new(),
+                            },
                             ObjectMesh::default(),
                             default,
                         ));
@@ -1179,6 +1350,108 @@ mod plate_tests {
         assert_eq!(m.mesh.triangle_count(), 6, "the modifier volume is not geometry");
         assert!(m.mesh.colors.unwrap().iter().all(|c| *c == GREEN), "extruder colour wins over filament colour");
         assert_eq!(m.filaments, [Filament { slot: 2, color: [0, 255, 0], material: Some("PETG".into()) }]);
+    }
+}
+
+#[cfg(test)]
+mod part_tests {
+    use super::tests_support::*;
+    use super::*;
+
+    #[test]
+    fn two_objects_are_two_parts_in_their_own_coordinates() {
+        let resources = format!("{}{}", cube_object(1, "name=\"Dose\""), cube_object(2, "name=\"Deckel\""));
+        let build = "<item objectid=\"1\" transform=\"1 0 0 0 1 0 0 0 1 100 0 5\"/>\
+                     <item objectid=\"2\" transform=\"2 0 0 0 2 0 0 0 2 10 20 30\"/>\
+                     <item objectid=\"2\" transform=\"1 0 0 0 1 0 0 0 1 50 0 0\"/>";
+        let pkg = package(&[("3D/3dmodel.model", model("millimeter", "", &resources, build))]);
+        let parts = parse_parts(&pkg).unwrap();
+        assert_eq!(parts.len(), 2, "the lid is placed twice and is one part");
+        let names: Vec<_> = parts.iter().map(|p| (p.name.as_deref(), p.object_id, p.instances)).collect();
+        assert_eq!(names, [(Some("Dose"), 1, 1), (Some("Deckel"), 2, 2)]);
+        assert!(parts.iter().all(|p| p.model == "3d/3dmodel.model"));
+        for part in &parts {
+            assert_eq!(part.mesh.triangle_count(), 12);
+            let b = part.mesh.bounds().unwrap();
+            assert_eq!((b.min, b.max), (Vec3::ZERO, Vec3::ONE), "not moved, not scaled");
+        }
+        assert_eq!(parts[1].transform.transform_point3(Vec3::ONE), Vec3::new(12.0, 22.0, 32.0), "its first place");
+        assert_eq!(parts[0].transform.transform_point3(Vec3::ZERO), Vec3::new(100.0, 0.0, 5.0));
+        assert_eq!(parse(&pkg).unwrap().mesh.triangle_count(), 36, "the whole model shows every placement");
+    }
+
+    #[test]
+    fn units_scale_the_part_and_where_it_stands() {
+        let pkg = package(&[(
+            "3D/3dmodel.model",
+            model("inch", "", &cube_object(1, ""), "<item objectid=\"1\" transform=\"1 0 0 0 1 0 0 0 1 2 0 0\"/>"),
+        )]);
+        let parts = parse_parts(&pkg).unwrap();
+        assert_eq!(parts[0].mesh.bounds().unwrap().size(), Vec3::splat(25.4));
+        assert_eq!(parts[0].transform.translation.x, 50.8);
+        assert_eq!(parts[0].name, None);
+        let whole = parse(&pkg).unwrap().mesh.bounds().unwrap();
+        let b = parts[0].mesh.bounds().unwrap();
+        assert_eq!(parts[0].transform.transform_point3(b.max), whole.max, "local and placed agree in mm");
+    }
+
+    /// A slicer project: one object of two parts and a modifier in a sub-model, named in the
+    /// slicer's settings, and a second object on another plate.
+    #[test]
+    fn slicer_projects_give_the_parts_of_the_first_plate() {
+        let root = model(
+            "millimeter",
+            "",
+            "<object id=\"10\" type=\"model\"><components>\
+               <component p:path=\"/3D/Objects/object_1.model\" objectid=\"1\"/>\
+               <component p:path=\"/3D/Objects/object_1.model\" objectid=\"2\" transform=\"1 0 0 0 1 0 0 0 1 5 0 0\"/>\
+               <component p:path=\"/3D/Objects/object_1.model\" objectid=\"3\"/>\
+             </components></object>\
+             <object id=\"11\" type=\"model\"><components>\
+               <component p:path=\"/3D/Objects/object_2.model\" objectid=\"1\"/></components></object>",
+            "<item objectid=\"10\" transform=\"1 0 0 0 1 0 0 0 1 0 0 1\"/><item objectid=\"11\"/>",
+        );
+        let sub_1 =
+            model("millimeter", "", &format!("{}{}{}", cube_object(1, ""), cube_object(2, ""), cube_object(3, "")), "");
+        let sub_2 = model("millimeter", "", &cube_object(1, ""), "");
+        let config = "<config><object id=\"10\"><metadata key=\"name\" value=\"Dose\"/>\
+            <part id=\"1\" subtype=\"normal_part\"><metadata key=\"name\" value=\"Wand\"/></part>\
+            <part id=\"2\" subtype=\"normal_part\"><metadata key=\"name\" value=\"Boden\"/></part>\
+            <part id=\"3\" subtype=\"modifier_part\"><metadata key=\"name\" value=\"Infill\"/></part></object>\
+            <object id=\"11\"><metadata key=\"name\" value=\"Deckel\"/></object>\
+            <plate><metadata key=\"plater_id\" value=\"1\"/>\
+              <model_instance><metadata key=\"object_id\" value=\"10\"/></model_instance></plate>\
+            <plate><metadata key=\"plater_id\" value=\"2\"/>\
+              <model_instance><metadata key=\"object_id\" value=\"11\"/></model_instance></plate></config>";
+        let pkg = package(&[
+            ("3D/3dmodel.model", root),
+            ("3D/Objects/object_1.model", sub_1),
+            ("3D/Objects/object_2.model", sub_2),
+            ("Metadata/model_settings.config", config.as_bytes().to_vec()),
+        ]);
+        let parts = parse_parts(&pkg).unwrap();
+        let seen: Vec<_> = parts.iter().map(|p| (p.name.as_deref(), p.model.as_str(), p.object_id)).collect();
+        assert_eq!(
+            seen,
+            [(Some("Wand"), "3d/objects/object_1.model", 1), (Some("Boden"), "3d/objects/object_1.model", 2)],
+            "the modifier is no part, the lid is on plate 2"
+        );
+        assert_eq!(parts[1].transform.translation, glam::Vec3A::new(5.0, 0.0, 1.0), "component within build item");
+        assert_eq!(parse(&pkg).unwrap().mesh.triangle_count(), 24, "as the whole model shows");
+    }
+
+    #[test]
+    fn prusa_modifier_volumes_are_not_in_the_part() {
+        let root = model("millimeter", "", &cube_object(1, ""), "<item objectid=\"1\"/>");
+        let config = "<config><object id=\"1\"><metadata type=\"object\" key=\"name\" value=\"Würfel\"/>\
+            <volume firstid=\"0\" lastid=\"5\"><metadata type=\"volume\" key=\"volume_type\" value=\"ModelPart\"/></volume>\
+            <volume firstid=\"6\" lastid=\"11\"><metadata type=\"volume\" key=\"volume_type\" value=\"ParameterModifier\"/></volume>\
+            </object></config>";
+        let pkg =
+            package(&[("3D/3dmodel.model", root), ("Metadata/Slic3r_PE_model.config", config.as_bytes().to_vec())]);
+        let parts = parse_parts(&pkg).unwrap();
+        assert_eq!((parts[0].name.as_deref(), parts[0].mesh.triangle_count()), (Some("Würfel"), 6));
+        assert!(parse_parts(b"no zip").is_err());
     }
 }
 
