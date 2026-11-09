@@ -201,7 +201,8 @@ folders. See [Talking to Meshgrove](#talking-to-meshgrove).
   instance on a thread of its own as long as its tab is open.
 - **Deadlines:**
   - A panel event, including render, mesh and snapshot, gets **2 s**.
-  - A tool call gets **60 s**.
+  - A tool call gets **60 s**. For more, a tool hands its work to a job (from 0.9.0, see
+    [Work that takes longer](#work-that-takes-longer-tool-jobs)).
   - Jobs have no deadline; the user cancels them.
   - Time Meshgrove spends in `library.*` calls on the plugin's behalf does not count.
   - Past the deadline the instance is stopped. A panel then shows the error and offers to open again.
@@ -395,8 +396,35 @@ bare mesh. It writes only the new mesh and lets Meshgrove make the file:
   like any other: tags, notes, lists, `next_to`.
 - An object PrusaSlicer cuts into several volumes within one mesh cannot be swapped.
 
-`job` on a bundle is reserved for tools that start background work; this Meshgrove refuses a
-bundle that carries one.
+### Work that takes longer: tool jobs
+
+From 0.9.0 a tool whose work does not fit its 60 s hands it to a job. It answers at once with
+a bundle that names the job instead of files:
+
+```json
+{"title": "Wood on rose.stl", "job": {"kind": "apply", "params": {"source": "Garten/rose.stl", "texture": "wood"}}}
+```
+
+- The AI gets the tool's `result` and `{"status": "started", "job": "<id>", "arrives": "review"}`
+  right away; it does not wait.
+- Meshgrove runs `run_job(kind, params)` in the background, one tool job at a time, writing
+  into the bundle's staging folder (`/out`). The job runs **as the tool did**: it reads the
+  library as the AI that called the tool may (a cloud AI's job does not see a local-only
+  library), `/data` is read-only, it has no deadline, and the user can cancel it. Report
+  `host::progress`; Meshgrove shows it in the status bar with a cancel button.
+- The job's answer may carry the final bundle as its `bundle` member (files, folder or
+  `next_to`, `derive_3mf`, tags, lists); without one, the tool's bundle is taken without its
+  `job`. It is checked like any bundle; a job's bundle cannot start another job.
+- What it made **always waits in the review**, also when the user lets the plugin's files be
+  accepted by themselves and in the chat's automatic mode: the user did not watch it being made.
+  A toast says so ("… waits in the review").
+- A job that fails or is cancelled proposes nothing, and its files are gone.
+- `meshgrove-mcp` runs these jobs itself; when the AI app closes the connection it waits up to
+  15 minutes for running jobs before it exits.
+- `meshgrove-plugin-run … call` waits for the job and prints the bundle it ended with.
+
+hello-box's `make_box_later` is an example: its job writes the box and returns its bundle.
+A Meshgrove before 0.9.0 refuses a bundle with `job`.
 
 **How a bundle is applied:**
 
@@ -405,6 +433,7 @@ bundle that carries one.
 | A tool, chat in review mode | waits in the review as a card (files, folder, size, lists) |
 | A tool, chat in automatic mode | applied at once, unless the plugin lacks "Accept without review" |
 | A tool, AI app over MCP | waits in the review; accepted by itself only when the AI's auto-accept is on **and** the plugin has "Accept without review" |
+| A tool's job (`job`, from 0.9.0) | always waits in the review, whatever is let be accepted by itself |
 | A panel, `Effect::ApplyBundle` | applied at once (the user clicked for it), with a toast; undo in the history |
 | A panel, `Effect::ProposeBundle` | goes to the review, never accepted by itself |
 
