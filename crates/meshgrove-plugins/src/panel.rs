@@ -114,7 +114,7 @@ impl PanelHandle {
         self.ask(|reply| Request::Event(json, reply))
     }
 
-    /// The triangles of the mesh view with `key`.
+    /// The triangles of the mesh view with `key`, or (no positions) the classes of an overlay.
     pub fn mesh(&self, key: &str) -> Result<Option<MeshData>, Error> {
         self.ask(|reply| Request::Mesh(key.to_owned(), reply))
     }
@@ -235,13 +235,14 @@ fn run(
             }
             Request::Mesh(key, reply) => {
                 let mesh = open.call(|s, p, r| p.call_mesh(s, r, &key)).and_then(|mesh| {
-                    let mesh = mesh.map(|m| MeshData { positions: m.positions, indices: m.indices });
-                    match &mesh {
-                        Some(m) => {
-                            m.check().map(|()| mesh.clone()).map_err(|e| Error::Failed(format!("its mesh: {e}")))
-                        }
-                        None => Ok(None),
+                    // Moved, not copied: a preview may hold millions of triangles.
+                    let Some(m) = mesh else { return Ok(None) };
+                    let mesh = MeshData { positions: m.positions, indices: m.indices };
+                    // Without positions it is an overlay: one class per triangle of another mesh.
+                    if !mesh.positions.is_empty() {
+                        mesh.check().map_err(|e| Error::Failed(format!("its mesh: {e}")))?;
                     }
+                    Ok(Some(mesh))
                 });
                 let _ = reply.send(mesh);
             }

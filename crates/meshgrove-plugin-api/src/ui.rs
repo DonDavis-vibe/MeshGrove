@@ -239,6 +239,14 @@ pub enum Node {
         /// the picture; a rectangle when it has no extent along one axis.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         frame: Option<[[f32; 3]; 2]>,
+        /// The user paints on the model, or picks points on it, instead of turning it with the
+        /// left button ([`Event::MeshStroke`], [`Event::MeshPick`]). From API 0.2.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        paint: Option<MeshPaint>,
+        /// Colours over the model, one class per triangle, which Meshgrove asks for with
+        /// `panel.mesh(overlay.key)` when the overlay's revision changes. From API 0.2.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        overlay: Option<MeshOverlay>,
     },
 
     /// A widget this Meshgrove does not know.
@@ -248,6 +256,91 @@ pub enum Node {
 
 fn half() -> f32 {
     0.5
+}
+
+fn five() -> f32 {
+    5.0
+}
+
+/// Painting on a [`Node::MeshView`]. While it is set the left button belongs to the tool: the
+/// right button turns the model, the middle one moves it, the wheel zooms. What a press starts
+/// it finishes, whatever the pointer does on the way; Shift held at the press erases. A press
+/// outside the view does nothing, and a double click does not reset the camera.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct MeshPaint {
+    #[serde(default)]
+    pub tool: PaintTool,
+    /// Radius of the brush in mm, shown as a circle on the surface under the pointer.
+    #[serde(default = "five")]
+    pub radius_mm: f32,
+    /// What Meshgrove tints painted triangles with until the next overlay arrives
+    /// (`#rrggbb[aa]`); none: a light orange.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<String>,
+    /// The same for erasing; none: the model's own colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub erase_tint: Option<String>,
+}
+
+impl Default for MeshPaint {
+    fn default() -> MeshPaint {
+        MeshPaint { tool: PaintTool::Brush, radius_mm: five(), tint: None, erase_tint: None }
+    }
+}
+
+/// What the left button does on a painted [`Node::MeshView`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PaintTool {
+    /// Dabs along the stroke, one where it has moved by a quarter of the radius: each a hit
+    /// at the dab's centre (the plugin takes the triangles within `radius_mm` of it).
+    #[default]
+    Brush,
+    /// Every triangle the pointer passes over, once per stroke.
+    Triangles,
+    /// A click sends [`Event::MeshPick`]; dragging does nothing.
+    Click,
+    /// Where the pointer goes on the surface, one hit per few pixels (to place or move
+    /// something); nothing is tinted.
+    Drag,
+}
+
+/// See [`Node::MeshView`]'s `overlay`. The plugin answers `panel.mesh(key)` with `positions`
+/// empty and `indices` holding one class per triangle of the mesh view's triangles, in their
+/// order; class `k` is drawn in `palette[k]`. A class without an entry, or with a transparent
+/// one, shows the model's own colour; a half transparent one is mixed with it. An overlay
+/// whose length does not match the triangles (it was made for another mesh) is ignored.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct MeshOverlay {
+    pub key: String,
+    pub revision: u64,
+    /// `#rrggbb` or `#rrggbbaa` per class.
+    #[serde(default)]
+    pub palette: Vec<String>,
+}
+
+/// A point on a mesh view's triangles, in the plugin's coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct MeshHit {
+    /// The triangle's index in the mesh the plugin gave (`indices[3 * triangle ..]`).
+    pub triangle: u32,
+    pub point: [f32; 3],
+    /// The triangle's normal, turned towards the camera.
+    pub normal: [f32; 3],
+}
+
+/// Where a [`Event::MeshStroke`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum StrokePhase {
+    Start,
+    Move,
+    End,
 }
 
 fn png() -> String {
@@ -553,6 +646,28 @@ pub enum Event {
     BundleFinished {
         title: String,
         outcome: BundleOutcome,
+    },
+    /// A click on a mesh view whose paint tool is `click`: where it hit the model (none: next
+    /// to it), and whether Shift was held when the button went down. From API 0.2.
+    MeshPick {
+        id: String,
+        hit: Option<MeshHit>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        shift: bool,
+    },
+    /// Painting on a mesh view (tools `brush`, `triangles`, `drag`), sent while the button is
+    /// held about every 50 ms with what was added since: `start` first, then `move`, `end` when
+    /// it is let go (it may bring hits as well). `stroke` numbers the strokes of the view;
+    /// `erase` is Shift at the press and stays for the whole stroke. Meshgrove sends none while
+    /// the panel is busy with an event and holds the hits back meanwhile. From API 0.2.
+    MeshStroke {
+        id: String,
+        stroke: u64,
+        phase: StrokePhase,
+        #[serde(default, skip_serializing_if = "is_false")]
+        erase: bool,
+        #[serde(default)]
+        hits: Vec<MeshHit>,
     },
     /// Library files the user opened with this panel, by their ids (a file type that receives
     /// ids, [`crate::manifest::Receive::Ids`]): one file or a whole selection. The panel and the
@@ -917,6 +1032,8 @@ mod tests {
                     height: Some(240.0),
                     bed: None,
                     frame: Some([[0.0, 0.0, 0.0], [84.0, 42.0, 21.0]]),
+                    paint: Some(MeshPaint { tool: PaintTool::Triangles, ..MeshPaint::default() }),
+                    overlay: Some(MeshOverlay { key: "mask".into(), revision: 2, palette: vec!["#00000000".into()] }),
                 }),
             },
             Node::Canvas(Canvas {
@@ -969,6 +1086,48 @@ mod tests {
             "frame": [[0.0, 0.0, 0.0], [250.0, 305.0, 100.0]]}))
         .unwrap();
         assert!(matches!(with, Node::MeshView { frame: Some([_, [250.0, 305.0, 100.0]]), .. }), "{with:?}");
+    }
+
+    #[test]
+    fn a_mesh_view_paints_and_shows_an_overlay() {
+        // What an API 0.1 plugin sends: neither.
+        let old: Node =
+            serde_json::from_value(json!({"type": "mesh_view", "id": "v", "key": "k", "revision": 1})).unwrap();
+        assert!(matches!(old, Node::MeshView { paint: None, overlay: None, .. }));
+        let json = serde_json::to_value(&old).unwrap();
+        assert!(json.get("paint").is_none() && json.get("overlay").is_none());
+        let painted: Node = serde_json::from_value(json!({"type": "mesh_view", "id": "v", "key": "k", "revision": 1,
+            "paint": {}, "overlay": {"key": "mask", "revision": 4, "palette": ["#00000000", "#ff8000c0"]}}))
+        .unwrap();
+        let Node::MeshView { paint: Some(paint), overlay: Some(overlay), .. } = &painted else { panic!("{painted:?}") };
+        assert_eq!(*paint, MeshPaint { tool: PaintTool::Brush, radius_mm: 5.0, tint: None, erase_tint: None });
+        assert_eq!((overlay.key.as_str(), overlay.revision, overlay.palette.len()), ("mask", 4, 2));
+        round_trip(&painted);
+        let tool: MeshPaint = serde_json::from_value(json!({"tool": "click", "radius_mm": 2.5})).unwrap();
+        assert_eq!((tool.tool, tool.radius_mm), (PaintTool::Click, 2.5));
+    }
+
+    #[test]
+    fn picks_and_strokes_read_as_documented() {
+        let hit = MeshHit { triangle: 7, point: [1.0, 2.0, 3.0], normal: [0.0, 0.0, 1.0] };
+        let pick = Event::MeshPick { id: "view".into(), hit: Some(hit), shift: false };
+        assert_eq!(
+            serde_json::to_value(&pick).unwrap(),
+            json!({"type": "mesh_pick", "id": "view", "hit": {"triangle": 7, "point": [1.0, 2.0, 3.0], "normal": [0.0, 0.0, 1.0]}})
+        );
+        let missed: Event = serde_json::from_value(json!({"type": "mesh_pick", "id": "view", "hit": null})).unwrap();
+        assert_eq!(missed, Event::MeshPick { id: "view".into(), hit: None, shift: false });
+        let stroke =
+            Event::MeshStroke { id: "view".into(), stroke: 3, phase: StrokePhase::End, erase: true, hits: vec![hit] };
+        let json = serde_json::to_value(&stroke).unwrap();
+        assert_eq!(
+            (json["phase"].as_str(), json["erase"].as_bool(), json["stroke"].as_u64()),
+            (Some("end"), Some(true), Some(3))
+        );
+        round_trip(&stroke);
+        let plain: Event =
+            serde_json::from_value(json!({"type": "mesh_stroke", "id": "v", "stroke": 1, "phase": "start"})).unwrap();
+        assert!(matches!(plain, Event::MeshStroke { erase: false, ref hits, .. } if hits.is_empty()));
     }
 
     #[test]
