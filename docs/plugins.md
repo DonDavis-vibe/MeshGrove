@@ -499,6 +499,12 @@ plugin's values count: it may correct or refuse them.
 | `canvas` | `Canvas {change}` when `interactive`, see below |
 | anything newer | shown as a placeholder |
 
+**Signs in labels.** Meshgrove draws text with the fonts it brings (Ubuntu, Noto Emoji, egui's
+icon font and Hack), plus the system's UI font. A sign none of them has shows as an empty box on
+the systems that lack it: Windows' Segoe UI has no ✧ (U+2727), ✓ (U+2713), ✕ (U+2715) or
+＋ (U+FF0B), for example. Signs that show everywhere include ✔ ✖ ⚠ ★ ☆ ✨ ⚙ ← ↑ → ↓ ▲ ▼ ▾ ↺ ↻ •
+and Noto Emoji's pictures (📁 📏 🔍 🔒 …); plain `+` and `×` are safe as well.
+
 **Grid editor** (cells × rows, `pitch` mm per cell, `snap_div`, zones, items):
 
 - **Coordinates** are in cells, with y running down the widget.

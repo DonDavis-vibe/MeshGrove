@@ -3282,6 +3282,7 @@ dependencies = [
 name = "meshgrove"
 version = "0.8.3"
 dependencies = [
+ "ab_glyph",
  "anyhow",
  "base64 0.23.1",
  "chrono",

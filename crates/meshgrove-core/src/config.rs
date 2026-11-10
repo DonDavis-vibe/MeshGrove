@@ -298,11 +298,11 @@ pub enum TileBadge {
     /// "2×": the file is in the library more than once.
     Duplicates,
     Tags,
-    /// How the model fits the printers and what the printability check found (↻, ✕, ⚠).
+    /// How the model fits the printers and what the printability check found (↻, ✖, ⚠).
     Check,
     /// The favourite star.
     Favorite,
-    /// Copies done of a print list, or the print log (✓2, ✗).
+    /// Copies done of a print list, or the print log (✔2, ✖).
     PrintState,
 }
 
@@ -373,10 +373,10 @@ pub enum FilamentStyle {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CheckStyle {
-    /// "↻ 90°", "✕ too big", "⚠ 🖨"
+    /// "↻ 90°", "✖ too big", "⚠ 🖶"
     #[default]
     Text,
-    /// Just ↻, ✕ or ⚠ (the tooltip says why).
+    /// Just ↻, ✖ or ⚠ (the tooltip says why).
     Symbol,
 }
 

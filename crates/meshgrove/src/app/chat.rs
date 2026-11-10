@@ -64,7 +64,7 @@ pub enum Pending {
         files: usize,
         action: Action,
     },
-    /// The tag editor's ✧ for the selection.
+    /// The tag editor's ✨ for the selection.
     TagCandidates,
 }
 

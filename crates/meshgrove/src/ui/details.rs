@@ -40,7 +40,7 @@ pub struct TagEditor<'a> {
     pub focus: bool,
     /// Existing tags stay listed below the field while nothing is typed.
     pub idle_chips: bool,
-    /// Tags the user's AI suggested for the selection (✧ asks for them), and whether it is being
+    /// Tags the user's AI suggested for the selection (✨ asks for them), and whether it is being
     /// asked; `None` without an AI endpoint for the selection.
     pub ai: Option<(&'a [String], bool)>,
 }
@@ -78,7 +78,7 @@ pub struct DetailsOutput {
     pub quantity: Option<u32>,
     /// A file to open in its default app (a folder's readme).
     pub open_file: Option<PathBuf>,
-    /// ✧ in the tag editor: ask the AI for tags.
+    /// ✨ in the tag editor: ask the AI for tags.
     pub ai_tags: bool,
 }
 
@@ -324,7 +324,7 @@ fn lists_row(ui: &mut Ui, lists: &ListsOfSelection, enabled: bool, count: usize,
             out.toggle_favorite = true;
         }
         for (list, n) in lists.lists.iter().filter(|(l, _)| !matches!(l.kind, ListKind::Favorites | ListKind::Recent)) {
-            let icon = if list.kind == ListKind::Print { "🖨" } else { "📁" };
+            let icon = if list.kind == ListKind::Print { "🖶" } else { "📁" };
             let label = if count > 1 && *n < count {
                 format!("{icon} {} ({n}/{count})", list.name)
             } else {
@@ -396,7 +396,7 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
     ui.horizontal_wrapped(|ui| {
         for (tag, n) in ed.on_selection {
             let label =
-                if count > 1 && *n < count { format!("{tag} ({n}/{count})  ✕") } else { format!("{tag}  ✕") };
+                if count > 1 && *n < count { format!("{tag} ({n}/{count})  ✖") } else { format!("{tag}  ✖") };
             if tags::chip(ui, style, tag, &label).on_hover_text(t!("tags.remove_hint")).clicked() {
                 out.remove_tag = Some(tag.clone());
             }
@@ -449,7 +449,7 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
             Some((_, true)) => {
                 ui.spinner().on_hover_text(t!("actions.tags_asking"));
             }
-            Some((_, false)) if ui.button("✧").on_hover_text(t!("actions.tags_hint")).clicked() => out.ai_tags = true,
+            Some((_, false)) if ui.button("✨").on_hover_text(t!("actions.tags_hint")).clicked() => out.ai_tags = true,
             _ => {}
         }
         field = Some(
@@ -462,7 +462,7 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
     }
     // Existing tags and suggestions that match what is typed (all existing ones while the field
     // is empty): the ones that start with it first. Up/Down pick one, Enter takes it.
-    // The AI's tags (asked for with ✧) come first, also while nothing is typed.
+    // The AI's tags (asked for with ✨) come first, also while nothing is typed.
     let needle = ed.input.trim().to_lowercase();
     let candidate =
         |tag: String, existing: bool, ai: bool| Candidate { label: tag, detail: String::new(), existing, value: ai };
@@ -507,9 +507,9 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
         ui.horizontal_wrapped(|ui| {
             for (i, (tag, existing, ai)) in candidates.iter().enumerate() {
                 let label = match (*ai, *existing) {
-                    (true, _) => format!("+ {tag} ✧"),
+                    (true, _) => format!("+ {tag} ✨"),
                     (false, true) => format!("+ {tag}"),
-                    (false, false) => format!("+ {tag} ✦"),
+                    (false, false) => format!("+ {tag} ✱"),
                 };
                 let mut response = tags::chip(ui, style, tag, &label);
                 if *ai {
@@ -609,7 +609,7 @@ pub fn facts(
                     match fit {
                         Fit::Fits => ui.add(egui::Label::new(format!("✔ {text}")).wrap()),
                         Fit::Rotated(_) => ui.colored_label(ui.visuals().warn_fg_color, format!("↻ {text}")),
-                        Fit::TooBig(_) => ui.colored_label(ui.visuals().error_fg_color, format!("✕ {text}")),
+                        Fit::TooBig(_) => ui.colored_label(ui.visuals().error_fg_color, format!("✖ {text}")),
                     };
                     ui.end_row();
                 }
@@ -743,7 +743,7 @@ pub fn problem_text(p: &Problem) -> String {
     .into_owned()
 }
 
-/// "✔ passt auf Kobra S1, A1 ↻ · ✕ zu groß für A1 mini", each printer's details on hover.
+/// "✔ passt auf Kobra S1, A1 ↻ · ✖ zu groß für A1 mini", each printer's details on hover.
 fn printer_fits(ui: &mut Ui, size: [f32; 3], printers: &[Printer]) {
     let fits = printer::fits_all(size, printers);
     let mut ok = Vec::new();
@@ -762,7 +762,7 @@ fn printer_fits(ui: &mut Ui, size: [f32; 3], printers: &[Printer]) {
         }
         if !too_big.is_empty() {
             let color = if ok.is_empty() { ui.visuals().error_fg_color } else { ui.visuals().weak_text_color() };
-            ui.colored_label(color, format!("✕ {}", t!("bed.too_big_for", printers = too_big.join(", "))));
+            ui.colored_label(color, format!("✖ {}", t!("bed.too_big_for", printers = too_big.join(", "))));
         }
     })
     .response

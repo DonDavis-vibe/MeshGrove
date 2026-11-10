@@ -660,9 +660,9 @@ impl Category {
             Category::View => "🎥",
             Category::ModelsUnits => "📏",
             Category::Programs => "🔧",
-            Category::Printer => "🖨",
-            Category::Ai => "✧",
-            Category::Plugins => "🧩",
+            Category::Printer => "🖶",
+            Category::Ai => "✨",
+            Category::Plugins => "🔌",
             Category::Data => "💾",
             Category::About => "ℹ",
         }
@@ -1024,7 +1024,7 @@ impl SettingsDialog {
                         theme.de = name.clone();
                         theme.en = name;
                     }
-                    if ui.small_button("✕").on_hover_text(t!("settings.suggest_remove")).clicked() {
+                    if ui.small_button("✖").on_hover_text(t!("settings.suggest_remove")).clicked() {
                         remove = Some(i);
                     }
                 });
@@ -1042,7 +1042,7 @@ impl SettingsDialog {
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let name = self.suggest_input[slot].trim().to_owned();
             let can_add = !name.is_empty() && !themes.iter().any(|t| t.matches(&name));
-            if (ui.add_enabled(can_add, egui::Button::new("＋")).clicked() || enter) && can_add {
+            if (ui.add_enabled(can_add, egui::Button::new("+")).clicked() || enter) && can_add {
                 themes.push(SuggestedTag::named(&name));
                 self.suggest_input[slot].clear();
                 field.request_focus();
@@ -1088,7 +1088,7 @@ impl SettingsDialog {
         hint(ui, t!("settings.library_hint"));
         for root in &config.library_roots {
             ui.horizontal(|ui| {
-                if ui.small_button("✕").on_hover_text(t!("sidebar.remove_root")).clicked() {
+                if ui.small_button("✖").on_hover_text(t!("sidebar.remove_root")).clicked() {
                     changes.push(SettingsChange::RemoveRoot(root.clone()));
                 }
                 ui.label(root.display().to_string());
@@ -1201,7 +1201,7 @@ impl SettingsDialog {
                             }
                         }
                         if !row.folder.trim().is_empty()
-                            && ui.small_button("✕").on_hover_text(t!("settings.placement_clear")).clicked()
+                            && ui.small_button("✖").on_hover_text(t!("settings.placement_clear")).clicked()
                         {
                             row.folder.clear();
                             edited = true;
@@ -1286,7 +1286,7 @@ impl SettingsDialog {
         let folders = &config.import.folders;
         for folder in folders {
             ui.horizontal(|ui| {
-                if ui.small_button("✕").on_hover_text(t!("settings.import_remove")).clicked() {
+                if ui.small_button("✖").on_hover_text(t!("settings.import_remove")).clicked() {
                     let kept: Vec<PathBuf> = folders.iter().filter(|f| *f != folder).cloned().collect();
                     changes.push(SettingsChange::ImportFolders(kept));
                 }
@@ -1423,7 +1423,7 @@ impl SettingsDialog {
                 }
                 ui.label(RichText::new(&program.name).strong());
                 ui.weak(program.program.display().to_string());
-                if ui.small_button("✕").on_hover_text(t!("settings.slicers_remove")).clicked() {
+                if ui.small_button("✖").on_hover_text(t!("settings.slicers_remove")).clicked() {
                     let list: Vec<Program> = programs.iter().filter(|s| s.name != program.name).cloned().collect();
                     send(list, default_name.clone().filter(|n| *n != program.name), changes);
                 }
@@ -1439,7 +1439,7 @@ impl SettingsDialog {
             .collect();
         for d in &addable {
             ui.horizontal(|ui| {
-                if ui.button("＋").on_hover_text(t!("settings.slicers_add")).clicked() {
+                if ui.button("+").on_hover_text(t!("settings.slicers_add")).clicked() {
                     let mut list = programs.to_vec();
                     list.push(d.program.clone());
                     send(list, default_name.clone().or_else(|| Some(d.program.name.clone())), changes);
@@ -1531,7 +1531,7 @@ impl SettingsDialog {
                     self.printer_editing = Some(p.name.clone());
                     self.printer_error = false;
                 }
-                if ui.small_button("✕").on_hover_text(t!("settings.printers_remove")).clicked() {
+                if ui.small_button("✖").on_hover_text(t!("settings.printers_remove")).clicked() {
                     let list: Vec<Printer> = printers.iter().filter(|q| q.name != p.name).cloned().collect();
                     send(list, default_name.clone().filter(|n| *n != p.name), changes);
                 }
@@ -1547,7 +1547,7 @@ impl SettingsDialog {
             .collect();
         for d in &addable {
             ui.horizontal(|ui| {
-                if ui.button("＋").on_hover_text(t!("settings.printers_add")).clicked() {
+                if ui.button("+").on_hover_text(t!("settings.printers_add")).clicked() {
                     let mut list = printers.to_vec();
                     list.push(d.printer.clone());
                     send(list, default_name.clone().or_else(|| Some(d.printer.name.clone())), changes);

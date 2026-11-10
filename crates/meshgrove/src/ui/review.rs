@@ -124,7 +124,7 @@ pub fn show(
                                     item.picked = if all { Picked::all(&item.proposal) } else { Picked::default() };
                                 }
                             }
-                            ui.add(egui::Label::new(RichText::new(format!("✧ {}", batch.title)).strong()).truncate());
+                            ui.add(egui::Label::new(RichText::new(format!("✨ {}", batch.title)).strong()).truncate());
                             let mut facts =
                                 vec![batch.source.clone(), t!("review.items", count = batch.items.len()).into_owned()];
                             if let Some(t) = batch.created {

@@ -171,20 +171,20 @@ impl Marks<'_> {
             TileBadge::Check => match o.check.as_ref()? {
                 Check::Rotated(angle) => (text(format!("↻ {angle}"), "↻"), warn, Color32::BLACK),
                 Check::TooBig => {
-                    (text(t!("bed.badge_too_big").to_string(), "✕"), self.visuals.error_fg_color, Color32::WHITE)
+                    (text(t!("bed.badge_too_big").to_string(), "✖"), self.visuals.error_fg_color, Color32::WHITE)
                 }
                 // Kept small: a folder of G-code for a second printer would otherwise shout on every tile.
-                Check::OtherPrinter => (text("⚠ 🖨".to_owned(), "⚠"), warn, Color32::BLACK),
+                Check::OtherPrinter => (text("⚠ 🖶".to_owned(), "⚠"), warn, Color32::BLACK),
                 Check::Problem => ("⚠".to_owned(), warn, Color32::BLACK),
             },
             TileBadge::Favorite => o.favorite.then(|| ("★".to_owned(), dark, FAVORITE_GOLD))?,
             TileBadge::PrintState => match *o.print.as_ref()? {
                 PrintMark::List { done, wanted } if done >= wanted => {
-                    (format!("✓ {done}/{wanted}"), PRINTED_GREEN, Color32::BLACK)
+                    (format!("✔ {done}/{wanted}"), PRINTED_GREEN, Color32::BLACK)
                 }
                 PrintMark::List { done, wanted } => (format!("{done}/{wanted}"), dark, light),
-                PrintMark::Printed(n) => (format!("✓{n}"), dark, PRINTED_GREEN),
-                PrintMark::Failed => ("✗".to_owned(), dark, self.visuals.error_fg_color),
+                PrintMark::Printed(n) => (format!("✔{n}"), dark, PRINTED_GREEN),
+                PrintMark::Failed => ("✖".to_owned(), dark, self.visuals.error_fg_color),
             },
             TileBadge::Filaments | TileBadge::Tags => return None,
         })

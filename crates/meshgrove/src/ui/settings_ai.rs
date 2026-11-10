@@ -370,7 +370,7 @@ impl AiSettings {
                 ui.label(format!("✔ {text}"));
             }
             Some(Err(e)) => {
-                ui.colored_label(ui.visuals().error_fg_color, format!("✕ {e}"));
+                ui.colored_label(ui.visuals().error_fg_color, format!("✖ {e}"));
             }
             None => {}
         }

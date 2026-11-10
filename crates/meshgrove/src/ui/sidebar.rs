@@ -131,7 +131,7 @@ impl Sidebar {
                 });
             }
             if library.duplicate_groups > 0 {
-                let label = format!("⧉  {}", t!("sidebar.duplicates", count = library.duplicate_groups));
+                let label = format!("🗐  {}", t!("sidebar.duplicates", count = library.duplicate_groups));
                 if ui.selectable_label(library.showing_duplicates, label).clicked() {
                     action = Some(SidebarAction::ShowDuplicates);
                 }
@@ -231,7 +231,7 @@ impl Sidebar {
         let own = |l: &&ListInfo| !matches!(l.kind, ListKind::Favorites | ListKind::Recent) && !l.archived;
         for list in library.lists.iter().filter(own) {
             let icon = match (list.kind, &list.query) {
-                (ListKind::Print, _) => "🖨",
+                (ListKind::Print, _) => "🖶",
                 (_, Some(_)) => "🔍",
                 _ => "📁",
             };
@@ -260,7 +260,7 @@ impl Sidebar {
                     for list in archived {
                         let response = ui.selectable_label(
                             library.showing_list == Some(list.id),
-                            format!("🖨  {}  ({})", list.name, list.count),
+                            format!("🖶  {}  ({})", list.name, list.count),
                         );
                         if response.clicked() {
                             *action = Some(SidebarAction::OpenList(list.id));

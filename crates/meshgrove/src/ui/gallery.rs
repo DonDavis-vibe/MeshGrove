@@ -871,7 +871,7 @@ fn entry_menu(
             }
             ui.menu_button(t!("menu.add_to_list"), |ui| {
                 for (id, kind, name) in &menu.lists {
-                    let icon = if *kind == ListKind::Print { "🖨" } else { "📁" };
+                    let icon = if *kind == ListKind::Print { "🖶" } else { "📁" };
                     item(ui, format!("{icon}  {name}").into(), Action::AddToList(*id));
                 }
                 if !menu.lists.is_empty() {

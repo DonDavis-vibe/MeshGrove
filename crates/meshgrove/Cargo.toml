@@ -52,6 +52,8 @@ default = ["plugins"]
 plugins = ["dep:meshgrove-plugins", "dep:rfd"]
 
 [dev-dependencies]
+# The bundled fonts' signs, for a test.
+ab_glyph.workspace = true
 tempfile = "3"
 
 [build-dependencies]

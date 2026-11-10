@@ -200,7 +200,7 @@ pub struct App {
     checks_next: Instant,
     /// The chat with the user's own model.
     chat: chat::ChatState,
-    /// The AI's tags for the tag editor (✧).
+    /// The AI's tags for the tag editor (✨).
     ai_tags: ai_actions::AiTags,
     egui_ctx: egui::Context,
     /// Watches the suggestion store while AI is on, and its change count last seen.
@@ -2155,7 +2155,7 @@ impl App {
                 let pending = self.pending_proposals();
                 let reviewing = matches!(self.view, View::Review { .. } | View::History { .. });
                 if self.reviews() && (pending > 0 || reviewing) {
-                    let label = if pending > 0 { format!("✧ {pending}") } else { "✧".to_owned() };
+                    let label = if pending > 0 { format!("✨ {pending}") } else { "✨".to_owned() };
                     let button = Button::new(RichText::new(label).size(15.0)).selected(reviewing);
                     if ui.add(button).on_hover_text(t!("review.open_hint")).clicked() {
                         self.show_review();
@@ -2330,12 +2330,12 @@ impl App {
                     Some(e) => t!("gallery.flatten_count", count = i18n::count(e.len())),
                     None => t!("gallery.loading"),
                 };
-                if ui.button(format!("🗂 {text}  ✕")).on_hover_text(t!("gallery.flatten_off")).clicked() {
+                if ui.button(format!("📂 {text}  ✖")).on_hover_text(t!("gallery.flatten_off")).clicked() {
                     self.set_flatten(false);
                 }
             }
             View::Duplicates { groups, .. } => {
-                ui.label(RichText::new(format!("⧉ {}", t!("dupes.title", count = groups.len()))).strong());
+                ui.label(RichText::new(format!("🗐 {}", t!("dupes.title", count = groups.len()))).strong());
                 if ui.button(t!("view.close")).clicked() {
                     self.view = View::Folder;
                     self.on_listing_arrived();
@@ -2362,7 +2362,7 @@ impl App {
             View::Review { .. } | View::History { .. } => {
                 let title =
                     if matches!(self.view, View::Review { .. }) { t!("review.title") } else { t!("history.title") };
-                ui.label(RichText::new(format!("✧ {title}")).strong());
+                ui.label(RichText::new(format!("✨ {title}")).strong());
                 if ui.button(t!("view.close")).clicked() {
                     self.view = View::Folder;
                     self.on_listing_arrived();
@@ -2734,7 +2734,7 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.add(egui::Label::new(RichText::new(name).heading().strong()).truncate());
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.button("✕").on_hover_text(t!("preview.close")).clicked() {
+                                if ui.button("✖").on_hover_text(t!("preview.close")).clicked() {
                                     close = true;
                                 }
                             });
@@ -3216,7 +3216,7 @@ fn list_icon(list: &ListInfo) -> &'static str {
     match list.kind {
         ListKind::Favorites => "★",
         ListKind::Recent => "🕘",
-        ListKind::Print => "🖨",
+        ListKind::Print => "🖶",
         ListKind::Collection if list.query.is_some() => "🔍",
         ListKind::Collection => "📁",
     }
@@ -3234,15 +3234,31 @@ fn list_title(list: &ListInfo) -> String {
 /// Use the desktop's UI font (Noto Sans on KDE) so the app does not look foreign;
 /// glyphs it lacks still fall back to egui's bundled fonts and the system fallback.
 fn use_system_ui_font(ctx: &egui::Context) {
-    let Some(path) = system_ui_font() else { return };
-    let Ok(bytes) = std::fs::read(&path) else { return };
-    let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert("system-ui".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
-    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-        family.insert(0, "system-ui".into());
+    let mut fonts = ui_fonts();
+    if let Some(path) = system_ui_font()
+        && let Ok(bytes) = std::fs::read(&path)
+    {
+        fonts.font_data.insert("system-ui".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            family.insert(0, "system-ui".into());
+        }
+        log::info!("UI font: {}", path.display());
     }
     ctx.set_fonts(fonts);
-    log::info!("UI font: {}", path.display());
+}
+
+/// egui's bundled fonts, with Hack last in line for the interface's text too: of them only it
+/// has the arrows and triangles the interface uses, which a system font may lack (Windows'
+/// Segoe UI). Every sign the interface draws is in one of these, so it shows on every system
+/// (the test `every_sign_of_the_interface_is_in_a_bundled_font` keeps it so).
+fn ui_fonts() -> egui::FontDefinitions {
+    let mut fonts = egui::FontDefinitions::default();
+    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional)
+        && !family.iter().any(|f| f == "Hack")
+    {
+        family.push("Hack".into());
+    }
+    fonts
 }
 
 #[cfg(target_os = "linux")]
@@ -3261,6 +3277,56 @@ fn system_ui_font() -> Option<PathBuf> {
 #[cfg(not(any(target_os = "linux", windows)))]
 fn system_ui_font() -> Option<PathBuf> {
     None
+}
+
+#[cfg(test)]
+mod font_tests {
+    /// The signs the interface draws (locale texts and string literals of the sources) are all
+    /// in egui's bundled fonts, which every system has: a sign only some system font carries
+    /// shows as an empty box elsewhere (✧ on Windows did).
+    #[test]
+    fn every_sign_of_the_interface_is_in_a_bundled_font() {
+        use ab_glyph::Font;
+        let fonts = super::ui_fonts();
+        let chain = &fonts.families[&egui::FontFamily::Proportional];
+        let faces: Vec<ab_glyph::FontRef> = chain
+            .iter()
+            .map(|name| ab_glyph::FontRef::try_from_slice(fonts.font_data[name].bytes()).expect("a font"))
+            .collect();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut texts = Vec::new();
+        for dir in ["locales", "src"] {
+            let mut stack = vec![root.join(dir)];
+            while let Some(d) = stack.pop() {
+                for entry in std::fs::read_dir(&d).unwrap().flatten() {
+                    let p = entry.path();
+                    if p.is_dir() {
+                        stack.push(p);
+                    } else if p.extension().is_some_and(|e| e == "yml" || e == "rs") {
+                        texts.push((p.clone(), std::fs::read_to_string(&p).unwrap()));
+                    }
+                }
+            }
+        }
+        let mut missing = std::collections::BTreeMap::<char, String>::new();
+        for (path, text) in &texts {
+            for line in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
+                // Signs in the interface's texts: what is inside quotes.
+                for (i, part) in line.split('"').enumerate() {
+                    if i % 2 == 0 {
+                        continue;
+                    }
+                    for ch in part.chars().filter(|c| !c.is_ascii() && !c.is_whitespace()) {
+                        if faces.iter().all(|f| f.glyph_id(ch).0 == 0) {
+                            missing.entry(ch).or_insert_with(|| path.display().to_string());
+                        }
+                    }
+                }
+            }
+        }
+        let found: Vec<String> = missing.iter().map(|(c, p)| format!("{c} (U+{:04X}) in {p}", *c as u32)).collect();
+        assert!(found.is_empty(), "signs no bundled font has:\n{}", found.join("\n"));
+    }
 }
 
 /// Thumbnails per second over the last few seconds, for the status bar.

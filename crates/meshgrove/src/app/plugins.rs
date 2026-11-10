@@ -382,7 +382,7 @@ impl App {
             ui.add(egui::ProgressBar::new(job.fraction.clamp(0.0, 1.0)).desired_width(90.0).desired_height(10.0))
                 .on_hover_text(t!("plugins.job_hint", tool = job.tool.as_str()));
             ui.label(text);
-            if ui.small_button("✕").on_hover_text(t!("plugins.cancel_job")).clicked() {
+            if ui.small_button("✖").on_hover_text(t!("plugins.cancel_job")).clicked() {
                 self.plugins.deferred().cancel(&job.id);
             }
         }
@@ -412,7 +412,7 @@ impl App {
             let mut cancel = None;
             for job in &open.jobs {
                 ui.horizontal(|ui| {
-                    if ui.small_button("✕").on_hover_text(t!("plugins.cancel_job")).clicked() {
+                    if ui.small_button("✖").on_hover_text(t!("plugins.cancel_job")).clicked() {
                         cancel = Some(job.id.clone());
                     }
                     let text = if job.message.is_empty() {

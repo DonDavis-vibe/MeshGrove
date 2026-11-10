@@ -102,7 +102,7 @@ impl ChatInput {
         self.insert_pill(end..end, pill);
     }
 
-    /// Takes a pill out (its ✕); returns where its text was.
+    /// Takes a pill out (its ✖); returns where its text was.
     pub fn remove_pill(&mut self, index: usize) -> usize {
         self.sync();
         let (range, _) = self.pills.remove(index);
@@ -337,7 +337,7 @@ pub fn show(
         set_cursor(ui, id, char_index(&input.text, at));
     }
 
-    // ✕ at the end of each pill removes it.
+    // ✖ at the end of each pill removes it.
     let mut remove = None;
     for (i, (r, _)) in input.pills().enumerate() {
         let end = char_index(&input.text, r.end);

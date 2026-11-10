@@ -109,7 +109,7 @@ pub fn show(
                 }
             }
         });
-        if ui.button("＋").on_hover_text(t!("chat.new")).clicked() {
+        if ui.button("+").on_hover_text(t!("chat.new")).clicked() {
             action = Some(ChatAction::NewChat);
         }
         if let Some(c) = view.current
@@ -243,7 +243,7 @@ fn message(ui: &mut Ui, m: &ChatMsg, view: &ChatView, md: &mut CommonMarkCache) 
             match card {
                 Card::Proposed { batch, title, items } => {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("✧ {title}")).strong());
+                        ui.label(RichText::new(format!("✨ {title}")).strong());
                         let state = view.card_states.get(batch).map_or("pending", String::as_str);
                         let open = matches!(state, "pending" | "partly");
                         ui.weak(match state {

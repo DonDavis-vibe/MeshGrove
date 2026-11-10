@@ -341,9 +341,9 @@ impl Gallery {
                     ui.label(RichText::new(format!("{done}/{wanted}")).color(color));
                 } else if let Some(m) = self.marks.get(&e.path).filter(|m| m.printed > 0 || m.last_failed) {
                     if m.last_failed {
-                        ui.label(RichText::new("✗").color(ui.visuals().error_fg_color));
+                        ui.label(RichText::new("✖").color(ui.visuals().error_fg_color));
                     } else {
-                        ui.label(RichText::new(format!("✓{}", m.printed)).color(PRINTED_GREEN));
+                        ui.label(RichText::new(format!("✔{}", m.printed)).color(PRINTED_GREEN));
                     }
                 }
             }

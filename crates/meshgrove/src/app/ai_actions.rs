@@ -1,5 +1,5 @@
 //! The one-click AI actions outside the chat pane: tags for the selection (as suggestions, or as
-//! ✧ candidates in the tag editor), a list from a description, and references for an assistant.
+//! ✨ candidates in the tag editor), a list from a description, and references for an assistant.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -24,7 +24,7 @@ pub struct AiTags {
 }
 
 impl AiTags {
-    /// The tag editor's ✧ state for these files: the AI's tags and whether they are coming.
+    /// The tag editor's ✨ state for these files: the AI's tags and whether they are coming.
     pub(super) fn for_paths(&self, paths: &[PathBuf]) -> (&[String], bool) {
         if self.paths != paths {
             return (&[], false);
@@ -91,7 +91,7 @@ impl App {
         self.toast(t!("actions.references_copied", count = ids.len()).into_owned());
     }
 
-    /// ✧ in the tag editor: asks the AI for tags for the selection, on a thread of its own.
+    /// ✨ in the tag editor: asks the AI for tags for the selection, on a thread of its own.
     pub(super) fn ask_tag_candidates(&mut self, confirmed: bool) {
         let Some(endpoint) = self.config.ai.endpoint.clone() else { return };
         let paths = self.menu_for.clone();

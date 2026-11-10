@@ -136,7 +136,7 @@ impl TagStyle {
     }
 }
 
-/// A tag chip as a button (info pane, settings); `label` may add to the name, e.g. " ✕".
+/// A tag chip as a button (info pane, settings); `label` may add to the name, e.g. " ✖".
 pub fn chip(ui: &mut Ui, style: &TagStyle, tag: &str, label: &str) -> egui::Response {
     let (bg, fg) = style.colors(tag);
     let text = egui::RichText::new(label).small().color(fg);
