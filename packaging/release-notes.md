@@ -7,7 +7,7 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 
 ## Highlights
 
-**Texgrove, the second plugin** (new in 0.9.0)
+**Texgrove, the second plugin** (new in 0.9)
 
 <img src="https://raw.githubusercontent.com/DonDavis-vibe/Texgrove/main/assets/banner.png" alt="Texgrove" width="80%">
 
@@ -15,7 +15,7 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 - Right-click one or several models and choose *Apply texture …*; the textured file lands beside the original, with every setting in its note. A 3MF project keeps its other objects, plates and settings.
 - Your AI can do it as well ("knurl the handle, 0.6 mm deep"); the file waits in the review. Get `texgrove.wasm` from [Texgrove's releases](https://github.com/DonDavis-vibe/Texgrove/releases) and install it in *Settings → Plugins*.
 
-**Plugins work on your models** (new in 0.9.0)
+**Plugins work on your models** (new in 0.9)
 
 - A plugin can take models straight from the gallery: right-click one or a whole selection and pick its entry, or use the button it adds in the Info pane. It may read exactly these files, also when it is not allowed to read the library.
 - What it makes can land beside the original, under its own name, instead of in a new folder; the original is never touched, and undo removes only the new files.
@@ -23,13 +23,13 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 - A plugin's 3D preview can be painted on: a brush (Shift erases) or a click on a surface, to show the plugin where its work goes. Pictures in a plugin's panel can be clicked, for a gallery to choose from.
 - An AI can start work that takes longer than a minute: it runs in the background with progress and a cancel button in the status bar, and what it made always waits in the review, even with *Accept without review* or the chat's automatic mode on.
 
-**A plugin's preview shows the space it plans for** (new in 0.9.0)
+**A plugin's preview shows the space it plans for** (new in 0.9)
 
 - A plugin can hand its 3D preview the space the model is meant to fit. [Bingrove 0.5](https://github.com/DonDavis-vibe/Bingrove/releases/tag/v0.5.0) shows the drawer, the shelf or the wall as a blue box round the plate and the bins, and the sides they stick out of turn red: a grid planned larger than its shelf shows before anything is printed. *Frame* above the preview hides it.
 
 <img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-plugin-frame.png" alt="Bingrove's panel for a shelf: the grid is 16 mm wider and 12 mm deeper than the board, two warnings say so, and the 3D preview outlines the board in red round the plate and the bins" width="80%">
 
-**Smaller things** (new in 0.9.0)
+**Smaller things** (new in 0.9)
 
 - Signs such as ✔, ✖ and the ✨ of the AI actions show on Windows too, where some of them were empty boxes: every sign Meshgrove uses now comes in a font it brings along.
 - Rows in a plugin's panel wrap when the panel is narrow, instead of running off its edge, and a scroll bar no longer covers the last line.
