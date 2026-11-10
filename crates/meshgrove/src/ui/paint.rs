@@ -11,8 +11,10 @@
 
 use egui::{Pos2, Vec2};
 
-/// What the left button does (the plugin's `PaintTool`).
+/// What the left button does (the plugin's `PaintTool`). Without plugins only the tests make
+/// the other tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "plugins"), allow(dead_code))]
 pub enum Tool {
     /// Dabs along the stroke.
     Brush,
@@ -25,6 +27,7 @@ pub enum Tool {
 }
 
 impl Tool {
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
     pub fn of(tool: meshgrove_plugin_api::ui::PaintTool) -> Tool {
         use meshgrove_plugin_api::ui::PaintTool;
         match tool {
