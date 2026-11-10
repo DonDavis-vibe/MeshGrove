@@ -626,7 +626,8 @@ An effect Meshgrove does not know (from a newer API) is skipped and the others a
 ## Opening files
 
 For a file matching one of the manifest's `file_types`, the gallery's context menu offers
-"Open with <plugin>". Meshgrove calls `open_file(name, bytes)` (up to 64 MiB), and the plugin
+"Open with <plugin>", and the Info pane shows the same as a button below "Open in <slicer>".
+Meshgrove calls `open_file(name, bytes)` (up to 64 MiB), and the plugin
 answers with effects, usually `open_panel` with the file's content as state.
 
 **By id (from 0.9.0).** A plugin that works on models wants neither 64 MiB of bytes nor one
@@ -639,7 +640,7 @@ file at a time. A file type may say so:
 
 | Field | Meaning |
 |---|---|
-| `label` | the entry in the context menu; without one it is "Open with <plugin>" |
+| `label` | the entry in the context menu and the button in the Info pane; without one it is "Open with <plugin>" |
 | `receive` | `"bytes"` (the default): `open_file`, one file. `"ids"`: the files' library ids, to a panel |
 | `panel` | with `"ids"`: the panel that takes them, one of the manifest's (required) |
 

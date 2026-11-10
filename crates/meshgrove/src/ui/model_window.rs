@@ -126,7 +126,7 @@ impl ModelWindow {
                 ui.label(RichText::new(name).heading().strong());
                 ui.add_space(10.0);
                 details::facts(ui, &self.entry, None, &self.model, cx.printers, (None, false));
-                let (slicer, editor) = details::open_buttons(ui, self.entry.kind, cx.slicers, cx.editors);
+                let (slicer, editor, _) = details::open_buttons(ui, self.entry.kind, cx.slicers, cx.editors, &[]);
                 if let Some(index) = slicer {
                     actions.push(WindowAction::OpenInSlicer(self.entry.path.clone(), index));
                 }

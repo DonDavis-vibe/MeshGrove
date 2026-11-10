@@ -67,6 +67,8 @@ pub struct DetailsOutput {
     pub open_in_slicer: Option<usize>,
     /// "Open in" the mesh editor was clicked.
     pub open_in_editor: Option<usize>,
+    /// A plugin's entry for the selection was clicked: the plugin's id.
+    pub open_with_plugin: Option<String>,
     /// The star was clicked.
     pub toggle_favorite: bool,
     /// A list chip was clicked.
@@ -110,6 +112,8 @@ pub struct DetailsContext<'a> {
     /// The slicers models can be handed to.
     pub slicers: super::SlicerList<'a>,
     pub editors: super::EditorList<'a>,
+    /// The plugins that open the selection: (id, what their button says).
+    pub plugin_openers: &'a [(String, String)],
     pub lists: ListsOfSelection<'a>,
     pub print: PrintInfo<'a>,
     pub tag_style: &'a TagStyle,
@@ -228,7 +232,8 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         ui.add_space(4.0);
         facts(ui, entry, cx.thumb, cx.model, cx.printers, cx.checks);
-        (out.open_in_slicer, out.open_in_editor) = open_buttons(ui, entry.kind, cx.slicers, cx.editors);
+        (out.open_in_slicer, out.open_in_editor, out.open_with_plugin) =
+            open_buttons(ui, entry.kind, cx.slicers, cx.editors, cx.plugin_openers);
         if !cx.plates.is_empty() {
             let active = match cx.model {
                 ModelStatus::Ready(info) => info.plate,
@@ -249,18 +254,20 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
 }
 
 /// "Open in Anycubic Slicer Next" and "Open in FreeCAD" for a model, as far as the slicers and
-/// the mesh editors open its kind; with several of either a ▾ lists the others. Which was
-/// clicked: (index of the slicer, index of the editor).
+/// the mesh editors open its kind; with several of either a ▾ lists the others. After them the
+/// plugins that take the selection, each with its own words ("Apply texture …"), as in the
+/// context menu. Which was clicked: (index of the slicer, index of the editor, id of the plugin).
 pub fn open_buttons(
     ui: &mut Ui,
     kind: Kind,
     slicers: super::SlicerList<'_>,
     editors: super::EditorList<'_>,
-) -> (Option<usize>, Option<usize>) {
+    plugins: &[(String, String)],
+) -> (Option<usize>, Option<usize>, Option<String>) {
     let slicers = if kind.is_sliceable() { slicers } else { super::SlicerList::default() };
     let usable = editors.usable(kind);
-    let mut clicked = (None, None);
-    if slicers.is_empty() && usable.is_empty() {
+    let mut clicked = (None, None, None);
+    if slicers.is_empty() && usable.is_empty() && plugins.is_empty() {
         return clicked;
     }
     ui.add_space(8.0);
@@ -298,6 +305,11 @@ pub fn open_buttons(
                 })
                 .response
                 .on_hover_text(t!("menu.open_in_other_editor"));
+            }
+        }
+        for (id, label) in plugins {
+            if ui.add(button(label.into())).clicked() {
+                clicked.2 = Some(id.clone());
             }
         }
     });

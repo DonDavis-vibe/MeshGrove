@@ -74,8 +74,8 @@ pub struct FileType {
     pub pattern: String,
     #[serde(default)]
     pub description: String,
-    /// The entry in the gallery's context menu ("Apply a texture …"); none: "Open with
-    /// <plugin>". From API 0.2.
+    /// The entry in the gallery's context menu and the button in the Info pane ("Apply a
+    /// texture …"); none: "Open with <plugin>". From API 0.2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// What the plugin gets of the files. From API 0.2.

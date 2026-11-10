@@ -2683,6 +2683,7 @@ impl App {
             printers: &self.printers,
             slicers: SlicerList { names: &self.slicer_names, default: self.default_slicer },
             editors: EditorList { programs: &self.editors, default: self.default_editor },
+            plugin_openers: &self.menu.plugin_openers,
             lists: ListsOfSelection { lists: &self.selection_lists, favorite: self.menu.favorite },
             print: PrintInfo { enabled: self.menu.can_tag, status: &self.selection_print, on_list },
             tag_style: &self.tag_style,
@@ -2818,6 +2819,15 @@ impl App {
         }
         if let Some(index) = out.open_in_editor {
             self.open_in_editor_with(self.selected_paths(), index);
+        }
+        if let Some(id) = out.open_with_plugin {
+            #[cfg(feature = "plugins")]
+            {
+                let paths = self.selected_paths();
+                self.open_with_plugin(&id, &paths);
+            }
+            #[cfg(not(feature = "plugins"))]
+            let _ = id;
         }
         if let Some(path) = out.open_file
             && let Err(e) = actions::open_with_default_app(&path)
