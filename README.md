@@ -699,9 +699,10 @@ with `--local` if needed) prints one. With the AppImage the command is `Meshgrov
 
 ### Plugins (optional)
 
-Plugins add tools to Meshgrove, for example Bingrove, a generator for Gridfinity drawer inserts.
-A plugin is one `.wasm` file for every system and runs sealed off. It may do nothing until you
-allow it in *Settings → Plugins*, and what it makes comes in as one change you can undo.
+Plugins add tools to Meshgrove, for example Bingrove, a generator for Gridfinity drawer inserts,
+and Texgrove, which puts textures onto models as real geometry. A plugin is one `.wasm` file for
+every system and runs sealed off. It may do nothing until you allow it in *Settings → Plugins*,
+and what it makes comes in as one change you can undo.
 Installing, granting and writing plugins: [docs/plugins.md](docs/plugins.md).
 
 ### Working with your slicer and other apps
