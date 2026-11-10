@@ -85,6 +85,16 @@ impl PluginDialog {
 }
 
 /// The paths of what a dialog answered.
+/// What a panel is called in the "Plugins" menu: its title, and with several plugins the
+/// plugin's name in front of it – unless the title says the name already ("Bingrove: Bingrove").
+fn menu_label(plugin: &str, title: &str, several: bool) -> String {
+    if !several || title.to_lowercase().contains(&plugin.to_lowercase()) {
+        title.to_owned()
+    } else {
+        format!("{plugin}: {title}")
+    }
+}
+
 fn paths(files: impl IntoIterator<Item = rfd::FileHandle>) -> Vec<PathBuf> {
     files.into_iter().map(|f| f.path().to_path_buf()).collect()
 }
@@ -481,8 +491,7 @@ impl App {
                 ui.label(RichText::new(t!("plugins.no_panels")).weak());
             }
             for (plugin, panel, title, name) in &defs {
-                let label = if several { format!("{name}: {title}") } else { title.clone() };
-                if ui.button(label).clicked() {
+                if ui.button(menu_label(name, title, several)).clicked() {
                     match self.plugins.open(plugin, panel, None) {
                         Ok(()) => self.layout.focus_plugin(plugin, panel),
                         Err(e) => self.toast(e),
@@ -753,5 +762,22 @@ impl App {
             }),
         }
         Ok(m.name.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::menu_label;
+
+    #[test]
+    fn the_plugins_menu_does_not_say_a_name_twice() {
+        // One plugin: its panels by their titles alone.
+        assert_eq!(menu_label("Bingrove", "Bingrove", false), "Bingrove");
+        assert_eq!(menu_label("Bingrove", "Drawer", false), "Drawer");
+        // Several: the plugin in front, so two "Settings" can be told apart …
+        assert_eq!(menu_label("Bingrove", "Drawer", true), "Bingrove: Drawer");
+        // … but not when the title is the name, or has it in it.
+        assert_eq!(menu_label("Texgrove", "Texgrove", true), "Texgrove");
+        assert_eq!(menu_label("Texgrove", "texgrove textures", true), "texgrove textures");
     }
 }
