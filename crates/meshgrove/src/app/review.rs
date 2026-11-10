@@ -255,6 +255,11 @@ impl App {
             && let Some(up) = self.nav.current().ancestors().find(|a| a.is_dir()).map(std::path::Path::to_path_buf)
         {
             self.nav.open(up);
+        } else {
+            // The library wrote, moved or removed these files itself and put them into the index
+            // at once, so the next scan finds nothing new and does not read the folder again: a
+            // plugin's file beside its original, or one undone, would stay unseen until a reload.
+            self.reload();
         }
         match self.view {
             View::Review { .. } => self.show_review(),
