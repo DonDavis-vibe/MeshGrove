@@ -791,8 +791,39 @@ impl Gallery {
     }
 }
 
+/// The rows of a context menu. Clicked items end up in `action`; `section` draws a separator
+/// before the next row only when something came before it, so a group that has nothing to offer
+/// (no tags without a library, no AI) leaves no stray line behind.
+struct MenuRows<'a> {
+    action: &'a mut Option<Action>,
+    rows_since_separator: bool,
+}
+
+impl MenuRows<'_> {
+    fn item(&mut self, ui: &mut Ui, text: std::borrow::Cow<str>, act: Action) {
+        if ui.button(text).clicked() {
+            *self.action = Some(act);
+            ui.close();
+        }
+        self.rows_since_separator = true;
+    }
+
+    fn submenu(&mut self, ui: &mut Ui, text: std::borrow::Cow<str>, add: impl FnOnce(&mut Ui, &mut Self)) {
+        ui.menu_button(text, |ui| add(ui, self));
+        self.rows_since_separator = true;
+    }
+
+    fn section(&mut self, ui: &mut Ui) {
+        if self.rows_since_separator {
+            ui.separator();
+            self.rows_since_separator = false;
+        }
+    }
+}
+
 /// The context menu of a tile or list row (`entry`, which is `e`); what it offers depends on the
-/// selection (`menu`). Clicked items end up in `action`.
+/// selection (`menu`). Clicked items end up in `action`. The rows come in groups: opening, tags
+/// and lists, files, AI, trash; the rarer ways to open a file sit under "Open with".
 fn entry_menu(
     response: &egui::Response,
     entry: usize,
@@ -807,72 +838,55 @@ fn entry_menu(
     let viewable = crate::meshes::viewable(e.kind);
     // Stays open on clicks inside: "Add to list" has a name field.
     super::context_menu_with_field(response, |ui| {
-        let mut item = |ui: &mut Ui, text: std::borrow::Cow<str>, act: Action| {
-            if ui.button(text).clicked() {
-                *action = Some(act);
-                ui.close();
-            }
-        };
-        item(ui, t!("menu.open"), Action::Open(entry));
+        let mut rows = MenuRows { action, rows_since_separator: false };
+        // Opening: the usual ways on top, the rest under "Open with".
+        rows.item(ui, t!("menu.open"), Action::Open(entry));
         if viewable {
-            item(ui, t!("menu.preview"), Action::Preview);
-            item(ui, t!("menu.open_with_default_app"), Action::OpenWithDefaultApp(entry));
+            rows.item(ui, t!("menu.preview"), Action::Preview);
         }
-        if sliceable && let Some(slicer) = menu.slicers.get(menu.default_slicer) {
-            item(ui, t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);
-            if menu.slicers.len() > 1 {
-                ui.menu_button(t!("menu.open_in_other_slicer"), |ui| {
-                    for (i, other) in menu.slicers.iter().enumerate().filter(|(i, _)| *i != menu.default_slicer) {
-                        item(ui, other.into(), Action::OpenInSlicerWith(i));
-                    }
-                });
-            }
+        let slicer = if sliceable { menu.slicers.get(menu.default_slicer) } else { None };
+        if let Some(slicer) = slicer {
+            rows.item(ui, t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);
         }
-        if model && let Some((index, editor)) = menu.editors.first() {
-            item(ui, t!("menu.open_in_editor", name = editor), Action::OpenInEditor(*index));
-            if menu.editors.len() > 1 {
-                ui.menu_button(t!("menu.open_in_other_editor"), |ui| {
-                    for (index, other) in &menu.editors[1..] {
-                        item(ui, other.into(), Action::OpenInEditor(*index));
-                    }
-                });
-            }
+        let other_slicers: Vec<(usize, &String)> = if slicer.is_some() {
+            menu.slicers.iter().enumerate().filter(|(i, _)| *i != menu.default_slicer).collect()
+        } else {
+            Vec::new()
+        };
+        let editors: &[(usize, String)] = if model { &menu.editors } else { &[] };
+        if viewable || !editors.is_empty() || !other_slicers.is_empty() || !menu.plugin_openers.is_empty() {
+            rows.submenu(ui, t!("menu.open_with"), |ui, rows| {
+                if viewable {
+                    rows.item(ui, t!("menu.default_app"), Action::OpenWithDefaultApp(entry));
+                }
+                for (index, editor) in editors {
+                    rows.item(ui, editor.into(), Action::OpenInEditor(*index));
+                }
+                for (i, other) in &other_slicers {
+                    rows.item(ui, (*other).into(), Action::OpenInSlicerWith(*i));
+                }
+                for (id, label) in &menu.plugin_openers {
+                    rows.item(ui, label.into(), Action::OpenWithPlugin(id.clone()));
+                }
+            });
         }
-        for (id, label) in &menu.plugin_openers {
-            item(ui, label.into(), Action::OpenWithPlugin(id.clone()));
-        }
-        if show_folders {
-            item(ui, t!("menu.show_in_folder"), Action::ShowInFolder(entry));
-        }
-        item(ui, t!("menu.show_in_file_manager", manager = crate::i18n::file_manager()), Action::ShowInFileManager);
-        if menu.rescan {
-            item(ui, t!("menu.rescan"), Action::Rescan);
-        }
-        item(ui, t!("menu.copy_files"), Action::CopyFiles);
-        if menu.can_cut {
-            item(ui, t!("menu.cut_files"), Action::CutFiles);
-        }
-        item(ui, t!("menu.copy_path"), Action::CopyPaths);
-        if menu.can_paste {
-            // Into the folder under the pointer, otherwise into the one shown.
-            let into = (e.kind == Kind::Folder).then_some(entry);
-            item(ui, t!("menu.paste_files"), Action::PasteFiles(into));
-        }
+        // Tags, favourites, the print log and lists.
+        rows.section(ui);
         if menu.can_tag {
-            item(ui, t!("menu.edit_tags"), Action::EditTags);
+            rows.item(ui, t!("menu.edit_tags"), Action::EditTags);
             if menu.can_place {
-                item(ui, t!("menu.place_by_tag"), Action::PlaceByTag);
+                rows.item(ui, t!("menu.place_by_tag"), Action::PlaceByTag);
             }
             let star = if menu.favorite { t!("menu.unfavorite") } else { t!("menu.favorite") };
-            item(ui, star, Action::ToggleFavorite);
+            rows.item(ui, star, Action::ToggleFavorite);
             if printable {
-                item(ui, t!("menu.printed"), Action::Print(PrintResult::Printed));
-                item(ui, t!("menu.failed"), Action::Print(PrintResult::Failed));
+                rows.item(ui, t!("menu.printed"), Action::Print(PrintResult::Printed));
+                rows.item(ui, t!("menu.failed"), Action::Print(PrintResult::Failed));
             }
-            ui.menu_button(t!("menu.add_to_list"), |ui| {
+            rows.submenu(ui, t!("menu.add_to_list"), |ui, rows| {
                 for (id, kind, name) in &menu.lists {
                     let icon = if *kind == ListKind::Print { "🖶" } else { "📁" };
-                    item(ui, format!("{icon}  {name}").into(), Action::AddToList(*id));
+                    rows.item(ui, format!("{icon}  {name}").into(), Action::AddToList(*id));
                 }
                 if !menu.lists.is_empty() {
                     ui.separator();
@@ -882,30 +896,52 @@ fn entry_menu(
                 let typed = name.trim().to_owned();
                 ui.data_mut(|d| d.insert_temp(new_list_id(), name));
                 if !typed.is_empty() {
-                    item(ui, t!("lists.new_print_with"), Action::NewList(ListKind::Print, typed.clone()));
-                    item(ui, t!("lists.new_collection_with"), Action::NewList(ListKind::Collection, typed));
+                    rows.item(ui, t!("lists.new_print_with"), Action::NewList(ListKind::Print, typed.clone()));
+                    rows.item(ui, t!("lists.new_collection_with"), Action::NewList(ListKind::Collection, typed));
                 }
             });
             if let Some((id, name)) = &menu.current_list {
-                item(ui, t!("menu.remove_from_list", list = name), Action::RemoveFromList(*id));
+                rows.item(ui, t!("menu.remove_from_list", list = name), Action::RemoveFromList(*id));
             }
         }
-        if menu.ai_chat || menu.ai_refs {
-            ui.separator();
+        // Files: the clipboard, the path, the folder on disk.
+        rows.section(ui);
+        rows.item(ui, t!("menu.copy_files"), Action::CopyFiles);
+        if menu.can_cut {
+            rows.item(ui, t!("menu.cut_files"), Action::CutFiles);
         }
+        if menu.can_paste {
+            // Into the folder under the pointer, otherwise into the one shown.
+            let into = (e.kind == Kind::Folder).then_some(entry);
+            rows.item(ui, t!("menu.paste_files"), Action::PasteFiles(into));
+        }
+        rows.item(ui, t!("menu.copy_path"), Action::CopyPaths);
+        rows.item(
+            ui,
+            t!("menu.show_in_file_manager", manager = crate::i18n::file_manager()),
+            Action::ShowInFileManager,
+        );
+        if show_folders {
+            rows.item(ui, t!("menu.show_in_folder"), Action::ShowInFolder(entry));
+        }
+        if menu.rescan {
+            rows.item(ui, t!("menu.rescan"), Action::Rescan);
+        }
+        // AI
+        rows.section(ui);
         if menu.ai_chat {
-            item(ui, t!("actions.menu_tags"), Action::SuggestTags);
-            item(ui, t!("actions.menu_mention"), Action::MentionInChat);
+            rows.item(ui, t!("actions.menu_tags"), Action::SuggestTags);
+            rows.item(ui, t!("actions.menu_mention"), Action::MentionInChat);
         }
         if menu.ai_refs {
-            item(ui, t!("actions.menu_reference"), Action::CopyReference);
+            rows.item(ui, t!("actions.menu_reference"), Action::CopyReference);
         }
-        ui.separator();
+        rows.section(ui);
         let trash = ui
             .add_enabled(menu.trash_blocked.is_none(), egui::Button::new(t!("menu.trash")))
             .on_disabled_hover_text(menu.trash_blocked.clone().unwrap_or_default());
         if trash.clicked() {
-            *action = Some(Action::Trash);
+            *rows.action = Some(Action::Trash);
             ui.close();
         }
     });

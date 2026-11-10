@@ -33,6 +33,7 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 
 - Signs such as ✔, ✖ and the ✨ of the AI actions show on Windows too, where some of them were empty boxes: every sign Meshgrove uses now comes in a font it brings along.
 - Rows in a plugin's panel wrap when the panel is narrow, instead of running off its edge, and a scroll bar no longer covers the last line.
+- The context menu of a tile is grouped: opening, tags and lists, files, AI, trash. The usual ways to open a file stay on top; the default program, mesh editors, other slicers and plugins sit under *Open with*.
 - For plugin authors: plugin API 0.2 brings all of the above to plugins; plugins written for 0.1 keep working. See [how to write a plugin](https://github.com/DonDavis-vibe/MeshGrove/blob/v@VERSION@/docs/plugins.md).
 
 **Checked on Windows** (new in 0.8.3) – a day in a Windows 11 VM, and what Linux never showed:
