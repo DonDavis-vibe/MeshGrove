@@ -51,6 +51,8 @@ pub struct ScreenshotHook {
     path: String,
     at: Instant,
     requested: bool,
+    /// The picture is written: no more frames needed for it.
+    saved: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ScreenshotHook {
@@ -101,22 +103,29 @@ impl ScreenshotHook {
             path,
             at: Instant::now() + Duration::from_secs_f32(delay),
             requested: false,
+            saved: Default::default(),
         })
     }
 
     pub fn tick(&mut self, ctx: &egui::Context) {
+        // Frames keep coming until the picture is saved, also in a window with nothing to
+        // animate: the picture is taken in one frame and handed over in a later one, and an
+        // idle window (Windows draws none unless asked) would never get there.
         if self.requested {
+            if !self.saved.load(std::sync::atomic::Ordering::Relaxed) {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
             return;
         }
         // eframe skips frames for hidden/occluded windows; a test run must not hang on that.
         ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
         let now = Instant::now();
         if now < self.at {
-            ctx.request_repaint_after(self.at - now);
+            ctx.request_repaint_after((self.at - now).min(Duration::from_millis(250)));
             return;
         }
         self.requested = true;
-        let (path, ctx2) = (self.path.clone(), ctx.clone());
+        let (path, ctx2, done) = (self.path.clone(), ctx.clone(), self.saved.clone());
         ctx.request_screenshot(move |image| {
             let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
             let saved = image::RgbaImage::from_raw(image.size[0] as u32, image.size[1] as u32, rgba)
@@ -127,6 +136,7 @@ impl ScreenshotHook {
                 Some(Err(e)) => log::error!("screenshot failed: {e}"),
                 None => log::error!("screenshot failed: bad image size"),
             }
+            done.store(true, std::sync::atomic::Ordering::Relaxed);
             ctx2.send_viewport_cmd(egui::ViewportCommand::Close);
         });
         ctx.request_repaint();
