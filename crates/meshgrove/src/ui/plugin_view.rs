@@ -385,12 +385,18 @@ impl Draw<'_> {
             let mut child =
                 ui.new_child(UiBuilder::new().id_salt(("part", i)).max_rect(part).layout(Layout::top_down(Align::Min)));
             child.set_clip_rect(part.intersect(ui.clip_rect()));
-            // What does not fit across (a wide form in a narrow part) can be scrolled to.
+            // A bar of its own below the content, not one floating over its last line.
+            child.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+            // What does not fit across and cannot wrap (a wide table or form) can be scrolled
+            // to; what can wrap (a row of pictures) wraps at the part's width.
             egui::ScrollArea::horizontal()
                 .id_salt(("part-scroll", i))
                 .auto_shrink([false, false])
                 .scroll_source(egui::containers::scroll_area::ScrollSource::SCROLL_BAR)
-                .show(&mut child, |ui| self.node(ui, node));
+                .show(&mut child, |ui| {
+                    ui.set_max_width(part.width());
+                    self.node(ui, node)
+                });
         }
         ui.advance_cursor_after_rect(rect);
     }
@@ -435,15 +441,24 @@ impl Draw<'_> {
         let r = match id {
             None => ui.add(image),
             Some(id) => {
-                // The frame is always there, so choosing a picture moves nothing.
-                let color = if selected { ui.visuals().selection.bg_fill } else { Color32::TRANSPARENT };
-                let frame =
-                    egui::Frame::new().inner_margin(2.0).corner_radius(4.0).stroke(egui::Stroke::new(2.0, color));
-                let framed = frame.show(ui, |ui| ui.add(image.sense(Sense::click())));
-                let r = framed.inner.on_hover_cursor(egui::CursorIcon::PointingHand);
-                if r.hovered() && !selected {
-                    let stroke = ui.visuals().widgets.hovered.bg_stroke;
-                    ui.painter().rect_stroke(framed.response.rect, 4.0, stroke, egui::StrokeKind::Inside);
+                // One allocation for picture and frame, so a row of them wraps like buttons do
+                // (a container in a wrapping row does not). The frame is always there, so
+                // choosing a picture moves nothing.
+                const PAD: f32 = 4.0;
+                let tex = texture.size_vec2();
+                // `width` is the picture's; the frame goes round it.
+                let max = width.unwrap_or_else(|| ui.available_width() - 2.0 * PAD).max(1.0);
+                let size = if tex.x > max { tex * (max / tex.x) } else { tex };
+                let (rect, r) = ui.allocate_exact_size(size + vec2(2.0 * PAD, 2.0 * PAD), Sense::click());
+                let r = r.on_hover_cursor(egui::CursorIcon::PointingHand);
+                if ui.is_rect_visible(rect) {
+                    image.paint_at(ui, rect.shrink(PAD));
+                    let stroke = match (selected, r.hovered()) {
+                        (true, _) => egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),
+                        (false, true) => ui.visuals().widgets.hovered.bg_stroke,
+                        (false, false) => egui::Stroke::NONE,
+                    };
+                    ui.painter().rect_stroke(rect, 4.0, stroke, egui::StrokeKind::Inside);
                 }
                 if r.clicked() {
                     self.events.push(Event::Click { id: id.to_owned() });
@@ -817,6 +832,46 @@ mod tests {
             "the chosen one too"
         );
         assert_eq!(click_at(&view, pictures[2].center()), [], "a picture without an id is only looked at");
+    }
+
+    /// Where the pictures of a frame were drawn, left to right and top to bottom.
+    fn picture_rects(shapes: &Shapes) -> Vec<Rect> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<Rect>) {
+            match shape {
+                egui::Shape::Rect(r) if r.fill_texture_id() != egui::TextureId::default() => out.push(r.rect),
+                egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default() => out.push(m.calc_bounds()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        shapes.iter().for_each(|s| walk(&s.shape, &mut out));
+        out
+    }
+
+    /// A row of pictures in a part of a split wraps at the part's width, as a gallery should;
+    /// it does not run off to the right.
+    #[test]
+    fn a_row_in_a_split_wraps_at_the_parts_width() {
+        let pictures: Vec<serde_json::Value> = (0..10)
+            .map(|i| serde_json::json!({"type": "image", "data": picture([i * 20, 60, 60]), "width": 72.0, "id": format!("t{i}")}))
+            .collect();
+        let json = serde_json::json!({"v": 1, "root": {"type": "split", "ratio": 0.4,
+            "first": {"type": "label", "text": "3D"},
+            "second": {"type": "column", "children": [{"type": "row", "children": pictures},
+                {"type": "button", "id": "apply", "label": "Apply"}]}}});
+        let view: View = serde_json::from_value(json).unwrap();
+        let (_, shapes) = drive(&view, 600.0, |_| Vec::new());
+        let rects = picture_rects(&shapes);
+        assert_eq!(rects.len(), 10, "{rects:?}");
+        let right = rects.iter().map(|r| r.right()).fold(0.0, f32::max);
+        assert!(right <= 600.0, "nothing runs off the window: {right}");
+        let lines = rects.iter().map(|r| r.top().round() as i32).collect::<std::collections::BTreeSet<_>>();
+        assert!(lines.len() >= 2, "the pictures wrap: {lines:?}");
+        // The button after the row is drawn below the last line of pictures, inside the window.
+        let apply = texts(&shapes).into_iter().find(|(t, ..)| t == "Apply").expect("the button");
+        let bottom = rects.iter().map(|r| r.bottom()).fold(0.0, f32::max);
+        assert!(apply.1.top() >= bottom && apply.1.bottom() < 600.0, "{:?} below {bottom}", apply.1);
     }
 
     /// Clicks through egui: a frame with the press, one with the release; the events the view sent.
