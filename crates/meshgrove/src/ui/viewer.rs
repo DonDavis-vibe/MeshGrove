@@ -71,6 +71,8 @@ pub struct ModelViewer {
     /// The space the model is meant to fit, in the mesh's recentred coordinates: drawn as a
     /// coloured frame and kept in the picture.
     frame: Option<Aabb>,
+    /// Whether the frame is shown; the toolbar's switch, kept while the plugin sends new meshes.
+    frame_shown: bool,
 }
 
 /// What the 3D mouse did since the last frame, for the viewer that has the focus.
@@ -101,6 +103,7 @@ impl ModelViewer {
             tools: true,
             bed: None,
             frame: None,
+            frame_shown: true,
         }
     }
 
@@ -120,9 +123,14 @@ impl ModelViewer {
         }
     }
 
-    /// What the camera keeps in the picture: the model, and the frame round it.
+    /// The frame, unless the toolbar's switch hides it.
+    fn shown_frame(&self) -> Option<Aabb> {
+        self.frame.filter(|_| self.frame_shown)
+    }
+
+    /// What the camera keeps in the picture: the model, and the frame round it while it shows.
     fn fitted(&self, mesh: &GpuMesh) -> Aabb {
-        match self.frame {
+        match self.shown_frame() {
             Some(f) => Aabb { min: mesh.bounds.min.min(f.min), max: mesh.bounds.max.max(f.max) },
             None => mesh.bounds,
         }
@@ -370,6 +378,15 @@ impl ModelViewer {
         {
             self.measure = if measuring { None } else { Some(Measure::default()) };
         }
+        if self.frame.is_some()
+            && ui
+                .selectable_label(self.frame_shown, RichText::new(format!("⬜ {}", t!("viewer.frame"))).small())
+                .on_hover_text(t!("viewer.frame_hint"))
+                .clicked()
+        {
+            self.frame_shown = !self.frame_shown;
+            self.dirty = true;
+        }
         let saving = self.saving.is_some();
         let picture = ui
             .add_enabled(!saving, egui::Button::new(RichText::new(format!("📷 {}", t!("viewer.picture"))).small()))
@@ -509,7 +526,7 @@ impl ModelViewer {
     /// for what is in front. Sides the model sticks out of are red, and their edges always drawn
     /// over the model, so a model too large for its space shows from any direction.
     fn paint_frame(&self, ui: &Ui, mesh: &GpuMesh, rect: Rect, front: bool) {
-        let Some(frame) = self.frame else { return };
+        let Some(frame) = self.shown_frame() else { return };
         let (bounds, aspect) = (self.fitted(mesh), rect.aspect_ratio());
         let to_screen = |p: Vec3| {
             project_point(&bounds, &self.view, aspect, p)

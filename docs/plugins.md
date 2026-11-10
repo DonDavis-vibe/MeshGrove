@@ -340,7 +340,7 @@ plugin's values count: it may correct or refuse them.
 | `checkbox`, `select`, `radio`, `color` (`#rrggbb[aa]`) | `Changed` at once |
 | `form` (rows of label + node; optional `submit` button) | the rows' own events; `Submit {values}` with every input by id |
 | `table` (columns: title, width, numeric; rows: id + cells; selected; max_height) | `TableSelect {row}`; clicking the selected row again sends `row: null`. Columns without a `width` can be dragged wider by the user; a cell cut short shows its whole text on hover |
-| `mesh_view` (key, revision, height, `bed: [x, y]`, `frame: [min, max]`) | — the bed is drawn under the model, centred; the frame is the space the model is meant to fit (a drawer, a shelf), drawn in blue round it and kept in the picture (from 0.9.0; older versions ignore it) |
+| `mesh_view` (key, revision, height, `bed: [x, y]`, `frame: [min, max]`) | — the bed is drawn under the model, centred; the frame is the space the model is meant to fit (a drawer, a shelf), drawn in blue round it and kept in the picture; the view's *Frame* button hides it (from 0.9.0; older versions ignore it) |
 | `grid_editor` | `Grid {change}`, see below |
 | `canvas` | `Canvas {change}` when `interactive`, see below |
 | anything newer | shown as a placeholder |
