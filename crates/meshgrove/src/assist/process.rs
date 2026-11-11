@@ -40,7 +40,7 @@ pub struct AgentProcess {
 pub struct ProcessHandle(std::sync::Arc<std::sync::Mutex<Option<Child>>>);
 
 impl ProcessHandle {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn pid(&self) -> Option<u32> {
         self.0.lock().ok().and_then(|c| c.as_ref().map(Child::id))
     }
@@ -152,7 +152,8 @@ impl AgentProcess {
         cmd.args(args).current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         detach_group(&mut cmd);
         let mut child = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
-        let (Some(mut stdin), Some(stdout), Some(stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take())
+        let (Some(mut stdin), Some(stdout), Some(stderr)) =
+            (child.stdin.take(), child.stdout.take(), child.stderr.take())
         else {
             end_tree(child);
             return Err("the agent's pipes could not be opened".into());
@@ -226,7 +227,7 @@ impl AgentProcess {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn pid(&self) -> Option<u32> {
         self.child.pid()
     }

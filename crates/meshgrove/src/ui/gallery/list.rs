@@ -461,7 +461,8 @@ impl Gallery {
         if !(response.hovered() || held) || !crate::meshes::viewable(e.kind) {
             return None;
         }
-        let drag = if response.dragged_by(egui::PointerButton::Primary) { response.drag_delta() } else { egui::Vec2::ZERO };
+        let drag =
+            if response.dragged_by(egui::PointerButton::Primary) { response.drag_delta() } else { egui::Vec2::ZERO };
         // The row's own fill, opaque: the still thumbnail must not show through.
         let row_fill = if selected {
             visuals.selection.bg_fill

@@ -1203,7 +1203,11 @@ mod tests {
         let mut lib = library();
         let root = Path::new("/lib/3D_druck");
         let zip = Path::new("/lib/3D_druck/pack.zip");
-        let members = [file("/lib/3D_druck/pack.zip", "minis/orc.stl", 1, 1), file("/lib/3D_druck/pack.zip", "minis_old/x.stl", 1, 1), file("/lib/3D_druck/pack.zip", "readme.txt", 1, 1)];
+        let members = [
+            file("/lib/3D_druck/pack.zip", "minis/orc.stl", 1, 1),
+            file("/lib/3D_druck/pack.zip", "minis_old/x.stl", 1, 1),
+            file("/lib/3D_druck/pack.zip", "readme.txt", 1, 1),
+        ];
         lib.update_dir(root, zip, 7, &members, &[]).unwrap();
         assert_eq!(names(&lib.member_preview(zip, "minis", 4).unwrap()), ["minis/orc.stl"]);
         assert!(lib.member_preview(zip, "nowhere", 4).unwrap().is_empty());

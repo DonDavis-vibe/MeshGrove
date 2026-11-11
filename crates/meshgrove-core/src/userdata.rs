@@ -102,7 +102,10 @@ impl UserData {
 
     /// Nothing hand-made to keep.
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty() && self.lists.is_empty() && self.tag_colors.is_empty() && self.ignored_duplicates.is_empty()
+        self.entries.is_empty()
+            && self.lists.is_empty()
+            && self.tag_colors.is_empty()
+            && self.ignored_duplicates.is_empty()
     }
 
     /// Same data, whatever the format version.

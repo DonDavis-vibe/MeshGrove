@@ -15,8 +15,8 @@ use meshgrove_core::config::{AccessClass, ChatMode};
 use super::App;
 use super::chat::Pending;
 use crate::assist::acp::{self, AuthKind, AuthMethod, ConfigOption, PermissionOption, PromptPart, ToolStatus};
-use crate::assist::actions::Action;
 use crate::assist::acp_client::{AcpBackend, Event};
+use crate::assist::actions::Action;
 use crate::assist::agents::{self, Entry};
 use crate::assist::chat::agent_note;
 use crate::assist::{connect, secret};
@@ -128,7 +128,11 @@ impl App {
             && let Ok(found) = rx.try_recv()
         {
             self.agents_rx = None;
-            log::info!("AI agents found: {:?} ({} ms)", found.found.iter().map(|f| f.id).collect::<Vec<_>>(), found.took_ms);
+            log::info!(
+                "AI agents found: {:?} ({} ms)",
+                found.found.iter().map(|f| f.id).collect::<Vec<_>>(),
+                found.took_ms
+            );
             self.agents = Some(found);
         }
     }
@@ -178,7 +182,9 @@ impl App {
             self.toast(t!("assistant.no_mcp").into_owned());
         }
         let ctx = self.egui_ctx.clone();
-        match AcpBackend::start(&entry.argv, &work_dir(), server, agent_note(&self.config), move || ctx.request_repaint()) {
+        match AcpBackend::start(&entry.argv, &work_dir(), server, agent_note(&self.config), move || {
+            ctx.request_repaint()
+        }) {
             Ok(backend) => {
                 self.chat.agent = Some(AgentChat {
                     entry: entry.clone(),
@@ -232,7 +238,11 @@ impl App {
             self.chat.endpoint_models = Some(EndpointModels {
                 base_url: e.base_url.clone(),
                 rx: Some(rx),
-                list: ModelList { current: e.model.clone(), note: Some(t!("assistant.listing").into_owned()), ..Default::default() },
+                list: ModelList {
+                    current: e.model.clone(),
+                    note: Some(t!("assistant.listing").into_owned()),
+                    ..Default::default()
+                },
             });
         }
         let models = self.chat.endpoint_models.as_mut().expect("just set");
@@ -257,10 +267,13 @@ impl App {
     pub(super) fn chat_options(&self) -> Vec<OptionRow> {
         let Some(entry) = self.assistant() else { return Vec::new() };
         if entry.is_endpoint() {
-            let current = self.config.ai.endpoint.as_ref().map(|e| e.reasoning_effort.trim().to_owned()).unwrap_or_default();
+            let current =
+                self.config.ai.endpoint.as_ref().map(|e| e.reasoning_effort.trim().to_owned()).unwrap_or_default();
             let default = t!("chat.option_default").into_owned();
-            let mut choices: Vec<(String, String, String)> =
-                EFFORTS.iter().map(|e| ((*e).to_owned(), if e.is_empty() { default.clone() } else { (*e).to_owned() }, String::new())).collect();
+            let mut choices: Vec<(String, String, String)> = EFFORTS
+                .iter()
+                .map(|e| ((*e).to_owned(), if e.is_empty() { default.clone() } else { (*e).to_owned() }, String::new()))
+                .collect();
             // An effort typed in the settings that is none of the usual ones stays pickable.
             if !current.is_empty() && !choices.iter().any(|c| c.0 == current) {
                 choices.push((current.clone(), current.clone(), String::new()));
@@ -343,14 +356,24 @@ impl App {
                     AuthKind::Agent => (None, true),
                     AuthKind::Terminal { args, command } => {
                         let words: Vec<String> = match command {
-                            Some((program, args)) => std::iter::once(program.clone()).chain(args.iter().cloned()).collect(),
+                            Some((program, args)) => {
+                                std::iter::once(program.clone()).chain(args.iter().cloned()).collect()
+                            }
                             None => agent.entry.argv.iter().cloned().chain(args.iter().cloned()).collect(),
                         };
                         (Some(words.join(" ")), false)
                     }
-                    AuthKind::EnvVar { vars } => (Some(t!("assistant.auth_env", vars = vars.join(", ")).into_owned()), false),
+                    AuthKind::EnvVar { vars } => {
+                        (Some(t!("assistant.auth_env", vars = vars.join(", ")).into_owned()), false)
+                    }
                 };
-                AuthRow { id: m.id.clone(), name: m.name.clone(), description: m.description.clone(), command, by_agent }
+                AuthRow {
+                    id: m.id.clone(),
+                    name: m.name.clone(),
+                    description: m.description.clone(),
+                    command,
+                    by_agent,
+                }
             })
             .collect()
     }
@@ -381,7 +404,8 @@ impl App {
             0
         };
         if !entry.local && !self.chat.cloud_ok && !confirmed {
-            let text = t!("chat.confirm_text", host = entry.name.clone(), refs = pills.len(), pictures = pictures).into_owned();
+            let text = t!("chat.confirm_text", host = entry.name.clone(), refs = pills.len(), pictures = pictures)
+                .into_owned();
             self.chat.confirm = Some((text, Pending::Message));
             return;
         }
@@ -418,7 +442,10 @@ impl App {
         msg.id = s.add_message(chat, "user", &serde_json::to_value(&msg).unwrap_or_default()).unwrap_or(0);
         let mut parts = vec![PromptPart::Text(llm)];
         for png in images {
-            parts.push(PromptPart::Image { mime: "image/png".into(), base64: base64::engine::general_purpose::STANDARD.encode(png) });
+            parts.push(PromptPart::Image {
+                mime: "image/png".into(),
+                base64: base64::engine::general_purpose::STANDARD.encode(png),
+            });
         }
         self.chat.input.clear();
         self.chat.offered = None;
@@ -441,7 +468,9 @@ impl App {
                 .into_iter()
                 .rev()
                 .filter(|m| !m.text.trim().is_empty() || !m.llm.is_empty())
-                .map(|m| format!("{}: {}", if m.user { "User" } else { "Assistant" }, if m.user { &m.llm } else { &m.text }))
+                .map(|m| {
+                    format!("{}: {}", if m.user { "User" } else { "Assistant" }, if m.user { &m.llm } else { &m.text })
+                })
                 .collect();
             if !earlier.is_empty()
                 && let Some(PromptPart::Text(text)) = parts.first_mut()
@@ -553,7 +582,8 @@ impl App {
                 if let Some(wanted) = self.config.ai.agent_options.get(&agent.entry.id)
                     && let Some((id, value)) = agent.options.iter().find_map(|o| {
                         let v = wanted.get(&o.id)?;
-                        (v != &o.current_value && o.options.iter().any(|c| &c.value == v)).then(|| (o.id.clone(), v.clone()))
+                        (v != &o.current_value && o.options.iter().any(|c| &c.value == v))
+                            .then(|| (o.id.clone(), v.clone()))
                     })
                 {
                     agent.backend.set_config_option(&id, &value);
@@ -603,28 +633,29 @@ impl App {
                     && let Some(wanted) = self.config.ai.agent_options.get(&agent.entry.id)
                     && let Some((id, value)) = agent.options.iter().find_map(|o| {
                         let v = wanted.get(&o.id)?;
-                        (v != &o.current_value && o.options.iter().any(|c| &c.value == v)).then(|| (o.id.clone(), v.clone()))
+                        (v != &o.current_value && o.options.iter().any(|c| &c.value == v))
+                            .then(|| (o.id.clone(), v.clone()))
                     })
                 {
                     agent.backend.set_config_option(&id, &value);
                 }
                 match acp::model_option(&options) {
-                Some(option) => {
-                    agent.model_option = Some(option.id.clone());
-                    agent.models.current = option.current_value.clone();
-                    agent.models.choices = option
-                        .options
-                        .iter()
-                        .map(|c| ModelChoice {
-                            value: c.value.clone(),
-                            label: c.name.clone(),
-                            tip: c.description.clone(),
-                            group: c.group.clone(),
-                        })
-                        .collect();
-                    agent.models.note = None;
-                }
-                None => agent.models.note = Some(t!("assistant.no_model_choice").into_owned()),
+                    Some(option) => {
+                        agent.model_option = Some(option.id.clone());
+                        agent.models.current = option.current_value.clone();
+                        agent.models.choices = option
+                            .options
+                            .iter()
+                            .map(|c| ModelChoice {
+                                value: c.value.clone(),
+                                label: c.name.clone(),
+                                tip: c.description.clone(),
+                                group: c.group.clone(),
+                            })
+                            .collect();
+                        agent.models.note = None;
+                    }
+                    None => agent.models.note = Some(t!("assistant.no_model_choice").into_owned()),
                 }
             }
             Event::ModelRejected(why) => {
@@ -665,7 +696,9 @@ impl App {
                     .find(|o| o.kind == "allow_always")
                     .or_else(|| options.iter().find(|o| o.kind == "allow_once"))
                     .map(|o| o.id.clone());
-                if title.contains("meshgrove") && let Some(allow) = allow {
+                if title.contains("meshgrove")
+                    && let Some(allow) = allow
+                {
                     agent.backend.answer_permission(key, Some(&allow));
                 } else {
                     agent.questions.push(Question { key, title, options: question_options(&options) });
@@ -779,21 +812,22 @@ impl App {
             _ => AccessClass::Cloud,
         }
     }
-
-
 }
 
 /// The endpoint's model ids as choices: ids of the form `vendor/model` (OpenRouter) fold under
 /// their vendors when there are several.
 pub fn endpoint_choices(ids: &[String]) -> Vec<ModelChoice> {
-    let vendors: std::collections::HashSet<&str> = ids.iter().filter_map(|id| id.split_once('/').map(|(v, _)| v)).collect();
+    let vendors: std::collections::HashSet<&str> =
+        ids.iter().filter_map(|id| id.split_once('/').map(|(v, _)| v)).collect();
     let grouped = vendors.len() >= 2 && ids.iter().filter(|id| id.contains('/')).count() * 2 >= ids.len();
     ids.iter()
         .map(|id| ModelChoice {
             value: id.clone(),
             label: id.clone(),
             tip: String::new(),
-            group: grouped.then(|| id.split_once('/').map(|(v, _)| v.to_owned()).unwrap_or_default()).filter(|g| !g.is_empty()),
+            group: grouped
+                .then(|| id.split_once('/').map(|(v, _)| v.to_owned()).unwrap_or_default())
+                .filter(|g| !g.is_empty()),
         })
         .collect()
 }
@@ -802,14 +836,14 @@ fn question_options(options: &[PermissionOption]) -> Vec<(String, String)> {
     options.iter().map(|o| (o.id.clone(), if o.name.is_empty() { o.kind.clone() } else { o.name.clone() })).collect()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn vendor_ids_fold_under_their_vendors_only_when_most_have_one() {
-        let ids: Vec<String> = ["openai/gpt-5", "anthropic/claude", "google/gemini", "mistral"].iter().map(|s| s.to_string()).collect();
+        let ids: Vec<String> =
+            ["openai/gpt-5", "anthropic/claude", "google/gemini", "mistral"].iter().map(|s| s.to_string()).collect();
         let choices = endpoint_choices(&ids);
         assert_eq!(choices[0].group.as_deref(), Some("openai"));
         assert_eq!(choices[3].group, None);

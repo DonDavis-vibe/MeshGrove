@@ -306,7 +306,11 @@ pub(crate) mod tests {
         let names: Vec<(&str, Kind)> = root.iter().map(|e| (e.name.as_str(), e.kind)).collect();
         assert_eq!(names, [("minis", Kind::Folder), ("readme.txt", Kind::Text)]);
         assert_eq!(root[0].path, zip.join("minis"));
-        assert_eq!(split(&root[0].path), Some((zip.clone(), "minis".to_owned())), "a folder inside splits like a member");
+        assert_eq!(
+            split(&root[0].path),
+            Some((zip.clone(), "minis".to_owned())),
+            "a folder inside splits like a member"
+        );
         let minis = entries_in(&zip, "minis").unwrap();
         assert_eq!(minis.iter().map(|e| e.path.clone()).collect::<Vec<_>>(), [member_path]);
         assert!(entries_in(&zip, "nowhere").unwrap().is_empty());

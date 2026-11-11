@@ -445,7 +445,12 @@ mod tests {
         let file = dir.path().join("a.stl");
         std::fs::write(&file, b"solid").unwrap();
         let meta = file.metadata().unwrap();
-        let t = Target { path: file.clone(), hash: None, size: 5, mtime_ns: meshgrove_core::db::nanos(meta.modified().ok()) };
+        let t = Target {
+            path: file.clone(),
+            hash: None,
+            size: 5,
+            mtime_ns: meshgrove_core::db::nanos(meta.modified().ok()),
+        };
         assert!(still_there(&t, false));
         assert!(!still_there(&t, true), "a file is no folder");
         std::fs::write(&file, b"solid changed").unwrap();

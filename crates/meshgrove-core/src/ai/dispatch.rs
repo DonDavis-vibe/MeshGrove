@@ -97,11 +97,7 @@ const TOOLS: &[(&str, &str, bool)] = &[
         "Move or rename files, archives or folders within their library; always waits for the user's review, never replaces anything.",
         true,
     ),
-    (
-        "propose_delete",
-        "Files, archives or folders for the trash; always waits for the user's review.",
-        true,
-    ),
+    ("propose_delete", "Files, archives or folders for the trash; always waits for the user's review.", true),
     (
         "ask_user",
         "Ask the user one to five questions with options (radio buttons, or checkboxes with multi), shown in Meshgrove; returns their answer. Use it when the request is ambiguous.",

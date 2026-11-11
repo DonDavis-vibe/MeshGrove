@@ -120,10 +120,11 @@ impl App {
         let assistants = self.assistant_rows();
         let models = self.chat_models();
         let options = self.chat_options();
-        let (status, questions, auth) = match assistant.as_ref().filter(|e| !e.is_endpoint()).and(self.chat.agent.as_ref()) {
-            Some(agent) => (agent.status.clone(), agent.questions.clone(), self.auth_rows()),
-            None => (None, Vec::new(), Vec::new()),
-        };
+        let (status, questions, auth) =
+            match assistant.as_ref().filter(|e| !e.is_endpoint()).and(self.chat.agent.as_ref()) {
+                Some(agent) => (agent.status.clone(), agent.questions.clone(), self.auth_rows()),
+                None => (None, Vec::new(), Vec::new()),
+            };
         let index = self.index.as_ref();
         let config = &self.config;
         let view = ChatView {

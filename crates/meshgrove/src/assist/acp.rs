@@ -77,7 +77,8 @@ pub fn config_options(v: &Value) -> ConfigParse {
                     if choices.len() >= 128 {
                         break 'items;
                     }
-                    let Some(value) = c.get("value").and_then(Value::as_str).filter(|s| !s.is_empty() && s.len() <= 256)
+                    let Some(value) =
+                        c.get("value").and_then(Value::as_str).filter(|s| !s.is_empty() && s.len() <= 256)
                     else {
                         continue;
                     };
@@ -87,7 +88,13 @@ pub fn config_options(v: &Value) -> ConfigParse {
                     choices.push(ConfigChoice {
                         value: value.into(),
                         name: c.get("name").and_then(Value::as_str).unwrap_or(value).chars().take(256).collect(),
-                        description: c.get("description").and_then(Value::as_str).unwrap_or("").chars().take(1024).collect(),
+                        description: c
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .chars()
+                            .take(1024)
+                            .collect(),
                         group: group.clone(),
                     });
                 }
@@ -129,10 +136,9 @@ pub fn config_options(v: &Value) -> ConfigParse {
 
 /// The option among `options` that picks the model: by its category, else by its id or name.
 pub fn model_option(options: &[ConfigOption]) -> Option<&ConfigOption> {
-    options
-        .iter()
-        .find(|o| o.category == "model")
-        .or_else(|| options.iter().find(|o| o.id.to_lowercase().contains("model") || o.name.to_lowercase().contains("model")))
+    options.iter().find(|o| o.category == "model").or_else(|| {
+        options.iter().find(|o| o.id.to_lowercase().contains("model") || o.name.to_lowercase().contains("model"))
+    })
 }
 
 /// The protocol version we speak.
@@ -238,7 +244,8 @@ pub fn session_new_params(cwd: &std::path::Path, server: Option<&Value>, init: &
 /// through it: an offer that names only `override` (the Claude adapter's) gets the note through
 /// its own key instead, so the agent's own prompt stays.
 fn takes_standard_note(init: &Value) -> bool {
-    let Some(offer) = init.pointer("/agentCapabilities/sessionCapabilities/systemPrompt").filter(|o| !o.is_null()) else {
+    let Some(offer) = init.pointer("/agentCapabilities/sessionCapabilities/systemPrompt").filter(|o| !o.is_null())
+    else {
         return false;
     };
     match offer.get("mode") {
@@ -257,7 +264,10 @@ fn takes_antigravity_note(init: &Value) -> bool {
 pub enum PromptPart {
     Text(String),
     /// A picture (PNG), sent only to agents that take images.
-    Image { mime: String, base64: String },
+    Image {
+        mime: String,
+        base64: String,
+    },
 }
 
 /// A message's parts as ACP content blocks.
@@ -355,8 +365,8 @@ pub fn auth_methods(init: &Value) -> Vec<AuthMethod> {
                     let kind = match m.get("type").and_then(Value::as_str) {
                         Some("terminal") => {
                             let meta = m.get("_meta").and_then(|x| x.get("terminal-auth"));
-                            let command =
-                                meta.and_then(|t| Some((t.get("command")?.as_str()?.to_string(), strings(t.get("args")))));
+                            let command = meta
+                                .and_then(|t| Some((t.get("command")?.as_str()?.to_string(), strings(t.get("args")))));
                             AuthKind::Terminal { args: strings(m.get("args")), command }
                         }
                         Some("env_var") => AuthKind::EnvVar {
@@ -364,7 +374,10 @@ pub fn auth_methods(init: &Value) -> Vec<AuthMethod> {
                                 .get("vars")
                                 .and_then(Value::as_array)
                                 .map(|v| {
-                                    v.iter().take(16).filter_map(|x| x.get("name").and_then(Value::as_str).map(str::to_string)).collect()
+                                    v.iter()
+                                        .take(16)
+                                        .filter_map(|x| x.get("name").and_then(Value::as_str).map(str::to_string))
+                                        .collect()
                                 })
                                 .unwrap_or_default(),
                         },
@@ -433,20 +446,42 @@ pub struct PermissionOption {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Incoming {
     /// The reply to one of our requests.
-    Reply { id: u64, result: Result<Value, (i64, String)> },
+    Reply {
+        id: u64,
+        result: Result<Value, (i64, String)>,
+    },
     /// Text the agent streams (`thought`: its reasoning).
-    Text { thought: bool, text: String },
+    Text {
+        thought: bool,
+        text: String,
+    },
     /// A new tool call, or news about one (`title`/`status` when they changed).
-    Tool { id: String, title: Option<String>, kind: Option<String>, status: Option<ToolStatus>, output: Option<String> },
+    Tool {
+        id: String,
+        title: Option<String>,
+        kind: Option<String>,
+        status: Option<ToolStatus>,
+        output: Option<String>,
+    },
     /// The agent asks before running a tool call; answered with [`permission_reply`].
-    Permission { rpc: Value, title: String, options: Vec<PermissionOption> },
+    Permission {
+        rpc: Value,
+        title: String,
+        options: Vec<PermissionOption>,
+    },
     /// The agent says whether it is logged in (an extension some adapters send).
     AuthStatus(String),
     /// The agent switched to another model.
     ModelChanged(String),
-    ConfigOptions { session: String, options: Vec<ConfigOption> },
+    ConfigOptions {
+        session: String,
+        options: Vec<ConfigOption>,
+    },
     /// A request we don't serve (file system, terminal, …): answer "method not found".
-    Unsupported { rpc: Value, method: String },
+    Unsupported {
+        rpc: Value,
+        method: String,
+    },
     /// Anything else (mode and command lists, plans, usage): nothing to show.
     Ignored,
 }
@@ -589,10 +624,13 @@ mod tests {
         let standard = json!({"mode": "append", "content": [{"type": "text", "text": "NOTE"}]});
         let offers_standard = params(json!({"agentCapabilities": {"sessionCapabilities": {"systemPrompt": {}}}}));
         assert_eq!(offers_standard["systemPrompt"], standard);
-        let appends = params(json!({"agentCapabilities": {"sessionCapabilities": {"systemPrompt": {"mode": {"append": {}, "override": {}}}}}}));
+        let appends = params(
+            json!({"agentCapabilities": {"sessionCapabilities": {"systemPrompt": {"mode": {"append": {}, "override": {}}}}}}),
+        );
         assert_eq!(appends["systemPrompt"], standard);
         // The Claude adapter offers only `override`: the note goes through its own key alone.
-        let overrides = params(json!({"agentCapabilities": {"sessionCapabilities": {"systemPrompt": {"mode": {"override": {}}}}}}));
+        let overrides =
+            params(json!({"agentCapabilities": {"sessionCapabilities": {"systemPrompt": {"mode": {"override": {}}}}}}));
         assert!(overrides.get("systemPrompt").is_none());
         assert_eq!(overrides["_meta"]["systemPrompt"]["append"], "NOTE");
         assert_eq!(offers_standard["mcpServers"][0]["name"], "meshgrove-chat");
@@ -604,7 +642,11 @@ mod tests {
         let plain = params(json!({}));
         assert!(plain.get("systemPrompt").is_none());
         assert_eq!(plain["_meta"]["systemPrompt"]["append"], "NOTE");
-        assert!(plain["_meta"]["claudeCode"]["options"]["disallowedTools"].as_array().is_some_and(|t| t.iter().any(|x| x == "Bash")));
+        assert!(
+            plain["_meta"]["claudeCode"]["options"]["disallowedTools"]
+                .as_array()
+                .is_some_and(|t| t.iter().any(|x| x == "Bash"))
+        );
         assert_eq!(session_new_params(std::path::Path::new("/tmp"), None, &json!({}), "")["mcpServers"], json!([]));
     }
 
@@ -615,17 +657,29 @@ mod tests {
         let tool = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"ok"}}]}}}"#;
         assert_eq!(
             parse(tool),
-            Some(Incoming::Tool { id: "t1".into(), title: None, kind: None, status: Some(ToolStatus::Completed), output: Some("ok".into()) })
+            Some(Incoming::Tool {
+                id: "t1".into(),
+                title: None,
+                kind: None,
+                status: Some(ToolStatus::Completed),
+                output: Some("ok".into())
+            })
         );
         let perm = r#"{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"sessionId":"s","toolCall":{"toolCallId":"t1","title":"search_models"},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"},{"optionId":"reject","name":"Reject","kind":"reject_once"}]}}"#;
         let Some(Incoming::Permission { rpc, title, options }) = parse(perm) else { panic!() };
         assert_eq!((title.as_str(), options.len(), options[1].kind.as_str()), ("search_models", 2, "reject_once"));
-        assert_eq!(permission_reply(rpc.clone(), Some("allow"))["result"]["outcome"], json!({"outcome": "selected", "optionId": "allow"}));
+        assert_eq!(
+            permission_reply(rpc.clone(), Some("allow"))["result"]["outcome"],
+            json!({"outcome": "selected", "optionId": "allow"})
+        );
         assert_eq!(permission_reply(rpc, None)["result"]["outcome"]["outcome"], "cancelled");
         let fs = r#"{"jsonrpc":"2.0","id":8,"method":"fs/read_text_file","params":{}}"#;
         assert!(matches!(parse(fs), Some(Incoming::Unsupported { .. })));
         let err = r#"{"jsonrpc":"2.0","id":3,"error":{"code":-32000,"message":"Authentication required"}}"#;
-        assert_eq!(parse(err), Some(Incoming::Reply { id: 3, result: Err((AUTH_REQUIRED, "Authentication required".into())) }));
+        assert_eq!(
+            parse(err),
+            Some(Incoming::Reply { id: 3, result: Err((AUTH_REQUIRED, "Authentication required".into())) })
+        );
         assert_eq!(parse("not json"), None);
         let changed = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"current_model_update","currentModelId":"haiku"}}}"#;
         assert_eq!(parse(changed), Some(Incoming::ModelChanged("haiku".into())));
@@ -656,7 +710,10 @@ mod tests {
             ConfigParse::Invalid
         ));
         assert_eq!(config_options(&json!({})), ConfigParse::Absent);
-        assert_eq!(set_config_option_params("s1", "vendor.model", "smart"), json!({"sessionId":"s1","configId":"vendor.model","value":"smart"}));
+        assert_eq!(
+            set_config_option_params("s1", "vendor.model", "smart"),
+            json!({"sessionId":"s1","configId":"vendor.model","value":"smart"})
+        );
         assert_eq!(set_model_params("s", "opus"), json!({"sessionId": "s", "modelId": "opus"}));
     }
 
@@ -682,7 +739,10 @@ mod tests {
 
     #[test]
     fn pictures_go_as_image_blocks_and_long_output_is_cut_on_a_character() {
-        let b = content_blocks(&[PromptPart::Text("hi".into()), PromptPart::Image { mime: "image/png".into(), base64: "AA==".into() }]);
+        let b = content_blocks(&[
+            PromptPart::Text("hi".into()),
+            PromptPart::Image { mime: "image/png".into(), base64: "AA==".into() },
+        ]);
         assert_eq!(b[1]["type"], "image");
         assert_eq!(b[1]["mimeType"], "image/png");
         let long = "é".repeat(3000);

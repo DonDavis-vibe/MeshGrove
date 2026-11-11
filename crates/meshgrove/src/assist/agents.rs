@@ -194,8 +194,16 @@ fn search_dirs_in(var: &dyn Fn(&str) -> Option<OsString>, windows: bool) -> Vec<
         dirs.push(if windows { prefix.clone() } else { prefix.join("bin") });
     }
     if let Some(h) = var(if windows { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).filter(|p| p.is_absolute()) {
-        for d in [".local/bin", ".npm-global/bin", ".npm-packages/bin", ".volta/bin", ".bun/bin", ".cargo/bin", ".grok/bin", "bin"]
-        {
+        for d in [
+            ".local/bin",
+            ".npm-global/bin",
+            ".npm-packages/bin",
+            ".volta/bin",
+            ".bun/bin",
+            ".cargo/bin",
+            ".grok/bin",
+            "bin",
+        ] {
             dirs.push(h.join(d));
         }
         // nvm: every installed Node version's bin, the newest first.
@@ -281,16 +289,16 @@ fn probe(program: &Path, limit: Duration) -> Probe {
         // CREATE_NO_WINDOW: probing a console agent doesn't flash a terminal window.
         cmd.creation_flags(0x0800_0000);
     }
-    let mut child = match cmd.arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
-    {
-        Ok(child) => child,
-        Err(e) => {
-            return Probe {
-                version: None,
-                problem: Some(cut(&e.to_string().replace("%1", &program.display().to_string()))),
-            };
-        }
-    };
+    let mut child =
+        match cmd.arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                return Probe {
+                    version: None,
+                    problem: Some(cut(&e.to_string().replace("%1", &program.display().to_string()))),
+                };
+            }
+        };
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -514,7 +522,8 @@ pub fn new_id(ai: &AiConfig) -> String {
 pub fn short_command(line: &str) -> String {
     let mut words = split_command(line);
     if let Some(first) = words.first_mut() {
-        *first = Path::new(first).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| first.clone());
+        *first =
+            Path::new(first).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| first.clone());
     }
     let text = words.join(" ");
     if text.chars().count() > 48 { format!("{}…", text.chars().take(47).collect::<String>()) } else { text }

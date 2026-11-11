@@ -144,7 +144,10 @@ fn popup(ui: &mut Ui, p: &Picker<'_>, state: egui::Id) -> Option<Picked> {
     let current_group =
         p.choices.iter().find(|c| c.value == p.current_value).and_then(|c| c.group).filter(|g| !g.is_empty());
     let is_open = |group: &str| {
-        folds.get(group).copied().unwrap_or(!query.is_empty() || current_group.is_none() || Some(group) == current_group)
+        folds
+            .get(group)
+            .copied()
+            .unwrap_or(!query.is_empty() || current_group.is_none() || Some(group) == current_group)
     };
     let rows = rows(&visible, grouped, &is_open);
     let shown: Vec<&Choice<'_>> =
@@ -170,9 +173,8 @@ fn popup(ui: &mut Ui, p: &Picker<'_>, state: egui::Id) -> Option<Picked> {
     let width = ui.available_width();
     let gap = ui.spacing().item_spacing.y;
     let weak = ui.visuals().weak_text_color();
-    let note = p.note.map(|note| {
-        ui.painter().layout(compact(note, 200), egui::FontId::proportional(12.0), weak, width)
-    });
+    let note =
+        p.note.map(|note| ui.painter().layout(compact(note, 200), egui::FontId::proportional(12.0), weak, width));
     let note_height = note.as_ref().map_or(0.0, |note| note.size().y + gap);
     let most = ui.ctx().content_rect().height() - 96.0;
     // A popup's Ui stays within its size of the last frame, so it can't grow once it is open:
@@ -215,7 +217,8 @@ fn popup(ui: &mut Ui, p: &Picker<'_>, state: egui::Id) -> Option<Picked> {
                                 }
                             }
                             Row::Choice(choice) => {
-                                let response = row(ui, &compact(choice.label, LABEL_CAP), choice.value == p.current_value);
+                                let response =
+                                    row(ui, &compact(choice.label, LABEL_CAP), choice.value == p.current_value);
                                 let response = if choice.tip.is_empty() {
                                     response
                                 } else {
@@ -253,7 +256,11 @@ enum Row<'a> {
     /// A lone group's dim heading.
     Heading(&'a str),
     /// One of several groups: its header, with how many of its choices are listed, folded or open.
-    Group { name: &'a str, count: usize, open: bool },
+    Group {
+        name: &'a str,
+        count: usize,
+        open: bool,
+    },
     Choice(&'a Choice<'a>),
 }
 
@@ -313,7 +320,11 @@ fn group_row(ui: &mut Ui, name: &str, count: usize, open: bool) -> Response {
     let chevron = if open { "⏷" } else { "⏵" };
     let text = format!("{chevron} {}  ·  {count}", compact(&name.to_uppercase(), LABEL_CAP));
     let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), visuals.weak_text_color());
-    painter.galley(egui::pos2(rect.left() + 6.0, rect.center().y - galley.size().y / 2.0), galley, visuals.weak_text_color());
+    painter.galley(
+        egui::pos2(rect.left() + 6.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        visuals.weak_text_color(),
+    );
     response.on_hover_text(t!("picker.group_models", count = count))
 }
 

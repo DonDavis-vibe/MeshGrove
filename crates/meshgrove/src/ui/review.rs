@@ -214,7 +214,10 @@ fn item_row(
                 ui.weak(t!("review.moved", path = to.display().to_string()));
             }
             if item.copies > 1
-                && !matches!(p.kind, ProposalKind::List | ProposalKind::Move | ProposalKind::Bundle | ProposalKind::Delete)
+                && !matches!(
+                    p.kind,
+                    ProposalKind::List | ProposalKind::Move | ProposalKind::Bundle | ProposalKind::Delete
+                )
             {
                 ui.weak(t!("review.copies", count = item.copies - 1));
             }
@@ -260,7 +263,8 @@ fn tags_row(ui: &mut Ui, item: &mut ReviewItem, style: &TagStyle) {
         let own: Vec<String> =
             item.picked.add.iter().filter(|t| !payload.add.iter().any(|a| &a.name == *t)).cloned().collect();
         for tag in own {
-            if chip(ui, style, &tag, &format!("+{tag} ✖"), true).on_hover_text(t!("review.own_tag_remove")).clicked() {
+            if chip(ui, style, &tag, &format!("+{tag} ✖"), true).on_hover_text(t!("review.own_tag_remove")).clicked()
+            {
                 toggle(&mut item.picked.add, &tag);
             }
         }
@@ -362,9 +366,8 @@ fn move_row(ui: &mut Ui, item: &mut ReviewItem) {
     let typed = item.draft.path.get_or_insert_with(|| shown(&chosen));
     ui.horizontal(|ui| {
         ui.label(RichText::new("→").strong());
-        let field = ui.add(
-            egui::TextEdit::singleline(typed).desired_width(320.0).id_salt(("move_to_text", item.proposal.id)),
-        );
+        let field =
+            ui.add(egui::TextEdit::singleline(typed).desired_width(320.0).id_salt(("move_to_text", item.proposal.id)));
         if field.changed() {
             match place_from(&m.root, &from, rename, typed) {
                 Ok(to) => {
@@ -480,7 +483,10 @@ fn list_row(ui: &mut Ui, item: &mut ReviewItem) {
         return;
     }
     let print = kind == "print";
-    let kept = item.picked.list_items.get_or_insert_with(|| list.items.iter().enumerate().map(|(i, it)| (i, it.quantity)).collect());
+    let kept = item
+        .picked
+        .list_items
+        .get_or_insert_with(|| list.items.iter().enumerate().map(|(i, it)| (i, it.quantity)).collect());
     ui.weak(t!("review.list_items_hint"));
     for (i, entry) in list.items.iter().enumerate() {
         ui.horizontal(|ui| {

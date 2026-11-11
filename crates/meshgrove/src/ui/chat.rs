@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use egui::{RichText, Ui};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use meshgrove_core::ai::proposals::{AskQuestion, ChatInfo};
-use serde_json::{Value, json};
 use meshgrove_core::config::ChatMode;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use super::chat_input::{self, ChatInput, Pill};
 use super::picker::{self, Choice, Picked, Picker};
@@ -83,9 +83,10 @@ impl AskCard {
 
     /// Every question has an answer.
     pub fn complete(&self) -> bool {
-        self.questions.iter().enumerate().all(|(i, q)| {
-            self.chosen[i].iter().any(|c| *c) || (q.allow_other && !self.other[i].trim().is_empty())
-        })
+        self.questions
+            .iter()
+            .enumerate()
+            .all(|(i, q)| self.chosen[i].iter().any(|c| *c) || (q.allow_other && !self.other[i].trim().is_empty()))
     }
 
     /// The answers as the assistant gets them.
@@ -203,13 +204,22 @@ pub enum ChatAction {
     /// Another model, listed or typed.
     Model(Picked),
     /// One of the selectors beside the model: the option and its new value.
-    Option { id: String, value: String },
+    Option {
+        id: String,
+        value: String,
+    },
     /// The agent's permission question `key`, answered with an option (`None`: cancelled).
-    Permission { key: u64, option: Option<String> },
+    Permission {
+        key: u64,
+        option: Option<String>,
+    },
     /// The agent signs in by itself with this method.
     Authenticate(String),
     /// The assistant's question `uid` is answered (what the card holds), or not at all.
-    Answer { uid: String, cancel: bool },
+    Answer {
+        uid: String,
+        cancel: bool,
+    },
 }
 
 pub fn show(
@@ -330,13 +340,16 @@ fn assistant_row(ui: &mut Ui, view: &ChatView) -> Option<ChatAction> {
             .map(|(_, name)| name.as_str())
             .unwrap_or(view.assistant);
         if view.assistants.len() > 1 {
-            egui::ComboBox::from_id_salt("chat_assistant").selected_text(name).width(150.0).truncate().show_ui(ui, |ui| {
-                for (id, name) in view.assistants {
-                    if ui.selectable_label(id == view.assistant, name).clicked() {
-                        action = Some(ChatAction::Assistant(id.clone()));
+            egui::ComboBox::from_id_salt("chat_assistant").selected_text(name).width(150.0).truncate().show_ui(
+                ui,
+                |ui| {
+                    for (id, name) in view.assistants {
+                        if ui.selectable_label(id == view.assistant, name).clicked() {
+                            action = Some(ChatAction::Assistant(id.clone()));
+                        }
                     }
-                }
-            });
+                },
+            );
         } else {
             ui.weak(name);
         }
@@ -367,7 +380,11 @@ fn assistant_row(ui: &mut Ui, view: &ChatView) -> Option<ChatAction> {
         }
         for o in view.options {
             let selected = o.choices.iter().find(|c| c.0 == o.current).map_or(o.current.as_str(), |c| c.1.as_str());
-            let tip = [o.name.as_str(), o.description.as_str()].into_iter().filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n");
+            let tip = [o.name.as_str(), o.description.as_str()]
+                .into_iter()
+                .filter(|t| !t.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
             egui::ComboBox::from_id_salt(("chat_option", &o.id))
                 .selected_text(picker::compact(selected, 24))
                 .width(110.0)
@@ -416,11 +433,12 @@ fn ask_card(ui: &mut Ui, card: &mut AskCard) -> Option<ChatAction> {
                     if !q.options.is_empty() {
                         ui.weak(t!("chat.question_other"));
                     }
-                    let field = ui.add(
-                        egui::TextEdit::singleline(&mut card.other[i])
-                            .desired_width(f32::INFINITY)
-                            .id_salt(("ask_other", &card.uid, i)),
-                    );
+                    let field =
+                        ui.add(egui::TextEdit::singleline(&mut card.other[i]).desired_width(f32::INFINITY).id_salt((
+                            "ask_other",
+                            &card.uid,
+                            i,
+                        )));
                     // Typing an own answer to a one-answer question drops the option picked.
                     if field.changed() && !q.multi && !card.other[i].trim().is_empty() {
                         card.chosen[i].fill(false);
@@ -480,7 +498,9 @@ fn sign_in(ui: &mut Ui, methods: &[AuthRow]) -> Option<ChatAction> {
             });
             if let Some(command) = &m.command {
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut command.as_str()).desired_width(f32::INFINITY).code_editor());
+                    ui.add(
+                        egui::TextEdit::singleline(&mut command.as_str()).desired_width(f32::INFINITY).code_editor(),
+                    );
                     if ui.button(t!("settings.mcp_copy")).clicked() {
                         ui.ctx().copy_text(command.clone());
                     }
@@ -579,10 +599,18 @@ fn message(ui: &mut Ui, m: &ChatMsg, view: &ChatView, md: &mut CommonMarkCache) 
                     });
                 }
                 Card::Applied { title, applied, .. } => {
-                    ui.add(egui::Label::new(format!("✔ {}", t!("chat.card_applied", title = title, count = applied))).wrap());
+                    ui.add(
+                        egui::Label::new(format!("✔ {}", t!("chat.card_applied", title = title, count = applied)))
+                            .wrap(),
+                    );
                 }
                 Card::Answered { question, answer } => {
-                    ui.add(egui::Label::new(RichText::new(t!("chat.card_answered", question = question, answer = answer)).weak()).wrap());
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(t!("chat.card_answered", question = question, answer = answer)).weak(),
+                        )
+                        .wrap(),
+                    );
                 }
             }
         });

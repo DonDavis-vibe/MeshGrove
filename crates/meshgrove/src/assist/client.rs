@@ -444,19 +444,35 @@ pub mod tests {
     #[test]
     fn a_service_refusing_no_reasoning_is_asked_without() {
         let (url, seen) = serve(vec![
-            (400, "application/json", json!({"error": {"message": "Unrecognized value for reasoning_effort"}}).to_string()),
+            (
+                400,
+                "application/json",
+                json!({"error": {"message": "Unrecognized value for reasoning_effort"}}).to_string(),
+            ),
             (200, "application/json", json!({"choices": [{"message": {"content": "{\"ok\":1}"}}]}).to_string()),
             (200, "application/json", json!({"choices": [{"message": {"content": "{\"ok\":2}"}}]}).to_string()),
         ]);
         let e = endpoint(&url, None);
-        assert_eq!(e.complete_json(&[json!({"role": "user", "content": "x"})], &json!({"type": "object"})).unwrap(), "{\"ok\":1}");
+        assert_eq!(
+            e.complete_json(&[json!({"role": "user", "content": "x"})], &json!({"type": "object"})).unwrap(),
+            "{\"ok\":1}"
+        );
         // An effort of the user's own goes along as it is, never "none".
         let high = endpoint(&url, None).with_effort("high");
-        assert_eq!(high.complete_json(&[json!({"role": "user", "content": "x"})], &json!({"type": "object"})).unwrap(), "{\"ok\":2}");
+        assert_eq!(
+            high.complete_json(&[json!({"role": "user", "content": "x"})], &json!({"type": "object"})).unwrap(),
+            "{\"ok\":2}"
+        );
         let requests = seen.lock().unwrap();
         let (first, second, third) = (body_of(&requests[0]), body_of(&requests[1]), body_of(&requests[2]));
-        assert_eq!((first["reasoning_effort"].as_str(), first["response_format"]["type"].as_str()), (Some("none"), Some("json_schema")));
-        assert!(second.get("reasoning_effort").is_none() && second["response_format"]["type"] == "json_schema", "{second}");
+        assert_eq!(
+            (first["reasoning_effort"].as_str(), first["response_format"]["type"].as_str()),
+            (Some("none"), Some("json_schema"))
+        );
+        assert!(
+            second.get("reasoning_effort").is_none() && second["response_format"]["type"] == "json_schema",
+            "{second}"
+        );
         assert_eq!(third["reasoning_effort"], "high");
     }
 }

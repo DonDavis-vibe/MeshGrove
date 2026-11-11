@@ -235,7 +235,11 @@ impl AcpBackend {
             }
             Incoming::ModelChanged(_) | Incoming::ConfigOptions { .. } => {}
             Incoming::Unsupported { rpc, method } => {
-                self.proc.send(&acp::reply_error(rpc, acp::METHOD_NOT_FOUND, &format!("Meshgrove does not serve `{method}`")));
+                self.proc.send(&acp::reply_error(
+                    rpc,
+                    acp::METHOD_NOT_FOUND,
+                    &format!("Meshgrove does not serve `{method}`"),
+                ));
             }
             Incoming::Ignored => {}
         }
@@ -359,7 +363,10 @@ mod tests {
         assert!(events.is_empty() && b.pending.contains_key(&2), "session/new was asked");
         b.handle(Incoming::Reply { id: 2, result: Ok(snapshot("s1", "fast")) }, &mut events);
         assert!(b.ready());
-        assert!(matches!(&events[..], [Event::ConfigOptions(o), Event::Ready { agent, images: true }] if o[0].current_value == "fast" && agent == "fake 1"), "{events:?}");
+        assert!(
+            matches!(&events[..], [Event::ConfigOptions(o), Event::Ready { agent, images: true }] if o[0].current_value == "fast" && agent == "fake 1"),
+            "{events:?}"
+        );
         events.clear();
         b.set_config_option("provider.model", "zzz");
         let request = b.config_pending.as_ref().map(|p| p.0).unwrap();
@@ -377,15 +384,24 @@ mod tests {
     fn a_sign_in_is_asked_for_and_the_session_tried_again() {
         let mut b = backend();
         let mut events = Vec::new();
-        b.handle(Incoming::Reply { id: 1, result: Ok(json!({"authMethods": [{"id": "login", "name": "Log in"}]})) }, &mut events);
-        b.handle(Incoming::Reply { id: 2, result: Err((acp::AUTH_REQUIRED, "Authentication required".into())) }, &mut events);
+        b.handle(
+            Incoming::Reply { id: 1, result: Ok(json!({"authMethods": [{"id": "login", "name": "Log in"}]})) },
+            &mut events,
+        );
+        b.handle(
+            Incoming::Reply { id: 2, result: Err((acp::AUTH_REQUIRED, "Authentication required".into())) },
+            &mut events,
+        );
         assert!(matches!(&events[..], [Event::AuthRequired { methods }] if methods[0].id == "login"), "{events:?}");
         events.clear();
         b.authenticate("login");
         b.handle(Incoming::Reply { id: b.next_id, result: Ok(json!({})) }, &mut events);
         assert_eq!(b.pending.get(&b.next_id), Some(&Pending::SessionNew), "the session is opened again");
         b.handle(Incoming::Reply { id: b.next_id, result: Ok(json!({"sessionId": "s2", "models": {"currentModelId": "a", "availableModels": [{"modelId": "a"}]}})) }, &mut events);
-        assert!(matches!(&events[..], [Event::Models { current, .. }, Event::Ready { .. }] if current == "a"), "{events:?}");
+        assert!(
+            matches!(&events[..], [Event::Models { current, .. }, Event::Ready { .. }] if current == "a"),
+            "{events:?}"
+        );
         b.shutdown(true);
     }
 }

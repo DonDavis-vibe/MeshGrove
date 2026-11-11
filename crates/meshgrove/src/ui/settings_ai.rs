@@ -124,9 +124,7 @@ impl AiSettings {
                 if e.is_endpoint() {
                     kit::pill(ui, t!("assistant.endpoint_pill"), ui.visuals().weak_text_color());
                 }
-                if !e.found
-                    && !e.is_endpoint()
-                    && ui.small_button("✖").on_hover_text(t!("assistant.remove")).clicked()
+                if !e.found && !e.is_endpoint() && ui.small_button("✖").on_hover_text(t!("assistant.remove")).clicked()
                 {
                     changes.push(SettingsChange::RemoveAgent(e.id.clone()));
                 }
@@ -406,7 +404,10 @@ impl AiSettings {
             });
         });
         row(ui, &t!("endpoint.url"), |ui| {
-            if ui.add(egui::TextEdit::singleline(&mut form.base_url).id(*ENDPOINT_URL_FIELD).desired_width(300.0)).changed() {
+            if ui
+                .add(egui::TextEdit::singleline(&mut form.base_url).id(*ENDPOINT_URL_FIELD).desired_width(300.0))
+                .changed()
+            {
                 form.local = guess_local(&form.base_url);
             }
         });
@@ -560,7 +561,8 @@ impl AiSettings {
 }
 
 /// The address field, whose focus says whether the address is being typed.
-static ENDPOINT_URL_FIELD: std::sync::LazyLock<egui::Id> = std::sync::LazyLock::new(|| egui::Id::unique("endpoint_url"));
+static ENDPOINT_URL_FIELD: std::sync::LazyLock<egui::Id> =
+    std::sync::LazyLock::new(|| egui::Id::unique("endpoint_url"));
 
 /// Asks the endpoint for its models on a thread: with the key typed, else the one kept.
 fn list_models(ctx: &egui::Context, form: &EndpointConfig, typed: &str) -> Receiver<Result<Vec<String>, String>> {

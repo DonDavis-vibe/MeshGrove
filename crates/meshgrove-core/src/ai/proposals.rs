@@ -797,7 +797,12 @@ pub fn to_ops(p: &Proposal, picked: &Picked, inbox_done: bool) -> Vec<crate::cha
             if let Ok(list) = serde_json::from_value::<ListPayload>(p.payload.clone()) {
                 let kind = picked.list_kind.clone().unwrap_or(list.kind);
                 let kind = if kind == "print" { ListKind::Print } else { ListKind::Collection };
-                let name = picked.list_name.clone().map(|n| n.trim().to_owned()).filter(|n| !n.is_empty()).unwrap_or(list.name);
+                let name = picked
+                    .list_name
+                    .clone()
+                    .map(|n| n.trim().to_owned())
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or(list.name);
                 let items: Vec<(Target, u32)> = match &picked.list_items {
                     Some(kept) => kept
                         .iter()
@@ -1350,7 +1355,9 @@ fn move_of(
     } else if cx.config.ai.cross_library_moves {
         to_root
     } else {
-        return Err("moves stay within one library (the user can allow moves between libraries in Settings → AI)".into());
+        return Err(
+            "moves stay within one library (the user can allow moves between libraries in Settings → AI)".into()
+        );
     };
     let (target, payload) = crate::moves::plan_move(cx.lib, &root, &from, &to)?;
     let lower = |p: &Path| p.to_string_lossy().to_lowercase();
@@ -1522,7 +1529,12 @@ mod tests {
         let o = origin();
         let ask = AskUser {
             questions: vec![
-                AskQuestion { question: " Which printer? ".into(), options: vec!["A1 mini".into(), "X1C".into(), "A1 mini".into()], multi: false, allow_other: false },
+                AskQuestion {
+                    question: " Which printer? ".into(),
+                    options: vec!["A1 mini".into(), "X1C".into(), "A1 mini".into()],
+                    multi: false,
+                    allow_other: false,
+                },
                 AskQuestion { question: "Anything else?".into(), options: vec![], multi: false, allow_other: false },
             ],
         };
@@ -1538,7 +1550,8 @@ mod tests {
         assert_eq!(store.answer_of(&receipt.question).unwrap().unwrap()["answers"][0]["selected"][0], "X1C");
         assert!(store.pending_questions(None, None).unwrap().is_empty());
         assert!(ask_user(&mut store, &o, &AskUser { questions: vec![] }).is_err());
-        let many = AskUser { questions: vec![AskQuestion { question: "q".into(), ..Default::default() }; MAX_QUESTIONS + 1] };
+        let many =
+            AskUser { questions: vec![AskQuestion { question: "q".into(), ..Default::default() }; MAX_QUESTIONS + 1] };
         assert!(ask_user(&mut store, &o, &many).is_err());
     }
 
@@ -1558,7 +1571,11 @@ mod tests {
         let picked = Picked { whole: true, note: Some("new".into()), append: Some(true), ..Default::default() };
         let ops = to_ops(&note, &picked, false);
         assert!(matches!(&ops[..], [crate::changes::ApplyOp::SetNote { text, append: true, .. }] if text == "new"));
-        let tags = Proposal { kind: ProposalKind::Tags, payload: serde_json::json!({"add": [{"name": "Garten", "status": "existing"}]}), ..note.clone() };
+        let tags = Proposal {
+            kind: ProposalKind::Tags,
+            payload: serde_json::json!({"add": [{"name": "Garten", "status": "existing"}]}),
+            ..note.clone()
+        };
         let picked = Picked { add: vec!["Garten".into(), "Rosen".into()], ..Default::default() };
         assert_eq!(to_ops(&tags, &picked, false).len(), 2, "a tag typed in the review is added too");
         let list = Proposal {
@@ -1567,16 +1584,27 @@ mod tests {
             payload: serde_json::to_value(ListPayload {
                 name: "Geschenke".into(),
                 kind: "print".into(),
-                items: vec![ListItemPayload { target: target.clone(), quantity: 1 }, ListItemPayload { target, quantity: 2 }],
+                items: vec![
+                    ListItemPayload { target: target.clone(), quantity: 1 },
+                    ListItemPayload { target, quantity: 2 },
+                ],
                 query: None,
                 description: None,
             })
             .unwrap(),
             ..note
         };
-        let picked = Picked { whole: true, list_name: Some(" Gifts ".into()), list_kind: Some("collection".into()), list_items: Some(vec![(1, 5)]), ..Default::default() };
+        let picked = Picked {
+            whole: true,
+            list_name: Some(" Gifts ".into()),
+            list_kind: Some("collection".into()),
+            list_items: Some(vec![(1, 5)]),
+            ..Default::default()
+        };
         let ops = to_ops(&list, &picked, false);
-        assert!(matches!(&ops[..], [crate::changes::ApplyOp::List { kind: crate::lists::ListKind::Collection, name, items, .. }] if name == "Gifts" && items.len() == 1 && items[0].1 == 5));
+        assert!(
+            matches!(&ops[..], [crate::changes::ApplyOp::List { kind: crate::lists::ListKind::Collection, name, items, .. }] if name == "Gifts" && items.len() == 1 && items[0].1 == 5)
+        );
     }
 
     #[test]
