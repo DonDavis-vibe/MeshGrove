@@ -131,6 +131,9 @@ pub enum ProposalKind {
     /// A file, archive or folder to the trash. Always waits for the review; the trash, not the
     /// history, brings it back.
     Delete,
+    /// An archive unpacked beside itself, files packed into a new ZIP, or added to one
+    /// ([`crate::archives::ArchivePayload`]). Always waits for the review.
+    Archive,
 }
 
 impl ProposalKind {
@@ -142,6 +145,7 @@ impl ProposalKind {
             ProposalKind::Move => "move",
             ProposalKind::Bundle => "bundle",
             ProposalKind::Delete => "delete",
+            ProposalKind::Archive => "archive",
         }
     }
 
@@ -152,6 +156,7 @@ impl ProposalKind {
             "move" => ProposalKind::Move,
             "bundle" => ProposalKind::Bundle,
             "delete" => ProposalKind::Delete,
+            "archive" => ProposalKind::Archive,
             _ => ProposalKind::Tags,
         }
     }
@@ -821,6 +826,11 @@ pub fn to_ops(p: &Proposal, picked: &Picked, inbox_done: bool) -> Vec<crate::cha
                 ops.extend(bundle.at_free_place().ops());
             }
         }
+        (ProposalKind::Archive, Some(t)) if picked.whole => {
+            if let Ok(payload) = serde_json::from_value::<crate::archives::ArchivePayload>(p.payload.clone()) {
+                ops.extend(crate::archives::to_ops(t, &payload));
+            }
+        }
         _ => {}
     }
     if inbox_done
@@ -949,6 +959,38 @@ pub struct ProposeDelete {
     /// Shown above the suggestions, e.g. "Doppelte Downloads entfernen".
     pub title: String,
     pub items: Vec<DeleteItem>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ArchiveItem {
+    /// "unpack": the archive into a new folder named after it, beside it (the archive stays);
+    /// "pack": files and folders into a new ZIP beside the first of them; "add": files and
+    /// folders into a ZIP that is there.
+    pub op: String,
+    /// unpack, add: the archive (an id from search_models, folder_summary, list_archive …).
+    #[serde(default)]
+    pub archive: Option<String>,
+    /// pack, add: the files and folders (ids) that go in, with what lies below the folders.
+    #[serde(default)]
+    pub ids: Vec<String>,
+    /// pack: the new ZIP's name, e.g. "Rosen.zip" (a taken name gets a number).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// add: the folder inside the archive the files go below, e.g. "minis"; none: the top.
+    #[serde(default)]
+    pub folder: Option<String>,
+    /// Why, in a few words (shown in the review).
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ProposeArchive {
+    /// Shown above the suggestions, e.g. "Download-Packs entpacken".
+    pub title: String,
+    pub items: Vec<ArchiveItem>,
 }
 
 /// One question to the user, answered by picking among options (or in their own words).
@@ -1428,6 +1470,78 @@ fn delete_of(cx: &Context, item: &DeleteItem) -> Result<(Target, DeletePayload),
         target(cx, &item.id).map_err(|e| e.to_string())?
     };
     Ok((target, DeletePayload { root, folder }))
+}
+
+/// Archives unpacked beside themselves, files packed into a new ZIP or added to one: always
+/// reviewed, never replacing anything; only ZIP is written.
+pub fn propose_archive(
+    cx: &Context,
+    store: &mut ProposalStore,
+    origin: &Origin,
+    req: &ProposeArchive,
+) -> ToolResult<Receipt> {
+    check_room(store, origin, req.items.len())?;
+    let mut proposals = Vec::new();
+    let mut rejected = Vec::new();
+    for item in &req.items {
+        match archive_of(cx, item) {
+            Ok((target, payload)) => proposals.push(NewProposal {
+                kind: ProposalKind::Archive,
+                target: Some(target),
+                payload: serde_json::to_value(payload).unwrap_or_default(),
+                reason: summary_line(item.reason.as_deref()),
+                confidence: None,
+            }),
+            Err(why) => {
+                let id = item.archive.clone().or_else(|| item.ids.first().cloned()).unwrap_or_else(|| item.op.clone());
+                rejected.push(RejectedItem { id, why });
+            }
+        }
+    }
+    if proposals.is_empty() {
+        let why = rejected.first().map_or("no items", |r| r.why.as_str());
+        return Err(ToolError::Invalid(format!("no usable archive operation ({why})")));
+    }
+    let title = summary_line(Some(&req.title)).unwrap_or_else(|| "Archive".into());
+    let batch = NewBatch { origin, kind: "archive", title: &title, summary: None, inbox_done: false };
+    let (_, uid) = store.insert_batch(&batch, &proposals)?;
+    Ok(Receipt {
+        batch: uid,
+        items: proposals.len(),
+        rejected,
+        tags: Vec::new(),
+        message: "Nothing has changed yet: archive operations always wait for the user's review in Meshgrove. \
+                  Nothing is ever replaced, and the history takes them back."
+            .into(),
+    })
+}
+
+fn archive_of(cx: &Context, item: &ArchiveItem) -> Result<(Target, crate::archives::ArchivePayload), String> {
+    use crate::archives::{plan_add, plan_pack, plan_unpack};
+    let resolve = |id: &str| cx.resolve(id).map_err(|e| e.to_string());
+    let root_of = |path: &Path| {
+        cx.scope.root_of(path).map(|r| r.path.clone()).ok_or_else(|| format!("{} is not in a library", path.display()))
+    };
+    let planned = match item.op.as_str() {
+        "unpack" => {
+            let archive = resolve(item.archive.as_deref().ok_or("unpack needs the archive's id")?)?;
+            plan_unpack(&root_of(&archive)?, &archive)
+        }
+        "pack" => {
+            let sources = item.ids.iter().map(|id| resolve(id)).collect::<Result<Vec<_>, _>>()?;
+            let first = sources.first().ok_or("pack needs the ids of what goes in")?;
+            let name = item.name.as_deref().ok_or("pack needs a name for the ZIP")?;
+            plan_pack(&root_of(first)?, &sources, name)
+        }
+        "add" => {
+            let archive = resolve(item.archive.as_deref().ok_or("add needs the archive's id")?)?;
+            let sources = item.ids.iter().map(|id| resolve(id)).collect::<Result<Vec<_>, _>>()?;
+            let folder = item.folder.as_deref().unwrap_or("");
+            plan_add(&root_of(&archive)?, &archive, folder, &sources)
+        }
+        other => return Err(format!("unknown op {other:?}: unpack, pack or add")),
+    };
+    planned.map_err(|e| e.to_string())
 }
 
 /// Puts the AI's questions to the user; the answer is read with [`ProposalStore::answer_of`].

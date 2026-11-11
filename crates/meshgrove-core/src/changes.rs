@@ -64,11 +64,31 @@ pub enum ApplyOp {
         folder: bool,
     },
     /// An archive from outside the library unpacked into the new folder `into` below `root`.
-    /// The archive itself stays where it is (the app puts it in the trash).
+    /// The archive itself stays where it is (the app puts it in the trash). An archive of the
+    /// library unpacked beside itself stays too; an index step after it lists the files.
     Extract {
         root: PathBuf,
         archive: Target,
         into: PathBuf,
+    },
+    /// A new ZIP at `to` below `root` holding `sources` (files, and what lies below folders),
+    /// named relative to `base`. Never onto anything that is there; sources that are gone are
+    /// left out. The caller lists the folder it landed in.
+    Pack {
+        root: PathBuf,
+        sources: Vec<Target>,
+        base: PathBuf,
+        to: PathBuf,
+    },
+    /// `sources` (files, and what lies below folders) into the ZIP `archive` of the library,
+    /// as members named relative to `base` below `prefix` (`""` or `minis/`); none of the
+    /// names may be in it already. The caller lists the archive's folder.
+    AddToArchive {
+        root: PathBuf,
+        archive: Target,
+        sources: Vec<Target>,
+        base: PathBuf,
+        prefix: String,
     },
     /// A copy of a file or folder (from this library, another one or anywhere) at `to` below
     /// `root`; folders that do not exist yet are made. Never onto anything that is there. The
@@ -163,6 +183,14 @@ enum UndoOp {
     Unsee {
         hashes: Vec<String>,
     },
+    /// Members added to the ZIP `archive`, to take out again while the archive is still as
+    /// the addition left it (`size`, `mtime_ns`).
+    RemoveMembers {
+        archive: PathBuf,
+        names: Vec<String>,
+        size: u64,
+        mtime_ns: i64,
+    },
 }
 
 /// What a change did on disk, to do backwards when its journal cannot be written.
@@ -171,6 +199,8 @@ enum Done {
     Moved { from: PathBuf, to: PathBuf, made: Vec<PathBuf> },
     /// Files written into `dir` (a folder made along with `made`, or the one file itself).
     Written { dir: PathBuf, files: Vec<PathBuf>, made: Vec<PathBuf> },
+    /// Members added to a ZIP.
+    Added { archive: PathBuf, names: Vec<String> },
 }
 
 type OnDisk = Vec<Done>;
@@ -190,8 +220,24 @@ fn roll_back(done: &OnDisk) {
                 let _ = std::fs::remove_dir(dir);
                 remove_empty(made);
             }
+            Done::Added { archive, names } => {
+                let _ = crate::archive::remove_from_zip(archive, names);
+            }
         }
     }
+}
+
+/// The sources (files as they were, folders at all) that are still there.
+fn still_there(sources: &[Target]) -> Vec<PathBuf> {
+    sources
+        .iter()
+        .filter(|t| {
+            t.path
+                .symlink_metadata()
+                .is_ok_and(|m| m.is_dir() || (m.len() == t.size && nanos(m.modified().ok()) == t.mtime_ns))
+        })
+        .map(|t| t.path.clone())
+        .collect()
 }
 
 /// The files below `dir`, each with its size and time, as [`UndoOp::RemoveCopied`] wants them.
@@ -364,9 +410,21 @@ impl Library {
     /// Applies `ops` in one go and journals how to undo them; `origin` names where they came from
     /// (`proposal:<uid>`, `chat:<message>`).
     pub fn apply_change(&mut self, origin: &str, title: &str, ops: &[ApplyOp]) -> Result<ChangeReport, Error> {
+        self.apply_change_with_progress(origin, title, ops, &mut |_, _| {})
+    }
+
+    /// [`Self::apply_change`], telling `progress` before each step how many of the steps are
+    /// done (so a view can show how far a long change got).
+    pub fn apply_change_with_progress(
+        &mut self,
+        origin: &str,
+        title: &str,
+        ops: &[ApplyOp],
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<ChangeReport, Error> {
         self.conn.execute_batch("SAVEPOINT apply_change")?;
         let mut done = OnDisk::new();
-        let result = self.apply_journalled(origin, title, ops, &mut done);
+        let result = self.apply_journalled(origin, title, ops, &mut done, progress);
         if result.is_err() {
             roll_back(&done);
         }
@@ -379,8 +437,9 @@ impl Library {
         title: &str,
         ops: &[ApplyOp],
         done: &mut OnDisk,
+        progress: &mut dyn FnMut(usize, usize),
     ) -> Result<ChangeReport, Error> {
-        match self.apply_ops(ops, done) {
+        match self.apply_ops(ops, done, progress) {
             Ok((undo, report)) => {
                 let result = (|| {
                     if undo.is_empty() {
@@ -410,14 +469,20 @@ impl Library {
         }
     }
 
-    fn apply_ops(&mut self, ops: &[ApplyOp], on_disk: &mut OnDisk) -> Result<(Vec<UndoOp>, ChangeReport), Error> {
+    fn apply_ops(
+        &mut self,
+        ops: &[ApplyOp],
+        on_disk: &mut OnDisk,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<(Vec<UndoOp>, ChangeReport), Error> {
         let mut undo = Vec::new();
         let mut report = ChangeReport::default();
         let now = nanos(Some(SystemTime::now()));
         // Places a step of this change should have written but did not: an index step leaves
         // them alone (they belong to someone else).
         let mut not_written: Vec<&Path> = Vec::new();
-        for op in ops {
+        for (step, op) in ops.iter().enumerate() {
+            progress(step, ops.len());
             let done = match op {
                 ApplyOp::AddTag { target, tag } => match self.target_hash(target)? {
                     Some(hash) => {
@@ -601,6 +666,59 @@ impl Library {
                                 remove_empty(&made);
                                 false
                             }
+                        }
+                    }
+                }
+                ApplyOp::Pack { root, sources, base, to } => {
+                    let made = crate::moves::missing_folders(root, to.parent().unwrap_or(root));
+                    let present = still_there(sources);
+                    if present.is_empty() || to.symlink_metadata().is_ok() || !make_folders(&made) {
+                        false
+                    } else {
+                        let written = crate::archive::members_of(&present, base)
+                            .and_then(|files| crate::archive::write_zip(to, &files));
+                        match written {
+                            Ok(()) => {
+                                on_disk.push(Done::Written {
+                                    dir: to.clone(),
+                                    files: vec![to.clone()],
+                                    made: made.clone(),
+                                });
+                                let size = to.metadata().map_or(0, |m| m.len());
+                                let files = vec![(to.clone(), size, mtime_ns_of(to))];
+                                undo.push(UndoOp::RemoveCopied { at: to.clone(), files, made });
+                                true
+                            }
+                            Err(_) => {
+                                remove_empty(&made);
+                                false
+                            }
+                        }
+                    }
+                }
+                ApplyOp::AddToArchive { archive, sources, base, prefix, .. } => {
+                    let present = still_there(sources);
+                    if present.is_empty() || crate::moves::check_move(archive, &archive.path, false).is_err() {
+                        false
+                    } else {
+                        let files: Vec<(PathBuf, String)> = crate::archive::members_of(&present, base)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|(p, n)| (p, format!("{prefix}{n}")))
+                            .collect();
+                        if files.is_empty() || crate::archive::add_to_zip(&archive.path, &files).is_err() {
+                            false
+                        } else {
+                            let names: Vec<String> = files.into_iter().map(|(_, n)| n).collect();
+                            on_disk.push(Done::Added { archive: archive.path.clone(), names: names.clone() });
+                            let size = archive.path.metadata().map_or(0, |m| m.len());
+                            undo.push(UndoOp::RemoveMembers {
+                                archive: archive.path.clone(),
+                                names,
+                                size,
+                                mtime_ns: mtime_ns_of(&archive.path),
+                            });
+                            true
                         }
                     }
                 }
@@ -896,6 +1014,12 @@ impl Library {
                 }
             }
             UndoOp::RemoveExtracted { dir, files, made } => self.remove_written(dir, files, made)?,
+            UndoOp::RemoveMembers { archive, names, size, mtime_ns } => {
+                // Only while the archive is as the addition left it: whatever changed it since
+                // may rely on the members.
+                let same = archive.metadata().is_ok_and(|m| m.len() == *size && nanos(m.modified().ok()) == *mtime_ns);
+                same && crate::archive::remove_from_zip(archive, names).is_ok()
+            }
             UndoOp::RemoveCopied { at, files, made } => {
                 let all = self.remove_written(at, files, made)?;
                 self.forget_path(at)?;
@@ -1253,6 +1377,69 @@ mod tests {
         let report = lib.apply_change("import", "pack.zip", &ops).unwrap();
         assert_eq!(lib.undo_change(report.id).unwrap().undone, 1);
         assert!(!into2.exists() && root.join("Import").is_dir(), "Import was there before and stays");
+    }
+
+    #[test]
+    fn zips_are_packed_added_to_and_taken_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("lib");
+        let garten = root.join("Garten");
+        std::fs::create_dir_all(garten.join("sub")).unwrap();
+        std::fs::write(garten.join("rose.stl"), "rose").unwrap();
+        std::fs::write(garten.join("sub").join("leaf.stl"), "leaf").unwrap();
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.finish_baseline(&root).unwrap();
+
+        // Packed into a new ZIP, undone while it is unchanged.
+        let (target, payload) =
+            crate::archives::plan_pack(&root, &[garten.join("rose.stl"), garten.join("sub")], "Rosen").unwrap();
+        let ops = crate::archives::to_ops(&target, &payload);
+        let report = lib.apply_change("archive", "Rosen.zip", &ops).unwrap();
+        assert_eq!((report.applied, report.skipped), (1, 0));
+        let zip = garten.join("Rosen.zip");
+        let names: Vec<String> = crate::archive::list(&zip).unwrap().into_iter().map(|m| m.name).collect();
+        assert_eq!(names, ["rose.stl", "sub/leaf.stl"]);
+        assert_eq!(lib.apply_change("archive", "Rosen.zip", &ops).unwrap().skipped, 1, "never onto what is there");
+        assert_eq!(lib.undo_change(report.id).unwrap().undone, 1);
+        assert!(!zip.exists());
+
+        // Added to a ZIP: the old members stay as they are; taken back while the ZIP is as the
+        // addition left it.
+        let zip = root.join("pack.zip");
+        crate::archive::tests::make_zip(&zip);
+        let (target, payload) = crate::archives::plan_add(&root, &zip, "more", &[garten.join("rose.stl")]).unwrap();
+        let ops = crate::archives::to_ops(&target, &payload);
+        let report = lib.apply_change("archive", "pack.zip", &ops).unwrap();
+        assert_eq!((report.applied, report.skipped), (1, 0));
+        let names: Vec<String> = crate::archive::list(&zip).unwrap().into_iter().map(|m| m.name).collect();
+        assert_eq!(names, ["minis/orc.stl", "readme.txt", "more/rose.stl"]);
+        assert_eq!(lib.apply_change("archive", "pack.zip", &ops).unwrap().skipped, 1, "the archive changed since");
+        let undo = lib.undo_change(report.id).unwrap();
+        assert_eq!((undo.undone, undo.kept), (1, 0));
+        let names: Vec<String> = crate::archive::list(&zip).unwrap().into_iter().map(|m| m.name).collect();
+        assert_eq!(names, ["minis/orc.stl", "readme.txt"]);
+        // The undo rewrote the archive: the old plan is stale, a new one goes through.
+        assert_eq!(lib.apply_change("archive", "pack.zip", &ops).unwrap().skipped, 1);
+        let (target, payload) = crate::archives::plan_add(&root, &zip, "more", &[garten.join("rose.stl")]).unwrap();
+        let report = lib.apply_change("archive", "pack.zip", &crate::archives::to_ops(&target, &payload)).unwrap();
+        assert_eq!(report.applied, 1);
+        // Changed since (another addition): the undo keeps its hands off.
+        let (t2, p2) = crate::archives::plan_add(&root, &zip, "", &[garten.join("sub")]).unwrap();
+        let later = lib.apply_change("archive", "pack.zip", &crate::archives::to_ops(&t2, &p2)).unwrap();
+        assert_eq!((later.applied, later.skipped), (1, 0));
+        assert_eq!(lib.undo_change(report.id).unwrap().kept, 1);
+        assert_eq!(crate::archive::list(&zip).unwrap().len(), 4);
+
+        // Unpacked beside itself in the library: the files are indexed at once; the archive stays.
+        let (target, payload) = crate::archives::plan_unpack(&root, &zip).unwrap();
+        let ops = crate::archives::to_ops(&target, &payload);
+        let report = lib.apply_change("archive", "pack", &ops).unwrap();
+        assert_eq!((report.applied, report.skipped), (2, 0), "extracted and indexed");
+        assert_eq!(std::fs::read_to_string(root.join("pack").join("readme.txt")).unwrap(), "hello");
+        assert!(lib.entry_of(&root.join("pack").join("minis").join("orc.stl")).unwrap().is_some(), "in the index");
+        assert!(zip.is_file());
+        assert!(lib.undo_change(report.id).unwrap().undone >= 1);
+        assert!(!root.join("pack").exists());
     }
 
     #[test]

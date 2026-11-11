@@ -793,7 +793,7 @@ impl App {
                     if self.config.ai.chat_mode == ChatMode::Auto && b.state == "pending" {
                         let items = store.proposals(b.id).unwrap_or_default();
                         let movable = |p: &proposals::Proposal| match p.kind {
-                            ProposalKind::Delete => false,
+                            ProposalKind::Delete | ProposalKind::Archive => false,
                             ProposalKind::Move => p.target.as_ref().is_some_and(|t| self.config.in_landing(&t.path)),
                             _ => true,
                         };

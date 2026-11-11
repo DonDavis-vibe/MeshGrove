@@ -257,6 +257,199 @@ fn materialize_in(path: &Path, base: &Path) -> io::Result<PathBuf> {
     Ok(target)
 }
 
+// ---- Writing ZIPs ----
+//
+// Only ZIP is written (the `zip` crate); 7z, RAR and TAR stay read-only through libarchive. An
+// archive is never changed in place: a new file beside it takes the old members as they are
+// and the new ones, then takes the old one's name.
+
+/// The files of `selection` (those below selected folders too; hidden ones and links left out),
+/// each with its member name: the path relative to `base`, `/`-separated, or the file's name
+/// alone where it does not lie below `base`.
+pub fn members_of(selection: &[PathBuf], base: &Path) -> io::Result<Vec<(PathBuf, String)>> {
+    let mut out = Vec::new();
+    for path in selection {
+        collect(path, base, &mut out)?;
+    }
+    Ok(out)
+}
+
+fn collect(path: &Path, base: &Path, out: &mut Vec<(PathBuf, String)>) -> io::Result<()> {
+    let meta = path.symlink_metadata()?;
+    if meta.is_symlink() || listing::is_hidden(&listing::file_name(path)) {
+        return Ok(());
+    }
+    if meta.is_dir() {
+        let mut children: Vec<PathBuf> = std::fs::read_dir(path)?.flatten().map(|e| e.path()).collect();
+        children.sort();
+        for child in children {
+            collect(&child, base, out)?;
+        }
+    } else {
+        out.push((path.to_path_buf(), member_name(path, base)));
+    }
+    Ok(())
+}
+
+fn member_name(path: &Path, base: &Path) -> String {
+    match path.strip_prefix(base) {
+        Ok(rel) if rel.components().next().is_some() => {
+            rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/")
+        }
+        _ => listing::file_name(path),
+    }
+}
+
+/// Makes the ZIP `zip` from `files` (each on disk, with its member name); nothing may be at
+/// `zip` yet. Written beside it first and renamed into place, so a failure leaves nothing.
+pub fn write_zip(zip: &Path, files: &[(PathBuf, String)]) -> io::Result<()> {
+    let temp = temp_name(zip);
+    let result = (|| {
+        let mut writer = zip::ZipWriter::new(File::create_new(&temp)?);
+        append(&mut writer, files)?;
+        writer.finish().map_err(zip_err)?.sync_all()?;
+        crate::fsops::rename_no_replace(&temp, zip)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
+/// Adds `files` to the ZIP `zip`, which stays as it is otherwise. A member of one of those
+/// names there already stops it, with nothing changed.
+pub fn add_to_zip(zip: &Path, files: &[(PathBuf, String)]) -> io::Result<()> {
+    rewrite(zip, |old, writer| {
+        for i in 0..old.len() {
+            let entry = old.by_index_raw(i).map_err(zip_err)?;
+            let name = entry.name().map_err(zip_err)?.into_owned();
+            if files.iter().any(|(_, n)| *n == name) {
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{name} is in the archive already")));
+            }
+            writer.raw_copy_file(entry).map_err(zip_err)?;
+        }
+        append(writer, files)
+    })
+}
+
+/// Takes the members `names` out of the ZIP `zip` (an addition taken back).
+pub fn remove_from_zip(zip: &Path, names: &[String]) -> io::Result<()> {
+    rewrite(zip, |old, writer| {
+        for i in 0..old.len() {
+            let entry = old.by_index_raw(i).map_err(zip_err)?;
+            let name = entry.name().map_err(zip_err)?.into_owned();
+            if !names.contains(&name) {
+                writer.raw_copy_file(entry).map_err(zip_err)?;
+            }
+        }
+        Ok(())
+    })
+}
+
+/// The members a ZIP has, by name (`/`-separated, folders ending in `/`).
+pub fn zip_names(zip: &Path) -> io::Result<Vec<String>> {
+    let archive = zip::ZipArchive::new(File::open(zip)?).map_err(zip_err)?;
+    archive.file_names().map(|n| n.map(|n| n.into_owned()).map_err(zip_err)).collect()
+}
+
+/// Writes `zip` anew beside itself: `fill` copies what stays and adds what is new; then the new
+/// file takes the old one's place.
+fn rewrite(
+    zip: &Path,
+    fill: impl FnOnce(&mut zip::ZipArchive<File>, &mut zip::ZipWriter<File>) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut old = zip::ZipArchive::new(File::open(zip)?).map_err(zip_err)?;
+    let temp = temp_name(zip);
+    let result = (|| {
+        let mut writer = zip::ZipWriter::new(File::create_new(&temp)?);
+        fill(&mut old, &mut writer)?;
+        writer.finish().map_err(zip_err)?.sync_all()?;
+        drop(old); // Windows renames over no open file
+        std::fs::rename(&temp, zip)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    forget(zip);
+    result
+}
+
+fn append(writer: &mut zip::ZipWriter<File>, files: &[(PathBuf, String)]) -> io::Result<()> {
+    for (path, name) in files {
+        let meta = path.metadata()?;
+        writer.start_file(name.as_str(), options(&meta)).map_err(zip_err)?;
+        io::copy(&mut File::open(path)?, writer)?;
+    }
+    Ok(())
+}
+
+/// The same on every system: "made by Unix", read and write for the owner, read for the others,
+/// deflated, with the file's own time (see the 3MF writer).
+fn options(meta: &std::fs::Metadata) -> zip::write::SimpleFileOptions {
+    let mut options = zip::write::SimpleFileOptions::default()
+        .system(zip::System::Unix)
+        .unix_permissions(0o644)
+        .compression_method(zip::CompressionMethod::Deflated)
+        .large_file(meta.len() >= u32::MAX as u64);
+    if let Some(time) = meta.modified().ok().and_then(zip_time) {
+        options = options.last_modified_time(time);
+    }
+    options
+}
+
+/// A file's time as ZIP stores it (UTC, to two seconds), for files from 1980 to 2107; others
+/// keep the writer's default.
+fn zip_time(time: SystemTime) -> Option<zip::DateTime> {
+    let secs = time.duration_since(SystemTime::UNIX_EPOCH).ok()?.as_secs() as i64;
+    let (days, rest) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    let (year, month, day) = civil_from_days(days);
+    let year = u16::try_from(year).ok()?;
+    zip::DateTime::from_date_and_time(
+        year,
+        month,
+        day,
+        (rest / 3600) as u8,
+        (rest % 3600 / 60) as u8,
+        (rest % 60) as u8,
+    )
+    .ok()
+}
+
+/// Days since 1970-01-01 as (year, month, day) in the Gregorian calendar (Howard Hinnant's
+/// `civil_from_days`).
+fn civil_from_days(days: i64) -> (i64, u8, u8) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u8;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u8;
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
+/// A hidden name beside `zip` for the new file while it is written.
+fn temp_name(zip: &Path) -> PathBuf {
+    zip.with_file_name(format!(".{}.{}.part", listing::file_name(zip), std::process::id()))
+}
+
+/// The cached members of `archive` are stale: it was written anew.
+fn forget(archive: &Path) {
+    let mut last = LAST.lock().unwrap_or_else(|p| p.into_inner());
+    if last.as_ref().is_some_and(|e| e.archive == archive) {
+        *last = None;
+    }
+}
+
+fn zip_err(e: zip::result::ZipError) -> io::Error {
+    match e {
+        zip::result::ZipError::Io(e) => e,
+        other => io::Error::other(other.to_string()),
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -278,6 +471,56 @@ pub(crate) mod tests {
         w.add_directory("empty/", opts).unwrap();
         w.finish().unwrap();
         stl
+    }
+
+    #[test]
+    fn zips_are_written_added_to_and_taken_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = dir.path().join("lib");
+        std::fs::create_dir_all(lib.join("Garten").join("sub")).unwrap();
+        std::fs::write(lib.join("Garten").join("rose.stl"), "rose").unwrap();
+        std::fs::write(lib.join("Garten").join("sub").join("leaf.stl"), "leaf").unwrap();
+        std::fs::write(lib.join("Garten").join(".hidden"), "x").unwrap();
+        std::fs::write(lib.join("loose.txt"), "loose").unwrap();
+
+        let members = members_of(&[lib.join("Garten"), lib.join("loose.txt")], &lib).unwrap();
+        let names: Vec<&str> = members.iter().map(|(_, n)| n.as_str()).collect();
+        assert_eq!(names, ["Garten/rose.stl", "Garten/sub/leaf.stl", "loose.txt"]);
+        assert_eq!(member_name(Path::new("/elsewhere/x.stl"), &lib), "x.stl", "outside base: the name alone");
+
+        let zip = lib.join("garten.zip");
+        write_zip(&zip, &members).unwrap();
+        assert_eq!(list(&zip).unwrap().iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), names);
+        assert_eq!(read(&zip.join("Garten/sub/leaf.stl")).unwrap(), b"leaf");
+        assert!(write_zip(&zip, &members).is_err(), "never onto what is there");
+        assert!(!temp_name(&zip).exists());
+
+        // Added, with the old members copied as they are.
+        let extra = [(lib.join("Garten").join("rose.stl"), "more/rose.stl".to_owned())];
+        add_to_zip(&zip, &extra).unwrap();
+        assert_eq!(zip_names(&zip).unwrap().len(), 4);
+        assert_eq!(read(&zip.join("more/rose.stl")).unwrap(), b"rose");
+        assert_eq!(read(&zip.join("loose.txt")).unwrap(), b"loose");
+        let clash = add_to_zip(&zip, &extra).unwrap_err();
+        assert_eq!(clash.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(zip_names(&zip).unwrap().len(), 4, "nothing changed");
+        assert!(!temp_name(&zip).exists());
+
+        // Taken back.
+        remove_from_zip(&zip, &["more/rose.stl".to_owned()]).unwrap();
+        assert_eq!(list(&zip).unwrap().iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), names);
+        assert!(read(&zip.join("more/rose.stl")).is_err());
+    }
+
+    #[test]
+    fn times_are_stored_in_the_zip() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(19_723), (2024, 1, 1));
+        assert_eq!(civil_from_days(20_787), (2026, 11, 30));
+        let t = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20_787 * 86_400 + 13 * 3600 + 45 * 60 + 30);
+        let z = zip_time(t).unwrap();
+        assert_eq!((z.year(), z.month(), z.day(), z.hour(), z.minute(), z.second()), (2026, 11, 30, 13, 45, 30));
+        assert!(zip_time(SystemTime::UNIX_EPOCH).is_none(), "before 1980: the default");
     }
 
     #[test]

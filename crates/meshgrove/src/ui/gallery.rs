@@ -90,6 +90,12 @@ pub enum Action {
     MentionInChat,
     /// `meshgrove:<id>` of the selection, for an assistant using the MCP server.
     CopyReference,
+    /// Unpack the selected archives into folders named after them, beside them.
+    Unpack,
+    /// Pack the selection into a new ZIP of this name, beside it.
+    Pack(String),
+    /// Add the selection to this ZIP nearby.
+    AddToArchive(PathBuf),
 }
 
 /// What the context menu can offer for the current selection.
@@ -124,6 +130,14 @@ pub struct MenuContext {
     pub ai_refs: bool,
     /// Plugins that open the selection: (id, the menu entry).
     pub plugin_openers: Vec<(String, String)>,
+    /// The selection is archives of the library, whose folder can be written.
+    pub can_unpack: bool,
+    /// The selection is files and folders of one library folder (not inside an archive).
+    pub can_pack: bool,
+    /// The name offered for a new ZIP of the selection.
+    pub pack_name: String,
+    /// ZIPs in the selection's folder it could be added to: (path, name).
+    pub archives_nearby: Vec<(PathBuf, String)>,
 }
 
 pub struct GalleryOutput {
@@ -931,6 +945,31 @@ fn entry_menu(
         if menu.rescan {
             rows.item(ui, t!("menu.rescan"), Action::Rescan);
         }
+        // Archives: unpacked beside themselves, the selection packed into a new ZIP or added
+        // to one nearby. Only ZIP is written.
+        rows.section(ui);
+        if menu.can_unpack {
+            rows.item(ui, t!("menu.unpack"), Action::Unpack);
+        }
+        if menu.can_pack {
+            rows.submenu(ui, t!("menu.pack"), |ui, rows| {
+                let mut name =
+                    ui.data_mut(|d| d.get_temp::<String>(pack_name_id())).unwrap_or_else(|| menu.pack_name.clone());
+                ui.add(egui::TextEdit::singleline(&mut name).hint_text(t!("menu.pack_name_hint")));
+                let typed = name.trim().to_owned();
+                ui.data_mut(|d| d.insert_temp(pack_name_id(), name));
+                if !typed.is_empty() {
+                    rows.item(ui, t!("menu.pack_as", name = typed.clone()), Action::Pack(typed));
+                }
+            });
+            if !menu.archives_nearby.is_empty() {
+                rows.submenu(ui, t!("menu.add_to_archive"), |ui, rows| {
+                    for (path, name) in &menu.archives_nearby {
+                        rows.item(ui, format!("📦  {name}").into(), Action::AddToArchive(path.clone()));
+                    }
+                });
+            }
+        }
         // AI
         rows.section(ui);
         if menu.ai_chat {
@@ -952,6 +991,13 @@ fn entry_menu(
     if matches!(action, Some(Action::NewList(..))) {
         response.ctx.data_mut(|d| d.remove::<String>(new_list_id()));
     }
+    if matches!(action, Some(Action::Pack(..))) {
+        response.ctx.data_mut(|d| d.remove::<String>(pack_name_id()));
+    }
+}
+
+fn pack_name_id() -> egui::Id {
+    egui::Id::unique("gallery-pack-name")
 }
 
 fn tile_background(visuals: &egui::Visuals, selected: bool, hovered: bool) -> Color32 {

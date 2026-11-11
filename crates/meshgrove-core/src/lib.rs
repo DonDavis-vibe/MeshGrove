@@ -2,6 +2,7 @@
 
 pub mod ai;
 pub mod archive;
+pub mod archives;
 pub mod bundle;
 pub mod bvh;
 pub mod cache;

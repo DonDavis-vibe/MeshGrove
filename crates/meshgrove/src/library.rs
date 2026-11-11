@@ -45,6 +45,9 @@ pub enum LibEvent {
     ChecksStored,
     /// Suggestions were accepted, or a change was undone or redone.
     Applied(Applied),
+    /// The decisions on a batch of suggestions are recorded (`ok`: and what was accepted of it
+    /// applied); the review can let its card go.
+    Decided { batch: i64, ok: bool },
     /// Result of an export or import, for a message.
     Transfer(Result<Transfer, String>),
     /// Files were brought in from an import folder; `trash` are archives unpacked on the way,
@@ -102,6 +105,8 @@ pub struct LibStatus {
     pub scanning: bool,
     pub counts: Counts,
     pub error: Option<String>,
+    /// A batch of suggestions being applied: its id, steps done, steps in all.
+    pub applying: Option<(i64, usize, usize)>,
 }
 
 enum Cmd {
@@ -170,6 +175,14 @@ enum Cmd {
     },
     /// Suggests moving these files into the folders of their tags.
     PlaceByTag(Vec<PathBuf>),
+    /// Unpacks, packs or adds to an archive (from the context menu), as planned; `dir` below
+    /// `root` is listed afterwards, so the new folder, ZIP or members get their index rows.
+    Archive {
+        title: String,
+        ops: Vec<ApplyOp>,
+        root: PathBuf,
+        dir: PathBuf,
+    },
 }
 
 /// Changes to favourites, lists and tag colours.
@@ -229,6 +242,11 @@ impl Applier {
     /// Copies files into a folder, as planned; answered with [`LibEvent::Copied`].
     pub fn copy_files(&self, plan: copies::Plan, title: String, index: bool) {
         let _ = self.0.send(Cmd::CopyFiles { plan, title, index });
+    }
+
+    /// Unpacks, packs or adds to an archive, as planned; answered with [`LibEvent::Applied`].
+    pub fn archive(&self, title: String, ops: Vec<ApplyOp>, root: PathBuf, dir: PathBuf) {
+        let _ = self.0.send(Cmd::Archive { title, ops, root, dir });
     }
 
     pub fn apply(&self, origin: &str, title: &str, ops: Vec<ApplyOp>) -> Result<ChangeReport, String> {
@@ -349,6 +367,11 @@ impl LibraryService {
     /// Brings files in from an import folder; answered with [`LibEvent::Imported`].
     pub fn import_files(&self, plan: import::Plan, title: String) {
         let _ = self.tx.send(Cmd::ImportFiles { plan, title });
+    }
+
+    /// Unpacks, packs or adds to an archive, as planned ([`LibEvent::Applied`]).
+    pub fn archive(&self, title: String, ops: Vec<ApplyOp>, root: PathBuf, dir: PathBuf) {
+        let _ = self.tx.send(Cmd::Archive { title, ops, root, dir });
     }
 
     /// Suggests moving these library files into the folders of their tags ([`LibEvent::Placed`]).
@@ -528,7 +551,18 @@ impl Worker {
                     self.send(LibEvent::UserDataChanged);
                 }
                 Ok(Cmd::Accept { batch, uid, title, ops, decisions }) => {
-                    let result = lib.apply_change(&format!("proposal:{uid}"), &title, &ops);
+                    // The review paints how far the batch got; not for every step of a big one.
+                    let mut told = Instant::now() - Duration::from_secs(1);
+                    let mut progress = |done: usize, total: usize| {
+                        if told.elapsed() >= Duration::from_millis(50) || done + 1 == total {
+                            told = Instant::now();
+                            self.status.lock().unwrap().applying = Some((batch, done, total));
+                            self.ctx.request_repaint();
+                        }
+                    };
+                    let result =
+                        lib.apply_change_with_progress(&format!("proposal:{uid}"), &title, &ops, &mut progress);
+                    let ok = result.is_ok();
                     let applied = match result {
                         Ok(report) => {
                             if let Some(store) = proposals.get()
@@ -541,7 +575,9 @@ impl Worker {
                         }
                         Err(e) => Applied::Failed(e.to_string()),
                     };
+                    self.status.lock().unwrap().applying = None;
                     self.send(LibEvent::Applied(applied));
+                    self.send(LibEvent::Decided { batch, ok });
                     self.send(LibEvent::UserDataChanged);
                 }
                 Ok(Cmd::ApplyBundle { origin, title, ops, from }) => {
@@ -592,12 +628,30 @@ impl Worker {
                     }
                     self.send(LibEvent::UserDataChanged);
                 }
+                Ok(Cmd::Archive { title, ops, root, dir }) => {
+                    let applied = match lib.apply_change("archive", &title, &ops) {
+                        Ok(report) => {
+                            // The folder is listed now: the new folder's files, the new ZIP or
+                            // the changed one's members get their index rows.
+                            if dir.is_dir() {
+                                self.scan(&mut lib, &[(root, dir)], Force::Start);
+                            }
+                            Applied::Accepted { title, report }
+                        }
+                        Err(e) => Applied::Failed(e.to_string()),
+                    };
+                    self.send(LibEvent::Applied(applied));
+                    self.send(LibEvent::UserDataChanged);
+                }
                 Ok(Cmd::Decide { batch, decisions }) => {
+                    let mut ok = true;
                     if let Some(store) = proposals.get()
                         && let Err(e) = store.decide(batch, &decisions)
                     {
                         log::warn!("recording the decisions failed: {e}");
+                        ok = false;
                     }
+                    self.send(LibEvent::Decided { batch, ok });
                 }
                 Ok(Cmd::Undo(id)) => {
                     let title = change_title(&lib, id);

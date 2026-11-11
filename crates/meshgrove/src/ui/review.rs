@@ -4,13 +4,14 @@
 //! again.
 
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
-use egui::{Color32, RichText, Ui};
+use egui::{Color32, Id, Rect, RichText, Shape, Ui, vec2};
 use meshgrove_core::ai::proposals::{
     DeletePayload, ListPayload, MovePayload, NotePayload, Picked, Proposal, ProposalKind, TagsPayload,
 };
 use meshgrove_core::ai::vocab::TagStatus;
+use meshgrove_core::archives::{ArchiveOp, ArchivePayload};
 use meshgrove_core::bundle::ResolvedBundle;
 use meshgrove_core::changes::ChangeInfo;
 use meshgrove_core::listing::{self, Entry};
@@ -18,11 +19,31 @@ use meshgrove_core::lists::ListKind;
 
 use super::duplicates::{TileClick, tile};
 use super::gallery::Gallery;
+use super::settings_kit::GOOD;
 use super::tags::{self, TagStyle};
 use crate::i18n;
 
 /// A new tag, which the AI made up.
 const NEW_TAG: Color32 = Color32::from_rgb(230, 140, 40);
+/// Space under each card.
+const GAP: f32 = 6.0;
+/// How long the green sweep takes to catch up with the library, and how long a finished card
+/// takes to fade away.
+const SWEEP_TIME: f32 = 0.25;
+const FADE_TIME: f32 = 0.45;
+/// The green of a card being applied, at its strongest.
+const TINT: f32 = 0.35;
+
+/// What a batch goes through after one of its buttons was clicked. The card stays where it is
+/// (the next batch's buttons come to where the clicked ones were) until the library has
+/// recorded the decisions, then fades away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flight {
+    /// Sent to the library; `reject`: nothing is applied, only recorded.
+    Applying { reject: bool },
+    /// Recorded (and what was picked applied): the card fades.
+    Done,
+}
 
 pub struct ReviewBatch {
     pub id: i64,
@@ -36,15 +57,41 @@ pub struct ReviewBatch {
     /// panel for the user to look at: never accepted by itself.
     pub chat: bool,
     pub items: Vec<ReviewItem>,
+    /// After a click on one of its buttons, until the card has gone.
+    pub flight: Option<Flight>,
 }
 
 impl ReviewBatch {
+    fn sweep_id(&self) -> Id {
+        Id::unique(("review_sweep", self.id))
+    }
+
+    fn fade_id(&self) -> Id {
+        Id::unique(("review_fade", self.id))
+    }
+
+    /// How far the green sweep across the card should be.
+    fn sweep_target(&self, applying: Option<(i64, usize, usize)>) -> f32 {
+        match self.flight {
+            Some(Flight::Applying { reject: true }) | None => 0.0,
+            Some(Flight::Applying { reject: false }) => match applying {
+                Some((batch, done, total)) if batch == self.id && total > 0 => (done as f32 / total as f32).max(0.08),
+                // Waiting in the library's queue: a sliver says it is on its way.
+                _ => 0.08,
+            },
+            Some(Flight::Done) => 1.0,
+        }
+    }
     fn moves(&self) -> bool {
         self.items.iter().any(|i| i.proposal.kind == ProposalKind::Move)
     }
 
     fn deletes(&self) -> bool {
         self.items.iter().any(|i| i.proposal.kind == ProposalKind::Delete)
+    }
+
+    fn archives(&self) -> bool {
+        self.items.iter().any(|i| i.proposal.kind == ProposalKind::Archive)
     }
 }
 
@@ -85,7 +132,29 @@ pub enum ReviewAction {
         all: bool,
     },
     Reject(usize),
+    /// A finished batch has faded away: take it out of the list.
+    Remove(usize),
     History,
+}
+
+/// The scroll area's pending offset, set by a click and read the next frame.
+fn jump_id() -> Id {
+    Id::unique("review_scroll_jump")
+}
+
+/// The offset that brings batch `clicked + 1` to where batch `clicked` is: its buttons land
+/// under the pointer, so the user can go on clicking. `rects` are the cards as drawn at
+/// `offset`. None for the last batch.
+pub(crate) fn jump_to_next(rects: &[Rect], clicked: usize, offset: f32) -> Option<f32> {
+    let next = rects.get(clicked + 1)?;
+    Some(offset + (next.min.y - rects[clicked].min.y))
+}
+
+/// How much the scroll offset shrinks when the card `removed` goes, so that what is below it
+/// stays where it is on screen: the card's height when it starts above the viewport (what the
+/// user looks at would move up otherwise), nothing when it is in view or below.
+pub(crate) fn compensation(removed: Rect, viewport: Rect) -> f32 {
+    if removed.min.y < viewport.min.y + 1.0 { removed.height() + GAP } else { 0.0 }
 }
 
 pub enum HistoryAction {
@@ -100,10 +169,14 @@ pub fn show(
     batches: &mut [ReviewBatch],
     gallery: &Gallery,
     style: &TagStyle,
+    applying: Option<(i64, usize, usize)>,
 ) -> Option<ReviewAction> {
     let mut action = None;
     ui.horizontal(|ui| {
         ui.label(RichText::new(t!("review.summary", count = batches.len())).strong());
+        if let Some((_, done, total)) = applying {
+            ui.weak(t!("review.applying", done = done, total = total));
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button(t!("review.history")).clicked() {
                 action = Some(ReviewAction::History);
@@ -116,61 +189,134 @@ pub fn show(
         ui.centered_and_justified(|ui| ui.weak(t!("review.empty")));
         return action;
     }
-    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+    let ctx = ui.ctx().clone();
+    let mut area = egui::ScrollArea::vertical().id_salt("review").auto_shrink(false);
+    if let Some(target) = ui.data_mut(|d| d.remove_temp::<f32>(jump_id())) {
+        area = area.vertical_scroll_offset(target);
+    }
+    // The cards as drawn this frame, for the scrolling below.
+    let mut rects: Vec<Rect> = Vec::with_capacity(batches.len());
+    let mut clicked = None;
+    let mut remove = None;
+    let shown = area.show(ui, |ui| {
+        let viewport_h = ui.clip_rect().height();
+        let rounding = ui.style().visuals.widgets.noninteractive.corner_radius;
         for (bi, batch) in batches.iter_mut().enumerate() {
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(t!("review.reject")).clicked() {
-                            action = Some(ReviewAction::Reject(bi));
-                        }
-                        if ui.button(t!("review.accept_all")).clicked() {
-                            action = Some(ReviewAction::Accept { batch: bi, all: true });
-                        }
-                        let any = batch.items.iter().any(|i| !i.picked.is_empty() && !i.stale);
-                        if ui.add_enabled(any, egui::Button::new(t!("review.accept_picked"))).clicked() {
-                            action = Some(ReviewAction::Accept { batch: bi, all: false });
-                        }
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            let picked = batch.items.iter().filter(|i| !i.picked.is_empty()).count();
-                            let mut all = picked == batch.items.len();
-                            let some = picked > 0 && !all;
-                            let check = egui::Checkbox::without_text(&mut all).indeterminate(some);
-                            if ui.add(check).on_hover_text(t!("review.toggle_batch")).changed() {
-                                for item in &mut batch.items {
-                                    item.picked = if all { Picked::all(&item.proposal) } else { Picked::default() };
+            let busy = batch.flight.is_some();
+            // Painted once the card's place is known: behind it.
+            let background = ui.painter().add(Shape::Noop);
+            let sweep = ctx.animate_value_with_time(batch.sweep_id(), batch.sweep_target(applying), SWEEP_TIME);
+            let fade = match batch.flight {
+                Some(Flight::Done) => ctx.animate_value_with_time(batch.fade_id(), 1.0, FADE_TIME),
+                _ => 0.0,
+            };
+            let card = ui.scope(|ui| {
+                if fade > 0.0 {
+                    ui.multiply_opacity(1.0 - fade);
+                }
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add_enabled(!busy, egui::Button::new(t!("review.reject"))).clicked() {
+                                action = Some(ReviewAction::Reject(bi));
+                                clicked = Some(bi);
+                            }
+                            if ui.add_enabled(!busy, egui::Button::new(t!("review.accept_all"))).clicked() {
+                                action = Some(ReviewAction::Accept { batch: bi, all: true });
+                                clicked = Some(bi);
+                            }
+                            let any = batch.items.iter().any(|i| !i.picked.is_empty() && !i.stale);
+                            if ui.add_enabled(any && !busy, egui::Button::new(t!("review.accept_picked"))).clicked() {
+                                action = Some(ReviewAction::Accept { batch: bi, all: false });
+                                clicked = Some(bi);
+                            }
+                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                let picked = batch.items.iter().filter(|i| !i.picked.is_empty()).count();
+                                let mut all = picked == batch.items.len();
+                                let some = picked > 0 && !all;
+                                let check = egui::Checkbox::without_text(&mut all).indeterminate(some);
+                                if ui.add_enabled(!busy, check).on_hover_text(t!("review.toggle_batch")).changed() {
+                                    for item in &mut batch.items {
+                                        item.picked = if all { Picked::all(&item.proposal) } else { Picked::default() };
+                                    }
                                 }
-                            }
-                            ui.add(egui::Label::new(RichText::new(format!("✨ {}", batch.title)).strong()).truncate());
-                            let mut facts =
-                                vec![batch.source.clone(), t!("review.items", count = batch.items.len()).into_owned()];
-                            if let Some(t) = batch.created {
-                                facts.push(i18n::datetime(t));
-                            }
-                            ui.add(egui::Label::new(RichText::new(facts.join(" · ")).weak()).truncate());
-                        });
-                    })
-                });
-                if batch.inbox_done {
-                    ui.weak(t!("review.inbox_done"));
-                }
-                if batch.moves() {
-                    ui.weak(t!("review.moves_hint"));
-                }
-                if batch.deletes() {
-                    ui.weak(t!("review.deletes_hint"));
-                }
-                for item in &mut batch.items {
-                    ui.separator();
-                    if let Some(a) = item_row(ui, entries, item, gallery, style) {
-                        action = Some(a);
+                                ui.add(
+                                    egui::Label::new(RichText::new(format!("✨ {}", batch.title)).strong()).truncate(),
+                                );
+                                let mut facts = vec![
+                                    batch.source.clone(),
+                                    t!("review.items", count = batch.items.len()).into_owned(),
+                                ];
+                                if let Some(t) = batch.created {
+                                    facts.push(i18n::datetime(t));
+                                }
+                                ui.add(egui::Label::new(RichText::new(facts.join(" · ")).weak()).truncate());
+                            });
+                        })
+                    });
+                    if batch.inbox_done {
+                        ui.weak(t!("review.inbox_done"));
                     }
-                }
+                    if batch.moves() {
+                        ui.weak(t!("review.moves_hint"));
+                    }
+                    if batch.deletes() {
+                        ui.weak(t!("review.deletes_hint"));
+                    }
+                    if batch.archives() {
+                        ui.weak(t!("review.archives_hint"));
+                    }
+                    ui.add_enabled_ui(!busy, |ui| {
+                        for item in &mut batch.items {
+                            ui.separator();
+                            if let Some(a) = item_row(ui, entries, item, gallery, style) {
+                                action = Some(a);
+                            }
+                        }
+                    });
+                })
             });
-            ui.add_space(6.0);
+            let rect = card.inner.response.rect;
+            if busy && sweep > 0.0 {
+                // Green from the left, as far as the library got; gone with the card.
+                let tint = Rect::from_min_size(rect.min, vec2(rect.width() * sweep, rect.height()));
+                let color = GOOD.gamma_multiply(TINT * (1.0 - fade));
+                ui.painter().set(background, Shape::rect_filled(tint, rounding, color));
+            }
+            if fade >= 0.999 && remove.is_none() {
+                remove = Some(bi);
+            }
+            rects.push(rect);
+            ui.add_space(GAP);
+        }
+        // Room below the last card, so any card can be scrolled up to where a clicked one was.
+        if let Some(last) = rects.last() {
+            ui.add_space((viewport_h - last.height() - GAP).max(0.0));
         }
     });
+    let offset = shown.state.clamped_offset().y;
+    let mut jump = None;
+    if let Some(bi) = clicked {
+        // The sweep and the fade start from nothing, whenever the answer comes.
+        ctx.animate_value_with_time(batches[bi].sweep_id(), 0.0, SWEEP_TIME);
+        ctx.animate_value_with_time(batches[bi].fade_id(), 0.0, FADE_TIME);
+        jump = jump_to_next(&rects, bi, offset);
+    }
+    if let Some(bi) = remove {
+        action = Some(ReviewAction::Remove(bi));
+        let back = compensation(rects[bi], shown.inner_rect);
+        if back > 0.0 {
+            jump = Some((offset - back).max(0.0));
+        }
+    }
+    if let Some(target) = jump {
+        ui.data_mut(|d| d.insert_temp(jump_id(), target));
+        ctx.request_repaint();
+    }
+    if batches.iter().any(|b| b.flight.is_some()) {
+        ctx.request_repaint_after(Duration::from_millis(100));
+    }
     action
 }
 
@@ -201,6 +347,7 @@ fn item_row(
                 ProposalKind::Move => move_row(ui, item),
                 ProposalKind::Bundle => bundle_row(ui, item),
                 ProposalKind::Delete => delete_row(ui, item),
+                ProposalKind::Archive => archive_row(ui, item),
             }
             let p = &item.proposal;
             if let Some(reason) = &p.reason {
@@ -216,7 +363,11 @@ fn item_row(
             if item.copies > 1
                 && !matches!(
                     p.kind,
-                    ProposalKind::List | ProposalKind::Move | ProposalKind::Bundle | ProposalKind::Delete
+                    ProposalKind::List
+                        | ProposalKind::Move
+                        | ProposalKind::Bundle
+                        | ProposalKind::Delete
+                        | ProposalKind::Archive
                 )
             {
                 ui.weak(t!("review.copies", count = item.copies - 1));
@@ -456,6 +607,35 @@ fn delete_row(ui: &mut Ui, item: &mut ReviewItem) {
     ui.weak(t!("review.delete_hint"));
 }
 
+/// An archive unpacked, files packed into a new ZIP, or added to one: what goes where.
+fn archive_row(ui: &mut Ui, item: &mut ReviewItem) {
+    let Ok(a) = serde_json::from_value::<ArchivePayload>(item.proposal.payload.clone()) else { return };
+    let Some(path) = item.proposal.target.as_ref().map(|t| t.path.clone()) else { return };
+    let rel = |p: &std::path::Path| p.strip_prefix(&a.root).unwrap_or(p).display().to_string();
+    let name = listing::file_name(&path);
+    let text = match &a.op {
+        ArchiveOp::Unpack { into } => t!("review.archive_unpack", name = name, into = rel(into)),
+        ArchiveOp::Pack { sources, to, .. } => t!("review.archive_pack", count = sources.len(), to = rel(to)),
+        ArchiveOp::Add { sources, .. } => t!("review.archive_add", name = name, count = sources.len()),
+    };
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut item.picked.whole, "");
+        ui.label(RichText::new(format!("📦 {text}")).strong());
+    });
+    if let ArchiveOp::Add { prefix, .. } = &a.op
+        && !prefix.is_empty()
+    {
+        ui.weak(t!("review.archive_into", folder = prefix.trim_end_matches('/')));
+    }
+    let sources = a.sources();
+    for s in sources.iter().take(8) {
+        ui.weak(rel(&s.path));
+    }
+    if sources.len() > 8 {
+        ui.weak(t!("review.more", count = sources.len() - 8));
+    }
+}
+
 /// A list as suggested: its name and kind to change, each item to leave out, the copies to set.
 fn list_row(ui: &mut Ui, item: &mut ReviewItem) {
     let Ok(list) = serde_json::from_value::<ListPayload>(item.proposal.payload.clone()) else { return };
@@ -624,4 +804,32 @@ pub fn show_history(ui: &mut Ui, changes: &[ChangeInfo]) -> Option<HistoryAction
         });
     });
     action
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+    use egui::pos2;
+
+    fn card(top: f32, height: f32) -> Rect {
+        Rect::from_min_size(pos2(0.0, top), vec2(400.0, height))
+    }
+
+    #[test]
+    fn the_next_batch_comes_to_where_the_clicked_one_is() {
+        // Cards at 100, 300 and 450 on screen, the view scrolled by 40.
+        let rects = [card(100.0, 194.0), card(300.0, 144.0), card(450.0, 80.0)];
+        assert_eq!(jump_to_next(&rects, 0, 40.0), Some(240.0));
+        assert_eq!(jump_to_next(&rects, 1, 40.0), Some(190.0));
+        assert_eq!(jump_to_next(&rects, 2, 40.0), None, "nothing after the last one");
+    }
+
+    #[test]
+    fn a_card_that_goes_above_the_view_takes_its_height_out_of_the_offset() {
+        let viewport = Rect::from_min_size(pos2(0.0, 100.0), vec2(400.0, 600.0));
+        assert_eq!(compensation(card(-50.0, 120.0), viewport), 120.0 + GAP);
+        assert_eq!(compensation(card(100.0, 120.0), viewport), 120.0 + GAP, "starting at the edge");
+        assert_eq!(compensation(card(150.0, 120.0), viewport), 0.0, "in view: what is below moves up");
+        assert_eq!(compensation(card(900.0, 120.0), viewport), 0.0, "below the view");
+    }
 }
