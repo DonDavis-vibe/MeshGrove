@@ -676,7 +676,7 @@ impl Picked {
             ProposalKind::Tags => {
                 let tags: Option<TagsPayload> = serde_json::from_value(p.payload.clone()).ok();
                 let tags = tags.unwrap_or(TagsPayload { add: Vec::new(), remove: Vec::new() });
-                Picked { add: tags.add.into_iter().map(|t| t.name).collect(), ..Picked::default() }
+                Picked { add: tags.add.into_iter().map(|t| t.name).collect(), remove: tags.remove, ..Picked::default() }
             }
             _ => Picked { whole: true, ..Picked::default() },
         }
@@ -928,14 +928,19 @@ pub fn propose_tags(
                 .push(RejectedItem { id: item.id.clone(), why: format!("at most {MAX_TAGS_PER_FILE} tags per file") });
             continue;
         }
+        let remove: Vec<String> = item.remove.iter().map(|t| vocab.normalize(t).0).collect();
         let mut add: Vec<TagOut> = Vec::new();
         for tag in &item.add {
-            let (name, status) = vocab.normalize(tag);
-            if !add.iter().any(|a| a.name.eq_ignore_ascii_case(&name)) {
+            let (mut name, mut status) = vocab.normalize(tag);
+            // "Drone" would become the "Drohne" in use; with "Drohne" going at the same time it
+            // is a rename, and the new spelling is meant.
+            if remove.iter().any(|r| r.eq_ignore_ascii_case(&name)) {
+                (name, status) = vocab.as_written(tag);
+            }
+            if !add.iter().any(|a| a.name.eq_ignore_ascii_case(&name)) && !remove.iter().any(|r| r == &name) {
                 add.push(TagOut { name, status });
             }
         }
-        let remove: Vec<String> = item.remove.iter().map(|t| vocab.normalize(t).0).collect();
         if add.is_empty() && remove.is_empty() {
             rejected.push(RejectedItem { id: item.id.clone(), why: "nothing to add or remove".into() });
             continue;
