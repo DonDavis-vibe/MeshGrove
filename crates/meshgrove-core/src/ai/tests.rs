@@ -277,6 +277,72 @@ fn suggestions_wait_and_leave_the_library_alone() {
 }
 
 #[test]
+fn removals_and_renames_survive_the_review() {
+    use crate::ai::proposals::{Picked, to_ops};
+    use crate::ai::vocab::TagStatus;
+    use crate::changes::ApplyOp;
+    let (lib, config) = (library(), config());
+    let cx = Context::new(&lib, &config, AccessClass::Local, None).unwrap();
+    let mut store = ProposalStore::open_in_memory().unwrap();
+    let origin = Origin { source: "mcp".into(), client: Some("test".into()), class: AccessClass::Local };
+    // A rename: "Workshop" would fold back to the "Werkstatt" in use, but "Werkstatt" goes.
+    propose_tags(
+        &cx,
+        &mut store,
+        &origin,
+        &ProposeTags {
+            title: "Englisch".into(),
+            items: vec![
+                TagItem {
+                    id: "eigene/deckel.3mf".into(),
+                    add: vec!["Workshop".into()],
+                    remove: vec!["werkstatt".into()],
+                    ..Default::default()
+                },
+                TagItem { id: "eigene/rose.stl".into(), remove: vec!["Garten".into()], ..Default::default() },
+            ],
+            mark_inbox_done: false,
+        },
+    )
+    .unwrap();
+    let batch = store.batches(Some("mcp"), Some("test"), &["pending"], 9).unwrap()[0].id;
+    let items = store.proposals(batch).unwrap();
+    let payload: TagsPayload = serde_json::from_value(items[0].payload.clone()).unwrap();
+    assert_eq!(
+        payload.add.iter().map(|t| (t.name.as_str(), t.status)).collect::<Vec<_>>(),
+        [("Workshop", TagStatus::Suggested)],
+        "the new spelling is meant"
+    );
+    assert_eq!(payload.remove, ["Werkstatt"], "the spelling of the library");
+    // Everything picked takes the removals along, so a removal alone is a change, not nothing.
+    let all = Picked::all(&items[0]);
+    assert_eq!(
+        (all.add.as_slice(), all.remove.as_slice()),
+        (&["Workshop".to_owned()][..], &["Werkstatt".to_owned()][..])
+    );
+    let ops = to_ops(&items[0], &all, false);
+    assert!(
+        matches!(&ops[..], [ApplyOp::AddTag { tag: a, .. }, ApplyOp::RemoveTag { tag: r, .. }] if a == "Workshop" && r == "Werkstatt")
+    );
+    let alone = Picked::all(&items[1]);
+    assert!(!alone.is_empty());
+    assert!(matches!(&to_ops(&items[1], &alone, false)[..], [ApplyOp::RemoveTag { tag, .. }] if tag == "Garten"));
+    // A merge replaces: the old tag goes, the new one keeps its spelling.
+    propose_tag_merge(
+        &cx,
+        &mut store,
+        &origin,
+        &ProposeTagMerge { from: vec!["Werkstatt".into()], to: "Workshop".into() },
+    )
+    .unwrap();
+    let merge = store.batches(Some("mcp"), Some("test"), &["pending"], 9).unwrap()[1].id;
+    let items = store.proposals(merge).unwrap();
+    let payload: TagsPayload = serde_json::from_value(items[0].payload.clone()).unwrap();
+    assert_eq!((payload.add[0].name.as_str(), payload.remove.as_slice()), ("Workshop", &["Werkstatt".to_owned()][..]));
+    assert_eq!(to_ops(&items[0], &Picked::all(&items[0]), false).len(), 2);
+}
+
+#[test]
 fn tags_name_their_folder_and_the_overview_the_import_folder() {
     let lib = library();
     let mut config = config();
