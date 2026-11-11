@@ -553,6 +553,8 @@ mod tests {
         assert_eq!(version_of("no number here"), "no number here");
     }
 
+    /// Unix paths: Windows splits PATH at `;` and knows no absolute `/home`.
+    #[cfg(unix)]
     #[test]
     fn the_usual_install_folders_are_searched_after_path() {
         let var = |name: &str| -> Option<OsString> {
