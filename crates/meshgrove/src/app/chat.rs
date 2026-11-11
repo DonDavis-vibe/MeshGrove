@@ -395,19 +395,43 @@ impl App {
         self.chat.chats = s.chats(50).unwrap_or_default();
     }
 
-    /// Reads the assistant's open questions from the store: new ones become cards, answered
-    /// ones go.
+    /// Reads the assistants' open questions from the store: new ones become cards, answered
+    /// ones go. The chat's own show in the conversation; those of an assistant that came over
+    /// MCP (Claude Desktop, Cursor …) get a window each, naming who asks.
     pub(super) fn load_questions(&mut self) {
         let Some(s) = store() else { return };
-        let pending = s.pending_questions(Some("chat"), None).unwrap_or_default();
+        let pending = s.pending_questions(None, None).unwrap_or_default();
         self.chat.asks.retain(|c| pending.iter().any(|p| p.uid == c.uid));
         for p in pending {
             if !self.chat.asks.iter().any(|c| c.uid == p.uid) {
-                self.chat.asks.push(AskCard::new(p.uid, p.ask.questions));
+                let from = (p.source != "chat")
+                    .then(|| p.client.clone().unwrap_or_else(|| t!("chat.question_mcp").into_owned()));
+                self.chat.asks.push(AskCard { from, ..AskCard::new(p.uid, p.ask.questions) });
             }
         }
-        if !self.chat.asks.is_empty() {
+        if self.chat.asks.iter().any(|c| c.from.is_none()) {
             self.layout.focus_chat();
+        }
+    }
+
+    /// The questions of the assistants over MCP, each in a window of its own: they do not
+    /// belong to the chat pane, which may not even be open.
+    pub(super) fn ask_windows(&mut self, ctx: &egui::Context) {
+        let mut answered = None;
+        for card in self.chat.asks.iter_mut().filter(|c| c.from.is_some()) {
+            let title = t!("chat.question_from", client = card.from.clone().unwrap_or_default());
+            egui::Window::new(title.as_ref())
+                .id(egui::Id::unique(("ask_window", &card.uid)))
+                .collapsible(false)
+                .default_width(380.0)
+                .show(ctx, |ui| {
+                    if let Some(ChatAction::Answer { uid, cancel }) = chat_view::ask_card(ui, card) {
+                        answered = Some((uid, cancel));
+                    }
+                });
+        }
+        if let Some((uid, cancel)) = answered {
+            self.answer_question(&uid, cancel);
         }
     }
 

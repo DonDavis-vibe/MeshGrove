@@ -724,7 +724,9 @@ cannot. Nothing inside an archive and never a library itself.
 **Questions back:** when a request is ambiguous, the assistant can ask you (`ask_user`): its
 questions appear in the chat with radio buttons for one answer, checkboxes for several, and a
 field for an answer in your own words; the assistant waits for the answer (a quarter of an hour at
-most) and carries on with it. *Don't answer* or stopping the answer lets it go on without one.
+most) and carries on with it. *Don't answer* or stopping the answer lets it go on without one. An
+assistant that asks over MCP (Claude Desktop, Cursor …) gets a window of its own in Meshgrove,
+naming who asks.
 
 On the command line, `meshgrove-mcp setup` does the same (`--dry-run` shows it first,
 `--client NAME` picks one), `meshgrove-mcp remove` takes the entries out again, and

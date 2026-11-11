@@ -769,6 +769,8 @@ lassen; der Verlauf kann das nicht. Nichts in Archiven, und nie eine Bibliothek 
 Fragen erscheinen im Chat mit Auswahlknöpfen für eine Antwort, Kästchen für mehrere und einem Feld
 für eine Antwort in eigenen Worten; der Assistent wartet auf die Antwort (höchstens eine
 Viertelstunde) und macht damit weiter. *Nicht antworten* oder Abbrechen lässt ihn ohne weitermachen.
+Fragt ein Assistent über MCP (Claude Desktop, Cursor …), bekommt er in Meshgrove ein eigenes
+Fenster, das sagt, wer fragt.
 
 Auf der Kommandozeile macht `meshgrove-mcp setup` dasselbe (`--dry-run` zeigt es vorher,
 `--client NAME` wählt einen aus), `meshgrove-mcp remove` nimmt die Einträge wieder heraus, und

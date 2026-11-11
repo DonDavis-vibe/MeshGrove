@@ -67,6 +67,8 @@ pub enum Card {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AskCard {
     pub uid: String,
+    /// Who asks, when not the chat's own assistant: the card then gets a window of its own.
+    pub from: Option<String>,
     pub questions: Vec<AskQuestion>,
     /// Per question, per option: picked.
     pub chosen: Vec<Vec<bool>>,
@@ -78,7 +80,7 @@ impl AskCard {
     pub fn new(uid: String, questions: Vec<AskQuestion>) -> AskCard {
         let chosen = questions.iter().map(|q| vec![false; q.options.len()]).collect();
         let other = vec![String::new(); questions.len()];
-        AskCard { uid, questions, chosen, other }
+        AskCard { uid, from: None, questions, chosen, other }
     }
 
     /// Every question has an answer.
@@ -310,7 +312,7 @@ pub fn show(
                     action = Some(a);
                 }
             }
-            for card in asks.iter_mut() {
+            for card in asks.iter_mut().filter(|c| c.from.is_none()) {
                 if let Some(a) = ask_card(ui, card) {
                     action = Some(a);
                 }
@@ -411,7 +413,7 @@ fn assistant_row(ui: &mut Ui, view: &ChatView) -> Option<ChatAction> {
 
 /// The assistant's questions: radio buttons where one answer is wanted, checkboxes where
 /// several may be picked, a field for an answer in the user's own words where allowed.
-fn ask_card(ui: &mut Ui, card: &mut AskCard) -> Option<ChatAction> {
+pub fn ask_card(ui: &mut Ui, card: &mut AskCard) -> Option<ChatAction> {
     let mut action = None;
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.set_width(ui.available_width());

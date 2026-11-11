@@ -3110,6 +3110,7 @@ impl eframe::App for App {
         self.poll_chat();
         self.poll_tag_candidates();
         self.chat_confirm_modal(&ctx);
+        self.ask_windows(&ctx);
         #[cfg(feature = "plugins")]
         {
             self.poll_plugins();

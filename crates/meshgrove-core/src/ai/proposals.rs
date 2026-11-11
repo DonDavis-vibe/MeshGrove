@@ -1555,6 +1555,23 @@ mod tests {
         assert!(ask_user(&mut store, &o, &many).is_err());
     }
 
+    /// Meshgrove's watcher polls `PRAGMA data_version` on a connection of its own: a question
+    /// an assistant writes through another connection has to move it, or the card never shows.
+    #[test]
+    fn a_question_from_another_connection_moves_the_data_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("proposals.db");
+        let mut writer = ProposalStore::open(&path).unwrap();
+        let watcher = ProposalStore::open(&path).unwrap();
+        let before = watcher.data_version().unwrap();
+        assert_eq!(watcher.data_version().unwrap(), before, "nothing happened");
+        let o = Origin { source: "mcp".into(), client: Some("desktop".into()), class: AccessClass::Cloud };
+        let ask = AskUser { questions: vec![AskQuestion { question: "Which?".into(), ..Default::default() }] };
+        ask_user(&mut writer, &o, &ask).unwrap();
+        assert_ne!(watcher.data_version().unwrap(), before, "the question is a change the watcher sees");
+        assert_eq!(watcher.pending_questions(None, None).unwrap().len(), 1);
+    }
+
     #[test]
     fn the_review_can_rewrite_what_was_suggested() {
         let target = Target { path: "/lib/a.stl".into(), hash: None, size: 1, mtime_ns: 2 };
