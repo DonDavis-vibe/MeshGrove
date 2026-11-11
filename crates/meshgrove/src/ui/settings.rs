@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 use crossbeam_channel::{Receiver, bounded};
 use egui::{RichText, Ui};
 use meshgrove_core::config::{
-    self, ArchiveImport, Config, DisplayUnits, DoubleClick, FOLDER_PREVIEW_DEPTH, FolderPreviews, FolderRule, GltfUnit,
-    ImportAtStart, ModelUnits, PreviewQuality, Program, Slicer, SuggestedTag, TileLayout, TileTags, default_properties,
-    default_states, default_themes,
+    self, ArchiveImport, Config, DisplayUnits, DoubleClick, DuplicatesKeep, FOLDER_PREVIEW_DEPTH, FolderPreviews,
+    FolderRule, GltfUnit, ImportAtStart, ModelUnits, PreviewQuality, Program, Slicer, SuggestedTag, TileLayout,
+    TileTags, default_properties, default_states, default_themes,
 };
 use meshgrove_core::printer::{self, DetectedPrinter, Printer};
 use meshgrove_core::programs::{Detected, ProgramKind, detect_editors, detect_slicers};
@@ -57,6 +57,8 @@ pub enum SettingsChange {
     FoldForPlugins(bool),
     /// The inbox of new files in the sidebar.
     Inbox(bool),
+    /// A model both packed and extracted: which copy the duplicate finder keeps.
+    DuplicatesKeep(DuplicatesKeep),
     /// The folders looked at for new files to import.
     ImportFolders(Vec<PathBuf>),
     /// The library imported files go to, and the folder in it.
@@ -174,6 +176,21 @@ fn inbox(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
     if check(ui, &mut on, t!("settings.inbox_show"), t!("settings.inbox_hint")) {
         changes.push(SettingsChange::Inbox(on));
     }
+}
+
+/// Which copy the duplicate finder keeps when a model is both packed and extracted.
+fn duplicates(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+    row(ui, &t!("settings.duplicates_keep_row"), |ui| {
+        let mut keep = config.duplicates_keep;
+        let options = [
+            (DuplicatesKeep::Extracted, t!("settings.duplicates_extracted").into_owned()),
+            (DuplicatesKeep::Packed, t!("settings.duplicates_packed").into_owned()),
+        ];
+        if segmented(ui, &mut keep, &options) {
+            changes.push(SettingsChange::DuplicatesKeep(keep));
+        }
+        hint(ui, t!("settings.duplicates_hint"));
+    });
 }
 
 /// How tags are drawn (how they show on the tiles is under Tiles).
@@ -449,6 +466,7 @@ enum Section {
     Panes,
     Library,
     Inbox,
+    Duplicates,
     Import,
     FolderPreviews,
     TilePreview,
@@ -485,6 +503,7 @@ impl Section {
             Section::Panes => t!("settings.panes"),
             Section::Library => t!("settings.library"),
             Section::Inbox => t!("settings.inbox"),
+            Section::Duplicates => t!("settings.duplicates"),
             Section::Import => t!("settings.import_section"),
             Section::FolderPreviews => t!("settings.folder_previews"),
             Section::TilePreview => t!("settings.tiles_preview"),
@@ -620,6 +639,7 @@ impl Category {
             }
             Category::Library => {
                 put(config.inbox != d.inbox, SettingsChange::Inbox(d.inbox));
+                put(config.duplicates_keep != d.duplicates_keep, SettingsChange::DuplicatesKeep(d.duplicates_keep));
                 put(config.import.at_start != d.import.at_start, SettingsChange::ImportAtStart(d.import.at_start));
                 put(config.import.archives != d.import.archives, SettingsChange::ImportArchives(d.import.archives));
                 put(
@@ -891,7 +911,7 @@ impl SettingsDialog {
     ) {
         let sections: &[Section] = match self.category {
             Category::General => &[Section::Language, Section::DoubleClick, Section::Panes],
-            Category::Library => &[Section::Library, Section::Inbox, Section::Import],
+            Category::Library => &[Section::Library, Section::Inbox, Section::Duplicates, Section::Import],
             Category::Tags => {
                 &[Section::Tags, Section::Placement, Section::Themes, Section::Properties, Section::States]
             }
@@ -925,6 +945,7 @@ impl SettingsDialog {
                     Section::Panes => panes(ui, config, changes),
                     Section::Library => self.library(ui, config, changes),
                     Section::Inbox => inbox(ui, config, changes),
+                    Section::Duplicates => duplicates(ui, config, changes),
                     Section::Import => self.import(ui, config, changes),
                     Section::FolderPreviews => folder_previews(ui, config, changes),
                     Section::TilePreview => self.tiles.preview(ui, config, info.tag_style, changes),

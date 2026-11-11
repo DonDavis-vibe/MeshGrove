@@ -656,8 +656,9 @@ In der Seitenleiste auf **Duplikate (n)** klicken. Meshgrove gruppiert:
   drehungsunabhängige Signatur des Netzes (Dreiecke, Oberfläche, Volumen, Trägheitsmomente).
 
 Die Gruppen sind nach verschwendetem Platz sortiert. Die Markierung ★ *Behalten* zeigt den
-Vorschlag: eine Kopie außerhalb eines Archivs, dann die älteste, dann die mit dem kürzesten
-Pfad; lieber eine andere Kopie behalten: auf sie zeigen und ☆ *Behalten* klicken. *Alle außer ★
+Vorschlag: eine Kopie außerhalb eines Archivs (oder darin, wie unter *Einstellungen → Bibliothek
+→ Duplikate* gewählt), dann die älteste, dann die mit dem kürzesten Pfad; lieber eine andere
+Kopie behalten: auf sie zeigen und ☆ *Behalten* klicken. *Alle außer ★
 in den Papierkorb* räumt eine Gruppe nach Rückfrage auf. Nach der Sichtung hakst du die Gruppen
 ab, bei denen es passt (oder *Alle Vorschläge passen*), und *Ausgewählte bereinigen* räumt sie
 alle mit einer Rückfrage auf. Kopien, die so bleiben sollen, bekommen *Ignorieren*: Die Gruppe
@@ -665,6 +666,17 @@ wird nicht mehr gelistet, in der Seitenleiste gezählt oder auf ihren Kacheln ma
 *Ignorierte zeigen* listet solche Gruppen wieder, mit *Wieder beachten* zum Zurücknehmen. Was
 ignoriert ist, bleibt bei deinen Tags und Notizen (auch im Export der Benutzerdaten). Überall in
 der Galerie tragen Dateien mit Duplikaten eine `2×`/`3×`-Markierung.
+
+**Gepackt und entpackt.** Ein Modellpaket, das als ZIP und entpackt in der Bibliothek liegt,
+ergibt eine Gruppe je Modell, und ein Eintrag eines Archivs lässt sich nicht einzeln löschen. Die
+Einstellung *Ein Modell gepackt und entpackt: behalten – die entpackte Kopie | die gepackte Kopie*
+bestimmt, welche Seite ★ vorschlägt, sodass *Alle Vorschläge passen* → *Ausgewählte bereinigen*
+alles auf einmal erledigt. Über den Gruppen listet *Archive mit entpackten Kopien* jedes solche
+Archiv mit der Zahl seiner entpackten Modelle und den Ordnern der Kopien und erledigt es mit einem
+Klick: das Archiv behalten und seine entpackten Kopien in den Papierkorb, oder die Kopien behalten
+und das Archiv in den Papierkorb – Letzteres erst, wenn jedes Modell darin entpackt ist (der Knopf
+sagt, wie viele sonst verloren gingen). Eine gesperrte Gruppe nennt ihr Archiv und verweist auf
+diese Zeile. Konfiguration: `duplicates_keep = "extracted" | "packed"`.
 
 ### KI-Assistent und MCP (freiwillig)
 
@@ -993,6 +1005,7 @@ sort_descending = false
 language = "de"            # "de", "en"; weglassen = Systemsprache
 lock_panes = false         # true: Bereiche nur in der Größe änderbar
 double_click = "window"    # window | preview | slicer | editor | default_app
+duplicates_keep = "extracted"  # Modell gepackt und entpackt: extracted | packed
 preview_quality = "high"   # große Vorschau und Modellfenster: standard | high | studio
 preview_controls = false   # große Vorschau: Name, Werkzeuge und Hinweise zeigen
 gallery_view = "grid"      # grid (Kacheln) | list (Liste)

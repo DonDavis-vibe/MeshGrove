@@ -619,15 +619,25 @@ Click **Duplicates (n)** in the sidebar. Meshgrove groups:
   re-exported, moved or rotated. These are detected by a rotation-independent signature of the
   mesh (triangle count, surface area, volume, moments of inertia).
 
-Groups are sorted by wasted space. The ★ *Keep* badge marks the suggested copy: one that is
-not inside an archive, then the oldest, then the one with the shortest path; to keep another
-copy, point at it and click ☆ *Keep*. *Move all but ★ to the trash* cleans up a group after a
+Groups are sorted by wasted space. The ★ *Keep* badge marks the suggested copy: one outside an
+archive (or inside one, as set under *Settings → Library → Duplicates*), then the oldest, then
+the one with the shortest path; to keep another copy, point at it and click ☆ *Keep*. *Move all but ★ to the trash* cleans up a group after a
 confirmation. Once you have looked through them, tick the groups where the choice is right (or
 *All suggestions are fine*) and *Clean up selected* clears them all with one confirmation.
 Copies you want to keep as they are get *Ignore*: the group is no longer listed, counted in the
 sidebar or badged on its tiles; *Show ignored* lists such groups again, with *Watch again* to
 undo it. What is ignored is kept with your tags and notes (and in the user-data export).
 Tiles everywhere in the gallery show a `2×` / `3×` badge for files that have duplicates.
+
+**Packed and extracted.** A model pack that lies in the library both as the ZIP and extracted
+gives one group per model, and a member of an archive cannot be trashed by itself. The setting
+*A model both packed and extracted: keep the extracted copy | the packed copy* decides which side
+★ suggests, so *All suggestions are fine* → *Clean up selected* settles them all at once. Above
+the groups, *Archives with extracted copies* lists each such archive with how many of its models
+are extracted and where the copies lie, and settles it with one click: keep the archive and trash
+its extracted copies, or keep the copies and trash the archive, the latter only once every model
+in it is extracted (the button says how many would be lost otherwise). A locked group names the
+archive it belongs to and points to that row. Config: `duplicates_keep = "extracted" | "packed"`.
 
 ### AI assistant and MCP (optional)
 
@@ -938,6 +948,7 @@ sort_descending = false
 language = "en"            # "de", "en"; leave out to follow the system
 lock_panes = false         # true: panes can only be resized, not moved
 double_click = "window"    # window | preview | slicer | editor | default_app
+duplicates_keep = "extracted"  # a model both packed and extracted: extracted | packed
 preview_quality = "high"   # large preview and model windows: standard | high | studio
 preview_controls = false   # large preview: show name, tools and hints
 gallery_view = "grid"      # grid | list
