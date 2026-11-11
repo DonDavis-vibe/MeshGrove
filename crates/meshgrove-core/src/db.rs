@@ -726,11 +726,14 @@ impl Library {
     }
 
     /// Every tag with the number of indexed files carrying it.
+    /// The tags in use, each with the number of files carrying it. Tags hang on content: one
+    /// whose files are all gone from the library (or have not been hashed yet) keeps its rows
+    /// and comes back with them, but is not in use meanwhile and is not listed.
     pub fn all_tags(&self) -> Result<Vec<(String, usize)>, Error> {
         let mut stmt = self.conn.prepare(
             "SELECT t.name, COUNT(f.id) FROM tags t
              JOIN file_tags ft ON ft.tag_id = t.id
-             LEFT JOIN files f ON f.content_hash = ft.content_hash
+             JOIN files f ON f.content_hash = ft.content_hash
              GROUP BY t.id ORDER BY t.name COLLATE NOCASE",
         )?;
         stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize)))?.collect()
@@ -1195,6 +1198,22 @@ mod tests {
         lib.untag(&both[1..], "Castle Tower").unwrap();
         lib.untag(&[minis.join("Knight_v2.stl")], "bemalt").unwrap();
         assert_eq!(lib.all_tags().unwrap(), [("Castle Tower".into(), 1)], "unused tag 'bemalt' is gone");
+
+        // The file leaves the library: its tag is not in use (the sidebar and the AI do not see
+        // it), but it waits with the content and is back when the file is.
+        lib.update_dir(root, minis, 10, &[file("/lib/3D_druck/minis", "box_lid.3mf", 50, 1)], &[]).unwrap();
+        assert_eq!(lib.all_tags().unwrap(), []);
+        lib.update_dir(
+            root,
+            minis,
+            11,
+            &[file("/lib/3D_druck/minis", "Knight_v3.stl", 100, 1), file("/lib/3D_druck/minis", "box_lid.3mf", 50, 1)],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(lib.all_tags().unwrap(), [], "not hashed yet: not in use");
+        lib.store_meta(&minis.join("Knight_v3.stl"), "k", &meta("h-knight")).unwrap();
+        assert_eq!(lib.all_tags().unwrap(), [("Castle Tower".into(), 1)], "back with its content");
     }
 
     #[test]
