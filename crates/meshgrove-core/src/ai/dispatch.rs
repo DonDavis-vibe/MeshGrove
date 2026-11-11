@@ -110,6 +110,11 @@ pub fn writes(name: &str) -> bool {
     TOOLS.iter().any(|(n, _, w)| *n == name && *w)
 }
 
+/// The fixed tools' names.
+pub fn fixed_names() -> impl Iterator<Item = &'static str> {
+    TOOLS.iter().map(|(n, _, _)| *n)
+}
+
 /// Whether `name` is one of the fixed tools (a provider's tool of that name is not offered).
 pub fn is_fixed(name: &str) -> bool {
     TOOLS.iter().any(|(n, _, _)| *n == name)

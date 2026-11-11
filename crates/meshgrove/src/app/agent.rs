@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime};
 
 use base64::Engine;
 use crossbeam_channel::{Receiver, bounded};
+use meshgrove_core::ai::dispatch;
 use meshgrove_core::ai::proposals::{self, Decision, Picked as PickedAll, ProposalKind};
 use meshgrove_core::config::{AccessClass, ChatMode};
 
@@ -573,6 +574,7 @@ impl App {
     }
 
     fn agent_event(&mut self, e: Event) {
+        let plugins = self.plugin_tools();
         let Some(agent) = self.chat.agent.as_mut() else { return };
         match e {
             Event::Ready { agent: name, .. } => {
@@ -689,14 +691,18 @@ impl App {
                     }
                 }
             }
-            Event::Permission { key, title, options } => {
-                // Meshgrove's own tools only read, or suggest for the review: no need to ask.
+            Event::Permission { key, name, kind, title, options } => {
+                // Meshgrove's own tools only read, or suggest for the review: they run without
+                // asking, once each. Everything else (a shell command, a file, whatever the
+                // agent brought itself) is the user's to allow: the title is the agent's text.
+                let own =
+                    |tool: &str| dispatch::is_fixed(tool) || plugins.as_ref().is_some_and(|p| p.writes(tool).is_some());
                 let allow = options
                     .iter()
-                    .find(|o| o.kind == "allow_always")
-                    .or_else(|| options.iter().find(|o| o.kind == "allow_once"))
+                    .find(|o| o.kind == "allow_once")
+                    .or_else(|| options.iter().find(|o| o.kind == "allow_always"))
                     .map(|o| o.id.clone());
-                if title.contains("meshgrove")
+                if runs_unasked(name.as_deref(), kind.as_deref(), &title, own)
                     && let Some(allow) = allow
                 {
                     agent.backend.answer_permission(key, Some(&allow));
@@ -832,6 +838,33 @@ pub fn endpoint_choices(ids: &[String]) -> Vec<ModelChoice> {
         .collect()
 }
 
+/// Whether a tool call may run without asking the user: only one of Meshgrove's own tools
+/// (`own` says which names those are), and only when the agent does not class the call as
+/// running, editing, deleting or moving something. The name is taken from the call's `name`
+/// (`mcp__meshgrove-chat__search_models`, `meshgrove-chat/search_models`, …) or, failing that,
+/// from a title that is nothing but a tool name; a title with more words in it (a shell
+/// command, say) never passes, whatever it mentions.
+fn runs_unasked(name: Option<&str>, kind: Option<&str>, title: &str, own: impl Fn(&str) -> bool) -> bool {
+    if matches!(kind, Some("execute" | "edit" | "delete" | "move" | "switch_mode")) {
+        return false;
+    }
+    let plain = |raw: &str| -> Option<String> {
+        let raw = raw.trim();
+        if raw.is_empty() || raw.chars().any(char::is_whitespace) {
+            return None;
+        }
+        let tail = raw.rsplit("__").next().unwrap_or(raw);
+        let tail = tail.rsplit(['/', ':', '.']).next().unwrap_or(tail);
+        (!tail.is_empty() && tail.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .then(|| tail.to_string())
+    };
+    let candidate = match name {
+        Some(n) => plain(n),
+        None => plain(title),
+    };
+    candidate.is_some_and(|c| own(&c))
+}
+
 fn question_options(options: &[PermissionOption]) -> Vec<(String, String)> {
     options.iter().map(|o| (o.id.clone(), if o.name.is_empty() { o.kind.clone() } else { o.name.clone() })).collect()
 }
@@ -839,6 +872,28 @@ fn question_options(options: &[PermissionOption]) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only Meshgrove's own tools run without asking, and only when the agent does not class
+    /// the call as running, editing, deleting or moving something; the title alone counts
+    /// only when it is nothing but a tool name.
+    #[test]
+    fn only_meshgroves_own_reading_or_suggesting_tools_run_unasked() {
+        let own = |t: &str| dispatch::is_fixed(t) || t == "bingrove_plan";
+        let yes = |name: Option<&str>, kind: Option<&str>, title: &str| runs_unasked(name, kind, title, own);
+        assert!(yes(Some("mcp__meshgrove-chat__search_models"), Some("other"), "search_models"));
+        assert!(yes(Some("meshgrove-chat/propose_tags"), None, "propose_tags"));
+        assert!(yes(Some("meshgrove-chat:bingrove_plan"), Some("read"), "whatever the agent writes"));
+        assert!(yes(None, None, "search_models"), "a bare tool name as the title");
+        assert!(yes(None, Some("search"), "mcp__meshgrove-chat__list_tags"));
+        // Not Meshgrove's: the shell, files, anything the agent brought.
+        assert!(!yes(Some("Bash"), Some("execute"), "rm -rf ~/.local/share/meshgrove"));
+        assert!(!yes(None, None, "rm -rf ~/.local/share/meshgrove"), "a title that mentions meshgrove");
+        assert!(!yes(None, None, "echo search_models"), "a title with more than a name in it");
+        assert!(!yes(Some("Write"), Some("edit"), "search_models"), "the name decides when given");
+        assert!(!yes(Some("mcp__other__search_models"), Some("execute"), "search_models"), "a running kind");
+        assert!(!yes(Some("mcp__meshgrove-chat__propose_moves"), Some("move"), "propose_moves"));
+        assert!(!yes(None, None, ""));
+    }
 
     #[test]
     fn vendor_ids_fold_under_their_vendors_only_when_most_have_one() {

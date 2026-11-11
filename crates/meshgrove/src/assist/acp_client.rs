@@ -34,7 +34,8 @@ pub enum Event {
     /// A new tool call, or news about one.
     Tool { id: String, title: Option<String>, kind: Option<String>, status: Option<ToolStatus>, output: Option<String> },
     /// It asks before running something of its own; answered with [`AcpBackend::answer_permission`].
-    Permission { key: u64, title: String, options: Vec<PermissionOption> },
+    /// `name` and `kind` are the tool call's, from the request or the call it announced before.
+    Permission { key: u64, name: Option<String>, kind: Option<String>, title: String, options: Vec<PermissionOption> },
     /// It needs the user to sign in; `methods` are its own ways to do so.
     AuthRequired { methods: Vec<AuthMethod> },
     /// What it says about its login.
@@ -70,6 +71,8 @@ pub struct AcpBackend {
     /// Open permission questions: our key → the agent's request id.
     permissions: HashMap<u64, Value>,
     next_key: u64,
+    /// What the tool calls of this turn said of themselves: id → (name, kind).
+    tool_calls: HashMap<String, (Option<String>, Option<String>)>,
     exited: bool,
     config_pending: Option<(u64, String)>,
     modern_config: bool,
@@ -100,6 +103,7 @@ impl AcpBackend {
             auth: Vec::new(),
             permissions: HashMap::new(),
             next_key: 0,
+            tool_calls: HashMap::new(),
             exited: false,
             config_pending: None,
             modern_config: false,
@@ -167,6 +171,7 @@ impl AcpBackend {
                         None => out.push(Event::Error("session/new: no sessionId".into())),
                     },
                     (Pending::Prompt, Ok(v)) => {
+                        self.tool_calls.clear();
                         let reason = v.get("stopReason").and_then(Value::as_str).unwrap_or("");
                         out.push(Event::TurnEnded {
                             reason: if reason == "end_turn" { String::new() } else { reason.to_string() },
@@ -218,13 +223,24 @@ impl AcpBackend {
                 }
             }
             Incoming::Text { thought, text } => out.push(Event::Text { thought, text }),
-            Incoming::Tool { id, title, kind, status, output } => {
+            Incoming::Tool { id, name, title, kind, status, output } => {
+                // A permission request names its call; what the call said of itself is kept.
+                let known = self.tool_calls.entry(id.clone()).or_default();
+                if name.is_some() {
+                    known.0 = name;
+                }
+                if kind.is_some() {
+                    known.1 = kind.clone();
+                }
                 out.push(Event::Tool { id, title, kind, status, output });
             }
-            Incoming::Permission { rpc, title, options } => {
+            Incoming::Permission { rpc, id, name, kind, title, options } => {
                 self.next_key += 1;
                 self.permissions.insert(self.next_key, rpc);
-                out.push(Event::Permission { key: self.next_key, title, options });
+                let known = id.as_ref().and_then(|id| self.tool_calls.get(id)).cloned().unwrap_or_default();
+                let name = name.or(known.0);
+                let kind = kind.or(known.1);
+                out.push(Event::Permission { key: self.next_key, name, kind, title, options });
             }
             Incoming::AuthStatus(s) => out.push(Event::AuthStatus(s)),
             Incoming::ModelChanged(m) if !self.modern_config => {
@@ -377,6 +393,44 @@ mod tests {
         assert!(b.busy() && !b.ready());
         b.handle(Incoming::Reply { id: b.next_id, result: Ok(json!({"stopReason": "end_turn"})) }, &mut events);
         assert_eq!(events, [Event::TurnEnded { reason: String::new() }]);
+        b.shutdown(true);
+    }
+
+    #[test]
+    fn a_permission_request_is_told_what_its_tool_call_said_of_itself() {
+        let mut b = backend();
+        let mut events = Vec::new();
+        b.handle(
+            Incoming::Tool {
+                id: "t1".into(),
+                name: Some("mcp__meshgrove-chat__search_models".into()),
+                title: Some("search_models".into()),
+                kind: Some("other".into()),
+                status: None,
+                output: None,
+            },
+            &mut events,
+        );
+        let ask = |id: &str| Incoming::Permission {
+            rpc: json!(5),
+            id: Some(id.into()),
+            name: None,
+            kind: None,
+            title: "search_models".into(),
+            options: vec![],
+        };
+        events.clear();
+        b.handle(ask("t1"), &mut events);
+        assert!(
+            matches!(&events[..], [Event::Permission { name: Some(n), kind: Some(k), .. }] if n == "mcp__meshgrove-chat__search_models" && k == "other"),
+            "{events:?}"
+        );
+        events.clear();
+        b.handle(ask("t9"), &mut events);
+        assert!(
+            matches!(&events[..], [Event::Permission { name: None, kind: None, .. }]),
+            "an unknown call: {events:?}"
+        );
         b.shutdown(true);
     }
 

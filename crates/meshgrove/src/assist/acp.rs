@@ -458,6 +458,8 @@ pub enum Incoming {
     /// A new tool call, or news about one (`title`/`status` when they changed).
     Tool {
         id: String,
+        /// The tool's own name (`mcp__meshgrove-chat__search_models`), where the agent says it.
+        name: Option<String>,
         title: Option<String>,
         kind: Option<String>,
         status: Option<ToolStatus>,
@@ -466,6 +468,10 @@ pub enum Incoming {
     /// The agent asks before running a tool call; answered with [`permission_reply`].
     Permission {
         rpc: Value,
+        /// The tool call's id, name and kind, as far as the request names them.
+        id: Option<String>,
+        name: Option<String>,
+        kind: Option<String>,
         title: String,
         options: Vec<PermissionOption>,
     },
@@ -538,7 +544,9 @@ pub fn parse(line: &str) -> Option<Incoming> {
         }
         (Some("session/request_permission"), Some(id)) => {
             let call = params.get("toolCall");
-            let title = call.and_then(|c| c.get("title")).and_then(Value::as_str).unwrap_or("").to_string();
+            let field = |k: &str| call.and_then(|c| c.get(k)).and_then(Value::as_str).map(str::to_string);
+            let title = field("title").unwrap_or_default();
+            let (call_id, name, kind) = (field("toolCallId"), field("name"), field("kind"));
             let options = params
                 .get("options")
                 .and_then(Value::as_array)
@@ -555,7 +563,7 @@ pub fn parse(line: &str) -> Option<Incoming> {
                         .collect()
                 })
                 .unwrap_or_default();
-            Some(Incoming::Permission { rpc: id.clone(), title, options })
+            Some(Incoming::Permission { rpc: id.clone(), id: call_id, name, kind, title, options })
         }
         (Some(m), Some(id)) => Some(Incoming::Unsupported { rpc: id.clone(), method: m.to_string() }),
         (Some("session/update"), None) => {
@@ -580,6 +588,7 @@ fn update(u: &Value, session: &str) -> Incoming {
         Some("tool_call" | "tool_call_update") => match s("toolCallId") {
             Some(id) => Incoming::Tool {
                 id,
+                name: s("name"),
                 title: s("title"),
                 kind: s("kind"),
                 status: u.get("status").and_then(Value::as_str).and_then(ToolStatus::parse),
@@ -659,6 +668,7 @@ mod tests {
             parse(tool),
             Some(Incoming::Tool {
                 id: "t1".into(),
+                name: None,
                 title: None,
                 kind: None,
                 status: Some(ToolStatus::Completed),
@@ -666,8 +676,12 @@ mod tests {
             })
         );
         let perm = r#"{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"sessionId":"s","toolCall":{"toolCallId":"t1","title":"search_models"},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"},{"optionId":"reject","name":"Reject","kind":"reject_once"}]}}"#;
-        let Some(Incoming::Permission { rpc, title, options }) = parse(perm) else { panic!() };
+        let Some(Incoming::Permission { rpc, id, name, kind, title, options }) = parse(perm) else { panic!() };
         assert_eq!((title.as_str(), options.len(), options[1].kind.as_str()), ("search_models", 2, "reject_once"));
+        assert_eq!((id.as_deref(), name, kind), (Some("t1"), None, None));
+        let full = r#"{"jsonrpc":"2.0","id":8,"method":"session/request_permission","params":{"sessionId":"s","toolCall":{"toolCallId":"t2","name":"mcp__meshgrove-chat__search_models","kind":"other","title":"search_models","rawInput":{"q":"vase"}},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"}]}}"#;
+        let Some(Incoming::Permission { name, kind, .. }) = parse(full) else { panic!() };
+        assert_eq!((name.as_deref(), kind.as_deref()), (Some("mcp__meshgrove-chat__search_models"), Some("other")));
         assert_eq!(
             permission_reply(rpc.clone(), Some("allow"))["result"]["outcome"],
             json!({"outcome": "selected", "optionId": "allow"})
