@@ -936,6 +936,20 @@ impl Library {
         Ok(())
     }
 
+    /// How many models the index has below `dir` (a folder or an archive), at any depth.
+    pub fn models_below(&self, dir: &Path) -> Result<usize, Error> {
+        let Some(d) = path_str(dir) else { return Ok(0) };
+        let n: i64 = self.conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM files f JOIN dirs d ON d.id = f.dir_id
+                 WHERE (d.path = ?1 OR d.path LIKE ?2 ESCAPE '\\') AND f.kind IN ({MODEL_KINDS})"
+            ),
+            params![d, format!("{}/%", d.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")).as_str()],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
+    }
+
     pub fn counts(&self) -> Result<Counts, Error> {
         self.conn.query_row(
             &format!(
