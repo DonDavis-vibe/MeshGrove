@@ -71,6 +71,18 @@ fn detach_group(cmd: &mut Command) {
     }
 }
 
+/// Whether anything of the agent's process group is left (the agent itself counts until it
+/// is reaped, which [`end_tree`] does last).
+#[cfg(unix)]
+fn group_alive(pgid: u32) -> bool {
+    if pgid <= 1 {
+        return false;
+    }
+    let Ok(pgid) = libc::pid_t::try_from(pgid) else { return false };
+    // SAFETY: signal 0 sends nothing; killpg only reports whether the group exists.
+    unsafe { libc::killpg(pgid, 0) == 0 }
+}
+
 /// Signal the agent's whole process group. The group's id is the agent's own process id, as it
 /// was started with `process_group(0)`.
 #[cfg(unix)]
@@ -121,12 +133,17 @@ fn end_tree(mut child: Child) {
     #[cfg(unix)]
     {
         // Helpers can outlive the agent: the group is signalled whether or not it ended. The
-        // group id stays reserved while any member lives, so it can't name someone else's.
-        signal_group(pid, libc::SIGTERM);
-        if !ended {
-            wait_for(&mut child, GRACE);
+        // group id stays reserved while any member lives, so it can't name someone else's; once
+        // nothing is left, no signal goes out at all (the id could be reused).
+        if group_alive(pid) {
+            signal_group(pid, libc::SIGTERM);
+            if !ended {
+                wait_for(&mut child, GRACE);
+            }
+            if group_alive(pid) {
+                signal_group(pid, libc::SIGKILL);
+            }
         }
-        signal_group(pid, libc::SIGKILL);
     }
     #[cfg(windows)]
     {
