@@ -499,10 +499,16 @@ pub struct AiConfig {
     pub endpoint: Option<EndpointConfig>,
     /// Who answers the chat: [`ENDPOINT_ASSISTANT`] for the endpoint, else the id of an AI agent
     /// on this computer that speaks the Agent Client Protocol (`claude`, `codex`, `opencode` …,
-    /// found by Meshgrove, or one of `agents`). Empty: the endpoint if set up, else the first
-    /// agent found.
+    /// found by Meshgrove, or one of `agents`). Empty: the endpoint if set up, else nobody until
+    /// the user picks one (an agent is never chosen for them).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub assistant: String,
+    /// What happens when the chat pane opens (once per run, after the search for agents):
+    /// empty, the agent waits for *Connect* or the first message; [`AUTO_CONNECT_LAST`], the
+    /// assistant picked last (`assistant`) is connected; an agent's id, that agent is picked and
+    /// connected.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub auto_connect: String,
     /// ACP agents the user added by hand (a command line).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub agents: Vec<AgentConfig>,
@@ -540,6 +546,7 @@ impl Default for AiConfig {
             agents: Vec::new(),
             agent_models: BTreeMap::new(),
             agent_options: BTreeMap::new(),
+            auto_connect: String::new(),
             chat_mode: ChatMode::Review,
             cross_library_moves: false,
             connect_apps: true,
@@ -550,6 +557,8 @@ impl Default for AiConfig {
 
 /// The `assistant` id that stands for the user's own endpoint.
 pub const ENDPOINT_ASSISTANT: &str = "endpoint";
+/// `AiConfig::auto_connect`: connect the assistant picked last.
+pub const AUTO_CONNECT_LAST: &str = "last";
 
 /// An AI agent the user added by hand: a program that speaks the Agent Client Protocol over
 /// its stdin and stdout (as `gemini --acp` or `opencode acp` do).

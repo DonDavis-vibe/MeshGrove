@@ -718,9 +718,14 @@ ein eigener Endpunkt oder ein **KI-Agent auf deinem Rechner**, der das Agent Cli
 spricht – Claude Code (`claude-agent-acp`), Codex, Google Antigravity, Gemini CLI, OpenCode, Grok,
 Copilot CLI, Qwen Code, goose. Meshgrove findet die installierten selbst (*Einstellungen → KI &
 MCP → Wer den Chat beantwortet* zeigt sie mit Anmeldestatus und nimmt jeden weiteren ACP-Befehl
-auf); der Agent startet, sobald der Chat offen ist, erreicht die Bibliothek über `meshgrove-mcp`,
-fragt im Chat nach, bevor er etwas jenseits von Meshgroves eigenen Werkzeugen ausführt, und zeigt
-seine Vorschläge als Karten wie der Endpunkt. Für einen Endpunkt trägst du unter *Eigener
+auf). Niemand wird für dich gewählt: Unter dem Nachrichtenfeld wählst du, wer antwortet (die Wahl
+bleibt), *Verbinden* startet den Agenten – oder die erste Nachricht –, und in den Einstellungen
+lässt sich einstellen, dass der Chat sich beim Aufgehen selbst verbindet: mit dem zuletzt
+genutzten Assistenten oder einem bestimmten Agenten. Er erreicht die
+Bibliothek über `meshgrove-mcp`; Meshgroves eigene Werkzeuge (sie lesen oder schlagen für die
+Prüfung vor) darf er ausführen, vor allem anderen, was er ausführen will – ein Shell-Befehl, eine
+Datei, was der Agent selbst mitbringt –, fragt Meshgrove dich im Chat. Seine Vorschläge zeigt er
+als Karten wie der Endpunkt. Für einen Endpunkt trägst du unter *Eigener
 Endpunkt* einen OpenAI-kompatiblen Dienst ein, den du selbst betreibst oder nutzt – Ollama, LM
 Studio, llama.cpp, OpenAI, OpenRouter –, mit Modell und, wenn nötig, Schlüssel (er liegt im
 Schlüsselbund). Unter dem Nachrichtenfeld wählst du, wer antwortet, und in einer
@@ -1026,6 +1031,7 @@ chat_mode = "review"       # review | auto: Änderungen aus dem Chat erst prüfe
 cross_library_moves = false  # die KI darf Verschiebungen in eine andere freigegebene Bibliothek vorschlagen
 assistant = "claude"       # wer den Chat beantwortet: "endpoint" oder die Id eines Agenten (claude, codex,
                            # antigravity, gemini, opencode, grok, copilot, qwen, goose oder einer aus ai.agents)
+auto_connect = "last"  # wenn der Chat aufgeht: "" wartet auf Verbinden, "last" verbindet den zuletzt genutzten Assistenten, eine Agent-Id wählt und verbindet diesen
 agent_models = { claude = "claude-opus-5-5" }  # das je Agent gewählte Modell
 [ai.agent_options.claude]  # seine weiteren Sitzungsoptionen, wie gewählt (Denkaufwand, Modus …)
 effort = "high"

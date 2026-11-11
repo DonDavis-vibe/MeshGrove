@@ -94,6 +94,8 @@ pub enum SettingsChange {
     },
     /// Who answers the chat: the endpoint, or an agent by its id.
     Assistant(String),
+    /// What happens when the chat opens: nothing, the last pick connected, or this agent (id).
+    AutoConnect(String),
     /// An ACP agent the user added as a command line.
     AddAgent(meshgrove_core::config::AgentConfig),
     RemoveAgent(String),

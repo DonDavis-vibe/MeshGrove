@@ -12,6 +12,7 @@ use meshgrove_core::ai::proposals::{ChatInfo, ProposalStore};
 use meshgrove_core::ai::types::ModelFilter;
 use meshgrove_core::ai::{Context, read};
 use meshgrove_core::cache::ThumbCache;
+use meshgrove_core::config::AUTO_CONNECT_LAST;
 use meshgrove_core::config::AccessClass;
 use meshgrove_core::listing;
 use serde_json::{Value, json};
@@ -57,6 +58,8 @@ pub struct ChatState {
     pub agent: Option<AgentChat>,
     /// An agent that did not start (by its id): not tried again until a message is sent.
     pub(super) agent_failed: Option<String>,
+    /// The connect-on-open setting was acted on (once per run, after the search for agents).
+    auto_connected: bool,
     /// Questions the assistant asked and the user has not answered.
     pub(super) asks: Vec<AskCard>,
     /// The endpoint's models for the picker.
@@ -90,8 +93,10 @@ pub(super) fn store() -> Option<ProposalStore> {
 impl App {
     /// The chat exists while AI is on and someone answers it: the endpoint, or an agent found
     /// on this computer.
+    /// The chat pane is shown while AI is on and there is someone to answer, or the search for
+    /// agents is still on (the pane says so).
     pub(super) fn chat_available(&self) -> bool {
-        self.config.ai.enabled && self.assistant().is_some()
+        self.config.ai.enabled && (self.agents.is_none() || !self.assistant_rows().is_empty())
     }
 
     pub(super) fn chat_class(&self) -> AccessClass {
@@ -111,12 +116,23 @@ impl App {
         let names = |id: &str| {
             scope.resolve(id).map_or_else(|| id.rsplit('/').next().unwrap_or(id).to_owned(), |p| listing::file_name(&p))
         };
-        // An agent is started as soon as the pane shows, so its models can be picked.
-        let assistant = self.assistant();
-        if let Some(entry) = assistant.as_ref().filter(|e| !e.is_endpoint()) {
-            self.ensure_agent(entry, false);
+        // An agent starts with *Connect* or the first message, unless the user set the chat to
+        // connect by itself when it opens (Settings → AI & MCP): the assistant picked last, or
+        // one agent in particular. Once per run, and only once the agents were all looked for.
+        if !self.chat.auto_connected && self.agents.is_some() {
+            self.chat.auto_connected = true;
+            let wanted = self.config.ai.auto_connect.clone();
+            if !wanted.is_empty() {
+                if wanted != AUTO_CONNECT_LAST && self.assistant_rows().iter().any(|(id, _)| *id == wanted) {
+                    self.set_assistant(wanted);
+                }
+                self.connect_agent(false);
+            }
         }
+        let assistant = self.assistant();
         let assistant_id = assistant.as_ref().map(|e| e.id.clone()).unwrap_or_default();
+        let connected = self.assistant_connected();
+        let looking = self.agents.is_none();
         let assistants = self.assistant_rows();
         let models = self.chat_models();
         let options = self.chat_options();
@@ -138,6 +154,8 @@ impl App {
             names: &names,
             assistants: &assistants,
             assistant: &assistant_id,
+            connected,
+            looking,
             models: &models,
             options: &options,
             status: status.as_deref(),
@@ -192,6 +210,7 @@ impl App {
             }
             Some(ChatAction::Answer { uid, cancel }) => self.answer_question(&uid, cancel),
             Some(ChatAction::Assistant(id)) => self.set_assistant(id),
+            Some(ChatAction::Connect) => self.connect_agent(true),
             Some(ChatAction::Model(picked)) => self.set_chat_model(picked),
             Some(ChatAction::Option { id, value }) => self.set_chat_option(id, value),
             Some(ChatAction::Permission { key, option }) => self.answer_permission(key, option),
@@ -313,7 +332,10 @@ impl App {
         if self.chat.streaming.is_some() || self.chat.input.is_empty() {
             return;
         }
-        let Some(assistant) = self.assistant() else { return };
+        let Some(assistant) = self.assistant() else {
+            self.toast(t!("chat.pick_assistant_first").into_owned());
+            return;
+        };
         if !assistant.is_endpoint() {
             self.send_to_agent(assistant, confirmed);
             return;
@@ -607,7 +629,8 @@ impl App {
             return;
         }
         let Some(assistant) = self.assistant() else {
-            self.toast(t!("chat.no_endpoint").into_owned());
+            let key = if self.assistant_rows().is_empty() { "chat.no_endpoint" } else { "chat.pick_assistant_first" };
+            self.toast(t!(key).into_owned());
             return;
         };
         if !assistant.is_endpoint() {

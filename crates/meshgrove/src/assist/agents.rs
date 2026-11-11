@@ -504,10 +504,13 @@ pub fn entries(ai: &AiConfig, detection: Option<&Detection>) -> Vec<Entry> {
 
 /// The entry the chat uses: the one picked in the settings, else the endpoint, else the first
 /// agent found.
+/// Who answers the chat: the user's pick, as long as it is still there (an agent found last
+/// time shows up again once the search is done), else the endpoint if one is set up. Never an
+/// agent the user did not pick.
 pub fn current(ai: &AiConfig, detection: Option<&Detection>) -> Option<Entry> {
     let all = entries(ai, detection);
     let pick = |id: &str| all.iter().find(|e| e.id == id).cloned();
-    (!ai.assistant.is_empty()).then(|| pick(&ai.assistant)).flatten().or_else(|| all.into_iter().next())
+    (!ai.assistant.is_empty()).then(|| pick(&ai.assistant)).flatten().or_else(|| pick(ENDPOINT_ASSISTANT))
 }
 
 /// A free id for an agent the user adds: `agent-1`, `agent-2`, …
@@ -594,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn entries_put_the_endpoint_first_and_the_picked_one_current() {
+    fn entries_put_the_endpoint_first_and_nobody_is_picked_for_the_user() {
         let mut ai = AiConfig::default();
         let detection = Detection {
             found: vec![Found {
@@ -608,7 +611,8 @@ mod tests {
             }],
             took_ms: 0,
         };
-        assert_eq!(current(&ai, Some(&detection)).map(|e| e.id), Some("claude".into()));
+        assert_eq!(current(&ai, Some(&detection)), None, "an agent found is never picked by itself");
+        assert_eq!(current(&ai, None), None);
         ai.endpoint = Some(meshgrove_core::config::EndpointConfig { model: "qwen3".into(), ..Default::default() });
         assert_eq!(current(&ai, Some(&detection)).map(|e| e.id), Some(ENDPOINT_ASSISTANT.into()));
         ai.assistant = "claude".into();

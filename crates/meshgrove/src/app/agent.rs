@@ -143,6 +143,23 @@ impl App {
         agents::entries(&self.config.ai, self.agents.as_ref()).into_iter().map(|e| (e.id, e.name)).collect()
     }
 
+    /// Starts the picked agent (the *Connect* button, or an agent set to connect by itself).
+    /// The endpoint has nothing to start.
+    pub(super) fn connect_agent(&mut self, retry: bool) {
+        if let Some(entry) = self.assistant().filter(|e| !e.is_endpoint()) {
+            self.ensure_agent(&entry, retry);
+        }
+    }
+
+    /// Whether the picked assistant can answer now: the endpoint always, an agent once it runs.
+    pub(super) fn assistant_connected(&self) -> bool {
+        match self.assistant() {
+            Some(e) if e.is_endpoint() => true,
+            Some(e) => self.chat.agent.as_ref().is_some_and(|a| a.entry.id == e.id),
+            None => false,
+        }
+    }
+
     /// The chat talks to this assistant from now on.
     pub(super) fn set_assistant(&mut self, id: String) {
         if self.config.ai.assistant == id {

@@ -174,9 +174,13 @@ pub struct ChatView<'a> {
     pub card_states: &'a HashMap<String, String>,
     /// A file id's name for the answer's references.
     pub names: &'a dyn Fn(&str) -> String,
-    /// Who can answer: (id, name), and who does.
+    /// Who can answer: (id, name), and who does (empty: nobody picked yet).
     pub assistants: &'a [(String, String)],
     pub assistant: &'a str,
+    /// The assistant can answer: the endpoint always, an agent once it was connected.
+    pub connected: bool,
+    /// The search for agents on this computer is still on.
+    pub looking: bool,
     /// The assistant's models, for the picker.
     pub models: &'a ModelList,
     /// The selectors beside it (reasoning effort, an agent's mode …).
@@ -203,6 +207,8 @@ pub enum ChatAction {
     Reveal(String),
     /// Another assistant answers from now on (its id).
     Assistant(String),
+    /// Start the picked agent.
+    Connect,
     /// Another model, listed or typed.
     Model(Picked),
     /// One of the selectors beside the model: the option and its new value.
@@ -335,13 +341,10 @@ pub fn show(
 fn assistant_row(ui: &mut Ui, view: &ChatView) -> Option<ChatAction> {
     let mut action = None;
     ui.horizontal_wrapped(|ui| {
-        let name = view
-            .assistants
-            .iter()
-            .find(|(id, _)| id == view.assistant)
-            .map(|(_, name)| name.as_str())
-            .unwrap_or(view.assistant);
-        if view.assistants.len() > 1 {
+        let picked = view.assistants.iter().find(|(id, _)| id == view.assistant);
+        let pick = t!("chat.pick_assistant");
+        let name = picked.map_or(pick.as_ref(), |(_, name)| name.as_str());
+        if view.assistants.len() > 1 || picked.is_none() {
             egui::ComboBox::from_id_salt("chat_assistant").selected_text(name).width(150.0).truncate().show_ui(
                 ui,
                 |ui| {
@@ -354,6 +357,25 @@ fn assistant_row(ui: &mut Ui, view: &ChatView) -> Option<ChatAction> {
             );
         } else {
             ui.weak(name);
+        }
+        if view.looking {
+            ui.spinner();
+            ui.weak(t!("assistant.looking"));
+        }
+        let Some((_, picked_name)) = picked else { return };
+        if !view.connected {
+            // Nothing runs until the user says so; the models can be picked once it does.
+            if ui
+                .button(t!("chat.connect"))
+                .on_hover_text(t!("chat.connect_hint", name = picked_name.clone()))
+                .clicked()
+            {
+                action = Some(ChatAction::Connect);
+            }
+            if let Some(status) = view.status {
+                ui.weak(status);
+            }
+            return;
         }
         let choices: Vec<Choice> = view
             .models

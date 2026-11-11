@@ -680,9 +680,13 @@ an endpoint of your own or by an **AI agent installed on your computer** that sp
 Client Protocol – Claude Code (`claude-agent-acp`), Codex, Google Antigravity, Gemini CLI,
 OpenCode, Grok, Copilot CLI, Qwen Code, goose. Meshgrove finds the installed ones by itself
 (*Settings → AI & MCP → Who answers the chat* lists them with their sign-in state, and takes any
-other ACP command you add); the agent starts when the chat opens, reaches the library through
-`meshgrove-mcp`, asks in the chat before running anything beyond Meshgrove's own tools, and
-shows what it suggests as cards like the endpoint does. For an endpoint, enter in *Your own
+other ACP command you add). Nobody is picked for you: under the message field you choose who
+answers (the choice is kept), *Connect* starts the agent – or the first message does –, and in
+the settings the chat can be set to connect by itself when it opens: the assistant used last, or
+one agent in particular. It reaches the library
+through `meshgrove-mcp`; Meshgrove lets it run Meshgrove's own tools (which read, or suggest for
+the review) and asks you in the chat before anything else it wants to run – a shell command, a
+file, whatever the agent brought. What it suggests shows as cards like the endpoint's. For an endpoint, enter in *Your own
 endpoint* an OpenAI-compatible service you run or use – Ollama, LM Studio, llama.cpp, OpenAI,
 OpenRouter – with a model and, if needed, a key (kept in the system keyring). Under the message
 field you pick who answers and, in a **searchable model picker**, which model: the list comes
@@ -973,6 +977,7 @@ chat_mode = "review"       # review | auto: changes from the chat reviewed first
 cross_library_moves = false  # the AI may suggest moves into another library it may see
 assistant = "claude"       # who answers the chat: "endpoint", or an agent's id (claude, codex, antigravity,
                            # gemini, opencode, grok, copilot, qwen, goose, or one of ai.agents)
+auto_connect = "last"  # when the chat opens: "" waits for Connect, "last" connects the assistant used last, an agent id picks and connects that one
 agent_models = { claude = "claude-opus-5-5" }  # the model picked per agent
 [ai.agent_options.claude]  # its other session options, as picked (reasoning effort, mode …)
 effort = "high"

@@ -11,7 +11,7 @@ use meshgrove_core::ai::agent_setup::{Change, Outcome};
 use meshgrove_core::ai::guess_local;
 use meshgrove_core::ai::proposals::{AccessEntry, ProposalStore};
 use meshgrove_core::ai::snippets::{self, Client};
-use meshgrove_core::config::{AccessClass, AgentConfig, AiAccess, Config, EndpointConfig};
+use meshgrove_core::config::{AUTO_CONNECT_LAST, AccessClass, AgentConfig, AiAccess, Config, EndpointConfig};
 use meshgrove_core::listing;
 
 use super::picker::{self, Choice, Picker};
@@ -129,9 +129,35 @@ impl AiSettings {
                     changes.push(SettingsChange::RemoveAgent(e.id.clone()));
                 }
             });
+
             if let Some(problem) = &e.problem {
                 hint(ui, t!("assistant.cannot_start", error = problem.clone()));
             }
+        }
+        // What happens when the chat opens: wait for Connect, connect the last pick, or one agent.
+        let agents: Vec<&agents::Entry> = entries.iter().filter(|e| !e.is_endpoint() && e.problem.is_none()).collect();
+        if !agents.is_empty() {
+            let current = config.ai.auto_connect.as_str();
+            let label = |value: &str| -> String {
+                match value {
+                    "" => t!("assistant.auto_connect_off").into_owned(),
+                    AUTO_CONNECT_LAST => t!("assistant.auto_connect_last").into_owned(),
+                    id => agents.iter().find(|e| e.id == id).map_or_else(|| id.to_owned(), |e| e.name.clone()),
+                }
+            };
+            row(ui, &t!("assistant.auto_connect"), |ui| {
+                egui::ComboBox::from_id_salt("auto_connect").selected_text(label(current)).width(220.0).show_ui(
+                    ui,
+                    |ui| {
+                        for value in ["", AUTO_CONNECT_LAST].into_iter().chain(agents.iter().map(|e| e.id.as_str())) {
+                            if ui.selectable_label(value == current, label(value)).clicked() && value != current {
+                                changes.push(SettingsChange::AutoConnect(value.to_owned()));
+                            }
+                        }
+                    },
+                );
+            });
+            hint(ui, t!("assistant.auto_connect_hint"));
         }
         // The known agents not found, and how to get them.
         if let Some(d) = detection {

@@ -1740,6 +1740,7 @@ impl App {
                     self.chat.endpoint_models = None;
                 }
                 SettingsChange::Assistant(id) => self.set_assistant(id),
+                SettingsChange::AutoConnect(value) => self.config.ai.auto_connect = value,
                 SettingsChange::AddAgent(agent) => {
                     self.config.ai.agents.push(agent);
                 }
