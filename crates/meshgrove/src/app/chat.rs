@@ -1,6 +1,7 @@
 //! The chat with the user's own model: conversations kept in the suggestion store, references
 //! offered after `@`, what they stand for sent along, the answer streamed in, and the changes
-//! of a message undone or redone through the arrow next to it.
+//! of a message undone or redone through the arrow next to it. The endpoint answers here; an
+//! agent of this computer answers through `agent.rs`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -15,11 +16,12 @@ use meshgrove_core::config::AccessClass;
 use meshgrove_core::listing;
 use serde_json::{Value, json};
 
+use super::agent::{AgentChat, EndpointModels};
 use super::{App, View};
 use crate::assist::actions::{Action, ActionJob};
 use crate::assist::chat::{ChatEvent, ChatService, Turn, system_prompt};
 use crate::assist::secret;
-use crate::ui::chat::{self as chat_view, Card, ChatAction, ChatMsg, ChatView};
+use crate::ui::chat::{self as chat_view, AskCard, Card, ChatAction, ChatMsg, ChatView};
 use crate::ui::chat_input::{ChatInput, Pill, Reference};
 use crate::ui::suggest::Candidate;
 
@@ -31,12 +33,12 @@ const MAX_PICTURES: usize = 4;
 #[derive(Default)]
 pub struct ChatState {
     service: Option<ChatService>,
-    chats: Vec<ChatInfo>,
-    current: Option<i64>,
-    messages: Vec<ChatMsg>,
+    pub(super) chats: Vec<ChatInfo>,
+    pub(super) current: Option<i64>,
+    pub(super) messages: Vec<ChatMsg>,
     /// The answer being written, and the user message it answers.
-    streaming: Option<ChatMsg>,
-    answering: i64,
+    pub(super) streaming: Option<ChatMsg>,
+    pub(super) answering: i64,
     pub input: ChatInput,
     md: CommonMarkCache,
     loaded: bool,
@@ -44,13 +46,21 @@ pub struct ChatState {
     changes: HashMap<i64, (usize, usize)>,
     /// What became of the suggestions on the cards: batch uid → state.
     card_states: HashMap<String, String>,
-    changes_stale: bool,
+    pub(super) changes_stale: bool,
     /// The references for the query last typed after `@`.
-    offered: Option<(String, Vec<Candidate<Pill>>)>,
+    pub(super) offered: Option<(String, Vec<Candidate<Pill>>)>,
     /// The cloud endpoint may be sent to without asking again (this session).
     pub(super) cloud_ok: bool,
     /// Waiting for the OK to go to a cloud endpoint: what goes out, and what does.
     pub confirm: Option<(String, Pending)>,
+    /// The agent of this computer answering the chat, while it runs.
+    pub agent: Option<AgentChat>,
+    /// An agent that did not start (by its id): not tried again until a message is sent.
+    pub(super) agent_failed: Option<String>,
+    /// Questions the assistant asked and the user has not answered.
+    pub(super) asks: Vec<AskCard>,
+    /// The endpoint's models for the picker.
+    pub(super) endpoint_models: Option<EndpointModels>,
 }
 
 /// What goes to a cloud endpoint once the user said yes.
@@ -73,21 +83,19 @@ pub(super) fn host_of(url: &str) -> String {
     url.split("://").nth(1).unwrap_or(url).split('/').next().unwrap_or_default().to_owned()
 }
 
-fn store() -> Option<ProposalStore> {
+pub(super) fn store() -> Option<ProposalStore> {
     ProposalStore::open(&ProposalStore::default_location()?).ok()
 }
 
 impl App {
-    /// The chat exists while AI is on and an endpoint is set up.
+    /// The chat exists while AI is on and someone answers it: the endpoint, or an agent found
+    /// on this computer.
     pub(super) fn chat_available(&self) -> bool {
-        self.config.ai.enabled && self.config.ai.endpoint.as_ref().is_some_and(|e| !e.base_url.trim().is_empty())
+        self.config.ai.enabled && self.assistant().is_some()
     }
 
     pub(super) fn chat_class(&self) -> AccessClass {
-        match &self.config.ai.endpoint {
-            Some(e) if e.local => AccessClass::Local,
-            _ => AccessClass::Cloud,
-        }
+        self.assistant_class()
     }
 
     pub(super) fn chat_pane(&mut self, ui: &mut egui::Ui) {
@@ -98,14 +106,26 @@ impl App {
         if std::mem::take(&mut self.chat.changes_stale) {
             self.refresh_chat_changes();
         }
-        let index = self.index.as_ref();
-        let config = &self.config;
         let class = self.chat_class();
-        let scope = meshgrove_core::ai::Scope::new(config, class);
+        let scope = meshgrove_core::ai::Scope::new(&self.config, class);
         let names = |id: &str| {
             scope.resolve(id).map_or_else(|| id.rsplit('/').next().unwrap_or(id).to_owned(), |p| listing::file_name(&p))
         };
-        let model = config.ai.endpoint.as_ref().map(|e| e.model.clone()).unwrap_or_default();
+        // An agent is started as soon as the pane shows, so its models can be picked.
+        let assistant = self.assistant();
+        if let Some(entry) = assistant.as_ref().filter(|e| !e.is_endpoint()) {
+            self.ensure_agent(entry, false);
+        }
+        let assistant_id = assistant.as_ref().map(|e| e.id.clone()).unwrap_or_default();
+        let assistants = self.assistant_rows();
+        let models = self.chat_models();
+        let options = self.chat_options();
+        let (status, questions, auth) = match assistant.as_ref().filter(|e| !e.is_endpoint()).and(self.chat.agent.as_ref()) {
+            Some(agent) => (agent.status.clone(), agent.questions.clone(), self.auth_rows()),
+            None => (None, Vec::new(), Vec::new()),
+        };
+        let index = self.index.as_ref();
+        let config = &self.config;
         let view = ChatView {
             chats: &self.chat.chats,
             current: self.chat.current,
@@ -115,7 +135,13 @@ impl App {
             changes: &self.chat.changes,
             card_states: &self.chat.card_states,
             names: &names,
-            model: &model,
+            assistants: &assistants,
+            assistant: &assistant_id,
+            models: &models,
+            options: &options,
+            status: status.as_deref(),
+            questions: &questions,
+            auth: &auth,
         };
         // References: computed once per typed query.
         let selection = self.menu_for.clone();
@@ -135,7 +161,8 @@ impl App {
             *offered = Some((query.to_owned(), list.clone()));
             list
         };
-        let action = chat_view::show(ui, view, &mut self.chat.input, &mut self.chat.md, &mut candidates);
+        let action =
+            chat_view::show(ui, view, &mut self.chat.input, &mut self.chat.asks, &mut self.chat.md, &mut candidates);
         match action {
             Some(ChatAction::NewChat) => {
                 self.chat.current = None;
@@ -159,7 +186,15 @@ impl App {
                 if let Some(s) = &self.chat.service {
                     s.stop();
                 }
+                self.stop_agent_answer();
+                self.cancel_questions();
             }
+            Some(ChatAction::Answer { uid, cancel }) => self.answer_question(&uid, cancel),
+            Some(ChatAction::Assistant(id)) => self.set_assistant(id),
+            Some(ChatAction::Model(picked)) => self.set_chat_model(picked),
+            Some(ChatAction::Option { id, value }) => self.set_chat_option(id, value),
+            Some(ChatAction::Permission { key, option }) => self.answer_permission(key, option),
+            Some(ChatAction::Authenticate(method)) => self.authenticate(method),
             Some(ChatAction::Undo(message)) => self.chat_changes(message, true),
             Some(ChatAction::Redo(message)) => self.chat_changes(message, false),
             Some(ChatAction::Review) => self.show_review(),
@@ -242,6 +277,7 @@ impl App {
 
     pub(super) fn chat_changed(&mut self) {
         self.chat.changes_stale = true;
+        self.load_questions();
     }
 
     fn chat_changes(&mut self, message: i64, undo: bool) {
@@ -271,9 +307,14 @@ impl App {
         }
     }
 
-    /// Sends the message in the field; to a cloud endpoint only after the user said yes once.
+    /// Sends the message in the field; to a cloud service only after the user said yes once.
     pub(super) fn send_chat(&mut self, confirmed: bool) {
         if self.chat.streaming.is_some() || self.chat.input.is_empty() {
+            return;
+        }
+        let Some(assistant) = self.assistant() else { return };
+        if !assistant.is_endpoint() {
+            self.send_to_agent(assistant, confirmed);
             return;
         }
         let Some(endpoint) = self.config.ai.endpoint.clone() else { return };
@@ -353,9 +394,51 @@ impl App {
         self.chat.chats = s.chats(50).unwrap_or_default();
     }
 
-    /// Takes what the chat thread reports; runs every frame so an answer comes in while the
-    /// pane is hidden too.
+    /// Reads the assistant's open questions from the store: new ones become cards, answered
+    /// ones go.
+    pub(super) fn load_questions(&mut self) {
+        let Some(s) = store() else { return };
+        let pending = s.pending_questions(Some("chat"), None).unwrap_or_default();
+        self.chat.asks.retain(|c| pending.iter().any(|p| p.uid == c.uid));
+        for p in pending {
+            if !self.chat.asks.iter().any(|c| c.uid == p.uid) {
+                self.chat.asks.push(AskCard::new(p.uid, p.ask.questions));
+            }
+        }
+        if !self.chat.asks.is_empty() {
+            self.layout.focus_chat();
+        }
+    }
+
+    /// The user answered (or declined) the assistant's question: the answer goes to the store,
+    /// where the waiting tool reads it; the conversation keeps a card of it.
+    fn answer_question(&mut self, uid: &str, cancel: bool) {
+        let Some(at) = self.chat.asks.iter().position(|c| c.uid == uid) else { return };
+        let card = self.chat.asks.remove(at);
+        let answer = if cancel { json!({"cancelled": true}) } else { card.answer() };
+        if let Some(mut s) = store() {
+            let _ = s.answer(uid, &answer);
+        }
+        if !cancel && let Some(msg) = self.chat.streaming.as_mut() {
+            let question = card.questions.iter().map(|q| q.question.clone()).collect::<Vec<_>>().join(" / ");
+            msg.cards.push(Card::Answered { question, answer: card.summary() });
+        }
+    }
+
+    /// The answer was stopped: open questions are declined, so the waiting tools return.
+    pub(super) fn cancel_questions(&mut self) {
+        let asks = std::mem::take(&mut self.chat.asks);
+        if let Some(mut s) = store() {
+            for card in asks {
+                let _ = s.answer(&card.uid, &json!({"cancelled": true}));
+            }
+        }
+    }
+
+    /// Takes what the chat thread (or the agent) reports; runs every frame so an answer comes
+    /// in while the pane is hidden too.
     pub(super) fn poll_chat(&mut self) {
+        self.poll_agent();
         let Some(service) = &self.chat.service else { return };
         let mut events = Vec::new();
         while let Some(e) = service.try_event() {
@@ -387,6 +470,7 @@ impl App {
                     }
                 }
                 ChatEvent::Notice(n) => msg.notices.push(n),
+                ChatEvent::Asked(_) => self.load_questions(),
                 ChatEvent::Done(_) | ChatEvent::Failed(_) => {
                     let mut msg = self.chat.streaming.take().unwrap_or_default();
                     if let ChatEvent::Failed(error) = &e {
@@ -406,7 +490,7 @@ impl App {
     }
 
     /// The thumbnails of the referenced files that may be sent (pictures allowed), at most four.
-    fn pictures_for(&self, pills: &[Pill]) -> Vec<Vec<u8>> {
+    pub(super) fn pictures_for(&self, pills: &[Pill]) -> Vec<Vec<u8>> {
         let Some(index) = &self.index else { return Vec::new() };
         let Some(dir) = ThumbCache::default_location() else { return Vec::new() };
         let thumbs = ThumbCache::new(dir);
@@ -426,7 +510,7 @@ impl App {
     }
 
     /// The message for the model: the text with each reference as ⟦n⟧ and their data below.
-    fn llm_message(&self, text: &str, pills: &[Pill], vision: bool) -> (String, Vec<Vec<u8>>) {
+    pub(super) fn llm_message(&self, text: &str, pills: &[Pill], vision: bool) -> (String, Vec<Vec<u8>>) {
         let mut out = text.to_owned();
         for (n, p) in pills.iter().enumerate() {
             out = out.replace(&format!("[[ref:{n}]]"), &format!("⟦{n}: {}⟧", p.label));
@@ -493,11 +577,25 @@ impl App {
         action: Action,
         confirmed: bool,
     ) {
-        if !self.chat_available() {
-            return;
-        }
         if self.chat.streaming.is_some() {
             self.toast(t!("actions.busy").into_owned());
+            return;
+        }
+        let Some(assistant) = self.assistant() else {
+            self.toast(t!("chat.no_endpoint").into_owned());
+            return;
+        };
+        if !assistant.is_endpoint() {
+            // The agent does it, with its own tools, in a conversation of its own.
+            if !assistant.local && !self.chat.cloud_ok && !confirmed {
+                let text = t!("actions.confirm_text", host = assistant.name.clone(), files = files, pictures = 0);
+                self.chat.confirm = Some((text.into_owned(), Pending::Action { title, user_text, llm, files, action }));
+                return;
+            }
+            if confirmed {
+                self.chat.cloud_ok = true;
+            }
+            self.start_action_with_agent(assistant, title, user_text, &action);
             return;
         }
         let Some(endpoint) = self.config.ai.endpoint.clone() else { return };

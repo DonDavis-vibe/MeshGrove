@@ -58,6 +58,27 @@ fn clean_id(id: &str) -> &str {
     id.trim().trim_start_matches("[[").trim_end_matches("]]").trim().trim_start_matches("meshgrove:")
 }
 
+/// The sent id an answer's `id` means: as it was, or in other letter case, with backslashes, or
+/// just its last part (the file's name) when that names one sent file only.
+fn sent_id<'a>(sent: &'a [String], id: &str) -> Option<&'a String> {
+    if let Some(exact) = sent.iter().find(|s| s.as_str() == id) {
+        return Some(exact);
+    }
+    let wanted = id.replace('\\', "/").to_lowercase();
+    let loose = |s: &String| s.to_lowercase();
+    if let Some(found) = sent.iter().find(|s| loose(s) == wanted) {
+        return Some(found);
+    }
+    let mut by_suffix = sent.iter().filter(|s| {
+        let s = loose(s);
+        s.ends_with(&format!("/{wanted}")) || wanted.ends_with(&format!("/{s}"))
+    });
+    match (by_suffix.next(), by_suffix.next()) {
+        (Some(one), None) => Some(one),
+        _ => None,
+    }
+}
+
 /// The items of an answer: `{"items": [...]}` or the array itself.
 fn items_of(value: &Value) -> Result<Vec<Value>, String> {
     match value {
@@ -156,7 +177,7 @@ pub fn parse_tags(answer: &str, sent: &[String]) -> Result<Vec<TagItem>, String>
     let mut out: Vec<TagItem> = Vec::new();
     for item in items_of(&value)? {
         let Some(id) = item["id"].as_str().map(clean_id) else { continue };
-        let Some(id) = sent.iter().find(|s| s.as_str() == id) else { continue };
+        let Some(id) = sent_id(sent, id) else { continue };
         if out.iter().any(|o| o.id == *id) {
             continue;
         }
@@ -393,6 +414,19 @@ pub fn parse_pick(answer: &str, sent: &[String]) -> Result<Vec<ListItemIn>, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Models respell ids: other letter case, backslashes, or just the file's name.
+    #[test]
+    fn answers_name_files_loosely() {
+        let sent = vec!["lib/Eingang/pack.zip/minis/orc.stl".to_owned(), "lib/Eingang/Rose.stl".to_owned()];
+        assert_eq!(sent_id(&sent, "lib/Eingang/Rose.stl").map(String::as_str), Some("lib/Eingang/Rose.stl"));
+        assert_eq!(sent_id(&sent, "LIB\\Eingang\\rose.stl").map(String::as_str), Some("lib/Eingang/Rose.stl"));
+        assert_eq!(sent_id(&sent, "minis/orc.stl").map(String::as_str), Some("lib/Eingang/pack.zip/minis/orc.stl"));
+        assert_eq!(sent_id(&sent, "orc.stl").map(String::as_str), Some("lib/Eingang/pack.zip/minis/orc.stl"));
+        assert_eq!(sent_id(&sent, "other.stl"), None);
+        let answer = r#"{"items": [{"id": "orc.stl", "tags": ["Miniatur"]}]}\n}\n<|tool_response>"#;
+        assert_eq!(parse_tags(answer, &sent).unwrap()[0].id, "lib/Eingang/pack.zip/minis/orc.stl");
+    }
 
     fn ids(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_owned()).collect()

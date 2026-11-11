@@ -1,5 +1,6 @@
 //! User settings in `~/.config/meshgrove/config.toml`.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -496,8 +497,27 @@ pub struct AiConfig {
     pub expire_days: u16,
     /// The user's own endpoint for the chat and the one-click actions; `None`: none set up.
     pub endpoint: Option<EndpointConfig>,
+    /// Who answers the chat: [`ENDPOINT_ASSISTANT`] for the endpoint, else the id of an AI agent
+    /// on this computer that speaks the Agent Client Protocol (`claude`, `codex`, `opencode` …,
+    /// found by Meshgrove, or one of `agents`). Empty: the endpoint if set up, else the first
+    /// agent found.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub assistant: String,
+    /// ACP agents the user added by hand (a command line).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<AgentConfig>,
+    /// The model picked for each agent (by its id), where the agent offers a choice.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_models: BTreeMap<String, String>,
+    /// The other session options picked for each agent (reasoning effort, mode …): agent id →
+    /// option id → value, put back when the agent lists that value again.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_options: BTreeMap<String, BTreeMap<String, String>>,
     /// Whether the chat's changes wait for review or apply at once (and can be undone).
     pub chat_mode: ChatMode,
+    /// The AI may suggest moving files and folders into another library it may see (else moves
+    /// stay within one library).
+    pub cross_library_moves: bool,
     /// While AI is on, Meshgrove adds itself to the AI assistants installed on this computer
     /// (and takes itself out again when this or AI is turned off).
     pub connect_apps: bool,
@@ -516,12 +536,36 @@ impl Default for AiConfig {
             log_days: 90,
             expire_days: 30,
             endpoint: None,
+            assistant: String::new(),
+            agents: Vec::new(),
+            agent_models: BTreeMap::new(),
+            agent_options: BTreeMap::new(),
             chat_mode: ChatMode::Review,
+            cross_library_moves: false,
             connect_apps: true,
             auto_accept_since: None,
         }
     }
 }
+
+/// The `assistant` id that stands for the user's own endpoint.
+pub const ENDPOINT_ASSISTANT: &str = "endpoint";
+
+/// An AI agent the user added by hand: a program that speaks the Agent Client Protocol over
+/// its stdin and stdout (as `gemini --acp` or `opencode acp` do).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentConfig {
+    /// Unique among the agents, never one of the known ids.
+    pub id: String,
+    pub name: String,
+    /// The command line that starts it in ACP mode.
+    pub command: String,
+    /// Its model runs on this computer or network: it then also sees the libraries opened to
+    /// local AI only.
+    pub local: bool,
+}
+
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -554,6 +598,10 @@ pub struct EndpointConfig {
     /// Or in this environment variable.
     pub key_env: String,
     pub timeout_s: u32,
+    /// Sent as `reasoning_effort` with every request (`low`, `high`, `max` … as the service takes
+    /// them); empty sends nothing and the service's default applies.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reasoning_effort: String,
 }
 
 impl Default for EndpointConfig {
@@ -568,6 +616,7 @@ impl Default for EndpointConfig {
             key_in_keyring: false,
             key_env: String::new(),
             timeout_s: 120,
+            reasoning_effort: String::new(),
         }
     }
 }

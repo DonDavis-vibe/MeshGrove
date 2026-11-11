@@ -97,6 +97,16 @@ const TOOLS: &[(&str, &str, bool)] = &[
         "Move or rename files, archives or folders within their library; always waits for the user's review, never replaces anything.",
         true,
     ),
+    (
+        "propose_delete",
+        "Files, archives or folders for the trash; always waits for the user's review.",
+        true,
+    ),
+    (
+        "ask_user",
+        "Ask the user one to five questions with options (radio buttons, or checkboxes with multi), shown in Meshgrove; returns their answer. Use it when the request is ambiguous.",
+        true,
+    ),
 ];
 
 /// Whether the tool changes something (or suggests a change).
@@ -231,6 +241,8 @@ pub fn definitions() -> Vec<Value> {
                 "propose_list" => schema::<proposals::ProposeList>(),
                 "propose_tag_merge" => schema::<proposals::ProposeTagMerge>(),
                 "propose_moves" => schema::<proposals::ProposeMoves>(),
+                "propose_delete" => schema::<proposals::ProposeDelete>(),
+                "ask_user" => schema::<proposals::AskUser>(),
                 _ => none(),
             };
             json!({"type": "function", "function": {"name": name, "description": description, "parameters": parameters}})
@@ -279,6 +291,8 @@ pub fn call(
         "propose_list" => to_value(proposals::propose_list(cx, store, origin, &args(arguments)?)?),
         "propose_tag_merge" => to_value(proposals::propose_tag_merge(cx, store, origin, &args(arguments)?)?),
         "propose_moves" => to_value(proposals::propose_moves(cx, store, origin, &args(arguments)?)?),
+        "propose_delete" => to_value(proposals::propose_delete(cx, store, origin, &args(arguments)?)?),
+        "ask_user" => to_value(proposals::ask_user(store, origin, &args(arguments)?)?),
         other => Err(ToolError::Invalid(format!("no tool called {other}"))),
     }
 }

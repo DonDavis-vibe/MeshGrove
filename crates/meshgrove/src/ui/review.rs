@@ -1,12 +1,14 @@
 //! "Vorschläge prüfen": what an AI suggested, batch by batch, to accept in parts, in full or
-//! not at all; and "Verlauf": the changes accepted, to take back or do again.
+//! not at all, and changed on the way: tags added or left out, a note rewritten, a new place
+//! typed, a list renamed and trimmed; and "Verlauf": the changes accepted, to take back or do
+//! again.
 
 use std::path::PathBuf;
 use std::time::SystemTime;
 
 use egui::{Color32, RichText, Ui};
 use meshgrove_core::ai::proposals::{
-    ListPayload, MovePayload, NotePayload, Picked, Proposal, ProposalKind, TagsPayload,
+    DeletePayload, ListPayload, MovePayload, NotePayload, Picked, Proposal, ProposalKind, TagsPayload,
 };
 use meshgrove_core::ai::vocab::TagStatus;
 use meshgrove_core::bundle::ResolvedBundle;
@@ -40,6 +42,20 @@ impl ReviewBatch {
     fn moves(&self) -> bool {
         self.items.iter().any(|i| i.proposal.kind == ProposalKind::Move)
     }
+
+    fn deletes(&self) -> bool {
+        self.items.iter().any(|i| i.proposal.kind == ProposalKind::Delete)
+    }
+}
+
+/// What the user is typing for one suggestion.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ItemDraft {
+    /// A tag of their own, before Enter adds it.
+    pub tag: String,
+    /// A move: the new place as typed, relative to the library, and why it will not do.
+    pub path: Option<String>,
+    pub path_error: Option<String>,
 }
 
 pub struct ReviewItem {
@@ -56,6 +72,8 @@ pub struct ReviewItem {
     pub note_before: Option<String>,
     /// A move whose new place is taken by now.
     pub taken: bool,
+    /// What the user is typing for it.
+    pub draft: ItemDraft,
 }
 
 pub enum ReviewAction {
@@ -140,6 +158,9 @@ pub fn show(
                 if batch.moves() {
                     ui.weak(t!("review.moves_hint"));
                 }
+                if batch.deletes() {
+                    ui.weak(t!("review.deletes_hint"));
+                }
                 for item in &mut batch.items {
                     ui.separator();
                     if let Some(a) = item_row(ui, entries, item, gallery, style) {
@@ -179,6 +200,7 @@ fn item_row(
                 ProposalKind::List => list_row(ui, item),
                 ProposalKind::Move => move_row(ui, item),
                 ProposalKind::Bundle => bundle_row(ui, item),
+                ProposalKind::Delete => delete_row(ui, item),
             }
             let p = &item.proposal;
             if let Some(reason) = &p.reason {
@@ -191,7 +213,9 @@ fn item_row(
             } else if let Some(to) = &item.moved_to {
                 ui.weak(t!("review.moved", path = to.display().to_string()));
             }
-            if item.copies > 1 && !matches!(p.kind, ProposalKind::List | ProposalKind::Move | ProposalKind::Bundle) {
+            if item.copies > 1
+                && !matches!(p.kind, ProposalKind::List | ProposalKind::Move | ProposalKind::Bundle | ProposalKind::Delete)
+            {
                 ui.weak(t!("review.copies", count = item.copies - 1));
             }
         });
@@ -232,6 +256,31 @@ fn tags_row(ui: &mut Ui, item: &mut ReviewItem, style: &TagStyle) {
                 toggle(&mut item.picked.remove, tag);
             }
         }
+        // Tags the user added themselves, each with its ✖.
+        let own: Vec<String> =
+            item.picked.add.iter().filter(|t| !payload.add.iter().any(|a| &a.name == *t)).cloned().collect();
+        for tag in own {
+            if chip(ui, style, &tag, &format!("+{tag} ✖"), true).on_hover_text(t!("review.own_tag_remove")).clicked() {
+                toggle(&mut item.picked.add, &tag);
+            }
+        }
+        let field = ui.add(
+            egui::TextEdit::singleline(&mut item.draft.tag)
+                .hint_text(t!("review.add_tag_hint"))
+                .desired_width(120.0)
+                .id_salt(("own_tag", item.proposal.id)),
+        );
+        let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if entered {
+            let tag = std::mem::take(&mut item.draft.tag);
+            let tag = tag.trim();
+            if !tag.is_empty() && !item.picked.add.iter().any(|t| t.eq_ignore_ascii_case(tag)) {
+                item.picked.add.push(tag.to_owned());
+                // A removal of the same tag makes no sense any more.
+                item.picked.remove.retain(|t| !t.eq_ignore_ascii_case(tag));
+            }
+            field.request_focus();
+        }
     });
 }
 
@@ -255,36 +304,83 @@ fn toggle(list: &mut Vec<String>, tag: &str) {
     }
 }
 
+/// The note as suggested, to rewrite before accepting; and whether it replaces the old one.
 fn note_row(ui: &mut Ui, item: &mut ReviewItem) {
     ui.horizontal(|ui| {
         ui.checkbox(&mut item.picked.whole, "");
         ui.label(RichText::new(target_name(item)).strong());
     });
     let Ok(note) = serde_json::from_value::<NotePayload>(item.proposal.payload.clone()) else { return };
+    let has_old = item.note_before.as_deref().is_some_and(|b| !b.is_empty());
+    let append = item.picked.append.get_or_insert(note.append);
     if let Some(before) = item.note_before.as_deref().filter(|b| !b.is_empty()) {
-        ui.label(RichText::new(t!("review.note_before", text = before)).weak().strikethrough());
+        let text = RichText::new(t!("review.note_before", text = before)).weak();
+        ui.label(if *append { text } else { text.strikethrough() });
     }
-    let label = if note.append { t!("review.note_append") } else { t!("review.note_new") };
-    ui.label(format!("{label} {}", note.text));
+    let text = item.picked.note.get_or_insert_with(|| note.text.clone());
+    ui.add(
+        egui::TextEdit::multiline(text)
+            .desired_rows(2)
+            .desired_width(f32::INFINITY)
+            .id_salt(("note_text", item.proposal.id)),
+    )
+    .on_hover_text(t!("review.note_edit_hint"));
+    if has_old {
+        ui.checkbox(append, t!("review.note_append_check"));
+    }
+    if text.trim().is_empty() {
+        ui.colored_label(ui.visuals().warn_fg_color, t!("review.note_empty"));
+    }
 }
 
 /// Old and new place, relative to the library; folders the move makes.
 fn move_row(ui: &mut Ui, item: &mut ReviewItem) {
     let Ok(m) = serde_json::from_value::<MovePayload>(item.proposal.payload.clone()) else { return };
     let Some(from) = item.proposal.target.as_ref().map(|t| t.path.clone()) else { return };
-    let rel = |p: &std::path::Path| p.strip_prefix(&m.root).unwrap_or(p).display().to_string();
-    let rename = from.parent() == m.to.parent();
+    // The new place is told from the library it goes to; a move into another library names it.
+    let cross = !from.starts_with(&m.root);
+    let rel = |p: &std::path::Path| match p.strip_prefix(&m.root) {
+        Ok(rel) if cross => format!("{}/{}", listing::file_name(&m.root), rel.display()),
+        Ok(rel) => rel.display().to_string(),
+        Err(_) => p.display().to_string(),
+    };
+    let rename = !cross && from.parent() == m.to.parent();
     ui.horizontal(|ui| {
         ui.checkbox(&mut item.picked.whole, "");
         let icon = if m.folder { "📁" } else { "📄" };
         let what = if rename { t!("review.rename") } else { t!("review.move") };
         ui.label(RichText::new(format!("{icon} {what}")).strong());
     });
-    let chosen = item.picked.to.clone().unwrap_or_else(|| m.to.clone());
-    let (old, new) =
-        if rename { (listing::file_name(&from), listing::file_name(&chosen)) } else { (rel(&from), rel(&chosen)) };
+    let mut chosen = item.picked.to.clone().unwrap_or_else(|| m.to.clone());
+    let old = if rename { listing::file_name(&from) } else { rel(&from) };
     ui.label(RichText::new(old).weak().strikethrough());
-    ui.label(RichText::new(format!("→ {new}")).strong());
+    if cross {
+        ui.weak(t!("review.cross_library", library = listing::file_name(&m.root)));
+    }
+    // The new place, to change: the name for a rename, the whole place below the library else.
+    let shown = |p: &std::path::Path| if rename { listing::file_name(p) } else { rel(p) };
+    let typed = item.draft.path.get_or_insert_with(|| shown(&chosen));
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("→").strong());
+        let field = ui.add(
+            egui::TextEdit::singleline(typed).desired_width(320.0).id_salt(("move_to_text", item.proposal.id)),
+        );
+        if field.changed() {
+            match place_from(&m.root, &from, rename, typed) {
+                Ok(to) => {
+                    item.draft.path_error = None;
+                    chosen = to.clone();
+                    item.picked.to = (to != m.to).then_some(to);
+                }
+                Err(why) => item.draft.path_error = Some(why),
+            }
+        }
+    });
+    if let Some(why) = &item.draft.path_error {
+        ui.colored_label(ui.visuals().warn_fg_color, why);
+    } else if chosen != from && chosen.symlink_metadata().is_ok() && !same_place(&chosen, &from) {
+        ui.colored_label(ui.visuals().warn_fg_color, t!("review.place_taken"));
+    }
     if !m.alternatives.is_empty() {
         // Several folders fit the file's tags: the suggested one first, the others to pick.
         let folder_label = |p: &std::path::Path| {
@@ -299,6 +395,8 @@ fn move_row(ui: &mut Ui, item: &mut ReviewItem) {
                     for option in std::iter::once(&m.to).chain(&m.alternatives) {
                         if ui.selectable_label(*option == chosen, folder_label(option)).clicked() {
                             item.picked.to = (*option != m.to).then(|| option.clone());
+                            item.draft.path = Some(shown(option));
+                            item.draft.path_error = None;
                         }
                     }
                 },
@@ -311,32 +409,99 @@ fn move_row(ui: &mut Ui, item: &mut ReviewItem) {
     }
 }
 
-fn list_row(ui: &mut Ui, item: &mut ReviewItem) {
-    let Ok(list) = serde_json::from_value::<ListPayload>(item.proposal.payload.clone()) else { return };
+/// The place the user typed for a move: a name beside the old place (a rename), or a path below
+/// the library; never outside it, never empty.
+fn place_from(root: &std::path::Path, from: &std::path::Path, rename: bool, typed: &str) -> Result<PathBuf, String> {
+    let typed = typed.trim().trim_matches(['/', '\\']);
+    if typed.is_empty() {
+        return Err(t!("review.place_empty").into_owned());
+    }
+    let parts: Vec<&str> = typed.split(['/', '\\']).collect();
+    if parts.iter().any(|p| p.is_empty() || *p == "." || *p == ".." || p.chars().any(char::is_control)) {
+        return Err(t!("review.place_invalid").into_owned());
+    }
+    if rename && parts.len() > 1 {
+        // A rename became a move: fine, the path is taken below the library.
+    }
+    let to = if rename && parts.len() == 1 {
+        from.parent().unwrap_or(root).join(parts[0])
+    } else {
+        parts.iter().fold(root.to_path_buf(), |p, part| p.join(part))
+    };
+    if !to.starts_with(root) || to == root {
+        return Err(t!("review.place_invalid").into_owned());
+    }
+    Ok(to)
+}
+
+/// The same file under another spelling of its name (a case-only rename).
+fn same_place(a: &std::path::Path, b: &std::path::Path) -> bool {
+    a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+}
+
+/// A file, archive or folder for the trash.
+fn delete_row(ui: &mut Ui, item: &mut ReviewItem) {
+    let Ok(d) = serde_json::from_value::<DeletePayload>(item.proposal.payload.clone()) else { return };
+    let Some(path) = item.proposal.target.as_ref().map(|t| t.path.clone()) else { return };
+    let rel = path.strip_prefix(&d.root).unwrap_or(&path).display().to_string();
     ui.horizontal(|ui| {
         ui.checkbox(&mut item.picked.whole, "");
-        let kind = if list.kind == "print" { t!("review.print_list") } else { t!("review.collection") };
-        ui.label(RichText::new(format!("{kind} „{}“", list.name)).strong());
+        let icon = if d.folder { "📁" } else { "📄" };
+        ui.label(RichText::new(format!("🗑 {icon} {}", t!("review.delete"))).strong());
+    });
+    ui.label(RichText::new(rel).strikethrough());
+    ui.weak(t!("review.delete_hint"));
+}
+
+/// A list as suggested: its name and kind to change, each item to leave out, the copies to set.
+fn list_row(ui: &mut Ui, item: &mut ReviewItem) {
+    let Ok(list) = serde_json::from_value::<ListPayload>(item.proposal.payload.clone()) else { return };
+    let id = item.proposal.id;
+    let kind = item.picked.list_kind.get_or_insert_with(|| list.kind.clone());
+    let name = item.picked.list_name.get_or_insert_with(|| list.name.clone());
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut item.picked.whole, "");
+        if list.query.is_none() {
+            let mut print = kind == "print";
+            let options = [(true, t!("review.print_list").into_owned()), (false, t!("review.collection").into_owned())];
+            if super::settings_kit::segmented(ui, &mut print, &options) {
+                *kind = if print { "print".into() } else { "collection".into() };
+            }
+        } else {
+            ui.label(RichText::new(t!("review.collection")).strong());
+        }
+        ui.add(egui::TextEdit::singleline(name).desired_width(220.0).id_salt(("list_name", id)))
+            .on_hover_text(t!("review.list_name_hint"));
     });
     if let Some(q) = &list.query {
         ui.weak(t!("review.saved_search", query = q));
     }
-    let names: Vec<String> = list
-        .items
-        .iter()
-        .take(12)
-        .map(|i| {
-            let name = listing::file_name(&i.target.path);
-            if i.quantity > 1 { format!("{name} ×{}", i.quantity) } else { name }
-        })
-        .collect();
-    if !names.is_empty() {
-        let more = list.items.len().saturating_sub(names.len());
-        let mut text = names.join(", ");
-        if more > 0 {
-            text += &format!(" {}", t!("review.more", count = more));
-        }
-        ui.label(text);
+    if list.items.is_empty() {
+        return;
+    }
+    let print = kind == "print";
+    let kept = item.picked.list_items.get_or_insert_with(|| list.items.iter().enumerate().map(|(i, it)| (i, it.quantity)).collect());
+    ui.weak(t!("review.list_items_hint"));
+    for (i, entry) in list.items.iter().enumerate() {
+        ui.horizontal(|ui| {
+            let at = kept.iter().position(|(k, _)| *k == i);
+            let mut on = at.is_some();
+            if ui.checkbox(&mut on, "").on_hover_text(t!("review.toggle")).changed() {
+                match at {
+                    Some(pos) => {
+                        kept.remove(pos);
+                    }
+                    None => {
+                        kept.push((i, entry.quantity));
+                        kept.sort_by_key(|(k, _)| *k);
+                    }
+                }
+            }
+            ui.label(listing::file_name(&entry.target.path));
+            if print && let Some(pos) = kept.iter().position(|(k, _)| *k == i) {
+                ui.add(egui::DragValue::new(&mut kept[pos].1).range(1..=999).prefix("×"));
+            }
+        });
     }
 }
 

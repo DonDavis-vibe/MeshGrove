@@ -115,7 +115,7 @@ Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 | **Drucker** | Alle deine Drucker mit Bauraum, gefunden in Anycubic Slicer Next, OrcaSlicer, Bambu Studio und PrusaSlicer oder von Hand eingetragen; jedes Modell sagt, auf welche Drucker es passt, Kacheln markieren Modelle, die nur gedreht (↻ 41°) oder auf keinen Drucker passen (✕); G-code wird seinem Drucker zugeordnet; Suche mit `passt:"Kobra S1"` und `is:zugross` |
 | **Druckbarkeits-Check** | Jedes Modell wird auf Löcher (offene Kanten), Kanten an mehr als zwei Flächen, Dreiecke ohne Fläche, getrennte Teile und Volumen geprüft, dazu auf verdächtige Größen (in Zoll gezeichnet?); ⚠ auf der Kachel, Einzelheiten im Bereich *Info*, `is:problem` in der Suche |
 | **Eingang** | Neue Dateien landen im Eingang, gruppiert nach dem Ordner oder Archiv, mit dem sie kamen (das ZIP eines Kunden, ein neuer Download); Kopien bekannter Modelle werden getrennt gezählt; abhaken, wenn eingeordnet |
-| **KI (freiwillig)** | Meshgrove bringt keine KI mit, aber dein eigener Assistent (Claude, LM Studio, Cursor …) kann über MCP in den freigegebenen Bibliotheken suchen und Tags, Notizen, Listen und Verschiebungen vorschlagen; mit einem eigenen Endpunkt (Ollama, LM Studio, OpenAI-kompatibel) gibt es dazu einen KI-Chat mit `@`-Verweisen und Ein-Klick-Aktionen. Nichts ändert sich, bevor du es annimmst, und alles lässt sich rückgängig machen |
+| **KI (freiwillig)** | Meshgrove bringt keine KI mit, aber dein eigener Assistent (Claude, LM Studio, Cursor …) kann über MCP in den freigegebenen Bibliotheken suchen und Tags, Notizen, Listen und Verschiebungen vorschlagen; der eingebaute KI-Chat mit `@`-Verweisen spricht mit einem eigenen Endpunkt (Ollama, LM Studio, OpenAI-kompatibel) oder mit einem KI-Agenten auf deinem Rechner (Claude Code, Codex, Antigravity, OpenCode …), mit durchsuchbarer Modellwahl; mit einem Endpunkt gibt es dazu Ein-Klick-Aktionen. Nichts ändert sich, bevor du es annimmst, und alles lässt sich rückgängig machen |
 | **Import und Ablage** | Nenne deinen Download-Ordner, und Meshgrove bietet dessen neue Modelle, G-Codes und Archive zum Import in den Landeordner der Bibliothek an (verschoben, nummeriert, wenn der Name vergeben ist, Archive ganz oder entpackt; rückgängig machbar). Eine Datei im Landeordner, die einen Themen-Tag bekommt, wird in den Ordner des Tags abgelegt – nach einer Regel von dir oder durch deinen Assistenten, mit deinem Okay oder, nur aus dem Landeordner, von selbst |
 | **Duplikate** | Findet exakte Kopien und dasselbe Modell in anderer Form (ASCII- statt Binär-STL, STL statt 3MF, gedrehte oder verschobene Kopien), schlägt vor, welche Kopie bleiben soll, und kann die anderen in den Papierkorb legen |
 | **Slicer und Programme** | „In Slicer öffnen“ für ein oder viele Modelle (erkennt Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer), ins schon offene Slicer-Fenster, wo der Slicer das erlaubt; „In … öffnen“ für deinen **Mesh-Editor oder dein CAD-Programm** (erkennt Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer); **Strg+C kopiert die Dateien** zum Einfügen im Dateimanager oder Slicer, **Strg+X schneidet aus, Strg+V fügt** Dateien aus der Zwischenablage in den Ordner ein; „Im Dateimanager zeigen“; Öffnen mit dem Standardprogramm |
@@ -341,7 +341,11 @@ Programme: irgendwohin entpacken und `meshgrove.exe` starten.
   *Unterordner einbeziehen*. Ein Klick auf einen Spaltentitel sortiert danach (noch einmal: in
   die andere Richtung), die Grenzen zwischen den Titeln ziehen macht Spalten breiter, ein
   Rechtsklick auf einen Titel blendet Spalten ein und aus. Die Zeilenhöhe folgt dem
-  Größenregler. Auswählen, Tastatur, Kontextmenü und Doppelklick funktionieren wie im Raster.
+  Größenregler, bis du die Vorschauspalte breiter ziehst: Dann haben die Vorschauen (und die
+  Zeilen) diese Größe, bis der Regler wieder benutzt wird. Die Vorschauen können alles, was eine
+  Kachel kann: Ordner blenden durch ihre Bilder, die Maus auf einem Modell dreht es, Ziehen dreht
+  es von Hand, und das Mausrad zoomt, solange eine Taste gedrückt ist. Auswählen, Tastatur,
+  Kontextmenü und Doppelklick funktionieren wie im Raster.
 - **Ordner filtern:** Mit dem 📁-Bereich gewählt ins Suchfeld tippen (Strg+F), um den aktuellen
   Ordner nach Namen einzugrenzen.
 - **Mehrere Dateien auswählen:** Strg+Klick schaltet einzelne um, Umschalt+Klick wählt einen
@@ -656,8 +660,11 @@ Vorschlag: eine Kopie außerhalb eines Archivs, dann die älteste, dann die mit 
 Pfad; lieber eine andere Kopie behalten: auf sie zeigen und ☆ *Behalten* klicken. *Alle außer ★
 in den Papierkorb* räumt eine Gruppe nach Rückfrage auf. Nach der Sichtung hakst du die Gruppen
 ab, bei denen es passt (oder *Alle Vorschläge passen*), und *Ausgewählte bereinigen* räumt sie
-alle mit einer Rückfrage auf. Überall in der Galerie tragen Dateien mit Duplikaten eine
-`2×`/`3×`-Markierung.
+alle mit einer Rückfrage auf. Kopien, die so bleiben sollen, bekommen *Ignorieren*: Die Gruppe
+wird nicht mehr gelistet, in der Seitenleiste gezählt oder auf ihren Kacheln markiert;
+*Ignorierte zeigen* listet solche Gruppen wieder, mit *Wieder beachten* zum Zurücknehmen. Was
+ignoriert ist, bleibt bei deinen Tags und Notizen (auch im Export der Benutzerdaten). Überall in
+der Galerie tragen Dateien mit Duplikaten eine `2×`/`3×`-Markierung.
 
 ### KI-Assistent und MCP (freiwillig)
 
@@ -692,7 +699,10 @@ er öffnet die Prüfliste. Jeder Block zeigt, was für welche Datei vorgeschlage
 zum Behalten, Tags, die es in der Bibliothek noch nicht gibt, als *neu* markiert), Tags zum
 Entfernen, Notizen, neue Listen. Haken weg bei einer Datei oder Klick auf einen Tag lässt ihn weg
 (der Haken am Titel gilt für den ganzen Block), dann *Ausgewählte annehmen*, *Alle annehmen* oder
-*Verwerfen*. Wer einen Block für den Eingang annimmt, nimmt die Dateien damit auch aus dem
+*Verwerfen*. Alles lässt sich dabei ändern: Ein eigenes Tag ins Feld *+ eigenes Tag* tippen, eine
+Notiz umschreiben (und wählen, ob sie die alte ersetzt oder darunter kommt), für eine Verschiebung
+einen anderen Namen oder Ort tippen, eine Liste umbenennen, zwischen Druckliste und Sammlung
+wechseln, Einträge abwählen und Stückzahlen setzen. Angenommen wird, was du siehst. Wer einen Block für den Eingang annimmt, nimmt die Dateien damit auch aus dem
 Eingang. Tags und Notizen gehören zum Inhalt und gelten damit auch für identische Kopien; die
 Prüfliste sagt es dann. *Einstellungen → KI & MCP → Vorschläge automatisch annehmen* überspringt
 die Prüfung für neue Vorschläge von KI-Apps und Ein-Klick-Aktionen; Verschiebungen warten immer.
@@ -703,10 +713,23 @@ wieder an. *Einstellungen → KI & MCP* zeigt außerdem das **Zugriffsprotokoll*
 wann was angesehen hat –, und *KI-Daten löschen* entfernt alle offenen Vorschläge, das Protokoll
 und die Chat-Gespräche.
 
-**KI-Chat (eigener Endpunkt):** Unter *Einstellungen → KI & MCP → Eigener Endpunkt* trägst du einen
-OpenAI-kompatiblen Dienst ein, den du selbst betreibst oder nutzt – Ollama, LM Studio, llama.cpp,
-OpenAI, OpenRouter –, mit Modell und, wenn nötig, Schlüssel (er liegt im Schlüsselbund).
-*Verbindung testen* listet die Modelle. Dann erscheint neben *Info* der Bereich **KI-Chat**: Frag
+**KI-Chat (eigener Endpunkt oder ein Agent auf deinem Rechner):** Den Chat beantwortet entweder
+ein eigener Endpunkt oder ein **KI-Agent auf deinem Rechner**, der das Agent Client Protocol
+spricht – Claude Code (`claude-agent-acp`), Codex, Google Antigravity, Gemini CLI, OpenCode, Grok,
+Copilot CLI, Qwen Code, goose. Meshgrove findet die installierten selbst (*Einstellungen → KI &
+MCP → Wer den Chat beantwortet* zeigt sie mit Anmeldestatus und nimmt jeden weiteren ACP-Befehl
+auf); der Agent startet, sobald der Chat offen ist, erreicht die Bibliothek über `meshgrove-mcp`,
+fragt im Chat nach, bevor er etwas jenseits von Meshgroves eigenen Werkzeugen ausführt, und zeigt
+seine Vorschläge als Karten wie der Endpunkt. Für einen Endpunkt trägst du unter *Eigener
+Endpunkt* einen OpenAI-kompatiblen Dienst ein, den du selbst betreibst oder nutzt – Ollama, LM
+Studio, llama.cpp, OpenAI, OpenRouter –, mit Modell und, wenn nötig, Schlüssel (er liegt im
+Schlüsselbund). Unter dem Nachrichtenfeld wählst du, wer antwortet, und in einer
+**durchsuchbaren Modellwahl**, welches Modell: Die Liste kommt vom Agenten oder vom Endpunkt
+(OpenRouters klappt nach Anbietern), und ein Modell, das nicht darin steht, tippst du ein. Daneben
+stehen die weiteren Wahlen: der **Denkaufwand** des Endpunkts (geht als `reasoning_effort` mit,
+auch ein Feld in seinen Einstellungen) oder die Sitzungsoptionen, die der Agent anbietet (Claude
+Code: Aufwand; sein Berechtigungsmodus gehört nicht dazu, denn Berechtigungen entscheidet Meshgrove
+selbst, und der Schalter Prüfen | Automatisch sagt, was aus den Vorschlägen wird). Dann erscheint neben *Info* der Bereich **KI-Chat**: Frag
 nach deiner Bibliothek, und mit `@` fügst du Dateien, Ordner, Tags, Listen, Drucker, den Eingang
 oder eine Suche (`@tag:garten passt:mini`) als Verweis ein. Antworten nennen Dateien als
 anklickbare Verweise; was die KI nachgeschlagen hat, steht eingeklappt darunter. Der Schalter
@@ -715,23 +738,37 @@ oder gleich angewendet werden; der Pfeil ↶ an deiner Nachricht nimmt alles zur
 geändert wurde. Ein Cloud-Dienst sieht nur Bibliotheken, die für Cloud-KI freigegeben sind, und
 vor dem ersten Senden zeigt Meshgrove, was rausgeht. Die Gespräche bleiben auf deinem Rechner.
 
-**Ein-Klick-Aktionen** gehen auch mit kleinen lokalen Modellen, weil sie ohne Werkzeug-Aufrufe
-auskommen: *✧ Einordnen* im Eingang (je Gruppe oder alles) schlägt Tags vor, *✧ Tags vorschlagen*
-im Kontextmenü tut es für die Auswahl, ✧ neben dem Tag-Feld bietet Tags zum Anklicken an, und
-*+ Neue Liste … → ✧ Oder beschreiben* macht aus „Geschenke unter 2 h für den A1 mini“ eine
-Druckliste (die Druckzeit kommt aus dem G-Code, auch aus einem gleichnamigen neben dem Modell). Die
-Ergebnisse warten in der Prüfliste und stehen als Karte in einem neuen Gespräch, in dem du
-nachfragen kannst. *✧ Im Chat erwähnen* legt die Auswahl ins Nachrichtenfeld, *Als KI-Verweis
+**Ein-Klick-Aktionen** gehen an den, der den Chat beantwortet: *✧ Einordnen* im Eingang (je
+Gruppe oder alles) schlägt Tags vor, *✧ Tags vorschlagen* im Kontextmenü tut es für die Auswahl,
+und *+ Neue Liste … → ✧ Oder beschreiben* macht aus „Geschenke unter 2 h für den A1 mini“ eine
+Druckliste (die Druckzeit kommt aus dem G-Code, auch aus einem gleichnamigen neben dem Modell). Mit
+einem Endpunkt kommen sie ohne Werkzeug-Aufrufe aus, also schaffen das auch kleine lokale Modelle;
+mit einem Agenten wie Claude Code wird die Aufgabe eine Nachricht in einem eigenen Gespräch, und
+der Agent macht die Vorschläge mit Meshgroves Werkzeugen. Die Ergebnisse warten in der Prüfliste
+und stehen als Karte in diesem Gespräch, in dem du nachfragen kannst. ✧ neben dem Tag-Feld, das
+Tags zum Anklicken anbietet, braucht einen Endpunkt. *✧ Im Chat erwähnen* legt die Auswahl ins Nachrichtenfeld, *Als KI-Verweis
 kopieren* gibt `meshgrove:`-Verweise für einen Assistenten über MCP.
 
 **Verschieben und Umbenennen:** Assistent und Chat können vorschlagen, Dateien, Archive oder Ordner
-innerhalb ihrer Bibliothek zu verschieben oder umzubenennen. Das bleibt immer ein Vorschlag, auch im
+innerhalb ihrer Bibliothek zu verschieben oder umzubenennen, und mit *Einstellungen → KI & MCP →
+Der KI erlauben, Dateien zwischen Bibliotheken zu verschieben* auch in eine andere freigegebene
+Bibliothek. Das bleibt immer ein Vorschlag, auch im
 automatischen Modus: Die Prüfliste zeigt alt → neu und welche Ordner dafür angelegt würden. Beim
 Annehmen wird auf der Festplatte verschoben, ohne je etwas zu überschreiben – ist das Ziel
 inzwischen belegt, wird es übersprungen. Tags, Notizen, Listen und Vorschaubilder ziehen mit,
 nichts wird neu berechnet. Im Verlauf lässt es sich zurücknehmen, solange die Dateien unverändert
 sind; eigens angelegte Ordner verschwinden dann wieder, wenn sie leer sind. Dateien in Archiven
 bleiben, wo sie sind.
+
+**Löschen:** Assistent und Chat können auch vorschlagen, Dateien, Archive oder Ordner in den
+Papierkorb zu legen (`propose_delete`). Das wartet immer auf die Prüfliste, auch im automatischen
+Modus, und beim Annehmen wandern sie in den Papierkorb des Systems, aus dem sie sich zurückholen
+lassen; der Verlauf kann das nicht. Nichts in Archiven, und nie eine Bibliothek selbst.
+
+**Rückfragen:** Ist eine Bitte mehrdeutig, kann der Assistent nachfragen (`ask_user`): Seine
+Fragen erscheinen im Chat mit Auswahlknöpfen für eine Antwort, Kästchen für mehrere und einem Feld
+für eine Antwort in eigenen Worten; der Assistent wartet auf die Antwort (höchstens eine
+Viertelstunde) und macht damit weiter. *Nicht antworten* oder Abbrechen lässt ihn ohne weitermachen.
 
 Auf der Kommandozeile macht `meshgrove-mcp setup` dasselbe (`--dry-run` zeigt es vorher,
 `--client NAME` wählt einen aus), `meshgrove-mcp remove` nimmt die Einträge wieder heraus, und
@@ -803,10 +840,13 @@ Plugins schreiben: [docs/plugins.md](docs/plugins.md) (englisch).
 
 ### Archive (ZIP, 7z, RAR, TAR)
 
-Ein Doppelklick auf ein Archiv öffnet es wie einen Ordner, mit Unterordnern im Archiv. Jedes
-Modell, Bild und PDF darin bekommt eine Vorschau. Die Archiv-Kachel zeigt ein Mosaik des
-Inhalts. Archive werden wie Ordner indiziert, also beziehen Bibliothekssuche, Tags, Notizen und
-Duplikatsuche ihren Inhalt mit ein. Archive werden nie verändert. Solide 7z/RAR-Archive werden
+Ein Doppelklick auf ein Archiv öffnet es wie einen Ordner, Ebene für Ebene: Die Ordner darin
+öffnen sich wie Ordner auf der Platte, mit eigenen Mosaik-Kacheln, und *Unterordner einbeziehen*
+zeigt alles unterhalb der Ebene, auf der du bist. Jedes Modell, Bild und PDF darin bekommt eine
+Vorschau. Die Archiv-Kachel zeigt ein Mosaik des Inhalts – in der Bibliothek (aus dem Index) wie
+außerhalb (aus dem Archiv gelesen), im Download-Ordner oder in der Import-Ansicht genauso.
+Archive in der Bibliothek werden wie Ordner indiziert, also beziehen Bibliothekssuche, Tags,
+Notizen und Duplikatsuche ihren Inhalt mit ein. Archive werden nie verändert. Solide 7z/RAR-Archive werden
 einmal pro Besuch entpackt, nicht einmal pro Datei.
 
 ### Dateien in den Papierkorb
@@ -981,6 +1021,18 @@ materials = ["PLA", "PETG"]
 enabled = false
 
 chat_mode = "review"       # review | auto: Änderungen aus dem Chat erst prüfen oder gleich anwenden
+cross_library_moves = false  # die KI darf Verschiebungen in eine andere freigegebene Bibliothek vorschlagen
+assistant = "claude"       # wer den Chat beantwortet: "endpoint" oder die Id eines Agenten (claude, codex,
+                           # antigravity, gemini, opencode, grok, copilot, qwen, goose oder einer aus ai.agents)
+agent_models = { claude = "claude-opus-5-5" }  # das je Agent gewählte Modell
+[ai.agent_options.claude]  # seine weiteren Sitzungsoptionen, wie gewählt (Denkaufwand, Modus …)
+effort = "high"
+
+[[ai.agents]]              # ein ACP-Agent, mit seinem Befehl eingetragen
+id = "agent-1"
+name = "Mein Agent"
+command = "my-agent --acp"
+local = false              # sein Modell läuft hier oder im eigenen Netz
 
 [[ai.libraries]]
 root = "/home/ich/3D-Modelle"
@@ -993,6 +1045,7 @@ model = "qwen3:8b"
 local = true               # läuft hier oder im eigenen Netz
 vision = false             # Modell versteht Bilder
 tools = true               # Modell kann Werkzeuge benutzen
+reasoning_effort = "high"  # geht als reasoning_effort mit; leer: Vorgabe des Dienstes
 ```
 
 Umgebungsvariablen für Sonderfälle:

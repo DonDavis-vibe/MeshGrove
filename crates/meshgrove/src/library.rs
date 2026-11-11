@@ -145,6 +145,8 @@ enum Cmd {
         reply: Sender<Result<ChangeReport, String>>,
     },
     Tag(Vec<PathBuf>, String),
+    /// A duplicate group kept as it is (true), or watched again.
+    IgnoreDuplicates(String, bool),
     Untag(Vec<PathBuf>, String),
     SetNote(Vec<PathBuf>, String),
     List(ListOp),
@@ -312,6 +314,11 @@ impl LibraryService {
         let _ = self.tx.send(Cmd::Tag(paths, tag));
     }
 
+    /// Keeps a duplicate group as it is (`on`), or watches it again.
+    pub fn ignore_duplicates(&self, key: String, on: bool) {
+        let _ = self.tx.send(Cmd::IgnoreDuplicates(key, on));
+    }
+
     pub fn untag(&self, paths: Vec<PathBuf>, tag: String) {
         let _ = self.tx.send(Cmd::Untag(paths, tag));
     }
@@ -459,6 +466,12 @@ impl Worker {
                     match lib.tag(&paths, &tag) {
                         Ok(()) => self.place(&lib, &mut proposals, &paths, true),
                         Err(e) => log::warn!("tagging failed: {e}"),
+                    }
+                    self.send(LibEvent::UserDataChanged);
+                }
+                Ok(Cmd::IgnoreDuplicates(key, on)) => {
+                    if let Err(e) = lib.ignore_duplicates(&key, on) {
+                        log::warn!("ignoring duplicates failed: {e}");
                     }
                     self.send(LibEvent::UserDataChanged);
                 }

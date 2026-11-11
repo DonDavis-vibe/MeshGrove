@@ -14,6 +14,7 @@ pub mod layout;
 pub mod model_window;
 pub mod offscreen;
 pub mod paint;
+pub mod picker;
 #[cfg(feature = "plugins")]
 pub mod plugin_view;
 pub mod review;

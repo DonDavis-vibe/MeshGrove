@@ -1,5 +1,6 @@
-//! Settings → "KI & MCP": switching AI on, what each library shows to which AI, setting up the
-//! user's assistant, and what it looked at.
+//! Settings → "KI & MCP": switching AI on, what each library shows to which AI, who answers the
+//! chat (an agent found on this computer, or the user's own endpoint), connecting the AI apps,
+//! and what they looked at.
 
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
@@ -10,11 +11,14 @@ use meshgrove_core::ai::agent_setup::{Change, Outcome};
 use meshgrove_core::ai::guess_local;
 use meshgrove_core::ai::proposals::{AccessEntry, ProposalStore};
 use meshgrove_core::ai::snippets::{self, Client};
-use meshgrove_core::config::{AccessClass, AiAccess, Config, EndpointConfig};
+use meshgrove_core::config::{AccessClass, AgentConfig, AiAccess, Config, EndpointConfig};
 use meshgrove_core::listing;
 
+use super::picker::{self, Choice, Picker};
 use super::settings::SettingsChange;
 use super::settings_kit::{self as kit, check, hint, row};
+use crate::app::ModelList;
+use crate::assist::agents::{self, Detection, Login};
 use crate::assist::connect;
 use crate::i18n;
 
@@ -32,10 +36,15 @@ pub struct AiSettings {
     form: Option<EndpointConfig>,
     key: String,
     test: Option<Receiver<Result<Vec<String>, String>>>,
-    models: Vec<String>,
+    /// The endpoint's models, listed for the address in `listed_for` (the picker lists by itself
+    /// once the form shows, and again after a test).
+    models: ModelList,
+    listed_for: Option<String>,
     tested: Option<Result<String, String>>,
     /// The assistants found and what connecting would do for each, read when the page shows.
     assistants: Option<Vec<Outcome>>,
+    /// An agent being added by hand.
+    new_agent: AgentConfig,
 }
 
 impl Default for AiSettings {
@@ -50,9 +59,11 @@ impl Default for AiSettings {
             form: None,
             key: String::new(),
             test: None,
-            models: Vec::new(),
+            models: ModelList::default(),
+            listed_for: None,
             tested: None,
             assistants: None,
+            new_agent: AgentConfig::default(),
         }
     }
 }
@@ -65,7 +76,109 @@ impl AiSettings {
         self.form = None;
         self.key.clear();
         self.tested = None;
+        self.listed_for = None;
         self.assistants = None;
+    }
+
+    /// Who answers the chat: the agents found on this computer and the ones added by hand,
+    /// the endpoint when set up; one of them picked.
+    pub fn assistant(
+        &mut self,
+        ui: &mut Ui,
+        config: &Config,
+        detection: Option<&Detection>,
+        changes: &mut Vec<SettingsChange>,
+    ) {
+        hint(ui, t!("assistant.hint"));
+        if !config.ai.enabled {
+            return;
+        }
+        let entries = agents::entries(&config.ai, detection);
+        let current = agents::current(&config.ai, detection).map(|e| e.id).unwrap_or_default();
+        if detection.is_none() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak(t!("assistant.looking"));
+            });
+        }
+        if entries.is_empty() {
+            hint(ui, t!("assistant.none"));
+        }
+        for e in &entries {
+            ui.horizontal(|ui| {
+                if ui.radio(e.id == current, &e.name).clicked() && e.id != current {
+                    changes.push(SettingsChange::Assistant(e.id.clone()));
+                }
+                ui.weak(&e.detail);
+                if e.found
+                    && let Some(f) = detection.and_then(|d| d.found.iter().find(|f| f.id == e.id))
+                {
+                    let (text, color) = match f.login {
+                        Login::LooksLoggedIn => (t!("assistant.login_found"), kit::GOOD),
+                        Login::KeyInEnvironment => (t!("assistant.login_key"), kit::GOOD),
+                        Login::NotLoggedIn => (t!("assistant.login_missing"), ui.visuals().warn_fg_color),
+                        Login::Unknown => (t!("assistant.login_unknown"), ui.visuals().weak_text_color()),
+                    };
+                    kit::pill(ui, text, color).on_hover_text(f.argv.join(" "));
+                }
+                if e.is_endpoint() {
+                    kit::pill(ui, t!("assistant.endpoint_pill"), ui.visuals().weak_text_color());
+                }
+                if !e.found
+                    && !e.is_endpoint()
+                    && ui.small_button("✖").on_hover_text(t!("assistant.remove")).clicked()
+                {
+                    changes.push(SettingsChange::RemoveAgent(e.id.clone()));
+                }
+            });
+            if let Some(problem) = &e.problem {
+                hint(ui, t!("assistant.cannot_start", error = problem.clone()));
+            }
+        }
+        // The known agents not found, and how to get them.
+        if let Some(d) = detection {
+            let missing: Vec<&agents::Known> =
+                agents::KNOWN.iter().filter(|k| !d.found.iter().any(|f| f.id == k.id)).collect();
+            if !missing.is_empty() {
+                egui::CollapsingHeader::new(t!("assistant.missing", count = missing.len())).show(ui, |ui| {
+                    for k in missing {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(k.name);
+                            ui.weak(k.install);
+                        });
+                    }
+                    hint(ui, t!("assistant.missing_hint"));
+                });
+            }
+        }
+        if config.ai.endpoint.is_none() {
+            hint(ui, t!("assistant.endpoint_hint"));
+        }
+        ui.add_space(4.0);
+        egui::CollapsingHeader::new(t!("assistant.add")).show(ui, |ui| {
+            row(ui, &t!("assistant.add_name"), |ui| {
+                ui.add(egui::TextEdit::singleline(&mut self.new_agent.name).desired_width(220.0));
+            });
+            row(ui, &t!("assistant.add_command"), |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.new_agent.command)
+                        .hint_text("opencode acp")
+                        .desired_width(300.0),
+                );
+            });
+            ui.checkbox(&mut self.new_agent.local, t!("endpoint.local")).on_hover_text(t!("endpoint.local_hint"));
+            let ready = !self.new_agent.command.trim().is_empty();
+            if ui.add_enabled(ready, egui::Button::new(t!("assistant.add_button"))).clicked() {
+                let mut agent = std::mem::take(&mut self.new_agent);
+                agent.id = agents::new_id(&config.ai);
+                agent.command = agent.command.trim().to_owned();
+                if agent.name.trim().is_empty() {
+                    agent.name = agents::short_command(&agent.command);
+                }
+                changes.push(SettingsChange::AddAgent(agent));
+            }
+            hint(ui, t!("assistant.add_hint"));
+        });
     }
 
     fn load(&mut self) {
@@ -88,6 +201,10 @@ impl AiSettings {
             let mut auto = config.ai.auto_accept_since.is_some();
             if check(ui, &mut auto, t!("settings.ai_auto_accept"), t!("settings.ai_auto_accept_hint")) {
                 changes.push(SettingsChange::AiAutoAccept(auto));
+            }
+            let mut cross = config.ai.cross_library_moves;
+            if check(ui, &mut cross, t!("settings.ai_cross_moves"), t!("settings.ai_cross_moves_hint")) {
+                changes.push(SettingsChange::AiCrossLibraryMoves(cross));
             }
             ui.horizontal(|ui| {
                 if ui.button(t!("settings.ai_review", count = self.pending)).clicked() {
@@ -251,10 +368,14 @@ impl AiSettings {
             self.tested = Some(match result {
                 Ok(models) => {
                     let text = t!("endpoint.test_ok", count = models.len()).into_owned();
-                    self.models = models;
+                    self.models.choices = crate::app::endpoint_choices(&models);
+                    self.models.note = models.is_empty().then(|| t!("assistant.no_models").into_owned());
                     Ok(text)
                 }
-                Err(e) => Err(e),
+                Err(e) => {
+                    self.models.note = Some(t!("assistant.models_failed", error = e.clone()).into_owned());
+                    Err(e)
+                }
             });
         }
         if self.form.is_none() {
@@ -285,23 +406,44 @@ impl AiSettings {
             });
         });
         row(ui, &t!("endpoint.url"), |ui| {
-            if ui.add(egui::TextEdit::singleline(&mut form.base_url).desired_width(300.0)).changed() {
+            if ui.add(egui::TextEdit::singleline(&mut form.base_url).id(*ENDPOINT_URL_FIELD).desired_width(300.0)).changed() {
                 form.local = guess_local(&form.base_url);
             }
         });
+        // The models are listed once for each address the form shows (never per keystroke:
+        // only when the address field is left), with the key as kept.
+        let address_settled = !ui.memory(|m| m.has_focus(*ENDPOINT_URL_FIELD));
+        if address_settled && self.listed_for.as_deref() != Some(form.base_url.as_str()) && self.test.is_none() {
+            self.listed_for = Some(form.base_url.clone());
+            self.models = ModelList { note: Some(t!("assistant.listing").into_owned()), ..Default::default() };
+            self.test = Some(list_models(ui.ctx(), form, &self.key));
+            self.tested = None;
+        }
         row(ui, &t!("endpoint.model"), |ui| {
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut form.model).hint_text("qwen3:8b").desired_width(220.0));
-                if !self.models.is_empty() {
-                    egui::ComboBox::from_id_salt("endpoint_models").selected_text("▾").width(40.0).show_ui(ui, |ui| {
-                        for m in &self.models {
-                            if ui.selectable_label(form.model == *m, m).clicked() {
-                                form.model = m.clone();
-                            }
-                        }
-                    });
-                }
-            });
+            let choices: Vec<Choice> = self
+                .models
+                .choices
+                .iter()
+                .map(|c| Choice { value: &c.value, label: &c.label, tip: &c.tip, group: c.group.as_deref() })
+                .collect();
+            let current = if form.model.is_empty() { "qwen3:8b".to_owned() } else { form.model.clone() };
+            let picked = picker::show(
+                ui,
+                Picker {
+                    id: "endpoint_model",
+                    current: &current,
+                    current_value: &form.model,
+                    hint: &t!("picker.search_hint"),
+                    choices: &choices,
+                    custom: true,
+                    note: self.models.note.as_deref(),
+                    width: Some(300.0),
+                    enabled: true,
+                },
+            );
+            if let Some(p) = picked.inner {
+                form.model = p.value().to_owned();
+            }
         });
         row(ui, &t!("endpoint.key"), |ui| {
             ui.horizontal(|ui| {
@@ -327,6 +469,14 @@ impl AiSettings {
         row(ui, &t!("endpoint.key_env"), |ui| {
             ui.add(egui::TextEdit::singleline(&mut form.key_env).hint_text("OPENAI_API_KEY").desired_width(220.0));
         });
+        row(ui, &t!("endpoint.effort"), |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut form.reasoning_effort)
+                    .hint_text(t!("endpoint.effort_field_hint"))
+                    .desired_width(220.0),
+            )
+            .on_hover_text(t!("endpoint.effort_hint"));
+        });
         ui.checkbox(&mut form.local, t!("endpoint.local")).on_hover_text(t!("endpoint.local_hint"));
         ui.checkbox(&mut form.vision, t!("endpoint.vision")).on_hover_text(t!("endpoint.vision_hint"));
         ui.checkbox(&mut form.tools, t!("endpoint.tools")).on_hover_text(t!("endpoint.tools_hint"));
@@ -336,18 +486,8 @@ impl AiSettings {
         let mut remove = false;
         ui.horizontal(|ui| {
             if ui.add_enabled(self.test.is_none(), egui::Button::new(t!("endpoint.test"))).clicked() {
-                let (tx, rx) = bounded(1);
-                let key = Some(self.key.trim().to_owned())
-                    .filter(|k| !k.is_empty())
-                    .or_else(|| crate::assist::secret::load(&form.base_url, form.key_in_keyring, &form.key_env));
-                let endpoint =
-                    crate::assist::client::Endpoint::new(&form.base_url, &form.model, key, Duration::from_secs(15));
-                let ctx = ui.ctx().clone();
-                std::thread::spawn(move || {
-                    let _ = tx.send(endpoint.models().map_err(|e| e.to_string()));
-                    ctx.request_repaint();
-                });
-                self.test = Some(rx);
+                self.listed_for = Some(form.base_url.clone());
+                self.test = Some(list_models(ui.ctx(), form, &self.key));
                 self.tested = None;
             }
             if self.test.is_some() {
@@ -417,6 +557,27 @@ impl AiSettings {
             }
         });
     }
+}
+
+/// The address field, whose focus says whether the address is being typed.
+static ENDPOINT_URL_FIELD: std::sync::LazyLock<egui::Id> = std::sync::LazyLock::new(|| egui::Id::unique("endpoint_url"));
+
+/// Asks the endpoint for its models on a thread: with the key typed, else the one kept.
+fn list_models(ctx: &egui::Context, form: &EndpointConfig, typed: &str) -> Receiver<Result<Vec<String>, String>> {
+    let (tx, rx) = bounded(1);
+    let key = Some(typed.trim().to_owned())
+        .filter(|k| !k.is_empty())
+        .or_else(|| crate::assist::secret::load(&form.base_url, form.key_in_keyring, &form.key_env));
+    let endpoint = crate::assist::client::Endpoint::new(&form.base_url, &form.model, key, Duration::from_secs(15));
+    let ctx = ctx.clone();
+    std::thread::Builder::new()
+        .name("models".into())
+        .spawn(move || {
+            let _ = tx.send(endpoint.models().map_err(|e| e.to_string()));
+            ctx.request_repaint();
+        })
+        .expect("spawning a thread");
+    rx
 }
 
 fn access_name(access: AiAccess) -> String {

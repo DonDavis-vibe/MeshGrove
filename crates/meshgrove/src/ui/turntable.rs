@@ -28,6 +28,8 @@ pub struct HoveredTile {
     pub drag: egui::Vec2,
     /// A mouse button is held on the tile: the wheel zooms the preview instead of scrolling.
     pub dragging: bool,
+    /// The wheel's movement this frame (the gallery reads it before its scroll area does).
+    pub wheel: f32,
 }
 
 struct Spin {
@@ -58,12 +60,12 @@ impl Turntable {
         rs: &egui_wgpu::RenderState,
         renderer: &Renderer,
     ) {
-        let wheel = ui.input(|i| i.smooth_scroll_delta.y);
         // Plain scrolling moves the grid, so the preview stops; with a button held it zooms instead.
-        let Some(tile) = hovered.filter(|t| t.dragging || wheel == 0.0) else {
+        let Some(tile) = hovered.filter(|t| t.dragging || t.wheel == 0.0) else {
             self.spin = None;
             return;
         };
+        let wheel = tile.wheel;
         let now = Instant::now();
         let start = ViewParams::default();
         let spin = match &mut self.spin {

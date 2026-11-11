@@ -73,8 +73,9 @@ enum View {
     Search(Vec<Entry>),
     /// Every file below `root` ("include subfolders"); `None` while the folders are walked.
     Flatten { root: PathBuf, entries: Option<Vec<Entry>> },
-    /// Groups of duplicate models from the library index.
-    Duplicates { entries: Vec<Entry>, groups: Vec<GroupInfo> },
+    /// Groups of duplicate models from the library index; `ignored`: how many the user keeps
+    /// as they are (listed too only on request).
+    Duplicates { entries: Vec<Entry>, groups: Vec<GroupInfo>, ignored: usize },
     /// The files of a list (favourites, print list, collection).
     List { id: i64, entries: Vec<Entry> },
     /// New files waiting to be sorted, by the drop they came with.
@@ -93,6 +94,7 @@ enum Scope {
     Library,
 }
 
+mod agent;
 mod ai_actions;
 mod chat;
 mod checks;
@@ -101,6 +103,8 @@ mod inbox;
 #[cfg(feature = "plugins")]
 mod plugins;
 mod review;
+
+pub use agent::{ModelList, endpoint_choices};
 
 /// Which switch to inches the question is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,6 +204,9 @@ pub struct App {
     checks_next: Instant,
     /// The chat with the user's own model.
     chat: chat::ChatState,
+    /// The AI agents found on this computer, and the search for them while it runs.
+    agents: Option<crate::assist::agents::Detection>,
+    agents_rx: Option<Receiver<crate::assist::agents::Detection>>,
     /// The AI's tags for the tag editor (✨).
     ai_tags: ai_actions::AiTags,
     egui_ctx: egui::Context,
@@ -234,6 +241,10 @@ pub struct App {
     /// to keep: they outlive the view being built again after a cleanup.
     dupes_picked: HashSet<PathBuf>,
     dupes_keep: HashSet<PathBuf>,
+    /// The duplicates view lists the ignored groups too.
+    dupes_show_ignored: bool,
+    /// Groups just ignored (or watched again) here, before the index has it: key → ignored.
+    dupes_ignored_now: HashMap<String, bool>,
     last_processed: usize,
     trash_confirm: Option<Vec<PathBuf>>,
     /// A switch to inches waiting for the answer to the question about imperial units.
@@ -406,6 +417,8 @@ impl App {
             auto_accepted: HashSet::new(),
             chat: chat::ChatState::default(),
             ai_tags: ai_actions::AiTags::default(),
+            agents: None,
+            agents_rx: None,
             egui_ctx: cc.egui_ctx.clone(),
             inbox_count: 0,
             inbox_due: None,
@@ -430,6 +443,8 @@ impl App {
             duplicates_due: Some(Instant::now()),
             dupes_picked: HashSet::new(),
             dupes_keep: HashSet::new(),
+            dupes_show_ignored: false,
+            dupes_ignored_now: HashMap::new(),
             last_processed: 0,
             trash_confirm: None,
             units_confirm: None,
@@ -514,12 +529,19 @@ impl App {
             // More than four candidates only when they are cycled through.
             let limit = if fp.enabled && fp.cycle { 8 } else { 4 };
             for (i, e) in entries.iter().enumerate().filter(|(_, e)| e.is_dir() || e.kind == Kind::Archive) {
-                let mut preview = match &self.index {
-                    Some(index) => index.folder_preview(&e.path, limit).unwrap_or_default(),
-                    None => Vec::new(),
+                // An archive, or a folder inside one: its members, from the index when it is
+                // in the library, else from the archive itself.
+                let archived = e.kind == Kind::Archive || meshgrove_core::archive::split(&e.path).is_some();
+                let mut preview = match (&self.index, meshgrove_core::archive::split(&e.path)) {
+                    (Some(index), Some((archive, inner))) => {
+                        index.member_preview(&archive, &inner, limit).unwrap_or_default()
+                    }
+                    (Some(index), None) => index.folder_preview(&e.path, limit).unwrap_or_default(),
+                    (None, _) => Vec::new(),
                 };
-                if preview.is_empty() && fp.enabled && e.is_dir() {
-                    preview = self.folder_scan.get_or_request(&e.path, fp.depth, limit).cloned().unwrap_or_default();
+                if preview.is_empty() && (archived || (fp.enabled && e.is_dir())) {
+                    let depth = if archived { 8 } else { fp.depth };
+                    preview = self.folder_scan.get_or_request(&e.path, depth, limit).cloned().unwrap_or_default();
                 }
                 if self.config.only_models {
                     preview.retain(|f| f.kind.is_printable());
@@ -529,9 +551,9 @@ impl App {
                 }
             }
         }
-        // Search hits, subfolder views and archive contents come from several folders.
-        self.gallery.show_folders =
-            !matches!(self.view, View::Folder) || meshgrove_core::archive::is_archive_file(self.nav.current());
+        // Search hits and subfolder views come from several folders (an archive opens level by
+        // level, like a folder).
+        self.gallery.show_folders = !matches!(self.view, View::Folder);
         self.gallery.set_entries(&entries, mosaics, &self.thumbs);
         if reset {
             self.gallery.reset_view();
@@ -812,6 +834,23 @@ impl App {
             .name("flatten".into())
             .spawn(move || {
                 let mut files = Vec::new();
+                // Inside an archive: every member below this level.
+                let archived = if meshgrove_core::archive::is_archive_file(&root) {
+                    Some((root.clone(), String::new()))
+                } else {
+                    meshgrove_core::archive::split(&root)
+                };
+                if let Some((archive, inner)) = archived {
+                    let below = if inner.is_empty() { String::new() } else { format!("{inner}/") };
+                    files = meshgrove_core::archive::entries(&archive)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|e| e.name.starts_with(&below))
+                        .take(MAX_RESULTS)
+                        .collect();
+                    let _ = tx.send((root, files));
+                    return;
+                }
                 let mut stack = vec![root.clone()];
                 while let Some(dir) = stack.pop() {
                     for e in listing::list_dir(&dir).unwrap_or_default() {
@@ -1275,7 +1314,13 @@ impl App {
         self.duplicates_due = None;
         self.last_processed = processed;
         let Some(index) = &self.index else { return };
-        let groups = index.duplicate_groups().unwrap_or_default();
+        let now = &self.dupes_ignored_now;
+        let groups: Vec<_> = index
+            .duplicate_groups()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|g| !now.get(&g.key).copied().unwrap_or(g.ignored))
+            .collect();
         self.duplicate_groups = groups.len();
         let map = groups.iter().flat_map(|g| g.files.iter().map(move |f| (f.path.clone(), g.files.len()))).collect();
         self.gallery.set_duplicates(map);
@@ -1290,10 +1335,18 @@ impl App {
     fn show_duplicates_without(&mut self, gone: &[PathBuf]) {
         let Some(index) = &self.index else { return };
         let (mut entries, mut groups) = (Vec::new(), Vec::new());
+        let mut ignored = 0;
         for mut g in index.duplicate_groups().unwrap_or_default() {
             g.files.retain(|f| !gone.contains(&f.path));
             if g.files.len() < 2 {
                 continue;
+            }
+            g.ignored = self.dupes_ignored_now.get(&g.key).copied().unwrap_or(g.ignored);
+            if g.ignored {
+                ignored += 1;
+                if !self.dupes_show_ignored {
+                    continue;
+                }
             }
             let start = entries.len();
             let chosen = g.files.iter().position(|f| self.dupes_keep.contains(&f.path));
@@ -1301,20 +1354,43 @@ impl App {
             let picked = g.files.iter().any(|f| self.dupes_picked.contains(&f.path));
             let (wasted, exact) = (g.wasted(), g.exact);
             entries.extend(g.files);
-            let mut group = GroupInfo { range: start..entries.len(), exact, keep, wasted, blocked: None, picked };
+            let mut group = GroupInfo {
+                range: start..entries.len(),
+                exact,
+                keep,
+                wasted,
+                blocked: None,
+                picked,
+                key: g.key,
+                ignored: g.ignored,
+            };
             group.blocked = actions::trash_blocked(&dupe_others(&group, &entries));
-            group.picked &= group.blocked.is_none();
+            group.picked &= group.blocked.is_none() && !group.ignored;
             groups.push(group);
         }
         self.leave_search();
         self.flatten = false;
-        self.view = View::Duplicates { entries, groups };
+        self.view = View::Duplicates { entries, groups, ignored };
         self.refresh_gallery(true);
     }
 
     fn dupes_action(&mut self, action: Option<DupAction>) {
-        let View::Duplicates { entries, groups } = &mut self.view else { return };
+        let View::Duplicates { entries, groups, .. } = &mut self.view else { return };
         match action {
+            Some(DupAction::Ignore(g, on)) => {
+                if let Some(group) = groups.get(g) {
+                    let key = group.key.clone();
+                    self.library.ignore_duplicates(key.clone(), on);
+                    // Shown as decided right away; the index writes it a moment later.
+                    self.dupes_ignored_now.insert(key, on);
+                    self.show_duplicates();
+                    self.duplicates_due = Some(Instant::now());
+                }
+            }
+            Some(DupAction::ShowIgnored(on)) => {
+                self.dupes_show_ignored = on;
+                self.show_duplicates();
+            }
             Some(DupAction::Select(i)) => self.gallery.select(Some(i)),
             Some(DupAction::Open(i)) => self.open_entry(i),
             Some(DupAction::TrashOthers(g)) => {
@@ -1641,6 +1717,7 @@ impl App {
                     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
                     self.config.ai.auto_accept_since = on.then_some(now.as_secs());
                 }
+                SettingsChange::AiCrossLibraryMoves(on) => self.config.ai.cross_library_moves = on,
                 SettingsChange::AiConnectNow => self.ai_connect.connect_now(),
                 SettingsChange::AiLibrary(library) => {
                     match self.config.ai.libraries.iter_mut().find(|l| l.root == library.root) {
@@ -1660,6 +1737,18 @@ impl App {
                         None => t!("endpoint.removed").into_owned(),
                     });
                     self.config.ai.endpoint = endpoint;
+                    self.chat.endpoint_models = None;
+                }
+                SettingsChange::Assistant(id) => self.set_assistant(id),
+                SettingsChange::AddAgent(agent) => {
+                    self.config.ai.agents.push(agent);
+                }
+                SettingsChange::RemoveAgent(id) => {
+                    self.config.ai.agents.retain(|a| a.id != id);
+                    if self.config.ai.assistant == id {
+                        self.config.ai.assistant.clear();
+                        self.stop_agent();
+                    }
                 }
                 SettingsChange::EndpointKey { url, key } => {
                     let kept = crate::assist::secret::store(&url, &key);
@@ -1827,7 +1916,7 @@ impl App {
     }
 
     /// Puts `paths` in the trash on a thread, after whatever is on its way there already.
-    fn trash_later(&mut self, paths: Vec<PathBuf>) {
+    pub(super) fn trash_later(&mut self, paths: Vec<PathBuf>) {
         self.trash_queue.extend(paths);
         self.start_trash();
     }
@@ -2532,8 +2621,8 @@ impl App {
             self.history_action(action);
             return;
         }
-        if let View::Duplicates { entries, groups } = &self.view {
-            let action = duplicates::show(ui, entries, groups, &self.gallery);
+        if let View::Duplicates { entries, groups, ignored } = &self.view {
+            let action = duplicates::show(ui, entries, groups, (*ignored, self.dupes_show_ignored), &self.gallery);
             self.dupes_action(action);
             return;
         }
@@ -2665,7 +2754,7 @@ impl App {
             _ => None,
         };
         let checks_coming = self.index.is_some() && self.menu_for.first().is_some_and(|p| self.in_library(p));
-        let ai_tags = self.chat_available() && self.chat_sees(&self.menu_for);
+        let ai_tags = self.endpoint_available() && self.chat_sees(&self.menu_for);
         DetailsContext {
             entry,
             selection,
@@ -2993,6 +3082,8 @@ impl eframe::App for App {
             self.toast(message);
         }
         self.library_events();
+        self.detect_agents();
+        self.poll_agents();
         let want = self.config.ai.enabled && self.config.ai.connect_apps;
         if let Some(names) = self.ai_connect.tick(want) {
             self.toast(t!("ai_connect.connected", names = names.join(", ")).into_owned());
@@ -3145,6 +3236,7 @@ impl eframe::App for App {
             render: (&rs, &self.renderer),
             tag_style: &self.tag_style,
             ai_connect: (self.ai_connect.armed(), self.ai_connect.busy()),
+            agents: self.agents.as_ref(),
             tags: &self.all_tags,
             #[cfg(feature = "plugins")]
             plugins: self.plugins.rows(),
@@ -3170,6 +3262,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        self.shutdown_chat();
         #[cfg(feature = "plugins")]
         self.plugins.save_all();
         self.layout.save();

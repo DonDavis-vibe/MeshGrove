@@ -64,6 +64,14 @@ CREATE TABLE files (
 CREATE INDEX files_content ON files(content_hash);
 CREATE INDEX files_geo ON files(geo_sig);
 ";
+/// Duplicate groups the user keeps as they are (user data, kept across index rebuilds): by the
+/// group's key, `exact:<content hash>` or `geo:<geometry signature>`.
+const IGNORED_DUPLICATES_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS ignored_duplicates (
+    key TEXT PRIMARY KEY,
+    created_ns INTEGER NOT NULL
+);
+";
 /// User data: kept across index rebuilds. Tags hang on file content, so they survive renames
 /// and moves and are shared by identical copies.
 const TAGS_SCHEMA: &str = "
@@ -137,6 +145,10 @@ const INDEX_COLUMNS_V6: [(&str, &str, &str); 6] = [
 pub struct DuplicateGroup {
     pub exact: bool,
     pub files: Vec<Entry>,
+    /// What the group is one of: `exact:<content hash>` or `geo:<geometry signature>`.
+    pub key: String,
+    /// The user wants these copies as they are: the group is not counted or badged.
+    pub ignored: bool,
 }
 
 impl DuplicateGroup {
@@ -234,6 +246,7 @@ impl Library {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         crate::lists::upgrade(&conn)?;
+        conn.execute_batch(IGNORED_DUPLICATES_SCHEMA)?;
         upgrade_index(&conn)?;
         reclassify_unknown(&conn)?;
         crate::inbox::start(&conn)?;
@@ -624,6 +637,20 @@ impl Library {
         stmt.query_map(params![d, b[0], b[1], b[2], b[3], n as i64], entry_from_row)?.collect()
     }
 
+    /// [`Library::folder_preview`] for a folder inside an archive: the members below `prefix`
+    /// (`minis`, `minis/orcs`), which the index keeps under the archive with their inner path.
+    pub fn member_preview(&self, archive: &Path, prefix: &str, n: usize) -> Result<Vec<Entry>, Error> {
+        let Some(a) = path_str(archive) else { return Ok(Vec::new()) };
+        let prefix = prefix.trim_matches('/');
+        let like = format!("{}/%", prefix.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns FROM files f JOIN dirs d ON d.id = f.dir_id
+             WHERE d.path = ?1 AND f.name LIKE ?2 ESCAPE '\\' AND f.kind IN ({MODEL_KINDS}, 'image', 'gcode')
+             ORDER BY CASE f.kind WHEN 'image' THEN 1 WHEN 'gcode' THEN 2 ELSE 0 END, f.name COLLATE NOCASE LIMIT ?3"
+        ))?;
+        stmt.query_map(params![a, like, n as i64], entry_from_row)?.collect()
+    }
+
     pub(crate) fn content_hash_of(&self, path: &Path) -> Result<Option<String>, Error> {
         let (Some(dir), Some(name)) = (path.parent().and_then(path_str), path.file_name().and_then(|n| n.to_str()))
         else {
@@ -809,7 +836,12 @@ impl Library {
                 e.files.push(format!("{dir}/{name}"));
             }
         }
-        Ok(UserData { lists, tag_colors, ..UserData::new(entries.into_values().collect()) })
+        let ignored_duplicates: Vec<String> = self
+            .conn
+            .prepare("SELECT key FROM ignored_duplicates ORDER BY key")?
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(UserData { lists, tag_colors, ignored_duplicates, ..UserData::new(entries.into_values().collect()) })
     }
 
     /// Merges exported user data: tags are added, a note only fills a file without one, lists,
@@ -832,6 +864,12 @@ impl Library {
                 )?;
             }
         }
+        for key in &data.ignored_duplicates {
+            tx.execute(
+                "INSERT OR IGNORE INTO ignored_duplicates (key, created_ns) VALUES (?1, ?2)",
+                params![key, nanos(Some(SystemTime::now()))],
+            )?;
+        }
         tx.commit()?;
         let prints: Vec<(String, Vec<_>)> = data
             .entries
@@ -843,9 +881,15 @@ impl Library {
         Ok(data.entries.len())
     }
 
-    /// Groups of duplicate models, the ones wasting most space first.
+    /// Groups of duplicate models, the ones wasting most space first; those the user ignores
+    /// are marked, not left out.
     pub fn duplicate_groups(&self) -> Result<Vec<DuplicateGroup>, Error> {
         let select = "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns FROM files f JOIN dirs d ON d.id = f.dir_id";
+        let ignored: std::collections::HashSet<String> = self
+            .conn
+            .prepare("SELECT key FROM ignored_duplicates")?
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
         let mut groups = Vec::new();
         for (exact, keys_sql, files_sql) in [
             (
@@ -869,12 +913,27 @@ impl Library {
                 self.conn.prepare(&keys_sql)?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
             let mut stmt = self.conn.prepare(&files_sql)?;
             for key in keys {
-                let files = stmt.query_map([key], entry_from_row)?.collect::<Result<Vec<_>, _>>()?;
-                groups.push(DuplicateGroup { exact, files });
+                let files = stmt.query_map([&key], entry_from_row)?.collect::<Result<Vec<_>, _>>()?;
+                let key = format!("{}:{key}", if exact { "exact" } else { "geo" });
+                let ignored = ignored.contains(&key);
+                groups.push(DuplicateGroup { exact, files, key, ignored });
             }
         }
         groups.sort_by_key(|g| std::cmp::Reverse(g.wasted()));
         Ok(groups)
+    }
+
+    /// Keeps a duplicate group as it is (`on`), or watches it again.
+    pub fn ignore_duplicates(&mut self, key: &str, on: bool) -> Result<(), Error> {
+        if on {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO ignored_duplicates (key, created_ns) VALUES (?1, ?2)",
+                params![key, nanos(Some(SystemTime::now()))],
+            )?;
+        } else {
+            self.conn.execute("DELETE FROM ignored_duplicates WHERE key = ?1", [key])?;
+        }
+        Ok(())
     }
 
     pub fn counts(&self) -> Result<Counts, Error> {
@@ -1136,6 +1195,18 @@ mod tests {
         lib.update_dir(root, root, 4, &[], &[]).unwrap();
         assert_eq!(lib.dir_mtime(minis), None, "subfolder vanished with its files");
         assert_eq!(lib.counts().unwrap().files, 0);
+    }
+
+    /// A folder inside an archive is pictured from the members the index keeps under the archive.
+    #[test]
+    fn a_folder_inside_an_archive_is_pictured_from_its_members() {
+        let mut lib = library();
+        let root = Path::new("/lib/3D_druck");
+        let zip = Path::new("/lib/3D_druck/pack.zip");
+        let members = [file("/lib/3D_druck/pack.zip", "minis/orc.stl", 1, 1), file("/lib/3D_druck/pack.zip", "minis_old/x.stl", 1, 1), file("/lib/3D_druck/pack.zip", "readme.txt", 1, 1)];
+        lib.update_dir(root, zip, 7, &members, &[]).unwrap();
+        assert_eq!(names(&lib.member_preview(zip, "minis", 4).unwrap()), ["minis/orc.stl"]);
+        assert!(lib.member_preview(zip, "nowhere", 4).unwrap().is_empty());
     }
 
     #[test]

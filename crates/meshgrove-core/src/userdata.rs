@@ -28,6 +28,9 @@ pub struct UserData {
     /// Palette slot by tag name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tag_colors: BTreeMap<String, u8>,
+    /// Duplicate groups kept as they are (`exact:<content hash>`, `geo:<geometry signature>`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignored_duplicates: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -87,17 +90,27 @@ fn one() -> u32 {
 
 impl UserData {
     pub fn new(entries: Vec<UserEntry>) -> UserData {
-        UserData { format: FORMAT.into(), version: VERSION, entries, lists: Vec::new(), tag_colors: BTreeMap::new() }
+        UserData {
+            format: FORMAT.into(),
+            version: VERSION,
+            entries,
+            lists: Vec::new(),
+            tag_colors: BTreeMap::new(),
+            ignored_duplicates: Vec::new(),
+        }
     }
 
     /// Nothing hand-made to keep.
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty() && self.lists.is_empty() && self.tag_colors.is_empty()
+        self.entries.is_empty() && self.lists.is_empty() && self.tag_colors.is_empty() && self.ignored_duplicates.is_empty()
     }
 
     /// Same data, whatever the format version.
     fn same_content(&self, other: &UserData) -> bool {
-        self.entries == other.entries && self.lists == other.lists && self.tag_colors == other.tag_colors
+        self.entries == other.entries
+            && self.lists == other.lists
+            && self.tag_colors == other.tag_colors
+            && self.ignored_duplicates == other.ignored_duplicates
     }
 }
 

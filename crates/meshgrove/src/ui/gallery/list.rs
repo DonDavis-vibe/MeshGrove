@@ -1,19 +1,27 @@
-//! The list view: the gallery's entries as a table with a small preview per row. Selection,
-//! keyboard, context menu and thumbnails are the grid's; columns can be resized, hidden (right-
-//! click a column title) and sorted (click it).
+//! The list view: the gallery's entries as a table with a preview per row. Selection,
+//! keyboard, context menu and thumbnails are the grid's, and so is everything the preview does
+//! there: folders fade through their pictures, resting the pointer on a model spins it, dragging
+//! turns it by hand and the wheel zooms it while a button is held. The preview column can be
+//! dragged wider: the rows grow with it. Columns can be resized, hidden (right-click a column
+//! title) and sorted (click it).
 
 use std::borrow::Cow;
 use std::collections::HashSet;
 
+use egui::scroll_area::DragScroll;
 use egui::{Align, Color32, Layout, Rect, RichText, Sense, Ui, pos2, vec2};
 use egui_extras::{Column as Width, TableBuilder};
+use meshgrove_core::Kind;
 use meshgrove_core::config::{ListColumns, SortKey};
 use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::printer::Fit;
 
-use super::{Action, FAVORITE_GOLD, Gallery, GalleryOutput, MenuContext, PRINTED_GREEN, Thumb, entry_menu, fit_inside};
+use super::{
+    Action, FAVORITE_GOLD, Gallery, GalleryOutput, MenuContext, PRINTED_GREEN, Thumb, entry_menu, fit_inside, over,
+};
 use crate::i18n;
 use crate::thumbs::ThumbService;
+use crate::ui::turntable::HoveredTile;
 use crate::ui::{icons, tags};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,9 +128,22 @@ pub struct ListSettings<'a> {
     pub descending: bool,
 }
 
-/// How rows look: the row height follows the tile size (the zoom slider and Ctrl + wheel).
+/// How rows look: the row height follows the tile size (the zoom slider and Ctrl + wheel),
+/// unless the preview column was dragged to a width of its own ([`preview_width`]).
 pub fn row_height(tile: f32) -> f32 {
     (tile / 4.0).clamp(24.0, 64.0)
+}
+
+/// How wide (and tall) the preview column can be dragged.
+const PREVIEW_WIDTH: std::ops::RangeInclusive<f32> = 24.0..=512.0;
+
+/// The preview column's width, which is also the row height: as dragged by the user, else
+/// following the tile size.
+pub fn preview_width(columns: &ListColumns, tile: f32) -> f32 {
+    match columns.widths.get(Column::Preview.id()) {
+        Some(w) => w.clamp(*PREVIEW_WIDTH.start(), *PREVIEW_WIDTH.end()),
+        None => row_height(tile),
+    }
 }
 
 impl Gallery {
@@ -138,7 +159,18 @@ impl Gallery {
         list: ListSettings<'_>,
     ) -> GalleryOutput {
         let ListSettings { columns, sort, descending } = list;
-        let row_h = row_height(tile);
+        // The zoom slider and Ctrl + wheel size the previews again once they are used.
+        if self.last_list_tile.is_some_and(|last| last != tile) {
+            columns.widths.remove(Column::Preview.id());
+        }
+        self.last_list_tile = Some(tile);
+        let row_h = preview_width(columns, tile);
+        // With a button held on a preview the wheel zooms it (as on a tile) instead of
+        // scrolling the table, which reads the input only after this.
+        let wheel = ui.input(|i| i.smooth_scroll_delta.y);
+        if self.tile_dragged {
+            ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+        }
         let shown_cols: Vec<Column> = Column::ALL
             .into_iter()
             .filter(|c| !columns.hidden.iter().any(|h| h == c.id()))
@@ -167,19 +199,28 @@ impl Gallery {
         let mut visible = HashSet::new();
         let mut widths = Vec::new();
         let mut hide: Option<(Column, bool)> = None;
+        let mut hovered = None;
+        let mut tile_dragged = false;
+        // The table keeps its widths by this id: a preview column that follows the zoom starts
+        // afresh at every size, one dragged by hand keeps what the user made of it.
+        let preview_key = if columns.widths.contains_key(Column::Preview.id()) { 0 } else { row_h.round() as u32 };
         // Wider than the pane when many columns are shown: then it scrolls sideways too.
         egui::ScrollArea::horizontal().id_salt("file_list_h").auto_shrink(false).show(ui, |ui| {
             let mut table = TableBuilder::new(ui)
-                .id_salt(("file_list", shown_cols.len()))
+                .id_salt(("file_list", shown_cols.len(), preview_key))
                 .striped(true)
                 .resizable(true)
                 .sense(Sense::click())
                 .auto_shrink(false)
                 .max_scroll_height(f32::INFINITY)
+                // (Mouse drags do not scroll, so they stay free for turning previews.)
+                .drag_to_scroll(DragScroll::Never)
                 .cell_layout(Layout::left_to_right(Align::Center));
             for (c, &w) in shown_cols.iter().zip(&initial) {
                 table = table.column(match c {
-                    Column::Preview => Width::exact(row_h),
+                    Column::Preview => {
+                        Width::initial(w).at_least(*PREVIEW_WIDTH.start()).at_most(*PREVIEW_WIDTH.end()).clip(true)
+                    }
                     _ => Width::initial(w).at_least(20.0).clip(true),
                 });
             }
@@ -229,9 +270,17 @@ impl Gallery {
                         let entry = self.shown[row.index()];
                         let e = &entries[entry];
                         visible.extend(self.keys.get(entry).cloned().flatten());
-                        row.set_selected(self.is_marked(entry));
+                        visible.extend(self.mosaics.get(&entry).into_iter().flatten().cloned());
+                        let selected = self.is_marked(entry);
+                        let striped = row.index() % 2 == 1;
+                        row.set_selected(selected);
                         for &c in &shown_cols {
-                            row.col(|ui| self.cell(ui, c, e, entry, row_h));
+                            row.col(|ui| {
+                                if let Some(h) = self.cell(ui, c, e, entry, (row_h, selected, striped, wheel)) {
+                                    tile_dragged |= h.dragging;
+                                    hovered = Some(h);
+                                }
+                            });
                         }
                         let response = row.response();
                         if response.clicked() {
@@ -257,23 +306,35 @@ impl Gallery {
                 columns.hidden.push(c.id().to_owned());
             }
         }
-        // Remember widths the user dragged (the preview column follows the row height).
+        // Remember widths the user dragged (a dragged preview column sizes the rows from now on).
         for ((c, w), start) in shown_cols.iter().zip(widths).zip(initial) {
-            if *c != Column::Preview && (w - start).abs() > 0.5 {
+            if (w - start).abs() > 0.5 {
                 columns.widths.insert(c.id().to_owned(), w);
             }
         }
+        if let Some(wait) = self.next_cycle.take() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f32(wait.max(0.016)));
+        }
+        self.tile_dragged = tile_dragged;
         if visible != self.visible {
             service.set_visible(|k| visible.contains(k));
             self.visible = visible;
         }
-        GalleryOutput { action, hovered: None, viewport }
+        GalleryOutput { action, hovered, viewport }
     }
 
-    fn cell(&self, ui: &mut Ui, column: Column, e: &Entry, index: usize, row_h: f32) {
+    /// One cell; the preview answers with the model under the pointer, for the turntable.
+    fn cell(
+        &self,
+        ui: &mut Ui,
+        column: Column,
+        e: &Entry,
+        index: usize,
+        (row_h, selected, striped, wheel): (f32, bool, bool, f32),
+    ) -> Option<HoveredTile> {
         let weak = ui.visuals().weak_text_color();
         match column {
-            Column::Preview => self.mini_preview(ui, e, index, row_h),
+            Column::Preview => return self.mini_preview(ui, e, index, (row_h, selected, striped, wheel)),
             Column::Name => {
                 let mut name = RichText::new(listing::file_name(&e.path));
                 if self.is_cut(e) {
@@ -296,8 +357,8 @@ impl Gallery {
                 }
             }
             Column::Dimensions => {
-                let Some(Thumb::Ready(_, meta)) = self.thumb(index) else { return };
-                let Some(size) = meta.size_mm else { return };
+                let Some(Thumb::Ready(_, meta)) = self.thumb(index) else { return None };
+                let size = meta.size_mm?;
                 let text = i18n::dimensions(glam::Vec3::from(size));
                 let color = match self.bed_fit(e, index) {
                     Some((Fit::Rotated(_), _)) => ui.visuals().warn_fg_color,
@@ -312,7 +373,7 @@ impl Gallery {
                 }
             }
             Column::Tags => {
-                let Some(marks) = self.marks.get(&e.path).filter(|m| !m.tags.is_empty()) else { return };
+                let marks = self.marks.get(&e.path).filter(|m| !m.tags.is_empty())?;
                 let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
                 let painter = ui.painter_at(rect);
                 let mut x = rect.left();
@@ -348,23 +409,78 @@ impl Gallery {
                 }
             }
         }
+        None
     }
 
-    fn mini_preview(&self, ui: &mut Ui, e: &Entry, index: usize, row_h: f32) {
+    /// The preview of a row: the thumbnail, a folder's pictures, or an icon. Like a tile, it
+    /// senses drags (the row keeps the clicks) and reports a model under the pointer.
+    fn mini_preview(
+        &self,
+        ui: &mut Ui,
+        e: &Entry,
+        index: usize,
+        (row_h, selected, striped, wheel): (f32, bool, bool, f32),
+    ) -> Option<HoveredTile> {
         let side = row_h - 4.0;
-        let (rect, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
+        let (rect, response) = ui.allocate_exact_size(vec2(side, side), Sense::drag());
+        let visuals = ui.visuals();
         let painter = ui.painter_at(rect);
-        let paper = ui.visuals().widgets.inactive.bg_fill;
-        let ink = ui.visuals().text_color();
-        match self.thumb(index) {
-            _ if e.is_dir() => icons::folder(&painter, rect),
-            Some(Thumb::Ready(texture, _)) => {
+        let paper = visuals.widgets.inactive.bg_fill;
+        let ink = visuals.text_color();
+        match (e.kind, self.thumb(index)) {
+            (Kind::Folder | Kind::Archive, _) if e.is_dir() || self.mosaics.contains_key(&index) => {
+                let ready: Vec<icons::Preview> = self
+                    .mosaics
+                    .get(&index)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|k| match self.thumbs.get(k) {
+                        Some(Thumb::Ready(t, _)) => Some((t.id(), t.size_vec2())),
+                        _ => None,
+                    })
+                    .collect();
+                let previews = self.cycled(ui.ctx(), index, &ready);
+                let color = if e.is_dir() { icons::FOLDER_BLUE } else { icons::ARCHIVE_AMBER };
+                if previews.is_empty() && e.is_dir() {
+                    icons::folder(&painter, rect);
+                } else if previews.is_empty() {
+                    icons::file(&painter, rect, "", paper, ink);
+                } else {
+                    icons::folder_mosaic(&painter, rect, &previews, visuals.extreme_bg_color, color);
+                }
+            }
+            (_, Some(Thumb::Ready(texture, _))) => {
                 let fit = fit_inside(texture.size_vec2(), rect);
                 painter.image(texture.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
-            Some(Thumb::Failed(_)) => icons::file(&painter, rect, "", paper, ui.visuals().warn_fg_color),
+            (_, Some(Thumb::Failed(_))) => icons::file(&painter, rect, "", paper, visuals.warn_fg_color),
             _ => icons::file(&painter, rect, "", paper, ink),
         }
+        // Held button counts too: press-and-scroll without moving should zoom as well.
+        let held = response.dragged() || response.is_pointer_button_down_on();
+        if !(response.hovered() || held) || !crate::meshes::viewable(e.kind) {
+            return None;
+        }
+        let drag = if response.dragged_by(egui::PointerButton::Primary) { response.drag_delta() } else { egui::Vec2::ZERO };
+        // The row's own fill, opaque: the still thumbnail must not show through.
+        let row_fill = if selected {
+            visuals.selection.bg_fill
+        } else if response.hovered() || held {
+            visuals.widgets.hovered.bg_fill
+        } else if striped {
+            visuals.faint_bg_color
+        } else {
+            Color32::TRANSPARENT
+        };
+        Some(HoveredTile {
+            path: e.path.clone(),
+            kind: e.kind,
+            image_rect: rect,
+            background: over(row_fill, visuals.panel_fill),
+            drag,
+            dragging: held,
+            wheel,
+        })
     }
 }
 
@@ -410,5 +526,18 @@ mod tests {
         assert_eq!(ids.len(), Column::ALL.len());
         assert!(Column::ALL.iter().all(|c| !c.title().is_empty()));
         assert_eq!((row_height(96.0), row_height(160.0), row_height(384.0)), (24.0, 40.0, 64.0));
+    }
+
+    /// A preview column dragged by hand sizes the rows, within bounds; otherwise the zoom does.
+    #[test]
+    fn a_dragged_preview_column_sets_the_row_height() {
+        let mut columns = ListColumns::default();
+        assert_eq!(preview_width(&columns, 160.0), 40.0);
+        columns.widths.insert("preview".into(), 200.0);
+        assert_eq!(preview_width(&columns, 160.0), 200.0);
+        columns.widths.insert("preview".into(), 5000.0);
+        assert_eq!(preview_width(&columns, 160.0), 512.0);
+        columns.widths.insert("preview".into(), 1.0);
+        assert_eq!(preview_width(&columns, 160.0), 24.0);
     }
 }

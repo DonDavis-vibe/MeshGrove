@@ -1,6 +1,7 @@
 //! Model packs in ZIP / 7z / RAR / TAR archives, read through libarchive. Members are addressed
 //! by a path that simply continues below the archive file — `/lib/pack.zip/minis/orc.stl` — so
-//! navigation, thumbnails, the viewer and the index treat them like ordinary files.
+//! navigation, thumbnails, the viewer and the index treat them like ordinary files, and a folder
+//! inside the archive (`/lib/pack.zip/minis`) opens like one on disk ([`entries_in`]).
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -35,13 +36,32 @@ fn tool_err(e: compress_tools::Error) -> io::Error {
 /// Files in the archive (folders and macOS/dot-file clutter left out), in archive order.
 pub fn list(archive: &Path) -> io::Result<Vec<Member>> {
     let entries = compress_tools::list_archive_entries_with_encoding(File::open(archive)?, lossy).map_err(tool_err)?;
-    Ok(entries
+    let members: Vec<Member> = entries.into_iter().map(|e| Member { name: e.path, size: e.size }).collect();
+    Ok(files_only(members))
+}
+
+/// The members that are files: not the folder entries (ZIP and 7z end them with `/`, RAR lists
+/// them bare, so a member that other members sit below is a folder too), and no macOS or
+/// dot-file clutter.
+fn files_only(members: Vec<Member>) -> Vec<Member> {
+    let mut dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for m in &members {
+        let mut path = m.name.trim_end_matches('/');
+        while let Some((parent, _)) = path.rsplit_once('/') {
+            if !dirs.insert(parent.to_owned()) {
+                break;
+            }
+            path = parent;
+        }
+    }
+    members
         .into_iter()
-        .filter(|e| {
-            !e.path.ends_with('/') && !e.path.split('/').any(|part| listing::is_hidden(part) || part == "__MACOSX")
+        .filter(|m| {
+            !m.name.ends_with('/')
+                && !dirs.contains(m.name.as_str())
+                && !m.name.split('/').any(|part| listing::is_hidden(part) || part == "__MACOSX")
         })
-        .map(|e| Member { name: e.path, size: e.size })
-        .collect())
+        .collect()
 }
 
 /// Archive members as directory entries (the archive's own mtime stands in for theirs).
@@ -58,6 +78,43 @@ pub fn entries(archive: &Path) -> io::Result<Vec<Entry>> {
         })
         .collect();
     entries.sort_by(|a, b| listing::natural_cmp(&a.name, &b.name));
+    Ok(entries)
+}
+
+/// One level of the archive, as a folder listing: the files directly in `prefix` (`""` for the
+/// archive's root, else `minis` or `minis/orcs`), and a folder entry for each subfolder, first.
+/// File entries keep their whole inner path as `name`, as [`entries`] does; folder entries too.
+pub fn entries_in(archive: &Path, prefix: &str) -> io::Result<Vec<Entry>> {
+    let modified = std::fs::metadata(archive)?.modified().ok();
+    let prefix = prefix.trim_matches('/');
+    let below = if prefix.is_empty() { String::new() } else { format!("{prefix}/") };
+    let mut files = Vec::new();
+    let mut folders: Vec<String> = Vec::new();
+    for m in list(archive)? {
+        let Some(rest) = m.name.strip_prefix(&below) else { continue };
+        match rest.split_once('/') {
+            None => files.push(Entry {
+                kind: Kind::from_file_name(&m.name),
+                path: archive.join(&m.name),
+                name: m.name,
+                size: m.size,
+                modified,
+            }),
+            Some((folder, _)) => {
+                let inner = format!("{below}{folder}");
+                if !folders.contains(&inner) {
+                    folders.push(inner);
+                }
+            }
+        }
+    }
+    folders.sort_by(|a, b| listing::natural_cmp(a, b));
+    files.sort_by(|a, b| listing::natural_cmp(&a.name, &b.name));
+    let mut entries: Vec<Entry> = folders
+        .into_iter()
+        .map(|inner| Entry { kind: Kind::Folder, path: archive.join(&inner), name: inner, size: 0, modified })
+        .collect();
+    entries.extend(files);
     Ok(entries)
 }
 
@@ -243,6 +300,32 @@ pub(crate) mod tests {
         let e = entries(&zip).unwrap();
         assert_eq!(e[0].kind, Kind::Stl);
         assert_eq!(e[0].path, member_path);
+
+        // Level by level, like folders: the subfolder first, then the files of this level.
+        let root = entries_in(&zip, "").unwrap();
+        let names: Vec<(&str, Kind)> = root.iter().map(|e| (e.name.as_str(), e.kind)).collect();
+        assert_eq!(names, [("minis", Kind::Folder), ("readme.txt", Kind::Text)]);
+        assert_eq!(root[0].path, zip.join("minis"));
+        assert_eq!(split(&root[0].path), Some((zip.clone(), "minis".to_owned())), "a folder inside splits like a member");
+        let minis = entries_in(&zip, "minis").unwrap();
+        assert_eq!(minis.iter().map(|e| e.path.clone()).collect::<Vec<_>>(), [member_path]);
+        assert!(entries_in(&zip, "nowhere").unwrap().is_empty());
+    }
+
+    /// RAR lists folders without a trailing slash: whatever has members below it is a folder.
+    #[test]
+    fn bare_folder_entries_are_told_from_files() {
+        let member = |name: &str, size: u64| Member { name: name.into(), size };
+        let listed = vec![
+            member("pack/readme.txt", 3),
+            member("pack/terrain/wall.stl", 9),
+            member("pack/terrain", 0),
+            member("pack", 0),
+            member("pack/minis/", 0),
+            member("pack/.DS_Store", 1),
+        ];
+        let files: Vec<String> = files_only(listed).into_iter().map(|m| m.name).collect();
+        assert_eq!(files, ["pack/readme.txt", "pack/terrain/wall.stl"]);
     }
 
     #[test]

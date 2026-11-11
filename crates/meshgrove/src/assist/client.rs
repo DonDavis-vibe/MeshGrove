@@ -62,6 +62,8 @@ pub struct Endpoint {
     base: String,
     model: String,
     key: Option<String>,
+    /// Sent as `reasoning_effort` when set.
+    effort: Option<String>,
     agent: ureq::Agent,
 }
 
@@ -82,11 +84,27 @@ impl Endpoint {
             .timeout_per_read(Some(timeout))
             .build()
             .new_agent();
-        Endpoint { base: base_url.trim_end_matches('/').to_owned(), model: model.to_owned(), key, agent }
+        Endpoint { base: base_url.trim_end_matches('/').to_owned(), model: model.to_owned(), key, effort: None, agent }
     }
 
     pub fn from_config(cfg: &EndpointConfig, key: Option<String>) -> Endpoint {
         Endpoint::new(&cfg.base_url, &cfg.model, key, Duration::from_secs(cfg.timeout_s.max(10) as u64))
+            .with_effort(&cfg.reasoning_effort)
+    }
+
+    /// The reasoning effort to send with every request; empty sends nothing.
+    pub fn with_effort(mut self, effort: &str) -> Endpoint {
+        self.effort = Some(effort.trim().to_owned()).filter(|e| !e.is_empty());
+        self
+    }
+
+    /// The request body every completion starts from.
+    fn body(&self, messages: &[Value], stream: bool) -> Value {
+        let mut body = json!({"model": self.model, "messages": messages, "stream": stream});
+        if let Some(effort) = &self.effort {
+            body["reasoning_effort"] = json!(effort);
+        }
+        body
     }
 
     fn post(&self, path: &str) -> ureq::RequestBuilder<ureq::typestate::WithBody> {
@@ -123,7 +141,7 @@ impl Endpoint {
         on_text: &mut dyn FnMut(&str),
         cancel: &AtomicBool,
     ) -> Result<Reply, ClientError> {
-        let mut body = json!({"model": self.model, "messages": messages, "stream": true});
+        let mut body = self.body(messages, true);
         if let Some(tools) = tools.filter(|t| !t.is_empty()) {
             body["tools"] = json!(tools);
         }
@@ -207,29 +225,46 @@ impl Endpoint {
     }
 
     /// A completion as a whole, asking for JSON (the one-click actions): the schema first, then
-    /// plain JSON mode, then only the prompt, as far as the endpoint goes along.
+    /// plain JSON mode, then only the prompt, as far as the endpoint goes along. Unless an effort
+    /// is set, the model is asked not to reason (`reasoning_effort: "none"`): a thinking model
+    /// otherwise spends its whole context on reasoning about a long list and answers nothing. A
+    /// service that refuses the value is asked again without it.
     pub fn complete_json(&self, messages: &[Value], schema: &Value) -> Result<String, ClientError> {
         let formats = [
             Some(json!({"type": "json_schema", "json_schema": {"name": "answer", "schema": schema}})),
             Some(json!({"type": "json_object"})),
             None,
         ];
+        let mut no_reasoning = self.effort.is_none();
         let mut last = ClientError::BadResponse("no answer".into());
         for format in formats {
-            let mut body = json!({"model": self.model, "messages": messages, "stream": false, "temperature": 0.2});
-            if let Some(f) = &format {
-                body["response_format"] = f.clone();
-            }
-            let mut response = self.post("/chat/completions").send_json(&body).map_err(network)?;
-            match check(&mut response) {
-                Ok(()) => {
-                    let value: Value =
-                        response.body_mut().read_json().map_err(|e| ClientError::BadResponse(e.to_string()))?;
-                    return Ok(value["choices"][0]["message"]["content"].as_str().unwrap_or_default().to_owned());
+            loop {
+                let mut body = self.body(messages, false);
+                body["temperature"] = json!(0.2);
+                if no_reasoning {
+                    body["reasoning_effort"] = json!("none");
                 }
-                // This format is not supported: try the next one.
-                Err(ClientError::Http(400 | 422, m)) => last = ClientError::Http(400, m),
-                Err(e) => return Err(e),
+                if let Some(f) = &format {
+                    body["response_format"] = f.clone();
+                }
+                let mut response = self.post("/chat/completions").send_json(&body).map_err(network)?;
+                match check(&mut response) {
+                    Ok(()) => {
+                        let value: Value =
+                            response.body_mut().read_json().map_err(|e| ClientError::BadResponse(e.to_string()))?;
+                        return Ok(value["choices"][0]["message"]["content"].as_str().unwrap_or_default().to_owned());
+                    }
+                    // The service does not take "none": from now on without.
+                    Err(ClientError::Http(400 | 422, m)) if no_reasoning && m.to_lowercase().contains("reasoning") => {
+                        no_reasoning = false;
+                    }
+                    // This format is not supported: try the next one.
+                    Err(ClientError::Http(400 | 422, m)) => {
+                        last = ClientError::Http(400, m);
+                        break;
+                    }
+                    Err(e) => return Err(e),
+                }
             }
         }
         Err(last)
@@ -327,6 +362,11 @@ pub mod tests {
         out
     }
 
+    /// The JSON body of a captured request.
+    fn body_of(request: &str) -> Value {
+        serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap_or("null")).unwrap_or(Value::Null)
+    }
+
     fn endpoint(url: &str, key: Option<&str>) -> Endpoint {
         Endpoint::new(url, "test-model", key.map(str::to_owned), Duration::from_secs(5))
     }
@@ -342,6 +382,7 @@ pub mod tests {
         let (url, seen) = serve(vec![(200, "text/event-stream", body)]);
         let mut streamed = String::new();
         let reply = endpoint(&url, Some("geheim"))
+            .with_effort(" high ")
             .chat(
                 &[json!({"role": "user", "content": "Garten?"})],
                 Some(&[json!({"type": "function"})]),
@@ -358,6 +399,7 @@ pub mod tests {
         assert!(request.contains("authorization: Bearer geheim"), "{request}");
         let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
         assert_eq!((body["stream"].as_bool(), body["model"].as_str()), (Some(true), Some("test-model")));
+        assert_eq!(body["reasoning_effort"], "high");
         assert!(body["tools"].is_array());
     }
 
@@ -396,5 +438,25 @@ pub mod tests {
         assert_eq!(text, "{\"ok\":true}");
         let requests = seen.lock().unwrap();
         assert!(requests[0].contains("json_schema") && requests[1].contains("json_object"));
+        assert_eq!(body_of(&requests[0])["reasoning_effort"], "none", "a one-click action asks for no reasoning");
+    }
+
+    #[test]
+    fn a_service_refusing_no_reasoning_is_asked_without() {
+        let (url, seen) = serve(vec![
+            (400, "application/json", json!({"error": {"message": "Unrecognized value for reasoning_effort"}}).to_string()),
+            (200, "application/json", json!({"choices": [{"message": {"content": "{\"ok\":1}"}}]}).to_string()),
+            (200, "application/json", json!({"choices": [{"message": {"content": "{\"ok\":2}"}}]}).to_string()),
+        ]);
+        let e = endpoint(&url, None);
+        assert_eq!(e.complete_json(&[json!({"role": "user", "content": "x"})], &json!({"type": "object"})).unwrap(), "{\"ok\":1}");
+        // An effort of the user's own goes along as it is, never "none".
+        let high = endpoint(&url, None).with_effort("high");
+        assert_eq!(high.complete_json(&[json!({"role": "user", "content": "x"})], &json!({"type": "object"})).unwrap(), "{\"ok\":2}");
+        let requests = seen.lock().unwrap();
+        let (first, second, third) = (body_of(&requests[0]), body_of(&requests[1]), body_of(&requests[2]));
+        assert_eq!((first["reasoning_effort"].as_str(), first["response_format"]["type"].as_str()), (Some("none"), Some("json_schema")));
+        assert!(second.get("reasoning_effort").is_none() && second["response_format"]["type"] == "json_schema", "{second}");
+        assert_eq!(third["reasoning_effort"], "high");
     }
 }

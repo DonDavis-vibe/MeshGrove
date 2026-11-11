@@ -47,10 +47,11 @@ pub fn missing_folders(root: &Path, dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// One move within library `root`, checked as far as paths go: what it is and where it goes,
-/// or why it cannot (worded for the assistant that suggested it). Nothing moves.
+/// One move into library `root` (usually the one `from` is in; another one when the user allows
+/// moves between libraries), checked as far as paths go: what it is and where it goes, or why it
+/// cannot (worded for the assistant that suggested it). Nothing moves.
 pub fn plan_move(lib: &Library, root: &Path, from: &Path, to: &Path) -> Result<(Target, MovePayload), String> {
-    if from == root {
+    if from == root || lib.is_indexed_root(from) {
         return Err("a library itself cannot be moved".into());
     }
     if crate::archive::split(from).is_some() {
@@ -118,6 +119,21 @@ impl Library {
                 Err(e)
             }
         }
+    }
+
+    /// Whether `path` is a library root, as the index knows it: a folder row with no parent.
+    pub fn is_indexed_root(&self, path: &Path) -> bool {
+        self.conn
+            .query_row("SELECT 1 FROM dirs WHERE path = ?1 AND parent IS NULL", [text(path)], |_| Ok(()))
+            .optional()
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    /// The library `path` is in, as the index knows it: its nearest ancestor that is a root.
+    pub fn indexed_root_of(&self, path: &Path) -> Option<PathBuf> {
+        path.ancestors().skip(1).find(|a| self.is_indexed_root(a)).map(Path::to_path_buf)
     }
 
     /// The index row of folder `dir`, made (with those above it up to `root`) when missing.
@@ -392,6 +408,32 @@ mod tests {
             "nothing usable"
         );
         assert!(s.other.read_dir().unwrap().next().is_none(), "suggesting moves nothing");
+    }
+
+    /// Into another library only once the user allows it; the move then belongs to that library
+    /// and the history brings the file back into its own.
+    #[test]
+    fn moves_into_another_library_need_the_users_leave_and_come_back() {
+        let mut s = setup();
+        let item = ("Werkstatt/Kunde/teil.stl", "Andere/Teile/teil.stl");
+        assert!(propose(&s, &[item]).is_err(), "refused while not allowed");
+        s.config.ai.cross_library_moves = true;
+        let (receipt, ops) = propose(&s, &[item]).unwrap();
+        assert_eq!(receipt.items, 1, "{:?}", receipt.rejected);
+        assert!(
+            matches!(&ops[0], crate::changes::ApplyOp::Move { root, .. } if *root == s.other),
+            "the move belongs to the library it goes to: {ops:?}"
+        );
+        let report = s.lib.apply_change("proposal:x", "Rüber", &ops).unwrap();
+        assert_eq!(report.applied, 1);
+        let moved = s.other.join("Teile").join("teil.stl");
+        assert!(moved.is_file() && !s.root.join("Kunde").join("teil.stl").exists());
+        assert!(s.lib.entry_of(&moved).unwrap().is_some(), "indexed at the new place");
+        let undo = s.lib.undo_change(report.id).unwrap();
+        assert_eq!(undo.undone, 1);
+        assert!(s.root.join("Kunde").join("teil.stl").is_file() && !moved.exists(), "back in its own library");
+        assert!(!s.other.join("Teile").exists(), "the folder made for it is gone again");
+        assert!(s.lib.entry_of(&s.root.join("Kunde").join("teil.stl")).unwrap().is_some());
     }
 
     #[test]

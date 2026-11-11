@@ -77,6 +77,8 @@ pub enum SettingsChange {
     AiConnectApps(bool),
     /// Accept the suggestions made from now on without the review (moves excepted).
     AiAutoAccept(bool),
+    /// The AI may suggest moves into another library.
+    AiCrossLibraryMoves(bool),
     /// Connect the AI apps found now.
     AiConnectNow,
     /// What a library shows to which AI.
@@ -90,6 +92,11 @@ pub enum SettingsChange {
         url: String,
         key: String,
     },
+    /// Who answers the chat: the endpoint, or an agent by its id.
+    Assistant(String),
+    /// An ACP agent the user added as a command line.
+    AddAgent(meshgrove_core::config::AgentConfig),
+    RemoveAgent(String),
     ShowAiReview,
     ShowAiHistory,
     /// Installs the plugin in this `.wasm` file (copied into Meshgrove's plugins folder).
@@ -312,6 +319,8 @@ pub struct AppInfo<'a> {
     pub tag_style: &'a TagStyle,
     /// Connecting the AI apps: allowed in this launch, and going on now.
     pub ai_connect: (bool, bool),
+    /// The AI agents found on this computer (`None`: still looking, or AI is off).
+    pub agents: Option<&'a crate::assist::agents::Detection>,
     /// The library's tags with their counts, for the placement rules.
     pub tags: &'a [(String, usize)],
     /// The installed plugins.
@@ -460,6 +469,7 @@ enum Section {
     Ai,
     AiLibraries,
     Mcp,
+    Assistant,
     Endpoint,
     AiLog,
     Plugins,
@@ -495,6 +505,7 @@ impl Section {
             Section::Ai => t!("settings.ai"),
             Section::AiLibraries => t!("settings.ai_libraries"),
             Section::Mcp => t!("settings.mcp"),
+            Section::Assistant => t!("assistant.title"),
             Section::Endpoint => t!("endpoint.title"),
             Section::AiLog => t!("settings.ai_log"),
             Section::Plugins => t!("settings.plugins"),
@@ -889,7 +900,14 @@ impl SettingsDialog {
             Category::Printer => &[Section::Printer],
             // With AI off, only the switch: the rest would say "AI is off" four times.
             Category::Ai if !config.ai.enabled => &[Section::Ai],
-            Category::Ai => &[Section::Ai, Section::AiLibraries, Section::Mcp, Section::Endpoint, Section::AiLog],
+            Category::Ai => &[
+                Section::Ai,
+                Section::AiLibraries,
+                Section::Assistant,
+                Section::Endpoint,
+                Section::Mcp,
+                Section::AiLog,
+            ],
             Category::Plugins => &[Section::Plugins],
             Category::Data => &[Section::UserData, Section::Storage],
             Category::About => {
@@ -925,6 +943,7 @@ impl SettingsDialog {
                     Section::Ai => self.ai.main(ui, config, changes),
                     Section::AiLibraries => self.ai.libraries(ui, config, changes),
                     Section::Mcp => self.ai.mcp(ui, config, info.ai_connect, changes),
+                    Section::Assistant => self.ai.assistant(ui, config, info.agents, changes),
                     Section::Endpoint => self.ai.endpoint(ui, config, changes),
                     Section::AiLog => self.ai.log(ui, changes),
                     Section::Plugins => self.plugins.page(ui, config, info.plugins, changes),
