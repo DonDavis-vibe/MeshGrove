@@ -218,6 +218,18 @@ pub enum DoubleClick {
     DefaultApp,
 }
 
+/// Which copy the duplicate finder suggests keeping when a model is both inside an archive and
+/// extracted beside it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DuplicatesKeep {
+    /// The extracted file; the archive goes once every model in it is extracted.
+    #[default]
+    Extracted,
+    /// The archive; the extracted copies go.
+    Packed,
+}
+
 /// Pictures of the models inside a folder on the folder's tile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -738,6 +750,8 @@ pub struct Config {
     pub preview_controls: bool,
     /// What a double-click (or Enter) on a model does.
     pub double_click: DoubleClick,
+    /// A model both packed and extracted: which copy the duplicate finder keeps.
+    pub duplicates_keep: DuplicatesKeep,
     /// Model pictures on folder tiles.
     pub folder_previews: FolderPreviews,
     /// The panes of the main window can only be resized, not moved.
@@ -1194,6 +1208,7 @@ impl Default for Config {
             preview_quality: PreviewQuality::High,
             preview_controls: false,
             double_click: DoubleClick::Window,
+            duplicates_keep: DuplicatesKeep::Extracted,
             folder_previews: FolderPreviews::default(),
             lock_panes: false,
             fold_for_plugins: true,

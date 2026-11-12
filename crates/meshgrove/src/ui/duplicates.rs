@@ -2,7 +2,9 @@
 //! suggestion which copy to keep (or the user's choice) and a way to move the others to the
 //! trash: group by group, or every group ticked as fine at once.
 
+use std::collections::BTreeMap;
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use egui::{Color32, RichText, Sense, Ui, vec2};
 use meshgrove_core::listing::{self, Entry};
@@ -27,6 +29,90 @@ pub struct GroupInfo {
     pub ignored: bool,
 }
 
+/// An archive whose models have extracted copies among the duplicates: one decision for all
+/// of them, instead of a locked group per member.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveInfo {
+    pub archive: PathBuf,
+    /// Models the index has in the archive.
+    pub members: usize,
+    /// Of those, how many have an exact copy outside it.
+    pub covered: usize,
+    /// The copies outside, to trash when the archive is kept.
+    pub copies: Vec<PathBuf>,
+    /// What the copies take, and what the archive takes.
+    pub copies_size: u64,
+    pub size: u64,
+    /// Why the archive cannot be trashed (a read-only drive).
+    pub blocked: Option<String>,
+}
+
+impl ArchiveInfo {
+    /// Every model of the archive is extracted: the archive can go without losing anything.
+    pub fn complete(&self) -> bool {
+        self.members > 0 && self.covered >= self.members
+    }
+
+    /// The folders the copies lie in, each once, as the archive's row names them.
+    pub fn folders(&self) -> Vec<PathBuf> {
+        let mut folders: Vec<PathBuf> = Vec::new();
+        for c in &self.copies {
+            if let Some(p) = c.parent()
+                && !folders.iter().any(|f| f == p)
+            {
+                folders.push(p.to_path_buf());
+            }
+        }
+        folders
+    }
+}
+
+/// The archives among the exact groups (ignored ones left out) that have copies outside them,
+/// in the order of their first group. `members_of` says how many models an archive holds.
+pub fn archives_of(entries: &[Entry], groups: &[GroupInfo], members_of: impl Fn(&Path) -> usize) -> Vec<ArchiveInfo> {
+    let mut found: BTreeMap<PathBuf, (usize, ArchiveInfo)> = BTreeMap::new();
+    let mut order = 0;
+    for group in groups.iter().filter(|g| g.exact && !g.ignored) {
+        let files: Vec<&Entry> = group.range.clone().map(|i| &entries[i]).collect();
+        let outside: Vec<&Entry> =
+            files.iter().copied().filter(|f| meshgrove_core::archive::split(&f.path).is_none()).collect();
+        if outside.is_empty() {
+            continue;
+        }
+        let mut seen: Vec<PathBuf> = Vec::new();
+        for f in &files {
+            let Some((archive, _)) = meshgrove_core::archive::split(&f.path) else { continue };
+            if seen.contains(&archive) {
+                continue; // the same model twice in one archive counts once
+            }
+            seen.push(archive.clone());
+            let (_, info) = found.entry(archive.clone()).or_insert_with(|| {
+                order += 1;
+                let info = ArchiveInfo {
+                    members: members_of(&archive),
+                    archive,
+                    covered: 0,
+                    copies: Vec::new(),
+                    copies_size: 0,
+                    size: 0,
+                    blocked: None,
+                };
+                (order, info)
+            });
+            info.covered += 1;
+            for o in &outside {
+                if !info.copies.contains(&o.path) {
+                    info.copies.push(o.path.clone());
+                    info.copies_size += o.size;
+                }
+            }
+        }
+    }
+    let mut archives: Vec<(usize, ArchiveInfo)> = found.into_values().collect();
+    archives.sort_by_key(|(order, _)| *order);
+    archives.into_iter().map(|(_, a)| a).collect()
+}
+
 pub enum DupAction {
     Select(usize),
     Open(usize),
@@ -45,24 +131,34 @@ pub enum DupAction {
     Ignore(usize, bool),
     /// List the ignored groups too, or hide them again.
     ShowIgnored(bool),
+    /// Keep the archive (by its index): its extracted copies go to the trash.
+    TrashArchiveCopies(usize),
+    /// Keep the extracted copies: the archive goes to the trash.
+    TrashArchive(usize),
 }
 
-/// The copy worth keeping: not inside an archive, then the oldest, then the shortest path.
-pub fn suggest_keep(files: &[Entry]) -> usize {
+/// The copy worth keeping: outside an archive (or, with `prefer_packed`, inside one), then the
+/// oldest, then the shortest path.
+pub fn suggest_keep(files: &[Entry], prefer_packed: bool) -> usize {
     (0..files.len())
         .min_by_key(|&i| {
             let f = &files[i];
-            (meshgrove_core::archive::split(&f.path).is_some(), f.modified, f.path.as_os_str().len())
+            let packed = meshgrove_core::archive::split(&f.path).is_some();
+            (packed != prefer_packed, f.modified, f.path.as_os_str().len())
         })
         .unwrap_or(0)
 }
 
-/// `ignored`: how many groups the user keeps as they are, and whether they are listed too.
+/// `ignored`: how many groups the user keeps as they are, and whether they are listed too;
+/// `archives`: the archives with extracted copies, decided as a whole above the groups;
+/// `prefer_packed`: the setting, which makes one of each archive's buttons the main one.
 pub fn show(
     ui: &mut Ui,
     entries: &[Entry],
     groups: &[GroupInfo],
     (ignored, show_ignored): (usize, bool),
+    archives: &[ArchiveInfo],
+    prefer_packed: bool,
     gallery: &Gallery,
 ) -> Option<DupAction> {
     let mut action = None;
@@ -110,6 +206,16 @@ pub fn show(
     });
     ui.add_space(6.0);
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+        if !archives.is_empty() {
+            ui.label(RichText::new(t!("dupes.archives_title")).strong());
+            ui.weak(t!("dupes.archives_explain"));
+            for (ai, a) in archives.iter().enumerate() {
+                if let Some(act) = archive_row(ui, a, prefer_packed, ai) {
+                    action = Some(act);
+                }
+            }
+            ui.add_space(10.0);
+        }
         for (gi, group) in groups.iter().enumerate() {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -193,6 +299,52 @@ pub fn show(
             ui.add_space(6.0);
         }
     });
+    action
+}
+
+/// One archive with extracted copies: what it holds, where the copies are, and the two ways to
+/// settle it. The way the setting prefers is the main button.
+fn archive_row(ui: &mut Ui, a: &ArchiveInfo, prefer_packed: bool, ai: usize) -> Option<DupAction> {
+    let mut action = None;
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("📦 {}", listing::file_name(&a.archive))).strong());
+            ui.add(
+                egui::Label::new(
+                    RichText::new(a.archive.parent().map(|p| p.display().to_string()).unwrap_or_default()).weak(),
+                )
+                .truncate(),
+            );
+        });
+        let folders = a.folders();
+        let mut names: Vec<String> = folders.iter().take(3).map(|f| f.display().to_string()).collect();
+        if folders.len() > 3 {
+            names.push(t!("dupes.more_folders", count = folders.len() - 3).into_owned());
+        }
+        ui.weak(t!("dupes.archive_info", members = a.members, covered = a.covered, folders = names.join(", ")));
+        ui.horizontal_wrapped(|ui| {
+            let keep_archive = t!("dupes.keep_archive", count = a.copies.len(), size = i18n::file_size(a.copies_size));
+            let keep_copies = t!("dupes.keep_copies", size = i18n::file_size(a.size));
+            let main = |text: std::borrow::Cow<str>, main: bool| {
+                let text = RichText::new(text);
+                egui::Button::new(if main { text.strong() } else { text })
+            };
+            if ui.add(main(keep_archive, prefer_packed)).on_hover_text(t!("dupes.keep_archive_hint")).clicked() {
+                action = Some(DupAction::TrashArchiveCopies(ai));
+            }
+            let can_go = a.complete() && a.blocked.is_none();
+            let why = match &a.blocked {
+                Some(reason) if !reason.is_empty() => reason.clone(),
+                _ => t!("dupes.keep_copies_blocked", missing = a.members.saturating_sub(a.covered)).into_owned(),
+            };
+            let button = ui.add_enabled(can_go, main(keep_copies, !prefer_packed)).on_disabled_hover_text(why);
+            if button.on_hover_text(t!("dupes.keep_copies_hint")).clicked() {
+                action = Some(DupAction::TrashArchive(ai));
+            }
+        });
+    });
+    ui.add_space(6.0);
     action
 }
 
@@ -286,4 +438,93 @@ pub(super) fn tile(
         None
     };
     (response, click)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use meshgrove_core::formats::Kind;
+    use std::time::{Duration, SystemTime};
+
+    /// A library on disk: `archive::split` tells members from files by what is there. The
+    /// archives are files (their contents do not matter here); the folders exist.
+    fn library() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("lib");
+        for folder in ["packs", "castle", "old", "a", "b"] {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+        }
+        for zip in ["castle.zip", "other.zip", "more.zip"] {
+            std::fs::write(root.join("packs").join(zip), b"PK").unwrap();
+        }
+        (dir, root)
+    }
+
+    fn entry(root: &Path, path: &str, size: u64, age: u64) -> Entry {
+        let path = root.join(path);
+        Entry {
+            name: listing::file_name(&path),
+            path,
+            kind: Kind::Stl,
+            size,
+            modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000 - age)),
+        }
+    }
+
+    fn group(range: Range<usize>, exact: bool, ignored: bool) -> GroupInfo {
+        GroupInfo { range, exact, keep: 0, wasted: 0, blocked: None, picked: false, key: String::new(), ignored }
+    }
+
+    #[test]
+    fn the_setting_says_which_copy_to_keep() {
+        let (_dir, root) = library();
+        // The packed copy is older; the extracted one has the shorter path.
+        let packed = entry(&root, "packs/castle.zip/towers/tower.stl", 10, 100);
+        let plain = entry(&root, "castle/tower.stl", 10, 10);
+        let files = [packed, plain];
+        assert_eq!(suggest_keep(&files, false), 1, "outside the archive");
+        assert_eq!(suggest_keep(&files, true), 0, "inside the archive");
+        let two_plain = [entry(&root, "a/tower.stl", 10, 10), entry(&root, "b/tower.stl", 10, 50)];
+        assert_eq!(suggest_keep(&two_plain, true), 1, "no packed copy: the oldest");
+    }
+
+    #[test]
+    fn archives_are_settled_as_a_whole() {
+        let (_dir, root) = library();
+        // castle.zip has 3 models in the index; two are extracted (one of them twice), one is not.
+        let entries = vec![
+            entry(&root, "packs/castle.zip/tower.stl", 10, 1),
+            entry(&root, "castle/tower.stl", 10, 1),
+            entry(&root, "old/tower.stl", 10, 1),
+            entry(&root, "packs/castle.zip/wall.stl", 20, 1),
+            entry(&root, "castle/wall.stl", 20, 1),
+            entry(&root, "packs/castle.zip/gate.stl", 5, 1), // same geometry, not a copy
+            entry(&root, "castle/gate.3mf", 7, 1),
+            entry(&root, "packs/other.zip/x.stl", 1, 1), // packed twice, never extracted
+            entry(&root, "packs/more.zip/x.stl", 1, 1),
+        ];
+        let groups = vec![
+            group(0..3, true, false),
+            group(3..5, true, false),
+            group(5..7, false, false),
+            group(7..9, true, false),
+        ];
+        let members = |a: &Path| if a.ends_with("castle.zip") { 3 } else { 1 };
+        let archives = archives_of(&entries, &groups, members);
+        assert_eq!(archives.len(), 1, "only archives with extracted copies");
+        let castle = &archives[0];
+        assert_eq!(castle.archive, root.join("packs").join("castle.zip"));
+        assert_eq!((castle.members, castle.covered), (3, 2));
+        assert!(!castle.complete(), "the gate is not extracted");
+        assert_eq!(castle.copies.len(), 3);
+        assert_eq!(castle.copies_size, 40);
+        assert_eq!(castle.folders(), [root.join("castle"), root.join("old")]);
+
+        // Ignored groups do not count; with every model extracted the archive can go.
+        let groups = vec![group(0..3, true, false), group(3..5, true, false)];
+        let all = archives_of(&entries, &groups, |_| 2);
+        assert!(all[0].complete());
+        let groups = vec![group(0..3, true, true), group(3..5, true, false)];
+        assert_eq!(archives_of(&entries, &groups, |_| 2)[0].covered, 1);
+    }
 }

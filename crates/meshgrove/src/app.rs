@@ -9,8 +9,8 @@ use meshgrove_core::cache::{ThumbCache, ThumbMeta};
 use meshgrove_core::changes::ChangeInfo;
 use meshgrove_core::checks::MeshChecks;
 use meshgrove_core::config::{
-    Config, DisplayUnits, DoubleClick, GalleryView, ImportAtStart, ModelUnits, PrintFilter, Program, Slicer, SortKey,
-    TILE_SIZE, TileTags,
+    Config, DisplayUnits, DoubleClick, DuplicatesKeep, GalleryView, ImportAtStart, ModelUnits, PrintFilter, Program,
+    Slicer, SortKey, TILE_SIZE, TileTags,
 };
 use meshgrove_core::db::Library;
 use meshgrove_core::listing::{self, Entry};
@@ -34,7 +34,7 @@ use crate::thumbs::{ThumbResult, ThumbService};
 use crate::ui::details::{
     self, DetailsContext, DetailsOutput, ListsOfSelection, ModelStatus, NoteEditor, PrintInfo, TagEditor,
 };
-use crate::ui::duplicates::{self, DupAction, GroupInfo};
+use crate::ui::duplicates::{self, ArchiveInfo, DupAction, GroupInfo};
 use crate::ui::gallery::{Action, Arrange, Gallery, ListSettings, MenuContext};
 use crate::ui::import::{self as import_view, ImportGroupInfo};
 use crate::ui::inbox::{self as inbox_view, InboxGroupInfo};
@@ -75,7 +75,7 @@ enum View {
     Flatten { root: PathBuf, entries: Option<Vec<Entry>> },
     /// Groups of duplicate models from the library index; `ignored`: how many the user keeps
     /// as they are (listed too only on request).
-    Duplicates { entries: Vec<Entry>, groups: Vec<GroupInfo>, ignored: usize },
+    Duplicates { entries: Vec<Entry>, groups: Vec<GroupInfo>, ignored: usize, archives: Vec<ArchiveInfo> },
     /// The files of a list (favourites, print list, collection).
     List { id: i64, entries: Vec<Entry> },
     /// New files waiting to be sorted, by the drop they came with.
@@ -1350,7 +1350,8 @@ impl App {
             }
             let start = entries.len();
             let chosen = g.files.iter().position(|f| self.dupes_keep.contains(&f.path));
-            let keep = start + chosen.unwrap_or_else(|| duplicates::suggest_keep(&g.files));
+            let prefer_packed = self.config.duplicates_keep == DuplicatesKeep::Packed;
+            let keep = start + chosen.unwrap_or_else(|| duplicates::suggest_keep(&g.files, prefer_packed));
             let picked = g.files.iter().any(|f| self.dupes_picked.contains(&f.path));
             let (wasted, exact) = (g.wasted(), g.exact);
             entries.extend(g.files);
@@ -1364,19 +1365,35 @@ impl App {
                 key: g.key,
                 ignored: g.ignored,
             };
-            group.blocked = actions::trash_blocked(&dupe_others(&group, &entries));
+            group.blocked = blocked_by(&group, &entries);
             group.picked &= group.blocked.is_none() && !group.ignored;
             groups.push(group);
         }
+        // The archives with extracted copies, settled as a whole above the groups.
+        let mut archives = duplicates::archives_of(&entries, &groups, |a| index.models_below(a).unwrap_or(0));
+        for a in &mut archives {
+            a.size = a.archive.metadata().map_or(0, |m| m.len());
+            a.blocked = actions::trash_blocked(std::slice::from_ref(&a.archive));
+        }
         self.leave_search();
         self.flatten = false;
-        self.view = View::Duplicates { entries, groups, ignored };
+        self.view = View::Duplicates { entries, groups, ignored, archives };
         self.refresh_gallery(true);
     }
 
     fn dupes_action(&mut self, action: Option<DupAction>) {
-        let View::Duplicates { entries, groups, .. } = &mut self.view else { return };
+        let View::Duplicates { entries, groups, archives, .. } = &mut self.view else { return };
         match action {
+            Some(DupAction::TrashArchiveCopies(ai)) => {
+                let paths = archives.get(ai).map(|a| a.copies.clone()).unwrap_or_default();
+                self.request_trash(paths);
+            }
+            Some(DupAction::TrashArchive(ai)) => {
+                if let Some(a) = archives.get(ai).filter(|a| a.complete()) {
+                    let archive = a.archive.clone();
+                    self.request_trash(vec![archive]);
+                }
+            }
             Some(DupAction::Ignore(g, on)) => {
                 if let Some(group) = groups.get(g) {
                     let key = group.key.clone();
@@ -1404,7 +1421,7 @@ impl App {
                 }
                 self.dupes_keep.insert(entries[i].path.clone());
                 group.keep = i;
-                group.blocked = actions::trash_blocked(&dupe_others(group, entries));
+                group.blocked = blocked_by(group, entries);
                 if group.blocked.is_some() {
                     group.picked = false;
                 }
@@ -1828,6 +1845,13 @@ impl App {
                     }
                 }
                 SettingsChange::DoubleClick(action) => self.config.double_click = action,
+                SettingsChange::DuplicatesKeep(keep) => {
+                    self.config.duplicates_keep = keep;
+                    // The suggestions follow the setting; what the user chose by hand stays.
+                    if matches!(self.view, View::Duplicates { .. }) {
+                        self.show_duplicates();
+                    }
+                }
                 SettingsChange::PreviewQuality(quality) => {
                     self.config.preview_quality = quality;
                     self.preview_viewer.set_quality(quality);
@@ -2622,8 +2646,17 @@ impl App {
             self.history_action(action);
             return;
         }
-        if let View::Duplicates { entries, groups, ignored } = &self.view {
-            let action = duplicates::show(ui, entries, groups, (*ignored, self.dupes_show_ignored), &self.gallery);
+        if let View::Duplicates { entries, groups, ignored, archives } = &self.view {
+            let prefer_packed = self.config.duplicates_keep == DuplicatesKeep::Packed;
+            let action = duplicates::show(
+                ui,
+                entries,
+                groups,
+                (*ignored, self.dupes_show_ignored),
+                archives,
+                prefer_packed,
+                &self.gallery,
+            );
             self.dupes_action(action);
             return;
         }
@@ -3294,6 +3327,18 @@ fn view_entries<'a>(view: &'a View, nav: &'a Navigator) -> &'a [Entry] {
 /// The files of a duplicate group that are not kept.
 fn dupe_others(group: &GroupInfo, entries: &[Entry]) -> Vec<PathBuf> {
     group.range.clone().filter(|&i| i != group.keep).map(|i| entries[i].path.clone()).collect()
+}
+
+/// Why a group's extra copies cannot be trashed: inside an archive (named, with a pointer to the
+/// archive's own row above), or on a read-only drive.
+fn blocked_by(group: &GroupInfo, entries: &[Entry]) -> Option<String> {
+    let others = dupe_others(group, entries);
+    let reason = actions::trash_blocked(&others)?;
+    let packed = others.iter().find_map(|p| meshgrove_core::archive::split(p).map(|(a, _)| a));
+    Some(match packed {
+        Some(archive) => t!("dupes.blocked_archive", archive = listing::file_name(&archive)).into_owned(),
+        None => reason,
+    })
 }
 
 /// Ticks a duplicate group as fine (or not), remembered by all of its files.
