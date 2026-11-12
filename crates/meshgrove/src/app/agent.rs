@@ -591,7 +591,29 @@ impl App {
     }
 
     fn agent_event(&mut self, e: Event) {
-        let plugins = self.plugin_tools();
+        if let Event::Permission { key, name, kind, title, options } = e {
+            // Meshgrove's own tools only read, or suggest for the review: they run without
+            // asking, once each. Everything else (a shell command, a file, a tool of another
+            // server, whatever the agent brought itself) is the user's to allow: the title is
+            // the agent's text.
+            let plugins = self.plugin_tools();
+            let own =
+                |tool: &str| dispatch::is_fixed(tool) || plugins.as_ref().is_some_and(|p| p.writes(tool).is_some());
+            let allow = options
+                .iter()
+                .find(|o| o.kind == "allow_once")
+                .or_else(|| options.iter().find(|o| o.kind == "allow_always"))
+                .map(|o| o.id.clone());
+            let Some(agent) = self.chat.agent.as_mut() else { return };
+            if runs_unasked(name.as_deref(), kind.as_deref(), &title, own)
+                && let Some(allow) = allow
+            {
+                agent.backend.answer_permission(key, Some(&allow));
+            } else {
+                agent.questions.push(Question { key, title, options: question_options(&options) });
+            }
+            return;
+        }
         let Some(agent) = self.chat.agent.as_mut() else { return };
         match e {
             Event::Ready { agent: name, .. } => {
@@ -708,25 +730,7 @@ impl App {
                     }
                 }
             }
-            Event::Permission { key, name, kind, title, options } => {
-                // Meshgrove's own tools only read, or suggest for the review: they run without
-                // asking, once each. Everything else (a shell command, a file, whatever the
-                // agent brought itself) is the user's to allow: the title is the agent's text.
-                let own =
-                    |tool: &str| dispatch::is_fixed(tool) || plugins.as_ref().is_some_and(|p| p.writes(tool).is_some());
-                let allow = options
-                    .iter()
-                    .find(|o| o.kind == "allow_once")
-                    .or_else(|| options.iter().find(|o| o.kind == "allow_always"))
-                    .map(|o| o.id.clone());
-                if runs_unasked(name.as_deref(), kind.as_deref(), &title, own)
-                    && let Some(allow) = allow
-                {
-                    agent.backend.answer_permission(key, Some(&allow));
-                } else {
-                    agent.questions.push(Question { key, title, options: question_options(&options) });
-                }
-            }
+            Event::Permission { .. } => unreachable!("handled above"),
             Event::AuthRequired { methods } => {
                 agent.ready = false;
                 agent.auth = methods;
@@ -856,30 +860,40 @@ pub fn endpoint_choices(ids: &[String]) -> Vec<ModelChoice> {
 }
 
 /// Whether a tool call may run without asking the user: only one of Meshgrove's own tools
-/// (`own` says which names those are), and only when the agent does not class the call as
-/// running, editing, deleting or moving something. The name is taken from the call's `name`
-/// (`mcp__meshgrove-chat__search_models`, `meshgrove-chat/search_models`, …) or, failing that,
-/// from a title that is nothing but a tool name; a title with more words in it (a shell
-/// command, say) never passes, whatever it mentions.
+/// (`own` says which names those are) served by Meshgrove's own MCP server, and only when the
+/// agent does not class the call as running, editing, deleting or moving something. The name
+/// is taken from the call's `name` (`mcp__meshgrove-chat__search_models`,
+/// `meshgrove-chat/search_models`, `meshgrove-chat:search_models`) or, failing that, from a
+/// title that is nothing but a tool name. Where the name has a server part, it has to be
+/// [`acp::SERVER_NAME`]: another server's tool that borrows one of our names is asked about.
+/// A title with more words in it (a shell command, say) never passes, whatever it mentions.
 fn runs_unasked(name: Option<&str>, kind: Option<&str>, title: &str, own: impl Fn(&str) -> bool) -> bool {
     if matches!(kind, Some("execute" | "edit" | "delete" | "move" | "switch_mode")) {
         return false;
     }
-    let plain = |raw: &str| -> Option<String> {
-        let raw = raw.trim();
-        if raw.is_empty() || raw.chars().any(char::is_whitespace) {
-            return None;
-        }
-        let tail = raw.rsplit("__").next().unwrap_or(raw);
-        let tail = tail.rsplit(['/', ':', '.']).next().unwrap_or(tail);
-        (!tail.is_empty() && tail.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
-            .then(|| tail.to_string())
+    let raw = name.unwrap_or(title).trim();
+    if raw.is_empty() || raw.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let Some((server, tool)) = split_tool_name(raw) else { return false };
+    server.is_none_or(|s| s == acp::SERVER_NAME) && own(tool)
+}
+
+/// A tool call's name taken apart: the server it names (none for a bare tool name) and the
+/// tool. `None` when the tool part is not a plain name.
+fn split_tool_name(raw: &str) -> Option<(Option<&str>, &str)> {
+    let (server, tool) = match raw.strip_prefix("mcp__") {
+        Some(rest) => match rest.rsplit_once("__") {
+            Some((server, tool)) => (Some(server), tool),
+            None => (None, rest),
+        },
+        None => match raw.rsplit_once(['/', ':']) {
+            Some((server, tool)) => (Some(server), tool),
+            None => (None, raw),
+        },
     };
-    let candidate = match name {
-        Some(n) => plain(n),
-        None => plain(title),
-    };
-    candidate.is_some_and(|c| own(&c))
+    let plain = !tool.is_empty() && tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    plain.then_some((server, tool))
 }
 
 fn question_options(options: &[PermissionOption]) -> Vec<(String, String)> {
@@ -902,6 +916,12 @@ mod tests {
         assert!(yes(Some("meshgrove-chat:bingrove_plan"), Some("read"), "whatever the agent writes"));
         assert!(yes(None, None, "search_models"), "a bare tool name as the title");
         assert!(yes(None, Some("search"), "mcp__meshgrove-chat__list_tags"));
+        assert!(yes(Some("search_models"), None, "Search models"), "a bare tool name");
+        // Another server's tool with one of our names: the agent takes that server's word for
+        // the kind, Meshgrove does not.
+        assert!(!yes(Some("mcp__other-server__search_models"), Some("other"), "search_models"));
+        assert!(!yes(Some("other/search_models"), None, "search_models"));
+        assert!(!yes(None, None, "mcp__other__list_tags"));
         // Not Meshgrove's: the shell, files, anything the agent brought.
         assert!(!yes(Some("Bash"), Some("execute"), "rm -rf ~/.local/share/meshgrove"));
         assert!(!yes(None, None, "rm -rf ~/.local/share/meshgrove"), "a title that mentions meshgrove");
