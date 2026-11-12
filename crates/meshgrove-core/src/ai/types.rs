@@ -237,6 +237,26 @@ pub struct TagCount {
     pub count: usize,
 }
 
+/// What an archive holds (files only; folder entries and clutter left out).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ArchiveListing {
+    pub id: String,
+    pub name: String,
+    /// ZIP: files can be added (propose_archive "add"); 7z, RAR and TAR can only be unpacked.
+    pub writable: bool,
+    pub members: Vec<ArchiveMember>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ArchiveMember {
+    /// The member's id, as search_models and get_model know it.
+    pub id: String,
+    /// The path inside the archive.
+    pub name: String,
+    pub size: u64,
+    pub kind: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FolderSummary {
     pub id: String,

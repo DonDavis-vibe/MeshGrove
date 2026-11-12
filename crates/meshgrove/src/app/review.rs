@@ -14,7 +14,7 @@ use meshgrove_core::moves::MoveProblem;
 use super::{App, View};
 use crate::library::Applied;
 use crate::proposals::ProposalWatcher;
-use crate::ui::review::{HistoryAction, ItemDraft, ReviewAction, ReviewBatch, ReviewItem};
+use crate::ui::review::{Flight, HistoryAction, ItemDraft, ReviewAction, ReviewBatch, ReviewItem};
 
 impl App {
     /// Starts or stops watching for suggestions as AI (or placement by tag) is switched on or off.
@@ -53,9 +53,10 @@ impl App {
     fn auto_accept(&mut self) {
         let Some(since) = self.config.ai.auto_accept_since else { return };
         let since = SystemTime::UNIX_EPOCH + Duration::from_secs(since);
-        let (_, batches) = self.pending_batches();
+        let (_, batches) = self.fresh_batches();
         for b in batches {
-            if b.chat || b.created.is_none_or(|c| c < since) || !self.auto_accepted.insert(b.id) {
+            if b.chat || b.created.is_none_or(|c| c < since) || self.in_flight(b.id) || !self.auto_accepted.insert(b.id)
+            {
                 continue;
             }
             let mut ops = Vec::new();
@@ -107,16 +108,41 @@ impl App {
         if !matches!(self.view, View::Review { .. }) {
             self.layout.focus_files();
         }
-        let (entries, batches) = self.pending_batches();
+        // Shown anew: what the user picked and typed stays, and the batches on their way to the
+        // library keep their cards (the store still lists them as pending until it got there).
+        let previous = match &mut self.view {
+            View::Review { entries, batches } => (std::mem::take(entries), std::mem::take(batches)),
+            _ => (Vec::new(), Vec::new()),
+        };
+        let fresh = self.fresh_batches();
+        let (entries, batches) = merge(fresh, previous);
         self.leave_search();
         self.flatten = false;
         self.view = View::Review { entries, batches };
         self.refresh_gallery(true);
     }
 
+    /// Whether this batch's card is on its way to the library (or fading away).
+    fn in_flight(&self, batch: i64) -> bool {
+        match &self.view {
+            View::Review { batches, .. } => batches.iter().any(|b| b.id == batch && b.flight.is_some()),
+            _ => false,
+        }
+    }
+
+    /// The library recorded the decisions on a batch: its card fades away (or, when that failed,
+    /// is back to be looked at; the message says what went wrong).
+    pub(super) fn decided(&mut self, batch: i64, ok: bool) {
+        if let View::Review { batches, .. } = &mut self.view
+            && let Some(b) = batches.iter_mut().find(|b| b.id == batch)
+        {
+            b.flight = if ok { Some(Flight::Done) } else { None };
+        }
+    }
+
     /// The suggestions waiting, by batch, with the files they are about (still there, moved or
-    /// gone) as entries.
-    fn pending_batches(&self) -> (Vec<meshgrove_core::listing::Entry>, Vec<ReviewBatch>) {
+    /// gone) as entries: as the store has them now.
+    fn fresh_batches(&self) -> (Vec<meshgrove_core::listing::Entry>, Vec<ReviewBatch>) {
         let store = ProposalStore::default_location().filter(|p| p.exists()).and_then(|p| ProposalStore::open(&p).ok());
         let mut entries = Vec::new();
         let mut batches = Vec::new();
@@ -156,12 +182,18 @@ impl App {
                         });
                         continue;
                     }
-                    if proposal.kind == ProposalKind::Delete {
-                        // A deletion works on the place it names, as a move does.
-                        let payload: Option<DeletePayload> = serde_json::from_value(proposal.payload.clone()).ok();
-                        if let (Some(t), Some(d)) = (&proposal.target, payload) {
-                            stale = !still_there(t, d.folder);
-                            if let Some(e) = index.entry_of(&t.path).ok().flatten().filter(|_| !d.folder) {
+                    if matches!(proposal.kind, ProposalKind::Delete | ProposalKind::Archive) {
+                        // A deletion (or an archive operation) works on the place it names, as
+                        // a move does.
+                        let folder = match proposal.kind {
+                            ProposalKind::Delete => {
+                                serde_json::from_value::<DeletePayload>(proposal.payload.clone()).ok().map(|d| d.folder)
+                            }
+                            _ => proposal.target.as_ref().map(|t| t.path.is_dir()),
+                        };
+                        if let (Some(t), Some(folder)) = (&proposal.target, folder) {
+                            stale = !still_there(t, folder);
+                            if let Some(e) = index.entry_of(&t.path).ok().flatten().filter(|_| !folder) {
                                 entry = Some(entries.len());
                                 entries.push(e);
                             }
@@ -225,7 +257,9 @@ impl App {
             Some(ReviewAction::Select(i)) => self.gallery.select(Some(i)),
             Some(ReviewAction::Open(i)) => self.open_entry(i),
             Some(ReviewAction::Accept { batch, all }) => {
-                let b = batches.remove(batch);
+                // The card stays, green with the progress, until the library has recorded it.
+                let b = &mut batches[batch];
+                b.flight = Some(Flight::Applying { reject: false });
                 let mut ops = Vec::new();
                 let mut decisions = Vec::new();
                 // Deletions go to the system's trash, not through the library's journal.
@@ -250,21 +284,27 @@ impl App {
                     };
                     decisions.push((item.proposal.id, decision));
                 }
+                let (id, uid, title) = (b.id, b.uid.clone(), b.title.clone());
                 if !trash.is_empty() {
-                    self.toast(t!("review.trashing", title = b.title.clone(), count = trash.len()).into_owned());
+                    self.toast(t!("review.trashing", title = title.clone(), count = trash.len()).into_owned());
                     self.trash_later(trash);
                 }
                 if ops.is_empty() {
-                    self.library.decide(b.id, decisions);
+                    self.library.decide(id, decisions);
                 } else {
-                    self.library.accept(b.id, b.uid, b.title, ops, decisions);
+                    self.library.accept(id, uid, title, ops, decisions);
                 }
             }
             Some(ReviewAction::Reject(batch)) => {
-                let b = batches.remove(batch);
+                let b = &mut batches[batch];
+                b.flight = Some(Flight::Applying { reject: true });
                 let decisions = b.items.iter().map(|i| (i.proposal.id, Decision::Rejected)).collect();
                 self.library.decide(b.id, decisions);
-                self.toast(t!("review.rejected", title = b.title).into_owned());
+                let title = b.title.clone();
+                self.toast(t!("review.rejected", title = title).into_owned());
+            }
+            Some(ReviewAction::Remove(batch)) => {
+                batches.remove(batch);
             }
             Some(ReviewAction::History) => self.show_history(),
             None => {}
@@ -347,7 +387,7 @@ pub(super) fn auto_acceptable(item: &ReviewItem, config: &Config) -> bool {
         let plugin = item.proposal.payload["plugin"].as_str().unwrap_or_default();
         return config.plugin(plugin).is_some_and(|p| p.enabled && p.grants.bundles && p.grants.auto_accept);
     }
-    if item.proposal.kind == ProposalKind::Delete {
+    if matches!(item.proposal.kind, ProposalKind::Delete | ProposalKind::Archive) {
         return false;
     }
     if item.proposal.kind != ProposalKind::Move {
@@ -393,6 +433,177 @@ fn review_batch(b: &BatchInfo, items: Vec<ReviewItem>) -> ReviewBatch {
         inbox_done: b.inbox_done,
         chat: b.source == "chat" || b.source.starts_with("plugin:"),
         items,
+        flight: None,
+    }
+}
+
+type Listed = (Vec<meshgrove_core::listing::Entry>, Vec<ReviewBatch>);
+
+/// The batches as the store lists them now (`fresh`), with what the user did to them in the
+/// view before (`previous`): picks and drafts carry over by suggestion, and a batch that is on
+/// its way to the library (or fading) keeps its card in its place even when the store has it
+/// decided by now. The fresh order stands; a kept batch sits before the fresh batch that
+/// followed it.
+fn merge(fresh: Listed, previous: Listed) -> Listed {
+    let (mut entries, fresh) = fresh;
+    let (old_entries, previous) = previous;
+    let mut fresh: Vec<Option<ReviewBatch>> = fresh.into_iter().map(Some).collect();
+    let mut out = Vec::with_capacity(fresh.len());
+    let mut next = 0; // the first fresh batch not emitted yet
+    for mut old in previous {
+        if let Some(at) = fresh.iter().position(|f| f.as_ref().is_some_and(|f| f.id == old.id)) {
+            for f in &mut fresh[next..=at] {
+                if let Some(f) = f.take() {
+                    out.push(f);
+                }
+            }
+            next = next.max(at + 1);
+            let kept = out.last_mut().expect("just pushed");
+            if old.flight.is_some() {
+                // Still listed, still on its way: the card as it was.
+                for item in &mut old.items {
+                    if let Some(i) = item.entry {
+                        item.entry = Some(entries.len());
+                        entries.push(old_entries[i].clone());
+                    }
+                }
+                *kept = old;
+            } else {
+                for item in &mut kept.items {
+                    if let Some(o) = old.items.iter().find(|o| o.proposal.id == item.proposal.id) {
+                        item.picked = o.picked.clone();
+                        item.draft = o.draft.clone();
+                    }
+                }
+            }
+        } else if old.flight.is_some() {
+            for item in &mut old.items {
+                if let Some(i) = item.entry {
+                    item.entry = Some(entries.len());
+                    entries.push(old_entries[i].clone());
+                }
+            }
+            out.push(old);
+        }
+    }
+    out.extend(fresh.into_iter().flatten());
+    (entries, out)
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+    use meshgrove_core::ai::proposals::Proposal;
+    use meshgrove_core::listing::Entry;
+    use std::path::{Path, PathBuf};
+
+    fn entry(name: &str) -> Entry {
+        let path = PathBuf::from(name);
+        Entry {
+            name: meshgrove_core::listing::file_name(&path),
+            path,
+            kind: meshgrove_core::formats::Kind::Stl,
+            size: 1,
+            modified: None,
+        }
+    }
+
+    fn item(id: i64, entry: Option<usize>) -> ReviewItem {
+        let proposal = Proposal {
+            id,
+            batch_id: 1,
+            kind: ProposalKind::Tags,
+            target: None,
+            payload: serde_json::json!({"add": [{"name": "a", "status": "existing"}, {"name": "b", "status": "existing"}]}),
+            reason: None,
+            confidence: None,
+            state: "pending".into(),
+        };
+        let picked = Picked::all(&proposal);
+        ReviewItem {
+            proposal,
+            entry,
+            moved_to: None,
+            stale: false,
+            copies: 0,
+            picked,
+            note_before: None,
+            taken: false,
+            draft: ItemDraft::default(),
+        }
+    }
+
+    fn batch(id: i64, items: Vec<ReviewItem>) -> ReviewBatch {
+        ReviewBatch {
+            id,
+            uid: format!("b{id}"),
+            title: format!("batch {id}"),
+            source: String::new(),
+            created: None,
+            inbox_done: false,
+            chat: false,
+            items,
+            flight: None,
+        }
+    }
+
+    fn ids(batches: &[ReviewBatch]) -> Vec<i64> {
+        batches.iter().map(|b| b.id).collect()
+    }
+
+    #[test]
+    fn picks_and_drafts_carry_over_by_suggestion() {
+        let mut old = batch(1, vec![item(10, None), item(11, None)]);
+        old.items[0].picked.add = vec!["a".into()]; // b unticked
+        old.items[1].draft.tag = "typed".into();
+        let fresh = (Vec::new(), vec![batch(1, vec![item(10, None), item(11, None)])]);
+        let (_, merged) = merge(fresh, (Vec::new(), vec![old]));
+        assert_eq!(merged[0].items[0].picked.add, vec!["a".to_owned()]);
+        assert_eq!(merged[0].items[1].draft.tag, "typed");
+        assert_eq!(merged[0].flight, None);
+    }
+
+    #[test]
+    fn batches_on_their_way_keep_their_place_and_their_files() {
+        // The store lists 1, 3 and 4 now; 2 was accepted and is gone from it, but still fading.
+        let old_entries = vec![entry("/lib/one.stl"), entry("/lib/two.stl")];
+        let mut two = batch(2, vec![item(20, Some(1))]);
+        two.flight = Some(Flight::Done);
+        let previous = (old_entries, vec![batch(1, vec![item(10, Some(0))]), two, batch(3, vec![item(30, None)])]);
+        let fresh_entries = vec![entry("/lib/one.stl")];
+        let fresh = (
+            fresh_entries,
+            vec![batch(1, vec![item(10, Some(0))]), batch(3, vec![item(30, None)]), batch(4, vec![item(40, None)])],
+        );
+        let (entries, merged) = merge(fresh, previous);
+        assert_eq!(ids(&merged), vec![1, 2, 3, 4]);
+        assert_eq!(merged[1].flight, Some(Flight::Done));
+        let kept = merged[1].items[0].entry.expect("the file of the kept batch");
+        assert_eq!(entries[kept].path, Path::new("/lib/two.stl"));
+        assert_eq!(entries[merged[0].items[0].entry.unwrap()].path, Path::new("/lib/one.stl"));
+    }
+
+    #[test]
+    fn a_batch_still_listed_while_on_its_way_keeps_its_card() {
+        let old_entries = vec![entry("/lib/one.stl")];
+        let mut one = batch(1, vec![item(10, Some(0))]);
+        one.flight = Some(Flight::Applying { reject: false });
+        one.items[0].picked.add = vec!["a".into()];
+        let fresh =
+            (vec![entry("/lib/one.stl")], vec![batch(1, vec![item(10, Some(0))]), batch(2, vec![item(20, None)])]);
+        let (entries, merged) = merge(fresh, (old_entries, vec![one]));
+        assert_eq!(ids(&merged), vec![1, 2]);
+        assert_eq!(merged[0].flight, Some(Flight::Applying { reject: false }));
+        assert_eq!(merged[0].items[0].picked.add, vec!["a".to_owned()]);
+        assert_eq!(entries[merged[0].items[0].entry.unwrap()].path, Path::new("/lib/one.stl"));
+    }
+
+    #[test]
+    fn a_batch_that_was_decided_without_a_flight_is_gone() {
+        let previous = (Vec::new(), vec![batch(1, vec![item(10, None)]), batch(2, vec![item(20, None)])]);
+        let fresh = (Vec::new(), vec![batch(2, vec![item(20, None)])]);
+        let (_, merged) = merge(fresh, previous);
+        assert_eq!(ids(&merged), vec![2]);
     }
 }
 

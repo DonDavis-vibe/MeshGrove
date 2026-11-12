@@ -17,7 +17,7 @@ use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::lists::{ListInfo, ListKind, PrintResult, PrintStatus};
 use meshgrove_core::printer::{self, Printer};
 use meshgrove_core::programs;
-use meshgrove_core::{Kind, copies, query};
+use meshgrove_core::{Kind, archive, archives, copies, query};
 use meshgrove_render::Renderer;
 
 use crate::actions;
@@ -974,6 +974,7 @@ impl App {
                     self.chat_changed();
                     self.applied(applied);
                 }
+                LibEvent::Decided { batch, ok } => self.decided(batch, ok),
                 LibEvent::ChecksStored => {
                     self.marks_dirty = true;
                     self.tags_dirty = true; // reloads the selection's check too
@@ -1097,6 +1098,19 @@ impl App {
                 #[cfg(not(feature = "plugins"))]
                 plugin_openers: Vec::new(),
                 ai_refs: self.config.ai.enabled && self.ai_sees_any(&paths),
+                can_unpack: self.index.is_some()
+                    && !paths.is_empty()
+                    && paths.iter().all(|p| self.in_library(p) && archive::is_archive_file(p)),
+                can_pack: self.index.is_some()
+                    && !paths.is_empty()
+                    && paths.iter().all(|p| self.in_library(p) && archive::split(p).is_none())
+                    && paths.iter().all(|p| p.parent() == paths[0].parent()),
+                pack_name: match paths.as_slice() {
+                    [one] => meshgrove_core::import::stem(&listing::file_name(one)),
+                    [first, ..] => first.parent().map(listing::file_name).unwrap_or_default(),
+                    [] => String::new(),
+                },
+                archives_nearby: zips_beside(&paths),
             };
             self.menu_for = paths;
             self.tags_dirty = true;
@@ -1547,7 +1561,92 @@ impl App {
             Action::CopyReference => self.copy_references(&self.selected_paths(), ctx),
             Action::PasteFiles(into) => self.paste_files(ctx, into),
             Action::CutFiles => self.cut_files(ctx),
+            Action::Unpack => self.unpack_selection(),
+            Action::Pack(name) => self.pack_selection(&name),
+            Action::AddToArchive(zip) => self.add_selection_to(&zip),
         }
+    }
+
+    /// The library the selection is in, and what is selected.
+    fn selection_in_library(&self) -> Option<(PathBuf, Vec<PathBuf>)> {
+        let paths = self.selected_paths();
+        let root = self.config.library_roots.iter().find(|r| paths.first().is_some_and(|p| p.starts_with(r)))?;
+        Some((root.clone(), paths))
+    }
+
+    /// Unpacks the selected archives into folders named after them, beside them (the archives
+    /// stay), as one change of the history.
+    fn unpack_selection(&mut self) {
+        let Some((root, paths)) = self.selection_in_library() else { return };
+        let mut ops = Vec::new();
+        let mut dir = None;
+        for path in &paths {
+            match archives::plan_unpack(&root, path) {
+                Ok((target, payload)) => {
+                    dir.get_or_insert_with(|| payload.lands_in(path));
+                    ops.extend(archives::to_ops(&target, &payload));
+                }
+                Err(e) => {
+                    self.toast(
+                        t!("toast.archive_failed", name = listing::file_name(path), error = e.to_string()).into_owned(),
+                    );
+                    return;
+                }
+            }
+        }
+        let Some(dir) = dir else { return };
+        let title = match paths.as_slice() {
+            [one] => t!("archive.journal_unpack", name = listing::file_name(one)),
+            _ => t!("archive.journal_unpack_many", count = paths.len()),
+        };
+        self.library.archive(title.into_owned(), ops, root, dir);
+    }
+
+    /// Packs the selection into a new ZIP called `name` beside it.
+    fn pack_selection(&mut self, name: &str) {
+        let Some((root, paths)) = self.selection_in_library() else { return };
+        match archives::plan_pack(&root, &paths, name) {
+            Ok((target, payload)) => {
+                let dir = payload.lands_in(&target.path);
+                let zip = match &payload.op {
+                    archives::ArchiveOp::Pack { to, .. } => listing::file_name(to),
+                    _ => name.to_owned(),
+                };
+                let title = t!("archive.journal_pack", name = zip).into_owned();
+                self.library.archive(title, archives::to_ops(&target, &payload), root, dir);
+            }
+            Err(e) => self.toast(t!("toast.archive_failed", name = name, error = e.to_string()).into_owned()),
+        }
+    }
+
+    /// Adds the selection to the ZIP `zip` (at its top).
+    fn add_selection_to(&mut self, zip: &Path) {
+        let Some((root, paths)) = self.selection_in_library() else { return };
+        self.add_to_archive(&root, zip, "", &paths);
+    }
+
+    fn add_to_archive(&mut self, root: &Path, zip: &Path, prefix: &str, files: &[PathBuf]) {
+        let name = listing::file_name(zip);
+        match archives::plan_add(root, zip, prefix, files) {
+            Ok((target, payload)) => {
+                let dir = payload.lands_in(&target.path);
+                let title = t!("archive.journal_add", name = name, count = files.len()).into_owned();
+                self.library.archive(title, archives::to_ops(&target, &payload), root.to_path_buf(), dir);
+            }
+            Err(e) => self.toast(t!("toast.archive_failed", name = name, error = e.to_string()).into_owned()),
+        }
+    }
+
+    /// The ZIP of the library that is open (or the folder inside it), which pasted files are
+    /// added to: (the ZIP, the folder inside it).
+    fn paste_archive(&self) -> Option<(PathBuf, String)> {
+        let current = self.nav.current();
+        if archive::is_archive_file(current) {
+            return (archives::is_zip(current) && self.in_library(current))
+                .then(|| (current.to_path_buf(), String::new()));
+        }
+        let (zip, member) = archive::split(current)?;
+        (archives::is_zip(&zip) && self.in_library(&zip)).then_some((zip, member))
     }
 
     /// Ctrl+X: the selection goes on the clipboard like a copy, and the next paste moves it.
@@ -1577,19 +1676,34 @@ impl App {
         self.cut = paths;
     }
 
-    /// Pasted files go into the folder shown: a real folder, not an archive and not a list.
+    /// Pasted files go into the folder shown: a real folder (not a list), or a ZIP of the
+    /// library, which they are added to.
     fn can_paste(&self) -> bool {
         let current = self.nav.current();
         matches!(self.view, View::Folder | View::Flatten { .. })
-            && meshgrove_core::archive::split(current).is_none()
-            && !meshgrove_core::archive::is_archive_file(current)
-            && current.is_dir()
+            && ((meshgrove_core::archive::split(current).is_none()
+                && !meshgrove_core::archive::is_archive_file(current)
+                && current.is_dir())
+                || self.paste_archive().is_some())
     }
 
     /// Copies the files on the clipboard into `into` (a folder entry) or the folder shown, as a
     /// change of the history. The clipboard is read on a thread: another program answers it.
     fn paste_files(&mut self, ctx: &egui::Context, into: Option<usize>) {
-        let dir = match into.and_then(|i| self.entries().get(i)).map(|e| e.path.clone()) {
+        let into = into.and_then(|i| self.entries().get(i)).map(|e| e.path.clone());
+        // Into a ZIP: the folder inside it under the pointer, or the one that is open.
+        let zip = match &into {
+            Some(p) if !p.is_dir() => {
+                archive::split(p).filter(|(zip, _)| archives::is_zip(zip) && self.in_library(zip))
+            }
+            Some(_) => None,
+            None => self.paste_archive(),
+        };
+        if let Some((zip, prefix)) = zip {
+            self.paste_into_archive(ctx, zip, prefix);
+            return;
+        }
+        let dir = match into {
             Some(path) if path.is_dir() => path,
             _ if self.can_paste() => self.nav.current().to_path_buf(),
             _ => return,
@@ -1631,6 +1745,43 @@ impl App {
                 t!("copy.journal_title", to = to, count = count)
             };
             applier.copy_files(plan, title.into_owned(), root.is_some());
+        });
+    }
+
+    /// Adds the files on the clipboard to the ZIP that is open, below the folder inside it that
+    /// is open. Cut files are not moved: an archive takes copies.
+    fn paste_into_archive(&mut self, ctx: &egui::Context, zip: PathBuf, prefix: String) {
+        let Some(root) = self.config.library_roots.iter().find(|r| zip.starts_with(r)).cloned() else { return };
+        let text = ctx.input(|i| {
+            i.events.iter().find_map(|e| if let egui::Event::Paste(t) = e { Some(t.clone()) } else { None })
+        });
+        let (applier, messages, ctx) = (self.library.applier(), self.messages.0.clone(), ctx.clone());
+        let cut = self.cut.clone();
+        std::thread::spawn(move || {
+            let (mut files, moving) = actions::clipboard_files(text.as_deref());
+            if files.is_empty() && !cut.is_empty() {
+                files = cut.clone();
+            }
+            let was_cut =
+                moving || (!cut.is_empty() && files.len() == cut.len() && cut.iter().all(|c| files.contains(c)));
+            let name = listing::file_name(&zip);
+            let message = if files.is_empty() {
+                t!("toast.paste_nothing", manager = i18n::file_manager()).into_owned()
+            } else if was_cut {
+                t!("toast.paste_into_archive_cut").into_owned()
+            } else {
+                match archives::plan_add(&root, &zip, &prefix, &files) {
+                    Ok((target, payload)) => {
+                        let dir = payload.lands_in(&target.path);
+                        let title = t!("archive.journal_add", name = name, count = files.len()).into_owned();
+                        applier.archive(title, archives::to_ops(&target, &payload), root, dir);
+                        return;
+                    }
+                    Err(e) => t!("toast.archive_failed", name = name, error = e.to_string()).into_owned(),
+                }
+            };
+            let _ = messages.send(message);
+            ctx.request_repaint();
         });
     }
 
@@ -2637,7 +2788,8 @@ impl App {
             return;
         }
         if let View::Review { entries, batches } = &mut self.view {
-            let action = review_view::show(ui, entries, batches, &self.gallery, &self.tag_style);
+            let applying = self.library.status().applying;
+            let action = review_view::show(ui, entries, batches, &self.gallery, &self.tag_style, applying);
             self.review_action(action);
             return;
         }
@@ -3502,4 +3654,22 @@ impl RateMeter {
             _ => 0.0,
         }
     }
+}
+
+/// The ZIPs in the folder of the first of `paths` that are not among them: (path, name), by name.
+fn zips_beside(paths: &[PathBuf]) -> Vec<(PathBuf, String)> {
+    let Some(dir) = paths.first().and_then(|p| p.parent()) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut zips: Vec<(PathBuf, String)> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| archives::is_zip(p) && p.is_file() && !paths.contains(p))
+        .map(|p| {
+            let name = listing::file_name(&p);
+            (p, name)
+        })
+        .collect();
+    zips.sort_by_key(|z| z.1.to_lowercase());
+    zips.truncate(20);
+    zips
 }

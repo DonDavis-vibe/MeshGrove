@@ -456,6 +456,29 @@ pub fn get_thumbnails(cx: &Context, ids: &[String], size: u32) -> ToolResult<(Pi
     Ok((images, denied))
 }
 
+/// The members of an archive with their ids, and whether files can be added to it.
+pub fn list_archive(cx: &Context, id: &str) -> ToolResult<ArchiveListing> {
+    let path = cx.resolve(id)?;
+    if !crate::archive::is_archive_file(&path) {
+        return Err(ToolError::Invalid(format!("{id} is not an archive")));
+    }
+    let members = crate::archive::list(&path).map_err(|e| ToolError::Invalid(format!("{id}: {e}")))?;
+    Ok(ArchiveListing {
+        id: id.to_owned(),
+        name: listing::file_name(&path),
+        writable: crate::archives::is_zip(&path),
+        members: members
+            .into_iter()
+            .map(|m| ArchiveMember {
+                id: cx.id_of(&path.join(&m.name)),
+                kind: Kind::from_file_name(&m.name).as_str().to_owned(),
+                name: m.name,
+                size: m.size,
+            })
+            .collect(),
+    })
+}
+
 pub fn folder_summary(cx: &Context, id: &str) -> ToolResult<FolderSummary> {
     let path = cx.resolve(id)?;
     let mut args = Vec::new();

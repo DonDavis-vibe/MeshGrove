@@ -103,7 +103,7 @@ What makes it different from other model managers:
 | **3D mouse** | Navigate the 3D views with a **3Dconnexion SpaceMouse / SpaceNavigator or a DIY 3D mouse** (anything that reports as a HID multi-axis controller; Linux reads `/dev/hidraw` directly, Windows and macOS use HID): twist or tilt to turn the model, push to pan, push forward/back to zoom, left button resets the view, right button shows the next standard view; a 3D picture of the mouse in the settings follows the real knob; per-axis speed and inversion, dead zone, a choice of what each movement does, and a **calibration** that finds out which axis is which |
 | **3MF projects** | Embedded slicer plate pictures (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); click a plate picture to see that plate in 3D; **multi-colour**: filament colours per object and part, painted models (multi-material painting) and 3MF material colours in the viewer and in rendered previews; filament swatches on tiles and in the details; title, designer and application from the metadata |
 | **STEP / STP** | CAD files are tessellated by OpenCascade in a separate helper process, so a broken file cannot crash the app; results are cached |
-| **Archives** | Open ZIP, 7z, RAR and TAR like folders; every model inside gets a preview; files are extracted only when another program needs them |
+| **Archives** | Open ZIP, 7z, RAR and TAR like folders; every model inside gets a preview; files are extracted only when another program needs them. Right-click: unpack an archive beside itself, pack the selection into a new ZIP, add files to a ZIP (or paste into an open one); each undoable in the history |
 | **Library** | Index (SQLite) of all library folders; instant search such as `dragon ext:3mf tag:painted is:unprinted`; changes on disk are picked up automatically, and *Rescan folder* catches anything else |
 | **Tags and notes** | Tags and notes belong to the file *content*, so they survive renames and moves; **tags in colours**, as pills or dots on the tiles; suggested tags for themes (garden, workshop, kids' room …), print properties and state; the search finds note text too; daily automatic backups; export and import as JSON |
 | **Favourites and lists** | ★ favourites (Ctrl+D); **collections** across folders, hand-picked or a saved search that stays current; **print lists** with the copies you need of each model, ticked off as you print, then archived; a print list becomes a **PDF checklist** with pictures or a CSV file |
@@ -735,6 +735,12 @@ the trash (`propose_delete`). That always waits for the review, also in automati
 accepting it moves them into the system's trash, from where they can be brought back; the history
 cannot. Nothing inside an archive and never a library itself.
 
+**Archives:** `list_archive` tells the assistant what an archive holds (members with their ids,
+and whether it can be written), and `propose_archive` suggests unpacking an archive beside itself,
+packing files into a new ZIP, or adding files to a ZIP (7z, RAR and TAR are only unpacked). That
+always waits for the review, also in automatic mode; nothing is ever replaced, and the history
+takes it back.
+
 **Questions back:** when a request is ambiguous, the assistant can ask you (`ask_user`): its
 questions appear in the chat with radio buttons for one answer, checkboxes for several, and a
 field for an answer in your own words; the assistant waits for the answer (a quarter of an hour at
@@ -812,8 +818,19 @@ like folders on disk, with their own mosaic tiles, and *Include subfolders* show
 the level you are at. Every model, image and PDF inside gets a preview. The archive's tile shows a
 mosaic of its contents, inside the library (from the index) and outside it (read from the archive),
 in a downloads folder or the import view alike. Archives in the library are indexed like folders,
-so the library search, tags, notes and the duplicate finder include their contents. Archives are
-never modified. Solid 7z/RAR archives are unpacked once per visit, not once per file.
+so the library search, tags, notes and the duplicate finder include their contents. Solid 7z/RAR
+archives are unpacked once per visit, not once per file.
+
+**Changing archives.** Right-click → *Unpack* puts an archive's contents into a new folder named
+after it, beside it (the archive stays; a taken name gets a number). *Pack as ZIP* makes a new ZIP
+of the selected files and folders in their folder, under the name you type. *Add to archive* lists
+the ZIPs in the same folder to add the selection to, and Ctrl+V while a ZIP (or a folder inside
+it) is open adds the copied files there – cut files are not moved into an archive. Only ZIP
+archives are written; 7z, RAR and TAR can be unpacked but not changed. Nothing is ever replaced:
+a member of the same name stops the whole addition, and a new ZIP never overwrites a file. Each
+operation is one entry in the history, which takes it back as long as the ZIP (or the unpacked
+files) are unchanged since. The library lists the folder right away, so the new files and members
+get their previews and land in the inbox.
 
 ### Moving files to the trash
 

@@ -105,7 +105,7 @@ Was Meshgrove von anderen Modell-Verwaltungen unterscheidet:
 | **3D-Maus** | Die 3D-Ansichten mit einer **3Dconnexion SpaceMouse / SpaceNavigator oder einer selbstgebauten 3D-Maus** steuern (alles, was sich als HID-Multi-Achsen-Controller meldet; Linux liest `/dev/hidraw` direkt, Windows und macOS nutzen HID): drehen oder kippen dreht das Modell, schieben verschiebt, vor/zurück zoomt, linke Taste setzt die Ansicht zurück, rechte Taste zeigt die nächste Standardansicht; ein 3D-Bild der Maus in den Einstellungen folgt dem echten Knopf; Geschwindigkeit und Umkehrung je Achse, Totzone, frei wählbare Belegung der Bewegungen und eine **Kalibrierung**, die herausfindet, welche Achse welche ist |
 | **3MF-Projekte** | Eingebettete Plattenbilder der Slicer (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); Klick auf ein Plattenbild zeigt diese Platte in 3D; **mehrfarbig**: Filamentfarben pro Objekt und Teil, bemalte Modelle (Multi-Material-Bemalung) und 3MF-Materialfarben im Viewer und in selbst gerenderten Vorschauen; Filament-Farbfelder auf Kacheln und in den Details; Titel, Designer und Programm aus den Metadaten |
 | **STEP / STP** | CAD-Dateien werden von OpenCascade in einem eigenen Hilfsprozess vernetzt, eine kaputte Datei kann die App also nicht abstürzen lassen; das Ergebnis wird zwischengespeichert |
-| **Archive** | ZIP, 7z, RAR und TAR öffnen wie Ordner; jedes enthaltene Modell bekommt eine Vorschau; entpackt wird nur, wenn ein anderes Programm die Datei braucht |
+| **Archive** | ZIP, 7z, RAR und TAR öffnen wie Ordner; jedes enthaltene Modell bekommt eine Vorschau; entpackt wird nur, wenn ein anderes Programm die Datei braucht. Rechtsklick: Archiv neben sich entpacken, Auswahl als neues ZIP packen, Dateien zu einem ZIP hinzufügen (oder in ein geöffnetes einfügen); alles im Verlauf rückgängig |
 | **Bibliothek** | Index (SQLite) aller Bibliotheksordner; Sofortsuche wie `drache ext:3mf tag:bemalt is:ungedruckt`; Änderungen auf der Platte werden automatisch erkannt, und *Ordner neu einlesen* holt den Rest |
 | **Tags und Notizen** | Tags und Notizen hängen am *Inhalt* der Datei und überleben so Umbenennen und Verschieben; **farbige Tags**, als Kärtchen oder Punkte auf den Kacheln; vorgeschlagene Tags für Themen (Garten, Werkstatt, Kinderzimmer …), Druck-Eigenschaften und Zustand; die Suche findet auch Notiztext; tägliche automatische Sicherung; Export und Import als JSON |
 | **Favoriten und Listen** | ★ Favoriten (Strg+D); **Sammlungen** über Ordner hinweg, von Hand oder als gespeicherte Suche, die aktuell bleibt; **Drucklisten** mit der gewünschten Stückzahl je Modell, beim Drucken abgehakt und danach archiviert; eine Druckliste wird zur **PDF-Checkliste** mit Bildern oder zur CSV-Datei |
@@ -782,6 +782,12 @@ Papierkorb zu legen (`propose_delete`). Das wartet immer auf die Prüfliste, auc
 Modus, und beim Annehmen wandern sie in den Papierkorb des Systems, aus dem sie sich zurückholen
 lassen; der Verlauf kann das nicht. Nichts in Archiven, und nie eine Bibliothek selbst.
 
+**Archive:** `list_archive` sagt dem Assistenten, was ein Archiv enthält (Einträge mit ihren Ids
+und ob es sich schreiben lässt), und `propose_archive` schlägt vor, ein Archiv neben sich zu
+entpacken, Dateien in ein neues ZIP zu packen oder zu einem ZIP hinzuzufügen (7z, RAR und TAR
+werden nur entpackt). Das wartet immer auf die Prüfliste, auch im automatischen Modus; nie wird
+etwas ersetzt, und der Verlauf nimmt es zurück.
+
 **Rückfragen:** Ist eine Bitte mehrdeutig, kann der Assistent nachfragen (`ask_user`): Seine
 Fragen erscheinen im Chat mit Auswahlknöpfen für eine Antwort, Kästchen für mehrere und einem Feld
 für eine Antwort in eigenen Worten; der Assistent wartet auf die Antwort (höchstens eine
@@ -865,8 +871,20 @@ zeigt alles unterhalb der Ebene, auf der du bist. Jedes Modell, Bild und PDF dar
 Vorschau. Die Archiv-Kachel zeigt ein Mosaik des Inhalts – in der Bibliothek (aus dem Index) wie
 außerhalb (aus dem Archiv gelesen), im Download-Ordner oder in der Import-Ansicht genauso.
 Archive in der Bibliothek werden wie Ordner indiziert, also beziehen Bibliothekssuche, Tags,
-Notizen und Duplikatsuche ihren Inhalt mit ein. Archive werden nie verändert. Solide 7z/RAR-Archive werden
-einmal pro Besuch entpackt, nicht einmal pro Datei.
+Notizen und Duplikatsuche ihren Inhalt mit ein. Solide 7z/RAR-Archive werden einmal pro Besuch
+entpackt, nicht einmal pro Datei.
+
+**Archive verändern.** Rechtsklick → *Entpacken* legt den Inhalt eines Archivs in einen neuen
+Ordner mit seinem Namen daneben (das Archiv bleibt; ein vergebener Name bekommt eine Nummer).
+*Als ZIP packen* macht aus den gewählten Dateien und Ordnern ein neues ZIP in ihrem Ordner, mit
+dem Namen, den du eintippst. *Zum Archiv hinzufügen* listet die ZIPs im selben Ordner, zu denen die
+Auswahl kommen kann, und Strg+V in einem geöffneten ZIP (oder einem Ordner darin) fügt die
+kopierten Dateien dort ein – ausgeschnittene Dateien werden nicht in ein Archiv verschoben. Nur
+ZIP-Archive werden geschrieben; 7z, RAR und TAR lassen sich entpacken, aber nicht verändern. Nie
+wird etwas ersetzt: Ein gleichnamiger Eintrag stoppt das ganze Hinzufügen, und ein neues ZIP
+überschreibt keine Datei. Jede Operation ist ein Eintrag im Verlauf, der sie zurücknimmt, solange
+das ZIP (oder die entpackten Dateien) seitdem unverändert sind. Die Bibliothek liest den Ordner
+sofort ein, also bekommen die neuen Dateien und Einträge ihre Vorschauen und landen im Eingang.
 
 ### Dateien in den Papierkorb
 

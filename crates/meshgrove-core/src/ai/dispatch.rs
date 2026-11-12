@@ -71,6 +71,11 @@ const TOOLS: &[(&str, &str, bool)] = &[
     ),
     ("list_inbox", "New files waiting in the inbox, grouped by the folder or archive they came in.", false),
     (
+        "list_archive",
+        "The members of an archive (ZIP, 7z, RAR, TAR) with their ids, and whether files can be added to it (ZIP only).",
+        false,
+    ),
+    (
         "list_tags",
         "Tags in use (with counts and groups) and Meshgrove's suggested tags. Call before suggesting tags.",
         false,
@@ -98,6 +103,11 @@ const TOOLS: &[(&str, &str, bool)] = &[
         true,
     ),
     ("propose_delete", "Files, archives or folders for the trash; always waits for the user's review.", true),
+    (
+        "propose_archive",
+        "Unpack an archive beside itself, pack files and folders into a new ZIP, or add them to a ZIP; always waits for the user's review, never replaces anything.",
+        true,
+    ),
     (
         "ask_user",
         "Ask the user one to five questions with options (radio buttons, or checkboxes with multi), shown in Meshgrove; returns their answer. Use it when the request is ambiguous.",
@@ -232,7 +242,7 @@ pub fn definitions() -> Vec<Value> {
         .map(|(name, description, _)| {
             let parameters = match *name {
                 "search_models" => schema::<ModelFilter>(),
-                "get_model" | "folder_summary" => schema::<IdArgs>(),
+                "get_model" | "folder_summary" | "list_archive" => schema::<IdArgs>(),
                 "check_printability" => schema::<IdsArgs>(),
                 "list_inbox" => schema::<InboxArgs>(),
                 "get_list" => schema::<ListArgs>(),
@@ -243,6 +253,7 @@ pub fn definitions() -> Vec<Value> {
                 "propose_tag_merge" => schema::<proposals::ProposeTagMerge>(),
                 "propose_moves" => schema::<proposals::ProposeMoves>(),
                 "propose_delete" => schema::<proposals::ProposeDelete>(),
+                "propose_archive" => schema::<proposals::ProposeArchive>(),
                 "ask_user" => schema::<proposals::AskUser>(),
                 _ => none(),
             };
@@ -278,6 +289,7 @@ pub fn call(
         "search_models" => to_value(read::search_models(cx, &args::<ModelFilter>(arguments)?)?),
         "get_model" => to_value(read::get_model(cx, &args::<IdArgs>(arguments)?.id, false)?.0),
         "folder_summary" => to_value(read::folder_summary(cx, &args::<IdArgs>(arguments)?.id)?),
+        "list_archive" => to_value(read::list_archive(cx, &args::<IdArgs>(arguments)?.id)?),
         "list_inbox" => to_value(read::list_inbox(cx, args::<InboxArgs>(arguments)?.folder.as_deref(), 200)?),
         "list_tags" => to_value(read::list_tags(cx)?),
         "list_lists" => to_value(read::list_lists(cx)?),
@@ -293,6 +305,7 @@ pub fn call(
         "propose_tag_merge" => to_value(proposals::propose_tag_merge(cx, store, origin, &args(arguments)?)?),
         "propose_moves" => to_value(proposals::propose_moves(cx, store, origin, &args(arguments)?)?),
         "propose_delete" => to_value(proposals::propose_delete(cx, store, origin, &args(arguments)?)?),
+        "propose_archive" => to_value(proposals::propose_archive(cx, store, origin, &args(arguments)?)?),
         "ask_user" => to_value(proposals::ask_user(store, origin, &args(arguments)?)?),
         other => Err(ToolError::Invalid(format!("no tool called {other}"))),
     }
