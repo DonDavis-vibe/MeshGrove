@@ -305,9 +305,11 @@ pub fn show(
     }
     if let Some(bi) = remove {
         action = Some(ReviewAction::Remove(bi));
+        // On top of a click's jump of the same frame: the cards below the removed one come up
+        // by its height either way.
         let back = compensation(rects[bi], shown.inner_rect);
         if back > 0.0 {
-            jump = Some((offset - back).max(0.0));
+            jump = Some((jump.unwrap_or(offset) - back).max(0.0));
         }
     }
     if let Some(target) = jump {

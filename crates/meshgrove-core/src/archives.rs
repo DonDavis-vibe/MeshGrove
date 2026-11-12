@@ -75,7 +75,9 @@ pub enum Problem {
     /// No sources, or the archive among its own sources.
     Nothing,
     BadName(&'static str),
-    /// A member of that name is in the archive already.
+    /// The folder inside the archive: only plain folder names, nothing that leads out of it.
+    BadFolder,
+    /// A member of that name is in the archive already, or two sources would get that name.
     Taken(String),
 }
 
@@ -90,7 +92,10 @@ impl fmt::Display for Problem {
             Problem::ReadOnly => f.write_str("is on a read-only drive"),
             Problem::Nothing => f.write_str("nothing to pack"),
             Problem::BadName(why) => write!(f, "the name will not do: {why}"),
-            Problem::Taken(name) => write!(f, "{name} is in the archive already"),
+            Problem::BadFolder => {
+                f.write_str("the folder inside the archive will not do: plain folder names only, no '.', '..' or '\\'")
+            }
+            Problem::Taken(name) => write!(f, "{name} is in the archive already, or would be twice"),
         }
     }
 }
@@ -122,6 +127,8 @@ pub fn plan_pack(root: &Path, selection: &[PathBuf], name: &str) -> Result<(Targ
     }
     let name = zip_name(name)?;
     let to = free_target(&base, &name, &[]);
+    let paths: Vec<PathBuf> = sources.iter().map(|s| s.path.clone()).collect();
+    unique_names(archive::members_of(&paths, &base).map_err(|_| Problem::Gone)?.iter().map(|(_, n)| n.as_str()))?;
     let target = sources[0].clone();
     Ok((target, ArchivePayload { root: root.to_path_buf(), op: ArchiveOp::Pack { sources, base, to } }))
 }
@@ -147,20 +154,54 @@ pub fn plan_add(
     }
     let sources = sources(root, selection)?;
     let base = selection[0].parent().ok_or(Problem::Gone)?.to_path_buf();
-    let prefix = match prefix.trim_matches('/') {
-        "" => String::new(),
-        p => format!("{p}/"),
-    };
-    // Nothing is ever replaced: a name that is there already stops the whole addition.
+    let prefix = folder_prefix(prefix)?;
+    // Nothing is ever replaced: a name that is there already stops the whole addition, and so
+    // do two sources that would get the same name.
     let there = archive::zip_names(archive).map_err(|_| Problem::NotZip)?;
     let paths: Vec<PathBuf> = sources.iter().map(|s| s.path.clone()).collect();
-    for (_, name) in archive::members_of(&paths, &base).map_err(|_| Problem::Gone)? {
-        let name = format!("{prefix}{name}");
-        if there.contains(&name) {
-            return Err(Problem::Taken(name));
+    let names: Vec<String> = archive::members_of(&paths, &base)
+        .map_err(|_| Problem::Gone)?
+        .into_iter()
+        .map(|(_, name)| format!("{prefix}{name}"))
+        .collect();
+    if let Some(name) = names.iter().find(|n| there.contains(n)) {
+        return Err(Problem::Taken(name.clone()));
+    }
+    unique_names(names.iter().map(String::as_str))?;
+    Ok((target, ArchivePayload { root: root.to_path_buf(), op: ArchiveOp::Add { sources, base, prefix } }))
+}
+
+/// The folder inside the archive as a member prefix (`minis/`, or nothing for the top): plain
+/// folder names between `/`, nothing that could lead out of the archive when another program
+/// unpacks it (zip slip), and no backslashes.
+fn folder_prefix(folder: &str) -> Result<String, Problem> {
+    let folder = folder.trim().trim_matches('/');
+    if folder.is_empty() {
+        return Ok(String::new());
+    }
+    if folder.contains('\\') {
+        return Err(Problem::BadFolder);
+    }
+    for part in folder.split('/') {
+        if part.is_empty() || part == "." || part == ".." || crate::fsops::check_name(part).is_err() {
+            return Err(Problem::BadFolder);
         }
     }
-    Ok((target, ArchivePayload { root: root.to_path_buf(), op: ArchiveOp::Add { sources, base, prefix } }))
+    Ok(format!("{folder}/"))
+}
+
+/// Two members may not get the same name (also not differing in case only: Windows would not
+/// tell them apart when unpacking).
+fn unique_names<'a>(names: impl Iterator<Item = &'a str>) -> Result<(), Problem> {
+    let mut seen: Vec<String> = Vec::new();
+    for name in names {
+        let folded = name.to_lowercase();
+        if seen.contains(&folded) {
+            return Err(Problem::Taken(name.to_owned()));
+        }
+        seen.push(folded);
+    }
+    Ok(())
 }
 
 /// The journal steps of an archive operation on `target`.
@@ -302,6 +343,22 @@ mod tests {
             Problem::Taken("readme.txt".into())
         );
         assert!(plan_add(&root, &zip, "docs", &[garten.join("readme.txt")]).is_ok(), "elsewhere inside it is fine");
+        // The folder inside the archive leads nowhere else.
+        for bad in ["../..", "..", "a/../b", "./a", "a//b", "a\\b", "con"] {
+            assert_eq!(
+                plan_add(&root, &zip, bad, &[garten.join("rose.stl")]).unwrap_err(),
+                Problem::BadFolder,
+                "{bad}"
+            );
+        }
+        assert!(matches!(plan_add(&root, &zip, " /minis/sub/ ", &[garten.join("rose.stl")]).unwrap().1.op,
+            ArchiveOp::Add { prefix, .. } if prefix == "minis/sub/"));
+        // Two sources that would get the same name: files of other folders carry their name alone.
+        std::fs::create_dir_all(root.join("other")).unwrap();
+        std::fs::write(root.join("other").join("Rose.stl"), "r2").unwrap();
+        let clash = [garten.join("rose.stl"), root.join("other").join("Rose.stl")];
+        assert_eq!(plan_add(&root, &zip, "", &clash).unwrap_err(), Problem::Taken("Rose.stl".into()));
+        assert_eq!(plan_pack(&root, &clash, "x").unwrap_err(), Problem::Taken("Rose.stl".into()));
         assert_eq!(plan_add(&root, &zip, "", std::slice::from_ref(&zip)).unwrap_err(), Problem::Nothing);
         assert_eq!(
             plan_add(&root, &zip, "", std::slice::from_ref(&root)).unwrap_err(),
