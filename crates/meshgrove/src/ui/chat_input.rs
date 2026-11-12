@@ -173,6 +173,27 @@ impl ChatInput {
         (starts_word && !query.contains('\n') && query.chars().count() <= 80).then(|| (at..cursor, query.to_owned()))
     }
 
+    /// Puts a message taken with [`ChatInput::take_message`] back into the field.
+    pub fn restore(&mut self, message: &str, pills: Vec<Pill>) {
+        self.clear();
+        let mut rest = message;
+        while let Some(start) = rest.find("[[ref:") {
+            let Some(end) = rest[start..].find("]]") else { break };
+            self.text.push_str(&rest[..start]);
+            self.seen = self.text.clone();
+            let pill = rest[start + 6..start + end].parse::<usize>().ok().and_then(|n| pills.get(n).cloned());
+            rest = &rest[start + end + 2..];
+            if let Some(pill) = pill {
+                let at = self.text.len();
+                self.insert_pill(at..at, pill);
+                // The pill brings its own space after it.
+                rest = rest.strip_prefix(' ').unwrap_or(rest);
+            }
+        }
+        self.text.push_str(rest);
+        self.seen = self.text.clone();
+    }
+
     /// The message: the text with each pill as `[[ref:n]]`, and the pills in that order.
     pub fn take_message(&mut self) -> (String, Vec<Pill>) {
         self.sync();
@@ -394,6 +415,18 @@ mod tests {
         let (message, pills) = input.take_message();
         assert_eq!(message, "Verbinde [[ref:0]] mit [[ref:1]] bitte.");
         assert_eq!(pills, [pill("Deckel.stl"), pill("Boden.stl")]);
+    }
+
+    #[test]
+    fn a_taken_message_can_be_put_back() {
+        let mut input = ChatInput::default();
+        typed(&mut input, "Verbinde @");
+        let (range, _) = input.mention(input.text.len()).unwrap();
+        input.insert_pill(range, pill("Deckel.stl"));
+        typed(&mut input, "bitte.");
+        let (message, pills) = input.take_message();
+        input.restore(&message, pills.clone());
+        assert_eq!(input.take_message(), (message, pills));
     }
 
     #[test]

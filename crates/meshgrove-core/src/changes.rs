@@ -121,7 +121,8 @@ enum UndoOp {
         hash: String,
     },
     /// From `at` back to `to`, if it is still as the move left it; `made` are the folders the
-    /// move created, removed again when empty.
+    /// move created, removed again when empty. `from_root`: the library `to` is in, when the
+    /// move crossed into another one (`root`, the one it went to, is the only one otherwise).
     MoveBack {
         root: PathBuf,
         at: PathBuf,
@@ -130,6 +131,8 @@ enum UndoOp {
         mtime_ns: i64,
         folder: bool,
         made: Vec<PathBuf>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_root: Option<PathBuf>,
     },
     /// An import back out of the library: from `at` to `to` (outside), if still as it came;
     /// its index rows go, and so do the folders `made`, when empty.
@@ -537,6 +540,8 @@ impl Library {
                         false
                     } else {
                         on_disk.push(Done::Moved { from: target.path.clone(), to: to.clone(), made: made.clone() });
+                        // Into another library: the way back needs the one it came from.
+                        let from_root = self.indexed_root_of(&target.path).filter(|r| r != root);
                         self.move_index(root, &target.path, to)?;
                         undo.push(UndoOp::MoveBack {
                             root: root.clone(),
@@ -547,6 +552,7 @@ impl Library {
                             mtime_ns: mtime_ns_of(to),
                             folder: *folder,
                             made,
+                            from_root,
                         });
                         true
                     }
@@ -850,8 +856,10 @@ impl Library {
                     [hash],
                 )? > 0
             }
-            UndoOp::MoveBack { root, at, to, size, mtime_ns, folder, made } => {
-                // Only as the move left it: not changed, and its old place still free.
+            UndoOp::MoveBack { root, at, to, size, mtime_ns, folder, made, from_root } => {
+                // Only as the move left it: not changed, and its old place still free. Back into
+                // the library it came from, when that was another one.
+                let root = from_root.as_ref().unwrap_or(root);
                 let now = Target { path: at.clone(), hash: None, size: *size, mtime_ns: *mtime_ns };
                 let missing = crate::moves::missing_folders(root, to.parent().unwrap_or(root));
                 if crate::moves::check_move(&now, to, *folder).is_err() || !make_folders(&missing) {

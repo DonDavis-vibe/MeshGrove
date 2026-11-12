@@ -102,9 +102,11 @@ impl Navigator {
         let dir = self.current.clone();
         let ctx = self.ctx.clone();
         std::thread::spawn(move || {
-            // An archive opens like a folder: its members are listed instead.
+            // An archive opens like a folder, level by level: its root, or a folder inside it.
             let result = if meshgrove_core::archive::is_archive_file(&dir) {
-                meshgrove_core::archive::entries(&dir)
+                meshgrove_core::archive::entries_in(&dir, "")
+            } else if let Some((archive, inner)) = meshgrove_core::archive::split(&dir) {
+                meshgrove_core::archive::entries_in(&archive, &inner)
             } else {
                 listing::list_dir(&dir)
             }

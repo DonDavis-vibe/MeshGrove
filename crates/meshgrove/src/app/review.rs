@@ -3,7 +3,9 @@
 
 use std::time::{Duration, SystemTime};
 
-use meshgrove_core::ai::proposals::{self, BatchInfo, Decision, MovePayload, Picked, ProposalKind, ProposalStore};
+use meshgrove_core::ai::proposals::{
+    self, BatchInfo, Decision, DeletePayload, MovePayload, Picked, ProposalKind, ProposalStore, Target,
+};
 use meshgrove_core::ai::snippets::Client;
 use meshgrove_core::changes::TargetState;
 use meshgrove_core::config::Config;
@@ -12,7 +14,7 @@ use meshgrove_core::moves::MoveProblem;
 use super::{App, View};
 use crate::library::Applied;
 use crate::proposals::ProposalWatcher;
-use crate::ui::review::{HistoryAction, ReviewAction, ReviewBatch, ReviewItem};
+use crate::ui::review::{HistoryAction, ItemDraft, ReviewAction, ReviewBatch, ReviewItem};
 
 impl App {
     /// Starts or stops watching for suggestions as AI (or placement by tag) is switched on or off.
@@ -141,7 +143,41 @@ impl App {
                         }
                         let picked = Picked::all(&proposal);
                         let stale = stale || taken;
-                        items.push(ReviewItem { proposal, entry, moved_to, stale, copies, picked, note_before, taken });
+                        items.push(ReviewItem {
+                            proposal,
+                            entry,
+                            moved_to,
+                            stale,
+                            copies,
+                            picked,
+                            note_before,
+                            taken,
+                            draft: ItemDraft::default(),
+                        });
+                        continue;
+                    }
+                    if proposal.kind == ProposalKind::Delete {
+                        // A deletion works on the place it names, as a move does.
+                        let payload: Option<DeletePayload> = serde_json::from_value(proposal.payload.clone()).ok();
+                        if let (Some(t), Some(d)) = (&proposal.target, payload) {
+                            stale = !still_there(t, d.folder);
+                            if let Some(e) = index.entry_of(&t.path).ok().flatten().filter(|_| !d.folder) {
+                                entry = Some(entries.len());
+                                entries.push(e);
+                            }
+                        }
+                        let picked = Picked::all(&proposal);
+                        items.push(ReviewItem {
+                            proposal,
+                            entry,
+                            moved_to,
+                            stale,
+                            copies,
+                            picked,
+                            note_before,
+                            taken,
+                            draft: ItemDraft::default(),
+                        });
                         continue;
                     }
                     if let Some(t) = &proposal.target {
@@ -163,7 +199,17 @@ impl App {
                         copies = t.hash.as_deref().and_then(|h| index.copies_of(h).ok()).unwrap_or(0);
                     }
                     let picked = Picked::all(&proposal);
-                    items.push(ReviewItem { proposal, entry, moved_to, stale, copies, picked, note_before, taken });
+                    items.push(ReviewItem {
+                        proposal,
+                        entry,
+                        moved_to,
+                        stale,
+                        copies,
+                        picked,
+                        note_before,
+                        taken,
+                        draft: ItemDraft::default(),
+                    });
                 }
                 if !items.is_empty() {
                     batches.push(review_batch(&b, items));
@@ -182,19 +228,37 @@ impl App {
                 let b = batches.remove(batch);
                 let mut ops = Vec::new();
                 let mut decisions = Vec::new();
+                // Deletions go to the system's trash, not through the library's journal.
+                let mut trash = Vec::new();
                 for item in &b.items {
                     let picked = if all { Picked::all(&item.proposal) } else { item.picked.clone() };
                     let decision = if item.stale {
                         Decision::Stale
                     } else if picked.is_empty() {
                         Decision::Rejected
+                    } else if item.proposal.kind == ProposalKind::Delete {
+                        match item.proposal.target.as_ref().map(|t| t.path.clone()) {
+                            Some(path) if crate::actions::trash_blocked(std::slice::from_ref(&path)).is_none() => {
+                                trash.push(path);
+                                Decision::Accepted
+                            }
+                            _ => Decision::Stale,
+                        }
                     } else {
                         ops.extend(proposals::to_ops(&item.proposal, &picked, b.inbox_done));
                         Decision::Accepted
                     };
                     decisions.push((item.proposal.id, decision));
                 }
-                self.library.accept(b.id, b.uid, b.title, ops, decisions);
+                if !trash.is_empty() {
+                    self.toast(t!("review.trashing", title = b.title.clone(), count = trash.len()).into_owned());
+                    self.trash_later(trash);
+                }
+                if ops.is_empty() {
+                    self.library.decide(b.id, decisions);
+                } else {
+                    self.library.accept(b.id, b.uid, b.title, ops, decisions);
+                }
             }
             Some(ReviewAction::Reject(batch)) => {
                 let b = batches.remove(batch);
@@ -283,6 +347,9 @@ pub(super) fn auto_acceptable(item: &ReviewItem, config: &Config) -> bool {
         let plugin = item.proposal.payload["plugin"].as_str().unwrap_or_default();
         return config.plugin(plugin).is_some_and(|p| p.enabled && p.grants.bundles && p.grants.auto_accept);
     }
+    if item.proposal.kind == ProposalKind::Delete {
+        return false;
+    }
     if item.proposal.kind != ProposalKind::Move {
         return true;
     }
@@ -290,6 +357,13 @@ pub(super) fn auto_acceptable(item: &ReviewItem, config: &Config) -> bool {
     let clear =
         serde_json::from_value::<MovePayload>(item.proposal.payload.clone()).is_ok_and(|m| m.alternatives.is_empty());
     out_of_landing && clear
+}
+
+/// Whether what a deletion names is still there as it was (a folder: at all).
+fn still_there(t: &Target, folder: bool) -> bool {
+    let Ok(meta) = t.path.symlink_metadata() else { return false };
+    meta.is_dir() == folder
+        && (folder || (meta.len() == t.size && meshgrove_core::db::nanos(meta.modified().ok()) == t.mtime_ns))
 }
 
 /// "Claude Desktop · lokal", "Chat · Cloud", "Meshgrove"
@@ -359,7 +433,30 @@ mod tests {
             picked: Picked::default(),
             note_before: None,
             taken: false,
+            draft: ItemDraft::default(),
         }
+    }
+
+    #[test]
+    fn deletions_never_apply_by_themselves() {
+        let config = Config::default();
+        assert!(!auto_acceptable(&item(ProposalKind::Delete, "/lib/Import/a.stl"), &config));
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.stl");
+        std::fs::write(&file, b"solid").unwrap();
+        let meta = file.metadata().unwrap();
+        let t = Target {
+            path: file.clone(),
+            hash: None,
+            size: 5,
+            mtime_ns: meshgrove_core::db::nanos(meta.modified().ok()),
+        };
+        assert!(still_there(&t, false));
+        assert!(!still_there(&t, true), "a file is no folder");
+        std::fs::write(&file, b"solid changed").unwrap();
+        assert!(!still_there(&t, false), "changed since");
+        let folder = Target { path: dir.path().to_path_buf(), hash: None, size: 0, mtime_ns: 0 };
+        assert!(still_there(&folder, true));
     }
 
     #[test]

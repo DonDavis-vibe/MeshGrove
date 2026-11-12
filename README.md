@@ -113,7 +113,7 @@ What makes it different from other model managers:
 | **Printers** | All your printers with their build volumes, found in Anycubic Slicer Next, OrcaSlicer, Bambu Studio and PrusaSlicer or entered by hand; each model says which printers it fits on, tiles mark models that fit only when turned (↻ 41°) or on no printer (✕); G-code is matched to its printer; search with `passt:"Kobra S1"` and `is:zugross` |
 | **Printability check** | Every model is checked for holes (open edges), edges shared by more than two faces, faces without area, separate parts and volume, and for suspicious sizes (drawn in inches?); ⚠ on the tile, details in the info pane, `is:problem` in the search |
 | **Inbox** | New files are collected in an inbox, grouped by the folder or archive they came in (a customer's ZIP, a new download), with copies of known models counted apart; tick them off when sorted |
-| **AI (optional)** | Meshgrove brings no AI, but your own assistant (Claude, LM Studio, Cursor …) can search the libraries you open to it over MCP and suggest tags, notes, lists and moves; with an endpoint of your own (Ollama, LM Studio, OpenAI-compatible) there is an AI chat with `@` references and one-click actions too. Nothing changes until you accept it, and everything can be undone |
+| **AI (optional)** | Meshgrove brings no AI, but your own assistant (Claude, LM Studio, Cursor …) can search the libraries you open to it over MCP and suggest tags, notes, lists and moves; the built-in AI chat with `@` references talks to an endpoint of your own (Ollama, LM Studio, OpenAI-compatible) or to an AI agent installed on your computer (Claude Code, Codex, Antigravity, OpenCode …), with a searchable model picker; with an endpoint there are one-click actions too. Nothing changes until you accept it, and everything can be undone |
 | **Import and placement** | Name a downloads folder and Meshgrove offers its new models, G-code and archives for import into the library's landing folder (moved, numbered when a name is taken, archives whole or unpacked; undoable). A file in the landing folder that gets a theme tag is placed into that tag's folder, by a rule you set or by your assistant, with your okay or – out of the landing folder only – by itself |
 | **Duplicates** | Finds exact copies and the same model saved differently (ASCII vs binary STL, STL vs 3MF, rotated or moved copies), suggests which copy to keep and can move the others to the trash |
 | **Slicer and apps** | "Open in slicer" for one or many models (finds over 30 common filament and resin slicers, among them Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer, Cura, Creality Print, QIDI Studio, FlashPrint, Lychee, ChiTuBox and UVtools, whether installed as a package, Flatpak, Snap or AppImage; add the ones you use with a ＋ in the settings, pick a default, the others sit in a submenu), into the slicer window that is already open where the slicer allows it; "open in" your **mesh editors or CAD programs** (finds over 20 programs, among them Blender, FreeCAD, Autodesk Fusion, MeshLab, SolidCraft, OpenSCAD, SolveSpace, Rhino, SketchUp, SolidWorks and fstl, again in every install variant; add and choose a default in the settings); **Ctrl+C copies the files** for pasting into the file manager or slicer, **Ctrl+X cuts, Ctrl+V pastes** files from the clipboard into the folder; "show in file manager"; open with the default app |
@@ -324,8 +324,11 @@ unpack it anywhere and start `meshgrove.exe`.
   modification date, tags, ★ and print state, plus the folder in search results, lists and
   *Include subfolders*. Click a column title to sort by it (again for the other direction),
   drag the borders between the titles to make columns wider, and right-click a title to show or
-  hide columns. The row height follows the size slider. Selecting, the keyboard, the context menu
-  and double-click work as in the grid.
+  hide columns. The row height follows the size slider, until you drag the preview column wider:
+  then the previews (and the rows) take that size, until the slider is used again. The previews
+  do all a tile does: folders fade through their pictures, resting the pointer on a model spins
+  it, dragging turns it by hand, and the wheel zooms it while a button is held. Selecting, the
+  keyboard, the context menu and double-click work as in the grid.
 - **Filter the folder:** type into the search field (Ctrl+F) with the 📁 scope selected to
   narrow the current folder by name.
 - **Select several files:** Ctrl+click toggles, Shift+click selects a range, Ctrl+A selects
@@ -621,6 +624,9 @@ not inside an archive, then the oldest, then the one with the shortest path; to 
 copy, point at it and click ☆ *Keep*. *Move all but ★ to the trash* cleans up a group after a
 confirmation. Once you have looked through them, tick the groups where the choice is right (or
 *All suggestions are fine*) and *Clean up selected* clears them all with one confirmation.
+Copies you want to keep as they are get *Ignore*: the group is no longer listed, counted in the
+sidebar or badged on its tiles; *Show ignored* lists such groups again, with *Watch again* to
+undo it. What is ignored is kept with your tags and notes (and in the user-data export).
 Tiles everywhere in the gallery show a `2×` / `3×` badge for files that have duplicates.
 
 ### AI assistant and MCP (optional)
@@ -656,7 +662,10 @@ einordnen* (sort the inbox), *druckliste-zusammenstellen* (put together a print 
 opens the review, where each batch shows what was suggested for which file: tags to add (✓ to
 keep, tags the library does not have yet marked *new*), tags to remove, notes, new lists. Untick a
 file or click a tag to leave it out (the tick at the title covers the whole batch), then *Accept
-selected*, *Accept all* or *Discard*. Accepting a batch for the inbox also takes its files out of
+selected*, *Accept all* or *Discard*. Everything can be changed on the way: type a tag of your
+own into the *+ own tag* field, rewrite a note (and choose whether it replaces the old one or goes
+below it), type another name or place for a move, rename a list, switch it between print list and
+collection, untick items and set the copies. What you accept is what you see. Accepting a batch for the inbox also takes its files out of
 the inbox. Tags and notes belong to the content, so they also reach identical copies; the review
 says when. *Settings → AI & MCP → Accept suggestions automatically* skips the review for new
 suggestions of AI apps and one-click actions; moves always wait.
@@ -666,10 +675,26 @@ changes, leaving what you changed by hand since; *↷ Redo* applies them again. 
 MCP* also shows the **access log** – which assistant looked at what, and when – and *Delete AI
 data* removes all open suggestions, the log and the chat conversations.
 
-**AI chat (your own endpoint):** in *Settings → AI & MCP → Your own endpoint* enter an
-OpenAI-compatible service you run or use – Ollama, LM Studio, llama.cpp, OpenAI, OpenRouter –
-with a model and, if needed, a key (kept in the system keyring). *Test connection* lists the
-models. The **AI chat** pane then appears next to *Info*: ask about your library, and type `@` to
+**AI chat (your own endpoint, or an agent on your computer):** the chat is answered either by
+an endpoint of your own or by an **AI agent installed on your computer** that speaks the Agent
+Client Protocol – Claude Code (`claude-agent-acp`), Codex, Google Antigravity, Gemini CLI,
+OpenCode, Grok, Copilot CLI, Qwen Code, goose. Meshgrove finds the installed ones by itself
+(*Settings → AI & MCP → Who answers the chat* lists them with their sign-in state, and takes any
+other ACP command you add). Nobody is picked for you: under the message field you choose who
+answers (the choice is kept), *Connect* starts the agent – or the first message does –, and in
+the settings the chat can be set to connect by itself when it opens: the assistant used last, or
+one agent in particular. It reaches the library
+through `meshgrove-mcp`; Meshgrove lets it run Meshgrove's own tools (which read, or suggest for
+the review) and asks you in the chat before anything else it wants to run – a shell command, a
+file, whatever the agent brought. What it suggests shows as cards like the endpoint's. For an endpoint, enter in *Your own
+endpoint* an OpenAI-compatible service you run or use – Ollama, LM Studio, llama.cpp, OpenAI,
+OpenRouter – with a model and, if needed, a key (kept in the system keyring). Under the message
+field you pick who answers and, in a **searchable model picker**, which model: the list comes
+from the agent or the endpoint (OpenRouter's folds under its vendors), and a model that is not
+listed can be typed. Beside it sit the other selectors: the endpoint's **reasoning effort**
+(sent as `reasoning_effort`, also a field in its settings), or whatever session options the agent
+offers (Claude Code: effort; its permission mode is not among them, as Meshgrove decides permissions
+itself and the Review | Automatic switch says what becomes of the suggestions). The **AI chat** pane appears next to *Info*: ask about your library, and type `@` to
 add files, folders, tags, lists, printers, the inbox or a search (`@tag:garden fits:mini`) as
 references. Answers name files as clickable references; what the AI looked up is folded below.
 The **Review | Automatic** switch decides whether its tags, notes and lists go to the review
@@ -677,20 +702,35 @@ first or are applied right away; the ↶ arrow on your message takes back everyt
 answer to it. A cloud service sees only the libraries opened to cloud AI, and before the first
 message Meshgrove shows what goes out. Conversations stay on your computer.
 
-**One-click actions** work with small local models too, as they need no tool calling: *✧ Sort
-in* in the inbox (per group or all) suggests tags, *✧ Suggest tags* in the context menu does it
-for the selection, ✧ next to the tag field offers tags to click, and *+ New list … → ✧ Or
-describe* turns "gifts under 2 h for the A1 mini" into a print list (print times come from
-G-code, also from one of the same name next to the model). The results wait in the review and
-appear as a card in a new conversation to ask about. *✧ Mention in chat* puts the selection into
+**One-click actions** go to whoever answers the chat: *✧ Sort in* in the inbox (per group or
+all) suggests tags, *✧ Suggest tags* in the context menu does it for the selection, and *+ New
+list … → ✧ Or describe* turns "gifts under 2 h for the A1 mini" into a print list (print times
+come from G-code, also from one of the same name next to the model). With an endpoint they need no
+tool calling, so small local models manage them; with an agent such as Claude Code the task
+becomes a message in a conversation of its own and the agent makes the suggestions with
+Meshgrove's tools. The results wait in the review and appear as a card in that conversation to
+ask about. ✧ next to the tag field, which offers tags to click, needs an endpoint. *✧ Mention in chat* puts the selection into
 the message field; *Copy as AI reference* gives `meshgrove:` references for an assistant over MCP.
 
 **Moving and renaming:** the assistant and the chat can suggest moving or renaming files,
-archives or folders within their library. That always stays a suggestion, also in automatic
+archives or folders within their library, and with *Settings → AI & MCP → Allow the AI to move
+files between libraries* also into another library you opened to it. That always stays a suggestion, also in automatic
 mode: the review shows old → new and which folders would be made. Accepting moves them on disk
 without ever overwriting anything – a place taken by then is skipped. Tags, notes, lists and
 thumbnails go along, nothing is computed again. The history takes it back as long as the files
 are unchanged; folders made for it go again when empty. Files inside archives stay where they are.
+
+**Deleting:** the assistant and the chat can also suggest putting files, archives or folders into
+the trash (`propose_delete`). That always waits for the review, also in automatic mode, and
+accepting it moves them into the system's trash, from where they can be brought back; the history
+cannot. Nothing inside an archive and never a library itself.
+
+**Questions back:** when a request is ambiguous, the assistant can ask you (`ask_user`): its
+questions appear in the chat with radio buttons for one answer, checkboxes for several, and a
+field for an answer in your own words; the assistant waits for the answer (a quarter of an hour at
+most) and carries on with it. *Don't answer* or stopping the answer lets it go on without one. An
+assistant that asks over MCP (Claude Desktop, Cursor …) gets a window of its own in Meshgrove,
+naming who asks.
 
 On the command line, `meshgrove-mcp setup` does the same (`--dry-run` shows it first,
 `--client NAME` picks one), `meshgrove-mcp remove` takes the entries out again, and
@@ -757,11 +797,13 @@ Installing, granting and writing plugins: [docs/plugins.md](docs/plugins.md).
 
 ### Archives (ZIP, 7z, RAR, TAR)
 
-Double-click an archive to browse it like a folder, including subfolders inside the archive.
-Every model, image and PDF inside gets a preview. The archive's tile shows a mosaic of its
-contents. Archives are indexed like folders, so the library search, tags, notes and the
-duplicate finder include their contents. Archives are never modified. Solid 7z/RAR archives
-are unpacked once per visit, not once per file.
+Double-click an archive to browse it like a folder, level by level: the folders inside it open
+like folders on disk, with their own mosaic tiles, and *Include subfolders* shows everything below
+the level you are at. Every model, image and PDF inside gets a preview. The archive's tile shows a
+mosaic of its contents, inside the library (from the index) and outside it (read from the archive),
+in a downloads folder or the import view alike. Archives in the library are indexed like folders,
+so the library search, tags, notes and the duplicate finder include their contents. Archives are
+never modified. Solid 7z/RAR archives are unpacked once per visit, not once per file.
 
 ### Moving files to the trash
 
@@ -932,6 +974,19 @@ materials = ["PLA", "PETG"]
 enabled = false
 
 chat_mode = "review"       # review | auto: changes from the chat reviewed first, or applied at once
+cross_library_moves = false  # the AI may suggest moves into another library it may see
+assistant = "claude"       # who answers the chat: "endpoint", or an agent's id (claude, codex, antigravity,
+                           # gemini, opencode, grok, copilot, qwen, goose, or one of ai.agents)
+auto_connect = "last"  # when the chat opens: "" waits for Connect, "last" connects the assistant used last, an agent id picks and connects that one
+agent_models = { claude = "claude-opus-5-5" }  # the model picked per agent
+[ai.agent_options.claude]  # its other session options, as picked (reasoning effort, mode …)
+effort = "high"
+
+[[ai.agents]]              # an ACP agent added by its command
+id = "agent-1"
+name = "My agent"
+command = "my-agent --acp"
+local = false              # its model runs here or on your own network
 
 [[ai.libraries]]
 root = "/home/me/3D-Models"
@@ -944,6 +999,7 @@ model = "qwen3:8b"
 local = true               # runs here or on your own network
 vision = false             # the model understands pictures
 tools = true               # the model can use tools
+reasoning_effort = "high"  # sent as reasoning_effort; empty: the service's default
 ```
 
 Environment variables for special cases:

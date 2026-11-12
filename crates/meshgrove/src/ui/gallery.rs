@@ -179,6 +179,8 @@ pub struct Gallery {
     pub show_folders: bool,
     /// A tile was being dragged last frame: the wheel then zooms its preview, not the grid.
     tile_dragged: bool,
+    /// The tile size the list view was last drawn with: a change sizes its previews again.
+    last_list_tile: Option<f32>,
     /// The printers model tiles are checked against, the main one first.
     pub printers: Vec<Printer>,
     /// Favourite, print and tag marks of library files.
@@ -418,6 +420,7 @@ impl Gallery {
 
         // (Mouse drags do not scroll by default, so they stay free for turning previews.)
         let wheel_scrolls = !self.tile_dragged;
+        let wheel = ui.input(|i| i.smooth_scroll_delta.y);
         let mut area = ScrollArea::vertical()
             .auto_shrink(false)
             .scroll_source(egui::scroll_area::ScrollSource { mouse_wheel: wheel_scrolls, ..Default::default() });
@@ -492,6 +495,7 @@ impl Gallery {
                                 ),
                                 drag,
                                 dragging: held,
+                                wheel,
                             });
                         }
                     }

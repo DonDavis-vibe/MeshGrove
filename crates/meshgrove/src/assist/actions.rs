@@ -125,14 +125,19 @@ fn ask<T>(
     match parse(&answer) {
         Ok(v) => Ok(v),
         Err(problem) => {
-            log::info!("the model's answer did not pass ({problem}), asking again");
+            let shown: String = answer.chars().take(300).collect();
+            log::warn!("the model's answer did not pass ({problem}), asking again; it was: {shown:?}");
             messages.push(json!({"role": "assistant", "content": answer}));
             messages.push(json!({
                 "role": "user",
                 "content": format!("That answer cannot be used: {problem}. Answer again, with the JSON only.")
             }));
             let answer = endpoint.complete_json(&messages, schema).map_err(|e| e.to_string())?;
-            parse(&answer)
+            parse(&answer).map_err(|problem| {
+                let shown: String = answer.chars().take(300).collect();
+                log::warn!("the model's second answer did not pass either ({problem}); it was: {shown:?}");
+                problem
+            })
         }
     }
 }

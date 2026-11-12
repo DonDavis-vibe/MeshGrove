@@ -72,6 +72,18 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created_ns INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS chat_messages_chat ON chat_messages(chat_id);
+CREATE TABLE IF NOT EXISTS questions (
+    id INTEGER PRIMARY KEY,
+    uid TEXT NOT NULL UNIQUE,
+    source TEXT NOT NULL,
+    client TEXT,
+    created_ns INTEGER NOT NULL,
+    -- JSON AskUser: what the AI asks
+    payload TEXT NOT NULL,
+    -- JSON: what the user answered, NULL while they have not
+    answer TEXT,
+    answered_ns INTEGER
+);
 CREATE TABLE IF NOT EXISTS access_log (
     id INTEGER PRIMARY KEY,
     at_ns INTEGER NOT NULL,
@@ -116,6 +128,9 @@ pub enum ProposalKind {
     Move,
     /// Files a plugin made, with their tags and lists ([`crate::bundle::ResolvedBundle`]).
     Bundle,
+    /// A file, archive or folder to the trash. Always waits for the review; the trash, not the
+    /// history, brings it back.
+    Delete,
 }
 
 impl ProposalKind {
@@ -126,6 +141,7 @@ impl ProposalKind {
             ProposalKind::List => "list",
             ProposalKind::Move => "move",
             ProposalKind::Bundle => "bundle",
+            ProposalKind::Delete => "delete",
         }
     }
 
@@ -135,6 +151,7 @@ impl ProposalKind {
             "list" => ProposalKind::List,
             "move" => ProposalKind::Move,
             "bundle" => ProposalKind::Bundle,
+            "delete" => ProposalKind::Delete,
             _ => ProposalKind::Tags,
         }
     }
@@ -190,6 +207,13 @@ pub struct MovePayload {
 pub struct ListItemPayload {
     pub target: Target,
     pub quantity: u32,
+}
+
+/// What goes to the trash: the library it is in, and whether it is a folder.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeletePayload {
+    pub root: PathBuf,
+    pub folder: bool,
 }
 
 pub struct NewProposal {
@@ -557,6 +581,54 @@ impl ProposalStore {
             "UPDATE batches SET state = 'expired', decided_ns = ?2 WHERE state = 'pending' AND created_ns < ?1",
             params![before(expire_days), nanos(Some(now))],
         )?;
+        self.conn.execute("DELETE FROM questions WHERE created_ns < ?1", [before(1)])?;
+        Ok(())
+    }
+
+    /// Stores a question of the AI; its uid.
+    pub fn ask(&mut self, origin: &Origin, ask: &AskUser) -> ToolResult<String> {
+        let uid = new_uid();
+        let payload = serde_json::to_value(ask).map_err(|e| ToolError::Invalid(e.to_string()))?;
+        self.conn.execute(
+            "INSERT INTO questions (uid, source, client, created_ns, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![uid, origin.source, origin.client, nanos(Some(SystemTime::now())), payload.to_string()],
+        )?;
+        Ok(uid)
+    }
+
+    /// The questions nobody answered yet, oldest first (`source`, `client`: only those).
+    pub fn pending_questions(&self, source: Option<&str>, client: Option<&str>) -> ToolResult<Vec<PendingQuestion>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, uid, source, client, created_ns, payload FROM questions
+             WHERE answer IS NULL AND (?1 IS NULL OR source = ?1) AND (?2 IS NULL OR client = ?2) ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![source, client], |r| {
+            let payload: String = r.get(5)?;
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, payload))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, uid, source, client, created_ns, payload) = row?;
+            if let Ok(ask) = serde_json::from_str::<AskUser>(&payload) {
+                out.push(PendingQuestion { id, uid, source, client, created_ns, ask });
+            }
+        }
+        Ok(out)
+    }
+
+    /// The user's answer to a question, once there is one.
+    pub fn answer_of(&self, uid: &str) -> ToolResult<Option<serde_json::Value>> {
+        let text: Option<Option<String>> =
+            self.conn.query_row("SELECT answer FROM questions WHERE uid = ?1", [uid], |r| r.get(0)).optional()?;
+        Ok(text.flatten().and_then(|t| serde_json::from_str(&t).ok()))
+    }
+
+    /// Records the user's answer (or that they did not answer: `{"cancelled": true}`).
+    pub fn answer(&mut self, uid: &str, answer: &serde_json::Value) -> ToolResult<()> {
+        self.conn.execute(
+            "UPDATE questions SET answer = ?2, answered_ns = ?3 WHERE uid = ?1 AND answer IS NULL",
+            params![uid, answer.to_string(), nanos(Some(SystemTime::now()))],
+        )?;
         Ok(())
     }
 }
@@ -657,16 +729,25 @@ fn new_uid() -> String {
 
 // ---- From suggestions to changes ----
 
-/// What the user picked of one suggestion in the review.
+/// What the user picked of one suggestion in the review, and what they changed of it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Picked {
-    /// Tags to add and to remove, as named in the suggestion.
+    /// Tags to add and to remove: those of the suggestion that were kept, and any the user
+    /// typed in the review.
     pub add: Vec<String>,
     pub remove: Vec<String>,
-    /// The note, the list (or the move) as suggested.
+    /// The note, the list, the move (or the deletion), as suggested or as changed below.
     pub whole: bool,
     /// A move: the place chosen in the review instead of the suggested one.
     pub to: Option<PathBuf>,
+    /// A note: the text as the user rewrote it, and whether it is added below the old one.
+    pub note: Option<String>,
+    pub append: Option<bool>,
+    /// A list: its name and kind ("print" or "collection") as changed, and the items kept, by
+    /// their index in the suggestion with the copies wanted.
+    pub list_name: Option<String>,
+    pub list_kind: Option<String>,
+    pub list_items: Option<Vec<(usize, u32)>>,
 }
 
 impl Picked {
@@ -699,7 +780,11 @@ pub fn to_ops(p: &Proposal, picked: &Picked, inbox_done: bool) -> Vec<crate::cha
         }
         (ProposalKind::Note, Some(t)) if picked.whole => {
             if let Ok(note) = serde_json::from_value::<NotePayload>(p.payload.clone()) {
-                ops.push(ApplyOp::SetNote { target: t.clone(), text: note.text, append: note.append });
+                let text = picked.note.clone().unwrap_or(note.text);
+                let append = picked.append.unwrap_or(note.append);
+                if !text.trim().is_empty() {
+                    ops.push(ApplyOp::SetNote { target: t.clone(), text, append });
+                }
             }
         }
         (ProposalKind::Move, Some(t)) if picked.whole => {
@@ -710,9 +795,24 @@ pub fn to_ops(p: &Proposal, picked: &Picked, inbox_done: bool) -> Vec<crate::cha
         }
         (ProposalKind::List, _) if picked.whole => {
             if let Ok(list) = serde_json::from_value::<ListPayload>(p.payload.clone()) {
-                let kind = if list.kind == "print" { ListKind::Print } else { ListKind::Collection };
-                let items = list.items.into_iter().map(|i| (i.target, i.quantity)).collect();
-                ops.push(ApplyOp::List { kind, name: list.name, query: list.query, items });
+                let kind = picked.list_kind.clone().unwrap_or(list.kind);
+                let kind = if kind == "print" { ListKind::Print } else { ListKind::Collection };
+                let name = picked
+                    .list_name
+                    .clone()
+                    .map(|n| n.trim().to_owned())
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or(list.name);
+                let items: Vec<(Target, u32)> = match &picked.list_items {
+                    Some(kept) => kept
+                        .iter()
+                        .filter_map(|&(i, n)| list.items.get(i).map(|item| (item.target.clone(), n.clamp(1, 999))))
+                        .collect(),
+                    None => list.items.into_iter().map(|i| (i.target, i.quantity)).collect(),
+                };
+                if list.query.is_some() || !items.is_empty() {
+                    ops.push(ApplyOp::List { kind, name, query: list.query, items });
+                }
             }
         }
         (ProposalKind::Bundle, _) if picked.whole => {
@@ -831,6 +931,102 @@ pub struct ProposeTagMerge {
     pub from: Vec<String>,
     /// The tag they become.
     pub to: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DeleteItem {
+    /// A file, archive or folder (an id from search_models, folder_summary …).
+    pub id: String,
+    /// Why, in a few words (shown in the review).
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ProposeDelete {
+    /// Shown above the suggestions, e.g. "Doppelte Downloads entfernen".
+    pub title: String,
+    pub items: Vec<DeleteItem>,
+}
+
+/// One question to the user, answered by picking among options (or in their own words).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AskQuestion {
+    pub question: String,
+    /// The answers to pick from; none: the user answers in their own words.
+    #[serde(default)]
+    pub options: Vec<String>,
+    /// Several options may be picked (checkboxes) instead of one (radio buttons).
+    #[serde(default)]
+    pub multi: bool,
+    /// Besides the options, the user may write an answer of their own.
+    #[serde(default)]
+    pub allow_other: bool,
+}
+
+/// Questions to the user, shown in Meshgrove's chat with radio buttons or checkboxes; the call
+/// returns once the user answered.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AskUser {
+    /// One to five questions.
+    pub questions: Vec<AskQuestion>,
+}
+
+/// Most questions in one call, options per question, and characters per text.
+pub const MAX_QUESTIONS: usize = 5;
+pub const MAX_OPTIONS: usize = 12;
+const MAX_QUESTION_CHARS: usize = 400;
+const MAX_OPTION_CHARS: usize = 120;
+
+impl AskUser {
+    /// The questions as asked, trimmed and bounded; what is wrong with them otherwise.
+    pub fn checked(&self) -> Result<AskUser, String> {
+        if self.questions.is_empty() || self.questions.len() > MAX_QUESTIONS {
+            return Err(format!("ask one to {MAX_QUESTIONS} questions"));
+        }
+        let mut questions = Vec::new();
+        for q in &self.questions {
+            let question = super::untrusted(q.question.trim(), MAX_QUESTION_CHARS);
+            if question.is_empty() {
+                return Err("a question is empty".into());
+            }
+            if q.options.len() > MAX_OPTIONS {
+                return Err(format!("at most {MAX_OPTIONS} options per question"));
+            }
+            let mut options: Vec<String> = Vec::new();
+            for o in &q.options {
+                let o = super::untrusted(o.trim(), MAX_OPTION_CHARS);
+                if !o.is_empty() && !options.iter().any(|x| x == &o) {
+                    options.push(o);
+                }
+            }
+            let allow_other = q.allow_other || options.is_empty();
+            questions.push(AskQuestion { question, options, multi: q.multi, allow_other });
+        }
+        Ok(AskUser { questions })
+    }
+}
+
+/// What `ask_user` answers at once: the question's id; the answer comes when the user gave it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AskReceipt {
+    pub question: String,
+    pub message: String,
+}
+
+/// A question waiting in the store.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingQuestion {
+    pub id: i64,
+    pub uid: String,
+    pub source: String,
+    pub client: Option<String>,
+    pub created_ns: i64,
+    pub ask: AskUser,
 }
 
 /// What a suggesting tool answers.
@@ -1152,9 +1348,17 @@ fn move_of(
         None => cx.resolve(item.to.trim()),
     }
     .map_err(|_| format!("the new place {:?} is no id in a library you may see", item.to))?;
-    if cx.scope.root_of(&to).map(|r| r.path.as_path()) != Some(root.as_path()) {
-        return Err("moves stay within one library".into());
-    }
+    // Into another library only when the user allows it; the move then belongs to that one.
+    let to_root = cx.scope.root_of(&to).map(|r| r.path.clone()).ok_or("the new place is in no library you may see")?;
+    let root = if to_root == root {
+        root
+    } else if cx.config.ai.cross_library_moves {
+        to_root
+    } else {
+        return Err(
+            "moves stay within one library (the user can allow moves between libraries in Settings → AI)".into()
+        );
+    };
     let (target, payload) = crate::moves::plan_move(cx.lib, &root, &from, &to)?;
     let lower = |p: &Path| p.to_string_lossy().to_lowercase();
     if targets.iter().any(|t| lower(t) == lower(&to)) {
@@ -1164,6 +1368,73 @@ fn move_of(
         return Err("it moves with a folder of this batch already".into());
     }
     Ok((target, payload))
+}
+
+/// Files, archives or folders for the trash: always reviewed, never inside an archive, never a
+/// library itself.
+pub fn propose_delete(
+    cx: &Context,
+    store: &mut ProposalStore,
+    origin: &Origin,
+    req: &ProposeDelete,
+) -> ToolResult<Receipt> {
+    check_room(store, origin, req.items.len())?;
+    let mut proposals = Vec::new();
+    let mut rejected = Vec::new();
+    for item in &req.items {
+        match delete_of(cx, item) {
+            Ok((target, payload)) => proposals.push(NewProposal {
+                kind: ProposalKind::Delete,
+                target: Some(target),
+                payload: serde_json::to_value(payload).unwrap_or_default(),
+                reason: summary_line(item.reason.as_deref()),
+                confidence: None,
+            }),
+            Err(why) => rejected.push(RejectedItem { id: item.id.clone(), why }),
+        }
+    }
+    if proposals.is_empty() {
+        let why = rejected.first().map_or("no items", |r| r.why.as_str());
+        return Err(ToolError::Invalid(format!("no usable deletion ({why})")));
+    }
+    let title = summary_line(Some(&req.title)).unwrap_or_else(|| "Löschen".into());
+    let batch = NewBatch { origin, kind: "delete", title: &title, summary: None, inbox_done: false };
+    let (_, uid) = store.insert_batch(&batch, &proposals)?;
+    Ok(Receipt {
+        batch: uid,
+        items: proposals.len(),
+        rejected,
+        tags: Vec::new(),
+        message: "Nothing has changed yet: deletions always wait for the user's review in Meshgrove, which puts the \
+                  files into the system's trash."
+            .into(),
+    })
+}
+
+fn delete_of(cx: &Context, item: &DeleteItem) -> Result<(Target, DeletePayload), String> {
+    let path = cx.resolve(&item.id).map_err(|e| e.to_string())?;
+    let root = cx.scope.root_of(&path).map(|r| r.path.clone()).ok_or_else(|| format!("unknown id: {}", item.id))?;
+    if path == root {
+        return Err("a library itself cannot be deleted".into());
+    }
+    if crate::archive::split(&path).is_some() {
+        return Err("nothing inside an archive can be deleted; delete the archive".into());
+    }
+    let meta = path.symlink_metadata().map_err(|_| format!("{} is gone", item.id))?;
+    let folder = meta.is_dir();
+    let target = if folder {
+        Target { path, hash: None, size: 0, mtime_ns: nanos(meta.modified().ok()) }
+    } else {
+        target(cx, &item.id).map_err(|e| e.to_string())?
+    };
+    Ok((target, DeletePayload { root, folder }))
+}
+
+/// Puts the AI's questions to the user; the answer is read with [`ProposalStore::answer_of`].
+pub fn ask_user(store: &mut ProposalStore, origin: &Origin, req: &AskUser) -> ToolResult<AskReceipt> {
+    let ask = req.checked().map_err(ToolError::Invalid)?;
+    let uid = store.ask(origin, &ask)?;
+    Ok(AskReceipt { question: uid, message: "Shown to the user in Meshgrove; waiting for their answer.".into() })
 }
 
 pub fn propose_tag_merge(
@@ -1250,6 +1521,107 @@ mod tests {
         store.conn.execute("UPDATE batches SET created_ns = 1 WHERE id = ?1", [old]).unwrap();
         store.prune(SystemTime::now(), 90, 30).unwrap();
         assert_eq!(store.batches(None, None, &["expired"], 9).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn questions_wait_for_their_answer() {
+        let mut store = ProposalStore::open_in_memory().unwrap();
+        let o = origin();
+        let ask = AskUser {
+            questions: vec![
+                AskQuestion {
+                    question: " Which printer? ".into(),
+                    options: vec!["A1 mini".into(), "X1C".into(), "A1 mini".into()],
+                    multi: false,
+                    allow_other: false,
+                },
+                AskQuestion { question: "Anything else?".into(), options: vec![], multi: false, allow_other: false },
+            ],
+        };
+        let receipt = ask_user(&mut store, &o, &ask).unwrap();
+        let pending = store.pending_questions(Some("mcp"), None).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].uid, receipt.question);
+        let q = &pending[0].ask.questions;
+        assert_eq!((q[0].question.as_str(), q[0].options.len(), q[0].allow_other), ("Which printer?", 2, false));
+        assert!(q[1].allow_other, "no options: an answer in the user's words");
+        assert_eq!(store.answer_of(&receipt.question).unwrap(), None);
+        store.answer(&receipt.question, &serde_json::json!({"answers": [{"selected": ["X1C"]}]})).unwrap();
+        assert_eq!(store.answer_of(&receipt.question).unwrap().unwrap()["answers"][0]["selected"][0], "X1C");
+        assert!(store.pending_questions(None, None).unwrap().is_empty());
+        assert!(ask_user(&mut store, &o, &AskUser { questions: vec![] }).is_err());
+        let many =
+            AskUser { questions: vec![AskQuestion { question: "q".into(), ..Default::default() }; MAX_QUESTIONS + 1] };
+        assert!(ask_user(&mut store, &o, &many).is_err());
+    }
+
+    /// Meshgrove's watcher polls `PRAGMA data_version` on a connection of its own: a question
+    /// an assistant writes through another connection has to move it, or the card never shows.
+    #[test]
+    fn a_question_from_another_connection_moves_the_data_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("proposals.db");
+        let mut writer = ProposalStore::open(&path).unwrap();
+        let watcher = ProposalStore::open(&path).unwrap();
+        let before = watcher.data_version().unwrap();
+        assert_eq!(watcher.data_version().unwrap(), before, "nothing happened");
+        let o = Origin { source: "mcp".into(), client: Some("desktop".into()), class: AccessClass::Cloud };
+        let ask = AskUser { questions: vec![AskQuestion { question: "Which?".into(), ..Default::default() }] };
+        ask_user(&mut writer, &o, &ask).unwrap();
+        assert_ne!(watcher.data_version().unwrap(), before, "the question is a change the watcher sees");
+        assert_eq!(watcher.pending_questions(None, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_review_can_rewrite_what_was_suggested() {
+        let target = Target { path: "/lib/a.stl".into(), hash: None, size: 1, mtime_ns: 2 };
+        let note = Proposal {
+            id: 1,
+            batch_id: 1,
+            kind: ProposalKind::Note,
+            target: Some(target.clone()),
+            payload: serde_json::to_value(NotePayload { text: "old".into(), append: false }).unwrap(),
+            reason: None,
+            confidence: None,
+            state: "pending".into(),
+        };
+        let picked = Picked { whole: true, note: Some("new".into()), append: Some(true), ..Default::default() };
+        let ops = to_ops(&note, &picked, false);
+        assert!(matches!(&ops[..], [crate::changes::ApplyOp::SetNote { text, append: true, .. }] if text == "new"));
+        let tags = Proposal {
+            kind: ProposalKind::Tags,
+            payload: serde_json::json!({"add": [{"name": "Garten", "status": "existing"}]}),
+            ..note.clone()
+        };
+        let picked = Picked { add: vec!["Garten".into(), "Rosen".into()], ..Default::default() };
+        assert_eq!(to_ops(&tags, &picked, false).len(), 2, "a tag typed in the review is added too");
+        let list = Proposal {
+            kind: ProposalKind::List,
+            target: None,
+            payload: serde_json::to_value(ListPayload {
+                name: "Geschenke".into(),
+                kind: "print".into(),
+                items: vec![
+                    ListItemPayload { target: target.clone(), quantity: 1 },
+                    ListItemPayload { target, quantity: 2 },
+                ],
+                query: None,
+                description: None,
+            })
+            .unwrap(),
+            ..note
+        };
+        let picked = Picked {
+            whole: true,
+            list_name: Some(" Gifts ".into()),
+            list_kind: Some("collection".into()),
+            list_items: Some(vec![(1, 5)]),
+            ..Default::default()
+        };
+        let ops = to_ops(&list, &picked, false);
+        assert!(
+            matches!(&ops[..], [crate::changes::ApplyOp::List { kind: crate::lists::ListKind::Collection, name, items, .. }] if name == "Gifts" && items.len() == 1 && items[0].1 == 5)
+        );
     }
 
     #[test]

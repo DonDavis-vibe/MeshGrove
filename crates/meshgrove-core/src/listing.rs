@@ -79,6 +79,9 @@ pub fn list_dir(dir: &Path) -> io::Result<Vec<Entry>> {
 pub fn scan_previews(dir: &Path, depth: u8, limit: usize) -> Vec<Entry> {
     const MAX_DIRS: usize = 120;
     const MAX_ENTRIES: usize = 4000;
+    if let Some(found) = archive_previews(dir, depth, limit) {
+        return found;
+    }
     let (mut models, mut images) = (Vec::new(), Vec::new());
     let mut level = vec![dir.to_path_buf()];
     let (mut dirs_read, mut seen) = (0, 0);
@@ -108,6 +111,32 @@ pub fn scan_previews(dir: &Path, depth: u8, limit: usize) -> Vec<Entry> {
     let mut found = if models.is_empty() { images } else { models };
     found.truncate(limit);
     found
+}
+
+/// [`scan_previews`] for an archive, or a folder inside one: its members up to `depth` levels
+/// below, the ones closer to the top first. `None` for a folder on disk.
+fn archive_previews(dir: &Path, depth: u8, limit: usize) -> Option<Vec<Entry>> {
+    let (archive, prefix) = if crate::archive::is_archive_file(dir) {
+        (dir.to_path_buf(), String::new())
+    } else {
+        crate::archive::split(dir)?
+    };
+    let below = if prefix.is_empty() { String::new() } else { format!("{prefix}/") };
+    let mut found: Vec<(usize, Entry)> = crate::archive::entries(&archive)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|e| {
+            let rest = e.name.strip_prefix(&below)?;
+            let level = rest.matches('/').count();
+            (level < usize::from(depth.max(1))).then_some((level, e))
+        })
+        .filter(|(_, e)| e.kind.is_model() || e.kind == Kind::Image)
+        .collect();
+    found.sort_by_key(|(level, _)| *level);
+    let models: Vec<Entry> = found.iter().filter(|(_, e)| e.kind.is_model()).map(|(_, e)| e.clone()).collect();
+    let mut found = if models.is_empty() { found.into_iter().map(|(_, e)| e).collect() } else { models };
+    found.truncate(limit);
+    Some(found)
 }
 
 /// Visible subfolders only, for the sidebar tree.
@@ -198,6 +227,20 @@ pub fn readme_excerpt(dir: &Path, max_chars: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An archive's tile is pictured from its members, from any folder: the model in a subfolder
+    /// counts for the archive and for that folder inside it, not for another one.
+    #[test]
+    fn archive_tiles_are_pictured_from_their_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip = dir.path().join("pack.zip");
+        crate::archive::tests::make_zip(&zip);
+        let found = scan_previews(&zip, 2, 4);
+        assert_eq!(found.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["minis/orc.stl"]);
+        assert_eq!(scan_previews(&zip.join("minis"), 1, 4).len(), 1);
+        assert!(scan_previews(&zip.join("elsewhere"), 3, 4).is_empty());
+        assert!(scan_previews(&zip, 1, 4).is_empty(), "one level deep sees no subfolder");
+    }
 
     #[test]
     fn natural_order() {

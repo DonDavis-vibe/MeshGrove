@@ -4,7 +4,8 @@
 //! user accepts a suggestion in Meshgrove. Works while Meshgrove is closed (on the last index).
 //!
 //! `meshgrove-mcp [--local] [--client NAME]` — `--local` when the assistant's model runs on this
-//! computer or network: it then also sees libraries opened to local AI only.
+//! computer or network: it then also sees libraries opened to local AI only. `--source chat` is
+//! what Meshgrove's own chat passes when it starts an agent: the suggestions then show there.
 //! `meshgrove-mcp --print-config claude-desktop|claude-code|lm-studio|cursor|vscode [--local]`
 //! prints what to paste into that client. Test runs take `--config`, `--db`, `--proposals`, `--thumbs`.
 //! `meshgrove-mcp setup|remove [--dry-run] [--client NAME]` adds this program to each installed
@@ -34,6 +35,7 @@ Started by an AI assistant (MCP over stdin/stdout); see Meshgrove → Settings �
 struct Args {
     class: AccessClass,
     client: Option<String>,
+    source: String,
     paths: Paths,
     print_config: Option<String>,
 }
@@ -46,6 +48,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
     let mut out = Args {
         class: AccessClass::Cloud,
         client: None,
+        source: "mcp".into(),
         paths: Paths { config: None, db, proposals, thumbs, plugins: None },
         print_config: None,
     };
@@ -55,6 +58,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
         match arg.as_str() {
             "--local" => out.class = AccessClass::Local,
             "--client" => out.client = Some(value()?),
+            "--source" => out.source = value()?,
             "--config" => out.paths.config = Some(value()?.into()),
             "--db" => out.paths.db = value()?.into(),
             "--proposals" => out.paths.proposals = value()?.into(),
@@ -188,7 +192,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let server = Meshgrove::new(args.paths, args.class, args.client);
+    let server = Meshgrove::new(args.paths, args.class, args.client, args.source);
     #[cfg(feature = "plugins")]
     let jobs = server.clone();
     let result = runtime.block_on(async move {

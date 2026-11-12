@@ -3302,6 +3302,7 @@ dependencies = [
  "image",
  "keyring",
  "krilla",
+ "libc",
  "log",
  "meshgrove-core",
  "meshgrove-plugin-api",

@@ -1,16 +1,20 @@
-//! The "KI-Chat" pane: the conversation with the user's own model, its answers with the files
-//! they mention, what its tools did, and the message field with references.
+//! The "KI-Chat" pane: the conversation with the user's own model (the endpoint, or an AI agent
+//! of this computer), its answers with the files they mention, what its tools did, the message
+//! field with references, and under it who answers and with which model.
 
 use std::collections::HashMap;
 
 use egui::{RichText, Ui};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
-use meshgrove_core::ai::proposals::ChatInfo;
+use meshgrove_core::ai::proposals::{AskQuestion, ChatInfo};
 use meshgrove_core::config::ChatMode;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use super::chat_input::{self, ChatInput, Pill};
+use super::picker::{self, Choice, Picked, Picker};
 use super::suggest::Candidate;
+use crate::app::ModelList;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChatMsg {
@@ -55,6 +59,106 @@ pub enum Card {
     Proposed { batch: String, title: String, items: usize },
     /// Changes made at once (automatic mode).
     Applied { change: i64, title: String, applied: usize },
+    /// A question of the assistant and what the user answered.
+    Answered { question: String, answer: String },
+}
+
+/// Questions the assistant asked, with what the user picked so far.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AskCard {
+    pub uid: String,
+    /// Who asks, when not the chat's own assistant: the card then gets a window of its own.
+    pub from: Option<String>,
+    pub questions: Vec<AskQuestion>,
+    /// Per question, per option: picked.
+    pub chosen: Vec<Vec<bool>>,
+    /// Per question: the answer in the user's own words.
+    pub other: Vec<String>,
+}
+
+impl AskCard {
+    pub fn new(uid: String, questions: Vec<AskQuestion>) -> AskCard {
+        let chosen = questions.iter().map(|q| vec![false; q.options.len()]).collect();
+        let other = vec![String::new(); questions.len()];
+        AskCard { uid, from: None, questions, chosen, other }
+    }
+
+    /// Every question has an answer.
+    pub fn complete(&self) -> bool {
+        self.questions
+            .iter()
+            .enumerate()
+            .all(|(i, q)| self.chosen[i].iter().any(|c| *c) || (q.allow_other && !self.other[i].trim().is_empty()))
+    }
+
+    /// The answers as the assistant gets them.
+    pub fn answer(&self) -> Value {
+        let answers: Vec<Value> = self
+            .questions
+            .iter()
+            .enumerate()
+            .map(|(i, q)| {
+                let selected: Vec<&str> =
+                    q.options.iter().enumerate().filter(|(j, _)| self.chosen[i][*j]).map(|(_, o)| o.as_str()).collect();
+                let mut a = json!({"question": q.question, "selected": selected});
+                let other = self.other[i].trim();
+                if !other.is_empty() {
+                    a["other"] = json!(other);
+                }
+                a
+            })
+            .collect();
+        json!({"answers": answers})
+    }
+
+    /// The answers in one line, for the card that stays in the conversation.
+    pub fn summary(&self) -> String {
+        self.questions
+            .iter()
+            .enumerate()
+            .map(|(i, q)| {
+                let mut parts: Vec<String> =
+                    q.options.iter().enumerate().filter(|(j, _)| self.chosen[i][*j]).map(|(_, o)| o.clone()).collect();
+                let other = self.other[i].trim();
+                if !other.is_empty() {
+                    parts.push(other.to_owned());
+                }
+                parts.join(", ")
+            })
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
+}
+
+/// A permission question an agent asked: what it wants to run, and its answers (id, name).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Question {
+    pub key: u64,
+    pub title: String,
+    pub options: Vec<(String, String)>,
+}
+
+/// One way an agent offers to sign in.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AuthRow {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// What to run in a terminal (or which variables to set); `None` when the agent does it.
+    pub command: Option<String>,
+    /// The agent signs in by itself when asked (it opens the browser).
+    pub by_agent: bool,
+}
+
+/// A selector beside the model: an endpoint's reasoning effort, or one of an agent's session
+/// options; its choices as (value, name, description).
+#[derive(Clone, Debug, PartialEq)]
+pub struct OptionRow {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub current: String,
+    pub choices: Vec<(String, String, String)>,
 }
 
 pub struct ChatView<'a> {
@@ -70,8 +174,23 @@ pub struct ChatView<'a> {
     pub card_states: &'a HashMap<String, String>,
     /// A file id's name for the answer's references.
     pub names: &'a dyn Fn(&str) -> String,
-    /// The model, for the header.
-    pub model: &'a str,
+    /// Who can answer: (id, name), and who does (empty: nobody picked yet).
+    pub assistants: &'a [(String, String)],
+    pub assistant: &'a str,
+    /// The assistant can answer: the endpoint always, an agent once it was connected.
+    pub connected: bool,
+    /// The search for agents on this computer is still on.
+    pub looking: bool,
+    /// The assistant's models, for the picker.
+    pub models: &'a ModelList,
+    /// The selectors beside it (reasoning effort, an agent's mode …).
+    pub options: &'a [OptionRow],
+    /// What an agent is up to (connecting, its name, a sign-in needed); `None` for the endpoint.
+    pub status: Option<&'a str>,
+    /// Permission questions the agent asked.
+    pub questions: &'a [Question],
+    /// The agent needs a sign-in, in these ways.
+    pub auth: &'a [AuthRow],
 }
 
 pub enum ChatAction {
@@ -86,12 +205,36 @@ pub enum ChatAction {
     Review,
     /// Show this file (an id) in the gallery.
     Reveal(String),
+    /// Another assistant answers from now on (its id).
+    Assistant(String),
+    /// Start the picked agent.
+    Connect,
+    /// Another model, listed or typed.
+    Model(Picked),
+    /// One of the selectors beside the model: the option and its new value.
+    Option {
+        id: String,
+        value: String,
+    },
+    /// The agent's permission question `key`, answered with an option (`None`: cancelled).
+    Permission {
+        key: u64,
+        option: Option<String>,
+    },
+    /// The agent signs in by itself with this method.
+    Authenticate(String),
+    /// The assistant's question `uid` is answered (what the card holds), or not at all.
+    Answer {
+        uid: String,
+        cancel: bool,
+    },
 }
 
 pub fn show(
     ui: &mut Ui,
     view: ChatView,
     input: &mut ChatInput,
+    asks: &mut [AskCard],
     md: &mut CommonMarkCache,
     candidates: &mut dyn FnMut(&str) -> Vec<Candidate<Pill>>,
 ) -> Option<ChatAction> {
@@ -155,7 +298,9 @@ pub fn show(
                 });
             });
         });
-        ui.weak(t!("chat.model", model = view.model));
+        if let Some(a) = assistant_row(ui, &view) {
+            action = Some(a);
+        }
     });
     egui::CentralPanel::default().show(ui, |ui| {
         egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
@@ -168,10 +313,225 @@ pub fn show(
                 }
                 ui.add_space(6.0);
             }
-            if busy {
+            for q in view.questions {
+                if let Some(a) = question(ui, q) {
+                    action = Some(a);
+                }
+            }
+            for card in asks.iter_mut().filter(|c| c.from.is_none()) {
+                if let Some(a) = ask_card(ui, card) {
+                    action = Some(a);
+                }
+            }
+            if !view.auth.is_empty()
+                && let Some(a) = sign_in(ui, view.auth)
+            {
+                action = Some(a);
+            }
+            if busy && view.questions.is_empty() && asks.is_empty() {
                 ui.spinner();
             }
         });
+    });
+    action
+}
+
+/// Under the field: who answers (a choice when there are several), the model picker, and what
+/// an agent is up to.
+fn assistant_row(ui: &mut Ui, view: &ChatView) -> Option<ChatAction> {
+    let mut action = None;
+    ui.horizontal_wrapped(|ui| {
+        let picked = view.assistants.iter().find(|(id, _)| id == view.assistant);
+        let pick = t!("chat.pick_assistant");
+        let name = picked.map_or(pick.as_ref(), |(_, name)| name.as_str());
+        if view.assistants.len() > 1 || picked.is_none() {
+            egui::ComboBox::from_id_salt("chat_assistant").selected_text(name).width(150.0).truncate().show_ui(
+                ui,
+                |ui| {
+                    for (id, name) in view.assistants {
+                        if ui.selectable_label(id == view.assistant, name).clicked() {
+                            action = Some(ChatAction::Assistant(id.clone()));
+                        }
+                    }
+                },
+            );
+        } else {
+            ui.weak(name);
+        }
+        if view.looking {
+            ui.spinner();
+            ui.weak(t!("assistant.looking"));
+        }
+        let Some((_, picked_name)) = picked else { return };
+        if !view.connected {
+            // Nothing runs until the user says so; the models can be picked once it does.
+            if ui
+                .button(t!("chat.connect"))
+                .on_hover_text(t!("chat.connect_hint", name = picked_name.clone()))
+                .clicked()
+            {
+                action = Some(ChatAction::Connect);
+            }
+            if let Some(status) = view.status {
+                ui.weak(status);
+            }
+            return;
+        }
+        let choices: Vec<Choice> = view
+            .models
+            .choices
+            .iter()
+            .map(|c| Choice { value: &c.value, label: &c.label, tip: &c.tip, group: c.group.as_deref() })
+            .collect();
+        let none = t!("chat.model_none");
+        let current = if view.models.current.is_empty() { none.as_ref() } else { view.models.current.as_str() };
+        let picked = picker::show(
+            ui,
+            Picker {
+                id: "chat_model",
+                current,
+                current_value: &view.models.current,
+                hint: &t!("picker.search_hint"),
+                choices: &choices,
+                custom: true,
+                note: view.models.note.as_deref(),
+                width: Some(200.0),
+                enabled: true,
+            },
+        );
+        if let Some(p) = picked.inner {
+            action = Some(ChatAction::Model(p));
+        }
+        for o in view.options {
+            let selected = o.choices.iter().find(|c| c.0 == o.current).map_or(o.current.as_str(), |c| c.1.as_str());
+            let tip = [o.name.as_str(), o.description.as_str()]
+                .into_iter()
+                .filter(|t| !t.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            egui::ComboBox::from_id_salt(("chat_option", &o.id))
+                .selected_text(picker::compact(selected, 24))
+                .width(110.0)
+                .truncate()
+                .show_ui(ui, |ui| {
+                    ui.label(RichText::new(&o.name).small().weak());
+                    for (value, name, description) in &o.choices {
+                        let r = ui.selectable_label(*value == o.current, name);
+                        let r = if description.is_empty() { r } else { r.on_hover_text(description) };
+                        if r.clicked() && *value != o.current {
+                            action = Some(ChatAction::Option { id: o.id.clone(), value: value.clone() });
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(tip);
+        }
+        if let Some(status) = view.status {
+            ui.weak(status);
+        }
+    });
+    action
+}
+
+/// The assistant's questions: radio buttons where one answer is wanted, checkboxes where
+/// several may be picked, a field for an answer in the user's own words where allowed.
+pub fn ask_card(ui: &mut Ui, card: &mut AskCard) -> Option<ChatAction> {
+    let mut action = None;
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(RichText::new(t!("chat.question_title")).strong());
+        for i in 0..card.questions.len() {
+            let q = card.questions[i].clone();
+            ui.add_space(4.0);
+            ui.label(&q.question);
+            for (j, option) in q.options.iter().enumerate() {
+                if q.multi {
+                    ui.checkbox(&mut card.chosen[i][j], option);
+                } else if ui.radio(card.chosen[i][j], option).clicked() {
+                    card.chosen[i].fill(false);
+                    card.chosen[i][j] = true;
+                }
+            }
+            if q.allow_other {
+                ui.horizontal(|ui| {
+                    if !q.options.is_empty() {
+                        ui.weak(t!("chat.question_other"));
+                    }
+                    let field =
+                        ui.add(egui::TextEdit::singleline(&mut card.other[i]).desired_width(f32::INFINITY).id_salt((
+                            "ask_other",
+                            &card.uid,
+                            i,
+                        )));
+                    // Typing an own answer to a one-answer question drops the option picked.
+                    if field.changed() && !q.multi && !card.other[i].trim().is_empty() {
+                        card.chosen[i].fill(false);
+                    }
+                });
+            }
+        }
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if ui.add_enabled(card.complete(), egui::Button::new(t!("chat.answer"))).clicked() {
+                action = Some(ChatAction::Answer { uid: card.uid.clone(), cancel: false });
+            }
+            if ui.button(t!("chat.answer_cancel")).clicked() {
+                action = Some(ChatAction::Answer { uid: card.uid.clone(), cancel: true });
+            }
+        });
+    });
+    action
+}
+
+/// An agent's permission question: what it wants to run, and the answers it offers.
+fn question(ui: &mut Ui, q: &Question) -> Option<ChatAction> {
+    let mut action = None;
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(RichText::new(t!("assistant.asks", tool = q.title.clone())).strong());
+        ui.horizontal_wrapped(|ui| {
+            for (id, name) in &q.options {
+                if ui.button(name).clicked() {
+                    action = Some(ChatAction::Permission { key: q.key, option: Some(id.clone()) });
+                }
+            }
+            if ui.button(t!("trash.cancel")).clicked() {
+                action = Some(ChatAction::Permission { key: q.key, option: None });
+            }
+        });
+    });
+    action
+}
+
+/// The agent needs a sign-in: its ways to do so, a button where it does it itself, the command
+/// to run where the user has to.
+fn sign_in(ui: &mut Ui, methods: &[AuthRow]) -> Option<ChatAction> {
+    let mut action = None;
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(RichText::new(t!("assistant.sign_in_title")).strong());
+        for m in methods {
+            ui.horizontal_wrapped(|ui| {
+                if m.by_agent {
+                    if ui.button(&m.name).on_hover_text(&m.description).clicked() {
+                        action = Some(ChatAction::Authenticate(m.id.clone()));
+                    }
+                } else {
+                    ui.label(&m.name);
+                }
+            });
+            if let Some(command) = &m.command {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut command.as_str()).desired_width(f32::INFINITY).code_editor(),
+                    );
+                    if ui.button(t!("settings.mcp_copy")).clicked() {
+                        ui.ctx().copy_text(command.clone());
+                    }
+                });
+            }
+        }
+        ui.weak(t!("assistant.sign_in_hint"));
     });
     action
 }
@@ -242,8 +602,10 @@ fn message(ui: &mut Ui, m: &ChatMsg, view: &ChatView, md: &mut CommonMarkCache) 
             ui.set_width(ui.available_width());
             match card {
                 Card::Proposed { batch, title, items } => {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("✨ {title}")).strong());
+                    // The title on a line of its own, cut short in a narrow pane; the state and
+                    // the button wrap below it, so the button never gets cut off.
+                    ui.add(egui::Label::new(RichText::new(format!("✨ {title}")).strong()).truncate());
+                    ui.horizontal_wrapped(|ui| {
                         let state = view.card_states.get(batch).map_or("pending", String::as_str);
                         let open = matches!(state, "pending" | "partly");
                         ui.weak(match state {
@@ -261,7 +623,18 @@ fn message(ui: &mut Ui, m: &ChatMsg, view: &ChatView, md: &mut CommonMarkCache) 
                     });
                 }
                 Card::Applied { title, applied, .. } => {
-                    ui.label(format!("✔ {}", t!("chat.card_applied", title = title, count = applied)));
+                    ui.add(
+                        egui::Label::new(format!("✔ {}", t!("chat.card_applied", title = title, count = applied)))
+                            .wrap(),
+                    );
+                }
+                Card::Answered { question, answer } => {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(t!("chat.card_answered", question = question, answer = answer)).weak(),
+                        )
+                        .wrap(),
+                    );
                 }
             }
         });

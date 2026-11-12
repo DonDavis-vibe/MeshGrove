@@ -21,6 +21,10 @@ pub struct GroupInfo {
     pub blocked: Option<String>,
     /// The user is happy with the group's choice: it is cleaned up with the others.
     pub picked: bool,
+    /// What the group is one of (`Library::duplicate_groups`), to ignore it by.
+    pub key: String,
+    /// The user keeps these copies as they are; shown only on request.
+    pub ignored: bool,
 }
 
 pub enum DupAction {
@@ -36,6 +40,11 @@ pub enum DupAction {
     PickAll(bool),
     /// Trash the extra copies of every ticked group.
     TrashPicked,
+    /// Keep this group as it is (true): it is no longer listed, counted or badged; or watch it
+    /// again.
+    Ignore(usize, bool),
+    /// List the ignored groups too, or hide them again.
+    ShowIgnored(bool),
 }
 
 /// The copy worth keeping: not inside an archive, then the oldest, then the shortest path.
@@ -48,18 +57,35 @@ pub fn suggest_keep(files: &[Entry]) -> usize {
         .unwrap_or(0)
 }
 
-pub fn show(ui: &mut Ui, entries: &[Entry], groups: &[GroupInfo], gallery: &Gallery) -> Option<DupAction> {
+/// `ignored`: how many groups the user keeps as they are, and whether they are listed too.
+pub fn show(
+    ui: &mut Ui,
+    entries: &[Entry],
+    groups: &[GroupInfo],
+    (ignored, show_ignored): (usize, bool),
+    gallery: &Gallery,
+) -> Option<DupAction> {
     let mut action = None;
-    if groups.is_empty() {
+    if groups.is_empty() && ignored == 0 {
         ui.centered_and_justified(|ui| ui.weak(t!("dupes.none")));
         return None;
     }
     // The summary and the cleanup of all ticked groups stay on top while the groups scroll.
-    let wasted: u64 = groups.iter().map(|g| g.wasted).sum();
-    ui.label(RichText::new(t!("dupes.summary", groups = groups.len(), size = i18n::file_size(wasted))).strong());
+    let watched: Vec<&GroupInfo> = groups.iter().filter(|g| !g.ignored).collect();
+    let wasted: u64 = watched.iter().map(|g| g.wasted).sum();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(t!("dupes.summary", groups = watched.len(), size = i18n::file_size(wasted))).strong());
+        if ignored > 0 {
+            ui.weak(t!("dupes.ignored_count", count = ignored));
+            let label = if show_ignored { t!("dupes.hide_ignored") } else { t!("dupes.show_ignored") };
+            if ui.small_button(label).clicked() {
+                action = Some(DupAction::ShowIgnored(!show_ignored));
+            }
+        }
+    });
     ui.weak(t!("dupes.explain"));
     ui.add_space(4.0);
-    let open: Vec<&GroupInfo> = groups.iter().filter(|g| g.blocked.is_none()).collect();
+    let open: Vec<&GroupInfo> = groups.iter().filter(|g| g.blocked.is_none() && !g.ignored).collect();
     let picked: Vec<&GroupInfo> = open.iter().copied().filter(|g| g.picked).collect();
     ui.horizontal(|ui| {
         let mut all = !open.is_empty() && picked.len() == open.len();
@@ -87,11 +113,11 @@ pub fn show(ui: &mut Ui, entries: &[Entry], groups: &[GroupInfo], gallery: &Gall
         for (gi, group) in groups.iter().enumerate() {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
+                ui.horizontal_top(|ui| {
                     let mut on = group.picked;
                     let check = egui::Checkbox::without_text(&mut on);
                     let response = ui
-                        .add_enabled(group.blocked.is_none(), check)
+                        .add_enabled(group.blocked.is_none() && !group.ignored, check)
                         .on_hover_text(t!("dupes.pick_group"))
                         .on_disabled_hover_text(group.blocked.clone().unwrap_or_default());
                     if response.changed() {
@@ -100,16 +126,33 @@ pub fn show(ui: &mut Ui, entries: &[Entry], groups: &[GroupInfo], gallery: &Gall
                     let title = if group.exact { t!("dupes.exact") } else { t!("dupes.geometry") };
                     ui.label(RichText::new(title).strong());
                     ui.weak(t!("dupes.group_info", count = group.range.len(), size = i18n::file_size(group.wasted)));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let button = ui
-                            .add_enabled(group.blocked.is_none(), egui::Button::new(t!("dupes.trash_others")))
-                            .on_disabled_hover_text(group.blocked.clone().unwrap_or_default());
-                        if button.clicked() {
-                            action = Some(DupAction::TrashOthers(gi));
-                        }
-                        if let Some(reason) = &group.blocked {
-                            ui.label("🔒").on_hover_text(reason);
-                        }
+                    if group.ignored {
+                        ui.label(RichText::new(t!("dupes.ignored")).weak().italics());
+                    }
+                    // The buttons stacked at the right edge, so they never run into the text.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                            if group.ignored {
+                                if ui.button(t!("dupes.unignore")).on_hover_text(t!("dupes.unignore_hint")).clicked() {
+                                    action = Some(DupAction::Ignore(gi, false));
+                                }
+                                return;
+                            }
+                            ui.horizontal(|ui| {
+                                if let Some(reason) = &group.blocked {
+                                    ui.label("🔒").on_hover_text(reason);
+                                }
+                                let button = ui
+                                    .add_enabled(group.blocked.is_none(), egui::Button::new(t!("dupes.trash_others")))
+                                    .on_disabled_hover_text(group.blocked.clone().unwrap_or_default());
+                                if button.clicked() {
+                                    action = Some(DupAction::TrashOthers(gi));
+                                }
+                            });
+                            if ui.button(t!("dupes.ignore")).on_hover_text(t!("dupes.ignore_hint")).clicked() {
+                                action = Some(DupAction::Ignore(gi, true));
+                            }
+                        });
                     });
                 });
                 ui.horizontal_wrapped(|ui| {
