@@ -300,6 +300,13 @@ fn removals_and_renames_survive_the_review() {
                     ..Default::default()
                 },
                 TagItem { id: "eigene/rose.stl".into(), remove: vec!["Garten".into()], ..Default::default() },
+                // The same tag in another case added and removed at once: only the removal stays.
+                TagItem {
+                    id: "eigene/deckel.3mf".into(),
+                    add: vec!["werkstatt".into()],
+                    remove: vec!["Werkstatt".into()],
+                    ..Default::default()
+                },
             ],
             mark_inbox_done: false,
         },
@@ -307,6 +314,8 @@ fn removals_and_renames_survive_the_review() {
     .unwrap();
     let batch = store.batches(Some("mcp"), Some("test"), &["pending"], 9).unwrap()[0].id;
     let items = store.proposals(batch).unwrap();
+    let same: TagsPayload = serde_json::from_value(items[2].payload.clone()).unwrap();
+    assert!(same.add.is_empty() && same.remove == ["Werkstatt"], "not added and removed at once: {same:?}");
     let payload: TagsPayload = serde_json::from_value(items[0].payload.clone()).unwrap();
     assert_eq!(
         payload.add.iter().map(|t| (t.name.as_str(), t.status)).collect::<Vec<_>>(),

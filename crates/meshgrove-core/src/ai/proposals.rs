@@ -1175,7 +1175,9 @@ pub fn propose_tags(
             if remove.iter().any(|r| r.eq_ignore_ascii_case(&name)) {
                 (name, status) = vocab.as_written(tag);
             }
-            if !add.iter().any(|a| a.name.eq_ignore_ascii_case(&name)) && !remove.iter().any(|r| r == &name) {
+            if !add.iter().any(|a| a.name.eq_ignore_ascii_case(&name))
+                && !remove.iter().any(|r| r.eq_ignore_ascii_case(&name))
+            {
                 add.push(TagOut { name, status });
             }
         }
