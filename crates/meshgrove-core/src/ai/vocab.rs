@@ -67,6 +67,15 @@ impl Vocabulary {
         }
         (tag.to_owned(), TagStatus::New)
     }
+
+    /// `tag` as the AI wrote it (trimmed): one of the suggestions in the spelling given, else new.
+    /// For a rename, where the usual spelling is the very tag that goes.
+    pub fn as_written(&self, tag: &str) -> (String, TagStatus) {
+        let tag = tag.trim();
+        let suggested =
+            self.suggested.iter().any(|(s, _)| s.de.eq_ignore_ascii_case(tag) || s.en.eq_ignore_ascii_case(tag));
+        (tag.to_owned(), if suggested { TagStatus::Suggested } else { TagStatus::New })
+    }
 }
 
 /// Whether an AI's tag is acceptable at all: short, one line, no control characters.
@@ -87,6 +96,8 @@ mod tests {
         assert_eq!(v.normalize("Workshop"), ("Werkstatt".into(), TagStatus::Existing), "translation of one in use");
         assert_eq!(v.normalize("garden"), ("Garten".into(), TagStatus::Suggested));
         assert_eq!(v.normalize(" Drachen "), ("Drachen".into(), TagStatus::New));
+        assert_eq!(v.as_written("Workshop"), ("Workshop".into(), TagStatus::Suggested), "a rename keeps the spelling");
+        assert_eq!(v.as_written(" Drachen "), ("Drachen".into(), TagStatus::New));
         assert_eq!(v.group_of("Garten"), "theme");
         assert_eq!(v.group_of("PLA"), "property");
         assert_eq!(v.group_of("Pirat"), "own");
