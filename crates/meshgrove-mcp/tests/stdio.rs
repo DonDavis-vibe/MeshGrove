@@ -232,6 +232,12 @@ fn each_access_class_sees_what_it_was_given() {
     assert!(hidden["content"][0]["text"].as_str().unwrap().contains("unknown id"));
     let mut local = Server::start(&f, &["--local"]);
     assert_eq!(ids(&local.call("search_models", json!({}))), ["eigene/rose.stl", "kunden/halter.stl"]);
+    // Every answer's structured content is an object, also where the tool has a list to give:
+    // clients that check it refuse an array (and the assistant sees nothing).
+    for tool in ["find_duplicates", "list_inbox", "list_lists", "list_proposals"] {
+        let answer = local.call(tool, json!({}));
+        assert!(answer["structuredContent"]["items"].is_array(), "{tool}: {answer}");
+    }
     let garden = local.call("search_models", json!({"q": "tag:garten", "fits_printer": "any"}));
     assert_eq!(garden["structuredContent"]["items"].as_array().unwrap().len(), 0, "no printers configured");
     let pictures = local.call("get_thumbnails", json!({"ids": ["eigene/rose.stl", "kunden/halter.stl"]}));
@@ -265,7 +271,7 @@ fn suggestions_are_queued_not_applied() {
             .any(|e| e.tool == "propose_tags" && e.client.as_deref() == Some("test") && e.access_class == "local")
     );
     let mine = s.call("list_proposals", json!({}));
-    assert_eq!(mine["structuredContent"][0]["title"], "Kunde einordnen");
+    assert_eq!(mine["structuredContent"]["items"][0]["title"], "Kunde einordnen", "a list goes out as an object");
 }
 
 #[test]
