@@ -194,6 +194,16 @@ impl Library {
         Ok(n as usize)
     }
 
+    /// Whether the content of the file at `path` waits in the inbox.
+    pub fn waits_in_inbox(&self, path: &Path) -> Result<bool, Error> {
+        let Some(hash) = self.content_hash_of(path)? else { return Ok(false) };
+        self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM inbox WHERE content_hash = ?1 AND done_ns IS NULL)",
+            [hash],
+            |r| r.get(0),
+        )
+    }
+
     /// Takes the contents of `paths` out of the inbox; `by` says who ('user', 'proposal:<uid>').
     /// Returns the hashes that were waiting (to reopen them on undo).
     pub fn inbox_done(&mut self, paths: &[PathBuf], by: &str) -> Result<Vec<String>, Error> {

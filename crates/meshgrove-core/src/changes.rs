@@ -481,6 +481,8 @@ impl Library {
         // Places a step of this change should have written but did not: an index step leaves
         // them alone (they belong to someone else).
         let mut not_written: Vec<&Path> = Vec::new();
+        // The moves of this change: from where, and to where (`None`: skipped, not placed).
+        let mut moves: Vec<(&Path, Option<&Path>)> = Vec::new();
         for (step, op) in ops.iter().enumerate() {
             progress(step, ops.len());
             let done = match op {
@@ -583,19 +585,25 @@ impl Library {
                     }
                     any
                 }
-                ApplyOp::InboxDone { target } => match self.target_hash(target)? {
-                    Some(hash) => {
-                        let done = self.conn.execute(
+                ApplyOp::InboxDone { target } => {
+                    // It goes along with the file's tags or move, so it is no change of its own
+                    // to count. A moved file's content is looked up where it went (the suggestion
+                    // may not have known it); one whose move was skipped stays in the inbox.
+                    let hash = match moves.iter().find(|(from, _)| *from == target.path) {
+                        Some((_, Some(to))) => self.content_hash_of(to)?,
+                        Some((_, None)) => None,
+                        None => self.target_hash(target)?,
+                    };
+                    if let Some(hash) = hash
+                        && self.conn.execute(
                             "UPDATE inbox SET done_ns = ?2, done_by = 'proposal' WHERE content_hash = ?1 AND done_ns IS NULL",
                             params![hash, now],
-                        )? > 0;
-                        if done {
-                            undo.push(UndoOp::Reopen { hash });
-                        }
-                        done
+                        )? > 0
+                    {
+                        undo.push(UndoOp::Reopen { hash });
                     }
-                    None => false,
-                },
+                    continue;
+                }
                 ApplyOp::Move { root, target, to, folder } => {
                     let made = crate::moves::missing_folders(root, to.parent().unwrap_or(root));
                     if crate::moves::check_move(target, to, *folder).is_err() || !make_folders(&made) {
@@ -619,6 +627,7 @@ impl Library {
                             made,
                             from_root,
                         });
+                        moves.push((&target.path, Some(to)));
                         true
                     }
                 }
@@ -772,6 +781,9 @@ impl Library {
                 report.skipped += 1;
                 if let ApplyOp::Copy { to, .. } | ApplyOp::Import { to, .. } | ApplyOp::Extract { into: to, .. } = op {
                     not_written.push(to);
+                }
+                if let ApplyOp::Move { target, .. } = op {
+                    moves.push((&target.path, None));
                 }
             }
         }
@@ -1458,7 +1470,7 @@ mod tests {
             ApplyOp::InboxDone { target: target("b.stl", "hb") },
         ];
         let report = lib.apply_change("chat:7", "Chat", &ops).unwrap();
-        assert_eq!(report.applied, 3);
+        assert_eq!(report.applied, 2, "leaving the inbox goes with the rest, it is not counted");
         assert_eq!(lib.notes_of(&[PathBuf::from("/r/a.stl")]).unwrap().0.as_deref(), Some("alt\n\nneu"));
         let markt = lib.lists().unwrap().into_iter().find(|l| l.name == "Markt").unwrap();
         assert_eq!(lib.list_entries(markt.id).unwrap().iter().map(|e| e.quantity).sum::<u32>(), 4);

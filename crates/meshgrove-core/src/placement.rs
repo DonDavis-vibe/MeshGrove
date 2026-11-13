@@ -117,7 +117,7 @@ pub fn proposals_for(
 /// Suggests `items` as batches of Meshgrove's own, at most [`MAX_ITEMS`] each, leaving out
 /// files that already have such a move waiting and stopping at [`MAX_PENDING`] batches. How
 /// many suggestions were made.
-pub fn propose(store: &mut ProposalStore, title: &str, items: Vec<NewProposal>) -> ToolResult<usize> {
+pub fn propose(lib: &Library, store: &mut ProposalStore, title: &str, items: Vec<NewProposal>) -> ToolResult<usize> {
     let waiting = store.pending_move_sources(SOURCE)?;
     let items: Vec<NewProposal> =
         items.into_iter().filter(|p| p.target.as_ref().is_none_or(|t| !waiting.contains(&t.path))).collect();
@@ -127,7 +127,15 @@ pub fn propose(store: &mut ProposalStore, title: &str, items: Vec<NewProposal>) 
         if store.pending_of(&origin)? >= MAX_PENDING {
             break;
         }
-        let batch = NewBatch { origin: &origin, kind: "move", title, summary: None, inbox_done: false };
+        // Placing files is filing them: accepting takes those waiting in the inbox out of it.
+        let mut inbox_done = false;
+        for target in chunk.iter().filter_map(|p| p.target.as_ref()) {
+            if lib.waits_in_inbox(&target.path)? {
+                inbox_done = true;
+                break;
+            }
+        }
+        let batch = NewBatch { origin: &origin, kind: "move", title, summary: None, inbox_done };
         store.insert_batch(&batch, chunk)?;
         made += chunk.len();
     }
@@ -244,20 +252,49 @@ mod tests {
             ]
         );
         let mut store = ProposalStore::open_in_memory().unwrap();
-        assert_eq!(propose(&mut store, "Ablage", items).unwrap(), 2);
+        assert_eq!(lib.inbox_count().unwrap(), 4, "rose, zaun, ohne and kopie are new");
+        assert_eq!(propose(&lib, &mut store, "Ablage", items).unwrap(), 2);
         let batches = store.batches(Some(SOURCE), None, &["pending"], 9).unwrap();
         assert_eq!((batches.len(), batches[0].kind.as_str(), batches[0].items), (1, "move", 2));
+        assert!(batches[0].inbox_done, "placing files of the inbox files them");
         // Suggested again while that waits: nothing new.
         let (items, _) = proposals_for(&lib, &config, &paths).unwrap();
-        assert_eq!(propose(&mut store, "Ablage", items).unwrap(), 0);
-        // Accepted, the files are in Garten with their tags.
-        let ops: Vec<_> =
-            store.proposals(batches[0].id).unwrap().iter().flat_map(|p| to_ops(p, &Picked::all(p), false)).collect();
-        let report = lib.apply_change("proposal:p", "Ablage", &ops).unwrap();
-        assert_eq!(report.applied, 2);
-        assert!(root.join("Garten").join("rose.stl").is_file() && !landing.join("rose.stl").exists());
-        assert_eq!(lib.tags_of(&[root.join("Garten").join("zaun.stl")]).unwrap()[0].0, "Garten");
-        let (items, skipped) = proposals_for(&lib, &config, &[root.join("Garten").join("rose.stl")]).unwrap();
+        assert_eq!(propose(&lib, &mut store, "Ablage", items).unwrap(), 0);
+        // `known`: as suggested; else as if the index had not known the files as they are then.
+        let ops = |known: bool| -> Vec<_> {
+            let mut proposals = store.proposals(batches[0].id).unwrap();
+            for target in proposals.iter_mut().filter_map(|p| p.target.as_mut()).filter(|_| !known) {
+                target.hash = None;
+            }
+            proposals.iter().flat_map(|p| to_ops(p, &Picked::all(p), batches[0].inbox_done)).collect()
+        };
+        let (garten, waits) = (root.join("Garten"), |lib: &Library, p: PathBuf| lib.waits_in_inbox(&p).unwrap());
+        // Something is at zaun's new place by then: rose is placed and leaves the inbox (found
+        // where it went), zaun stays.
+        std::fs::write(garten.join("zaun.stl"), "fremd").unwrap();
+        let report = lib.apply_change("proposal:p", "Ablage", &ops(false)).unwrap();
+        assert_eq!((report.applied, report.skipped), (1, 1), "leaving the inbox is no change of its own");
+        assert!(!waits(&lib, garten.join("rose.stl")) && waits(&lib, landing.join("zaun.stl")));
+        assert_eq!(lib.inbox_count().unwrap(), 3);
+        // Taken back: rose is in the landing folder and the inbox again.
+        lib.undo_change(report.id).unwrap();
+        assert!(landing.join("rose.stl").is_file() && waits(&lib, landing.join("rose.stl")));
+        assert_eq!(lib.inbox_count().unwrap(), 4);
+        // Accepted, the files are in Garten with their tags, and out of the inbox.
+        std::fs::remove_file(garten.join("zaun.stl")).unwrap();
+        let report = lib.apply_change("proposal:p", "Ablage", &ops(true)).unwrap();
+        assert_eq!((report.applied, report.skipped), (2, 0));
+        assert!(garten.join("rose.stl").is_file() && !landing.join("rose.stl").exists());
+        assert_eq!(lib.tags_of(&[garten.join("zaun.stl")]).unwrap()[0].0, "Garten");
+        assert_eq!(lib.inbox_count().unwrap(), 2, "ohne and kopie wait");
+        let (items, skipped) = proposals_for(&lib, &config, &[garten.join("rose.stl")]).unwrap();
         assert!(items.is_empty() && skipped[0].why == "there_already");
+        // A file out of the inbox already: its move does not touch the inbox.
+        lib.inbox_done(&[landing.join("ohne.stl")], "user").unwrap();
+        lib.tag(&[landing.join("ohne.stl")], "Deko").unwrap();
+        let (items, _) = proposals_for(&lib, &config, &[landing.join("ohne.stl")]).unwrap();
+        let mut store = ProposalStore::open_in_memory().unwrap();
+        assert_eq!(propose(&lib, &mut store, "Ablage", items).unwrap(), 1);
+        assert!(!store.batches(Some(SOURCE), None, &["pending"], 9).unwrap()[0].inbox_done);
     }
 }

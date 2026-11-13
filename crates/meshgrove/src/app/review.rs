@@ -265,7 +265,7 @@ impl App {
                 // Deletions go to the system's trash, not through the library's journal.
                 let mut trash = Vec::new();
                 for item in &b.items {
-                    let picked = if all { Picked::all(&item.proposal) } else { item.picked.clone() };
+                    let picked = if all { item.picked.everything(&item.proposal) } else { item.picked.clone() };
                     let decision = if item.stale {
                         Decision::Stale
                     } else if picked.is_empty() {

@@ -508,7 +508,9 @@ impl App {
             sort: self.config.sort_by,
             descending: self.config.sort_descending,
             print: self.config.print_filter,
-            keep_order: matches!(self.view, View::List { id, .. } if recent(id)),
+            // Views that draw the entries in their own order: a Shift-range follows it.
+            keep_order: matches!(self.view, View::Inbox { .. })
+                || matches!(self.view, View::List { id, .. } if recent(id)),
             supported_first: self.config.supported_first,
         }
     }
@@ -1087,6 +1089,7 @@ impl App {
                 lists: menu_lists(&self.lists),
                 favorite: self.all_favorite(&paths),
                 current_list: self.current_list(),
+                inbox: matches!(self.view, View::Inbox { .. }),
                 rescan: self.index.is_some()
                     && matches!(paths.as_slice(), [p] if self.in_library(p)
                         && (p.is_dir() || Kind::from_file_name(&listing::file_name(p)) == Kind::Archive)),
@@ -1555,6 +1558,7 @@ impl App {
                 self.focus_tags = true;
             }
             Action::Trash => self.request_trash(self.selected_paths()),
+            Action::InboxDone => self.library.inbox_done(Some(self.selected_paths())),
             Action::SuggestTags => self.suggest_tags(self.selected_paths()),
             Action::PlaceByTag => self.library.place_by_tag(self.selected_paths()),
             Action::MentionInChat => self.mention_in_chat(self.selected_paths()),
@@ -2783,8 +2787,8 @@ impl App {
         if let View::Inbox { entries, groups } = &self.view {
             let ai = self.chat_available();
             let placement = self.config.placement.enabled;
-            let action = inbox_view::show(ui, entries, groups, &self.gallery, ai, placement);
-            self.inbox_action(action);
+            let action = inbox_view::show(ui, entries, groups, &self.gallery, &self.menu, ai, placement);
+            self.inbox_action(ui.ctx(), action);
             return;
         }
         if let View::Review { entries, batches } = &mut self.view {

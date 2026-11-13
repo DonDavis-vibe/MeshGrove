@@ -82,6 +82,8 @@ pub enum Action {
     NewList(ListKind, String),
     RemoveFromList(i64),
     Trash,
+    /// The selection is done: it leaves the inbox.
+    InboxDone,
     /// Ask the user's AI for tags for the selection (suggested in the review).
     SuggestTags,
     /// Suggest moving the selection into the folders of its tags (Settings → Tags).
@@ -118,6 +120,8 @@ pub struct MenuContext {
     pub favorite: bool,
     /// The hand-made list shown now (id, name), for "remove from …".
     pub current_list: Option<(i64, String)>,
+    /// The inbox is shown: its files can be ticked off.
+    pub inbox: bool,
     /// The selection is one folder or archive of the library, which can be indexed again.
     pub rescan: bool,
     /// The folder shown takes pasted files (a real folder, not an archive or a list).
@@ -347,11 +351,12 @@ impl Gallery {
         self.duplicates = duplicates;
     }
 
-    fn is_marked(&self, entry: usize) -> bool {
+    pub fn is_marked(&self, entry: usize) -> bool {
         self.marked.contains(&entry) || self.selected == Some(entry)
     }
 
-    fn click(&mut self, entry: usize, modifiers: egui::Modifiers) {
+    /// A click on an entry: Shift extends the selection from the anchor, Ctrl toggles.
+    pub fn click(&mut self, entry: usize, modifiers: egui::Modifiers) {
         if modifiers.shift
             && let Some(anchor) = self.anchor
             && let (Some(a), Some(b)) =
@@ -372,6 +377,19 @@ impl Gallery {
             self.select(Some(entry));
             self.scroll_to_selected = false;
         }
+    }
+
+    /// Marks every shown entry (Ctrl+A).
+    pub fn select_all(&mut self) {
+        self.marked = self.shown.iter().copied().collect();
+    }
+
+    /// The selection again after the entries were rebuilt: `marked` by their new indices,
+    /// `focus` the focused one (or the last marked one when it is gone).
+    pub fn restore(&mut self, focus: Option<usize>, marked: Vec<usize>) {
+        self.marked = marked.into_iter().filter(|i| self.shown.contains(i)).collect();
+        self.selected = focus.filter(|i| self.shown.contains(i)).or_else(|| self.marked.iter().next_back().copied());
+        self.anchor = self.selected;
     }
 
     pub fn thumb(&self, entry: usize) -> Option<&Thumb> {
@@ -571,7 +589,7 @@ impl Gallery {
             self.select(Some(self.shown[t]));
         }
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::A)) {
-            self.marked = self.shown.iter().copied().collect();
+            self.select_all();
         }
         // Ctrl+C and Ctrl+X arrive as copy and cut events, not as key presses.
         if self.selected.is_some() && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy))) {
@@ -842,7 +860,7 @@ impl MenuRows<'_> {
 /// The context menu of a tile or list row (`entry`, which is `e`); what it offers depends on the
 /// selection (`menu`). Clicked items end up in `action`. The rows come in groups: opening, tags
 /// and lists, files, AI, trash; the rarer ways to open a file sit under "Open with".
-fn entry_menu(
+pub(super) fn entry_menu(
     response: &egui::Response,
     entry: usize,
     e: &Entry,
@@ -857,6 +875,11 @@ fn entry_menu(
     // Stays open on clicks inside: "Add to list" has a name field.
     super::context_menu_with_field(response, |ui| {
         let mut rows = MenuRows { action, rows_since_separator: false };
+        // In the inbox, ticking off comes first.
+        if menu.inbox {
+            rows.item(ui, t!("inbox.done_one"), Action::InboxDone);
+            rows.section(ui);
+        }
         // Opening: the usual ways on top, the rest under "Open with".
         rows.item(ui, t!("menu.open"), Action::Open(entry));
         if viewable {

@@ -798,7 +798,7 @@ impl Worker {
             }
         };
         let proposed = match (items.is_empty(), proposals.open_or_create()) {
-            (false, Some(store)) => match placement::propose(store, &t!("placement.title"), items) {
+            (false, Some(store)) => match placement::propose(lib, store, &t!("placement.title"), items) {
                 Ok(n) => n,
                 Err(e) => {
                     log::warn!("suggesting the moves failed: {e}");

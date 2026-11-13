@@ -768,6 +768,33 @@ impl Picked {
         }
     }
 
+    /// Everything a suggestion offers, as the user changed it in the review ("Accept all"): what
+    /// they unticked comes back, what they typed or rewrote stays (own tags, the note, the place,
+    /// the list's name, kind and copies).
+    pub fn everything(&self, p: &Proposal) -> Picked {
+        let mut all = Picked::all(p);
+        for tag in &self.add {
+            if !all.add.iter().any(|t| t.eq_ignore_ascii_case(tag)) {
+                all.add.push(tag.clone());
+            }
+        }
+        // A tag typed in the review that the suggestion would take away is kept.
+        all.remove.retain(|t| !self.add.iter().any(|a| a.eq_ignore_ascii_case(t)));
+        all.to = self.to.clone();
+        all.note = self.note.clone();
+        all.append = self.append;
+        all.list_name = self.list_name.clone();
+        all.list_kind = self.list_kind.clone();
+        if let Some(kept) = &self.list_items
+            && let Ok(list) = serde_json::from_value::<ListPayload>(p.payload.clone())
+        {
+            let copies = |i: usize, suggested: u32| kept.iter().find(|(k, _)| *k == i).map_or(suggested, |(_, n)| *n);
+            all.list_items =
+                Some(list.items.iter().enumerate().map(|(i, item)| (i, copies(i, item.quantity))).collect());
+        }
+        all
+    }
+
     pub fn is_empty(&self) -> bool {
         self.add.is_empty() && self.remove.is_empty() && !self.whole
     }
@@ -1742,6 +1769,64 @@ mod tests {
         let ops = to_ops(&list, &picked, false);
         assert!(
             matches!(&ops[..], [crate::changes::ApplyOp::List { kind: crate::lists::ListKind::Collection, name, items, .. }] if name == "Gifts" && items.len() == 1 && items[0].1 == 5)
+        );
+    }
+
+    #[test]
+    fn accept_all_keeps_what_was_changed_in_the_review() {
+        let target = Target { path: "/a.stl".into(), hash: Some("h".into()), size: 1, mtime_ns: 2 };
+        let tags = Proposal {
+            id: 1,
+            batch_id: 1,
+            kind: ProposalKind::Tags,
+            target: Some(target.clone()),
+            payload: serde_json::json!({"add": [{"name": "Garten", "status": "existing"}, {"name": "Rosen", "status": "new"}], "remove": ["Alt", "Deko"]}),
+            reason: None,
+            confidence: None,
+            state: "pending".into(),
+        };
+        // Rosen unticked, an own tag typed, and Deko typed back in although the suggestion removes it.
+        let edited = Picked {
+            add: vec!["Garten".into(), "Prüfteil".into(), "Deko".into()],
+            remove: vec!["Alt".into()],
+            ..Default::default()
+        };
+        let all = edited.everything(&tags);
+        assert_eq!(all.add, ["Garten", "Rosen", "Prüfteil", "Deko"]);
+        assert_eq!(all.remove, ["Alt"]);
+        let note = Proposal {
+            kind: ProposalKind::Note,
+            payload: serde_json::to_value(NotePayload { text: "old".into(), append: false }).unwrap(),
+            ..tags.clone()
+        };
+        let edited = Picked { whole: false, note: Some("rewritten".into()), append: Some(true), ..Default::default() };
+        let all = edited.everything(&note);
+        assert!(all.whole);
+        assert!(
+            matches!(&to_ops(&note, &all, false)[..], [crate::changes::ApplyOp::SetNote { text, append: true, .. }] if text == "rewritten")
+        );
+        let list = Proposal {
+            kind: ProposalKind::List,
+            target: None,
+            payload: serde_json::to_value(ListPayload {
+                name: "Geschenke".into(),
+                kind: "print".into(),
+                items: vec![
+                    ListItemPayload { target: target.clone(), quantity: 1 },
+                    ListItemPayload { target, quantity: 2 },
+                ],
+                query: None,
+                description: None,
+            })
+            .unwrap(),
+            ..tags
+        };
+        // The first item unticked, the second one's copies set to 5, the list renamed.
+        let edited = Picked { list_name: Some("Gifts".into()), list_items: Some(vec![(1, 5)]), ..Default::default() };
+        let all = edited.everything(&list);
+        assert_eq!(all.list_items, Some(vec![(0, 1), (1, 5)]));
+        assert!(
+            matches!(&to_ops(&list, &all, false)[..], [crate::changes::ApplyOp::List { name, items, .. }] if name == "Gifts" && items.len() == 2)
         );
     }
 

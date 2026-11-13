@@ -7,6 +7,49 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 
 ## Highlights
 
+**Your AI agent answers the chat** (new in 0.10) – the agents, the review, archives and duplicates of this release come from [@Rec0iL](https://github.com/Rec0iL), thank you.
+
+- The chat can be answered by an **AI agent installed on your computer** instead of an endpoint: Claude Code, Codex, Google Antigravity, Gemini CLI, OpenCode, Grok, Copilot CLI, Qwen Code, goose, or any command that speaks the Agent Client Protocol. Meshgrove finds the installed ones by itself (*Settings → AI & MCP → Who answers the chat*, with their sign-in state). Nobody is picked for you: under the message field you choose who answers, *Connect* starts the agent (or the first message does), and the settings can let the chat connect by itself when it opens, to the assistant used last or to one agent in particular. Nothing from the library goes out before your first message.
+- The agent reaches the library through `meshgrove-mcp`. Meshgrove lets it run Meshgrove's own tools, which read or suggest for the review, and asks you in the chat before anything else it wants to run: a shell command, a file, whatever the agent brought. What it suggests shows as cards like the endpoint's; a needed sign-in shows a button or the command to run.
+- A **searchable model picker** under the message field, for agents and endpoints alike: the list comes from the agent or the endpoint, OpenRouter's models fold under their vendors, and a model that is not listed can be typed. Beside it sit the endpoint's reasoning effort or whatever session options the agent offers. Picks are remembered per agent.
+- The one-click actions go to whoever answers the chat; with an agent the task becomes a conversation of its own, with the results as a card to ask about. With an endpoint they now ask for no reasoning, so a thinking local model no longer spends its whole context on an inbox batch and answers nothing.
+- The assistant can **ask you back**: its questions appear in the chat with radio buttons, checkboxes or a field for your own words; from an MCP app (Claude Desktop, Cursor …) they get a window of their own in Meshgrove, naming who asks. It can also suggest putting files, archives or folders into the system's trash, which always waits for the review, and, with *Allow the AI to move files between libraries* on, moves into another library you opened to it.
+
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-assistant.png" alt="Settings → AI & MCP → Who answers the chat: the agents Meshgrove looks for, with the command that installs each" width="60%">
+
+**The review: change before you accept, and watch it apply** (new in 0.10)
+
+- Everything in a batch can be changed before accepting: type a tag of your own into the *+ own tag* field, rewrite a note (and choose whether it replaces the old one or goes below it), give a move another name or place, rename a list, switch it between print list and collection, untick items and set the copies. What you accept is what you see.
+- A batch being applied stays in the list with a green sweep that follows the library's progress and fades out once the batch is recorded; the next batch's buttons land exactly where the clicked ones were. A backlog of hundreds of suggestions is settled with the pointer at rest, and the list no longer flickers or loses your ticks when it reloads.
+- Accepted tag suggestions now remove what they say: a suggestion that only takes a tag away, or a tag merge, used to do nothing. A tag renamed through the AI keeps the spelling it was given instead of folding back to the old one.
+
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-review-edit.png" alt="The review: a rename and a move with their names in editable fields, and below them a tag batch with an own tag added, being applied with the green sweep following the progress" width="80%">
+
+**Archives: browse, unpack, pack, add** (new in 0.10)
+
+- ZIP, 7z, RAR and TAR open level by level like folders, with folder tiles and mosaics inside, also outside the library (in a downloads folder, in the import view); *Include subfolders* works inside them.
+- Right-click → *Unpack* puts an archive's contents into a new folder named after it, beside it. *Pack as ZIP* makes a new ZIP of the selected files and folders under the name you type, *Add to archive* lists the ZIPs of the same folder to add the selection to, and Ctrl+V while a ZIP is open adds the copied files there. Only ZIP archives are written; 7z, RAR and TAR are unpacked. Nothing is ever replaced (a member of the same name stops the whole addition), and each operation is one entry in the history, which takes it back as long as the archive is unchanged since.
+- Your assistant gets the same three operations (`list_archive`, `propose_archive`), always reviewed; the review shows what goes where.
+
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-archive-menu.png" alt="The context menu of two selected models with Pack as ZIP open: a field for the archive's name; Add to archive sits below it, and a ZIP shows as a tile with a mosaic of its contents" width="60%">
+
+**Duplicates: packed or extracted, one decision per archive** (new in 0.10)
+
+- A model pack that lies in the library both as the ZIP and extracted gave one locked group per model, because a member of an archive cannot be trashed by itself. Now *Settings → Library → Duplicates* says which copy ★ suggests, the extracted or the packed one, so *All suggestions are fine* → *Clean up selected* settles them all at once. Above the groups, *Archives with extracted copies* lists each such archive and settles it with one click: keep the archive and trash its extracted copies, or keep the copies and trash the archive, the latter only once every model in it is extracted (the button says how many would be lost otherwise).
+- *Ignore* keeps a group as it is: no longer listed, counted in the sidebar or badged on its tiles. *Show ignored* lists such groups again, with *Watch again* to undo it.
+
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-duplicates-archives.png" alt="The duplicates view: above the groups, an archive with its extracted copies and the two buttons, Keep the archive or Keep the copies" width="80%">
+
+**Smaller things** (new in 0.10)
+
+- The context menu of a tile is grouped: opening, tags and lists, files, AI, trash. The usual ways to open a file stay on top; the default program, mesh editors, other slicers and plugins sit under *Open with*.
+- List view: the preview column can be dragged wider (the rows follow), and its previews do what tiles do: folders fade through their pictures, resting the pointer on a model spins it, dragging turns it, the wheel zooms it.
+- A tag whose files have all left the library is no longer listed in the sidebar with 0 files, nor seen by the AI as in use; it comes back with the files.
+- Chat cards wrap in a narrow pane instead of cutting off their buttons.
+- The inbox: Ctrl- and Shift-click select several files, Ctrl+A all of them, and the tags, lists and marks in Info apply to the whole selection; a tile's menu is the gallery's, with *Done* on top.
+- *Place by tag* takes the files out of the inbox once their moves are accepted: they no longer stay listed there, and the count in the sidebar drops with them. A file whose move was skipped stays in the inbox; undo puts the others back.
+- Config: `ai.assistant`, `ai.auto_connect`, `ai.agents`, `ai.agent_models`, `ai.agent_options`, `ai.cross_library_moves`, `ai.endpoint.reasoning_effort`, `duplicates_keep`, `list_columns.widths.preview`; all documented in the READMEs.
+
 **Texgrove, the second plugin** (new in 0.9)
 
 <img src="https://raw.githubusercontent.com/DonDavis-vibe/Texgrove/main/assets/banner.png" alt="Texgrove" width="80%">
@@ -33,7 +76,6 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 
 - Signs such as ✔, ✖ and the ✨ of the AI actions show on Windows too, where some of them were empty boxes: every sign Meshgrove uses now comes in a font it brings along.
 - Rows in a plugin's panel wrap when the panel is narrow, instead of running off its edge, and a scroll bar no longer covers the last line.
-- The context menu of a tile is grouped: opening, tags and lists, files, AI, trash. The usual ways to open a file stay on top; the default program, mesh editors, other slicers and plugins sit under *Open with*.
 - For plugin authors: plugin API 0.2 brings all of the above to plugins; plugins written for 0.1 keep working. See [how to write a plugin](https://github.com/DonDavis-vibe/MeshGrove/blob/v@VERSION@/docs/plugins.md).
 
 **Checked on Windows** (new in 0.8.3) – a day in a Windows 11 VM, and what Linux never showed:
@@ -214,6 +256,8 @@ If Meshgrove saves you time, you can leave a tip on [Ko-fi](https://ko-fi.com/do
 <summary><b>🇩🇪 Kurzfassung auf Deutsch</b></summary>
 
 **Meshgrove @VERSION@**: eine schnelle, native Galerie für 3D-Druck-Dateien unter Linux, Windows und macOS, mit echten Vorschauen für STL, 3MF, STEP, OBJ, PLY, glTF, G-code, Modelle in ZIP/7z/RAR, PDFs und Readmes, dazu Favoriten, Drucklisten und einem Druckprotokoll.
+
+**Neu in 0.10** (Agenten, Prüfliste, Archive und Duplikate von [@Rec0iL](https://github.com/Rec0iL), danke!)**:** Den KI-Chat beantwortet jetzt wahlweise ein **KI-Agent auf deinem Rechner** – Claude Code, Codex, Antigravity, Gemini CLI, OpenCode, Grok, Copilot CLI, Qwen Code, goose oder jedes andere Programm, das das Agent Client Protocol spricht. Meshgrove findet die installierten selbst (*Einstellungen → KI & MCP → Wer den Chat beantwortet*), du wählst unter dem Eingabefeld, wer antwortet, und *Verbinden* startet ihn; auf Wunsch verbindet sich der Chat beim Öffnen von selbst. Der Agent erreicht die Bibliothek über `meshgrove-mcp`, Meshgroves eigene Werkzeuge darf er nutzen, vor allem anderen fragt er dich im Chat. Dazu eine durchsuchbare Modellauswahl mit Reasoning-Stufe für Agenten und Endpunkte, Rückfragen des Assistenten als Fragen im Chat (aus KI-Apps in einem eigenen Fenster), Löschvorschläge in den Papierkorb (immer über die Prüfliste) und auf Wunsch Verschiebungen in eine andere Bibliothek. In der **Prüfliste** lässt sich vor dem Annehmen alles ändern – eigene Tags, Notizen, Ziel und Name einer Verschiebung, Listenname, -art und -einträge –, ein laufender Block zeigt seinen Fortschritt als grünen Balken, und die Knöpfe des nächsten Blocks landen genau unter dem Zeiger; Tag-Vorschläge entfernen jetzt auch, was sie entfernen sollen. **Archive** (ZIP, 7z, RAR, TAR) öffnen sich Ebene für Ebene wie Ordner, auch außerhalb der Bibliothek; per Rechtsklick *Entpacken*, *Als ZIP packen* und *Zum Archiv hinzufügen* (Strg+V in ein offenes ZIP geht auch) – nur ZIP wird geschrieben, nichts wird je ersetzt, der Verlauf nimmt alles zurück; die KI kann dasselbe vorschlagen. Bei den **Duplikaten** entscheidet eine Einstellung, ob bei gepackt *und* entpackt vorliegenden Modellen ★ die entpackte oder die gepackte Kopie vorschlägt, und über den Gruppen wird jedes Archiv mit einem Klick erledigt: Archiv behalten oder Kopien behalten. *Ignorieren* nimmt eine Gruppe aus der Liste. Kleineres: im Eingang lassen sich mehrere Dateien markieren (Strg/Umschalt-Klick, Strg+A) und zusammen taggen, mit *Nach Tag ablegen* verschobene Dateien verlassen den Eingang (auch in der Zahl der Seitenleiste), das Kachelmenü ist in Gruppen geordnet (seltene Öffnen-Wege unter *Öffnen mit*), die Vorschau-Spalte der Listenansicht lässt sich breiter ziehen und ihre Bilder verhalten sich wie Kacheln, Tags ohne Dateien verschwinden aus der Seitenleiste, Chat-Karten brechen in schmalen Bereichen um.
 
 **Neu in 0.9:** Plugins arbeiten an deinen Modellen. Per Rechtsklick auf ein oder mehrere Modelle (oder über ihren Knopf im Info-Bereich) bekommt ein Plugin genau diese Dateien; was es macht, landet auf Wunsch neben dem Original, und in einem 3MF-Projekt tauscht es nur die geänderten Objekte aus – Platten, Einstellungen und die anderen Objekte bleiben. In der 3D-Vorschau eines Plugins lässt sich malen, und Arbeit, die deine KI anstößt, läuft im Hintergrund und wartet danach immer in der Prüfliste. Zweites Plugin ist [Texgrove](https://github.com/DonDavis-vibe/Texgrove): Texturen als echte Geometrie – Rändel, Waben, Holz, Leder oder eigene Bilder –, als neue Datei neben dem Original. Bingroves Vorschau zeigt den Platz, für den es plant (Schublade, Regal, Wand), und *Rahmen* blendet ihn aus. Behoben: Zeichen wie ✔ und ✨ erscheinen auch unter Windows, und Zeilen in Plugin-Panels brechen um. Für Plugin-Autoren: Plugin-API 0.2, für 0.1 geschriebene Plugins laufen weiter.
 

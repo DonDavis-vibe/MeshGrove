@@ -5,11 +5,11 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use egui::{RichText, Ui};
+use egui::{Key, Modifiers, RichText, Ui};
 use meshgrove_core::listing::Entry;
 
 use super::duplicates::{TILE_WIDTH, TileClick, tile};
-use super::gallery::Gallery;
+use super::gallery::{Action, Gallery, MenuContext, entry_menu};
 use crate::i18n;
 
 pub struct InboxGroupInfo {
@@ -26,8 +26,13 @@ pub struct InboxGroupInfo {
 }
 
 pub enum InboxAction {
-    Select(usize),
+    /// A tile was clicked with these modifiers (Ctrl and Shift extend the selection).
+    Click(usize, Modifiers),
+    /// Ctrl+A: every file of the inbox.
+    SelectAll,
     Open(usize),
+    /// An entry of a tile's context menu, the gallery's.
+    Gallery(Action),
     /// These entries are done.
     Done(Vec<usize>),
     AllDone,
@@ -37,12 +42,14 @@ pub enum InboxAction {
     Place(Option<usize>),
 }
 
-/// `ai`: the user's AI can be asked for tags; `placement`: files can be placed by their tags.
+/// `menu`: what the tiles' context menu offers for the selection; `ai`: the user's AI can be
+/// asked for tags; `placement`: files can be placed by their tags.
 pub fn show(
     ui: &mut Ui,
     entries: &[Entry],
     groups: &[InboxGroupInfo],
     gallery: &Gallery,
+    menu: &MenuContext,
     ai: bool,
     placement: bool,
 ) -> Option<InboxAction> {
@@ -50,6 +57,10 @@ pub fn show(
     if groups.is_empty() {
         ui.centered_and_justified(|ui| ui.weak(t!("inbox.empty")));
         return None;
+    }
+    // Not while a text field (the tag field) has the keyboard.
+    if !ui.ctx().egui_wants_keyboard_input() && ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::A)) {
+        action = Some(InboxAction::SelectAll);
     }
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -125,21 +136,27 @@ pub fn show(
                             &entries[i],
                             gallery.thumb(i),
                             (None, warn),
-                            gallery.selected == Some(i),
+                            gallery.is_marked(i),
                             TILE_WIDTH,
                             false,
                         );
                         match click {
-                            Some(TileClick::Select) => action = Some(InboxAction::Select(i)),
+                            Some(TileClick::Select) => {
+                                let modifiers = ui.input(|input| input.modifiers);
+                                action = Some(InboxAction::Click(i, modifiers));
+                            }
                             Some(TileClick::Open) => action = Some(InboxAction::Open(i)),
                             None => {}
                         }
-                        response.context_menu(|ui| {
-                            if ui.button(t!("inbox.done_one")).clicked() {
-                                action = Some(InboxAction::Done(vec![i]));
-                                ui.close();
-                            }
-                        });
+                        // A right-click outside the selection selects the tile, as in the gallery.
+                        if response.secondary_clicked() && !gallery.is_marked(i) {
+                            action = Some(InboxAction::Click(i, Modifiers::NONE));
+                        }
+                        let mut picked = None;
+                        entry_menu(&response, i, &entries[i], true, menu, &mut picked);
+                        if let Some(a) = picked {
+                            action = Some(InboxAction::Gallery(a));
+                        }
                     }
                 });
             });

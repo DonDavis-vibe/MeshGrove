@@ -16,6 +16,9 @@ const LIMIT: usize = 2000;
 impl App {
     pub(super) fn show_inbox(&mut self) {
         let Some(index) = &self.index else { return };
+        // Shown again after tags, marks or new files changed it: the selection stays.
+        let kept = matches!(self.view, View::Inbox { .. })
+            .then(|| (self.selected_entry().map(|e| e.path.clone()), self.selected_paths()));
         let groups = index.inbox(&self.config.library_roots, LIMIT).unwrap_or_default();
         self.inbox_count = index.inbox_count().unwrap_or_default();
         let (mut entries, mut infos) = (Vec::new(), Vec::new());
@@ -35,13 +38,22 @@ impl App {
         self.flatten = false;
         self.view = View::Inbox { entries, groups: infos };
         self.refresh_gallery(true);
+        if let Some((focus, marked)) = kept {
+            let entries = self.entries();
+            let at = |path: &PathBuf| entries.iter().position(|e| e.path == *path);
+            let focus = focus.as_ref().and_then(at);
+            let marked = marked.iter().filter_map(at).collect();
+            self.gallery.restore(focus, marked);
+        }
     }
 
-    pub(super) fn inbox_action(&mut self, action: Option<InboxAction>) {
+    pub(super) fn inbox_action(&mut self, ctx: &egui::Context, action: Option<InboxAction>) {
         let View::Inbox { entries, groups } = &self.view else { return };
         match action {
-            Some(InboxAction::Select(i)) => self.gallery.select(Some(i)),
+            Some(InboxAction::Click(i, modifiers)) => self.gallery.click(i, modifiers),
+            Some(InboxAction::SelectAll) => self.gallery.select_all(),
             Some(InboxAction::Open(i)) => self.open_entry(i),
+            Some(InboxAction::Gallery(action)) => self.handle_action(ctx, action),
             Some(InboxAction::Done(indices)) => {
                 let paths: Vec<PathBuf> =
                     indices.iter().filter_map(|&i| entries.get(i)).map(|e| e.path.clone()).collect();
