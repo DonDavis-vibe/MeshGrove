@@ -34,7 +34,7 @@ use crate::thumbs::{ThumbResult, ThumbService};
 use crate::ui::details::{
     self, DetailsContext, DetailsOutput, ListsOfSelection, ModelStatus, NoteEditor, PrintInfo, TagEditor,
 };
-use crate::ui::duplicates::{self, ArchiveInfo, DupAction, GroupInfo};
+use crate::ui::duplicates::{self, ArchiveInfo, DupAction, GroupInfo, TwinInfo};
 use crate::ui::gallery::{Action, Arrange, Gallery, ListSettings, MenuContext};
 use crate::ui::import::{self as import_view, ImportGroupInfo};
 use crate::ui::inbox::{self as inbox_view, InboxGroupInfo};
@@ -85,7 +85,13 @@ enum View {
     Flatten { root: PathBuf, entries: Option<Vec<Entry>> },
     /// Groups of duplicate models from the library index; `ignored`: how many the user keeps
     /// as they are (listed too only on request).
-    Duplicates { entries: Vec<Entry>, groups: Vec<GroupInfo>, ignored: usize, archives: Vec<ArchiveInfo> },
+    Duplicates {
+        entries: Vec<Entry>,
+        groups: Vec<GroupInfo>,
+        ignored: usize,
+        archives: Vec<ArchiveInfo>,
+        twins: Vec<TwinInfo>,
+    },
     /// The files of a list (favourites, print list, collection).
     List { id: i64, entries: Vec<Entry> },
     /// New files waiting to be sorted, by the drop they came with.
@@ -1409,6 +1415,17 @@ impl App {
                 groups[gi].in_archive = true;
             }
         }
+        // Archives that hold the same models: one of a pair can go as a whole.
+        let mut twins = duplicates::twins_of(&entries, &groups, |a| index.models_below(a).unwrap_or(0));
+        for twin in &mut twins {
+            for side in &mut twin.pair {
+                side.size = side.archive.metadata().map_or(0, |m| m.len());
+                side.blocked = actions::trash_blocked(std::slice::from_ref(&side.archive));
+            }
+            for &gi in &twin.groups {
+                groups[gi].in_archive = true;
+            }
+        }
         // Folded away, a group is not part of "clean up selected".
         if !self.dupes_show_archive_groups {
             for g in groups.iter_mut().filter(|g| g.in_archive) {
@@ -1417,13 +1434,19 @@ impl App {
         }
         self.leave_search();
         self.flatten = false;
-        self.view = View::Duplicates { entries, groups, ignored, archives };
+        self.view = View::Duplicates { entries, groups, ignored, archives, twins };
         self.refresh_gallery(true);
     }
 
     fn dupes_action(&mut self, action: Option<DupAction>) {
-        let View::Duplicates { entries, groups, archives, .. } = &mut self.view else { return };
+        let View::Duplicates { entries, groups, archives, twins, .. } = &mut self.view else { return };
         match action {
+            Some(DupAction::TrashTwin(ti, side)) => {
+                if let Some(twin) = twins.get(ti).filter(|t| side < 2 && t.contained(side)) {
+                    let archive = twin.pair[side].archive.clone();
+                    self.request_trash(vec![archive]);
+                }
+            }
             Some(DupAction::TrashArchiveCopies(ai)) => {
                 let paths = archives.get(ai).map(|a| a.copies.clone()).unwrap_or_default();
                 self.request_trash(paths);
@@ -2858,7 +2881,7 @@ impl App {
             self.history_action(action);
             return;
         }
-        if let View::Duplicates { entries, groups, ignored, archives } = &self.view {
+        if let View::Duplicates { entries, groups, ignored, archives, twins } = &self.view {
             let prefer_packed = self.config.duplicates_keep == DuplicatesKeep::Packed;
             let cleanup = self.trash_run.as_ref().map(|run| duplicates::Cleanup {
                 done: run.done.load(std::sync::atomic::Ordering::Relaxed),
@@ -2868,6 +2891,7 @@ impl App {
                 ignored: *ignored,
                 show_ignored: self.dupes_show_ignored,
                 archives,
+                twins,
                 prefer_packed,
                 show_archive_groups: self.dupes_show_archive_groups,
                 cleanup,

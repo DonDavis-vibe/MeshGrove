@@ -39,6 +39,8 @@ pub struct Shown<'a> {
     pub show_ignored: bool,
     /// The archives with extracted copies, decided as a whole above the groups.
     pub archives: &'a [ArchiveInfo],
+    /// Pairs of archives of which one holds nothing the other does not.
+    pub twins: &'a [TwinInfo],
     /// The setting, which makes one of each archive's buttons the main one.
     pub prefer_packed: bool,
     /// The groups that belong to those archives are listed too.
@@ -199,6 +201,67 @@ pub fn archives_of(entries: &[Entry], groups: &[GroupInfo], members_of: impl Fn(
     archives.into_iter().map(|(_, a)| a).collect()
 }
 
+/// Two archives that hold the same models: when every model of one is in the other too, that
+/// one can go as a whole, which settles groups no single file could (both copies are members).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TwinInfo {
+    /// The two archives, each with the models the index has in it, its size on disk and why it
+    /// cannot be trashed (a read-only drive).
+    pub pair: [TwinSide; 2],
+    /// Models that are in both.
+    pub shared: usize,
+    /// The groups (by index) those models are in.
+    pub groups: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TwinSide {
+    pub archive: PathBuf,
+    pub members: usize,
+    pub size: u64,
+    pub blocked: Option<String>,
+}
+
+impl TwinInfo {
+    /// Every model of this side (0 or 1) is in the other archive too: it can go.
+    pub fn contained(&self, side: usize) -> bool {
+        self.pair[side].members > 0 && self.shared >= self.pair[side].members
+    }
+
+    /// One of the two can go without losing a model.
+    pub fn settles(&self) -> bool {
+        self.contained(0) || self.contained(1)
+    }
+}
+
+/// The pairs of archives among the exact groups (ignored ones left out) that share models, the
+/// pair with the most in common first; only pairs where one side is contained in the other.
+pub fn twins_of(entries: &[Entry], groups: &[GroupInfo], members_of: impl Fn(&Path) -> usize) -> Vec<TwinInfo> {
+    let mut pairs: BTreeMap<(PathBuf, PathBuf), Vec<usize>> = BTreeMap::new();
+    for (gi, group) in groups.iter().enumerate().filter(|(_, g)| g.exact && !g.ignored) {
+        let mut archives: Vec<PathBuf> = group
+            .range
+            .clone()
+            .filter_map(|i| meshgrove_core::archive::split(&entries[i].path).map(|(archive, _)| archive))
+            .collect();
+        archives.sort();
+        archives.dedup();
+        for (i, a) in archives.iter().enumerate() {
+            for b in &archives[i + 1..] {
+                pairs.entry((a.clone(), b.clone())).or_default().push(gi);
+            }
+        }
+    }
+    let side = |archive: PathBuf| TwinSide { members: members_of(&archive), archive, size: 0, blocked: None };
+    let mut twins: Vec<TwinInfo> = pairs
+        .into_iter()
+        .map(|((a, b), groups)| TwinInfo { pair: [side(a), side(b)], shared: groups.len(), groups })
+        .filter(TwinInfo::settles)
+        .collect();
+    twins.sort_by_key(|t| std::cmp::Reverse(t.shared));
+    twins
+}
+
 pub enum DupAction {
     Select(usize),
     Open(usize),
@@ -227,6 +290,8 @@ pub enum DupAction {
     TrashAllArchives,
     /// List the groups that belong to the archives too, or fold them away again.
     ShowArchiveGroups(bool),
+    /// Of a pair of archives holding the same models (by its index), this side goes to the trash.
+    TrashTwin(usize, usize),
 }
 
 /// The copy worth keeping: outside an archive (or, with `prefer_packed`, inside one), then the
@@ -248,7 +313,7 @@ pub fn show(
     view: &Shown,
     gallery: &Gallery,
 ) -> Option<DupAction> {
-    let Shown { ignored, show_ignored, archives, prefer_packed, show_archive_groups, cleanup } = *view;
+    let Shown { ignored, show_ignored, archives, twins, prefer_packed, show_archive_groups, cleanup } = *view;
     // An archive's groups are settled with its row; among the groups they would be one locked
     // card per model.
     let folded = |g: &GroupInfo| g.in_archive && !show_archive_groups;
@@ -319,7 +384,21 @@ pub fn show(
                     action = Some(act);
                 }
             }
-            let theirs = groups.iter().filter(|g| g.in_archive).count();
+            ui.add_space(6.0);
+        }
+        if !twins.is_empty() {
+            ui.label(RichText::new(t!("dupes.twins_title")).strong());
+            ui.weak(t!("dupes.twins_explain"));
+            for (ti, twin) in twins.iter().enumerate() {
+                let flight = cleanup.and_then(|c| c.of(twin.pair.iter().map(|s| s.archive.as_path())));
+                if let Some(act) = twin_row(ui, twin, ti, flight) {
+                    action = Some(act);
+                }
+            }
+            ui.add_space(6.0);
+        }
+        let theirs = groups.iter().filter(|g| g.in_archive).count();
+        if theirs > 0 {
             ui.horizontal_wrapped(|ui| {
                 ui.weak(t!("dupes.archive_groups", count = theirs));
                 let label =
@@ -415,6 +494,50 @@ pub fn show(
             ui.add_space(6.0);
         }
     });
+    action
+}
+
+/// Two archives holding the same models: which of them can go as a whole. The first one that
+/// can is the main button (the pair is sorted, so `_inbox/pack.zip` comes after `Garten/pack.zip`
+/// only by name; the user picks).
+fn twin_row(ui: &mut Ui, twin: &TwinInfo, ti: usize, flight: Option<(usize, usize)>) -> Option<DupAction> {
+    let mut action = None;
+    let [a, b] = &twin.pair;
+    card(ui, Id::unique(("dupes_twin", &a.archive, &b.archive)), flight, |ui| {
+        for side in [a, b] {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("📦 {}", listing::file_name(&side.archive))).strong());
+                ui.weak(t!("dupes.twin_models", count = side.members));
+                let folder = side.archive.parent().map(|p| p.display().to_string()).unwrap_or_default();
+                ui.add(egui::Label::new(RichText::new(folder).weak()).truncate());
+            });
+        }
+        ui.weak(t!("dupes.twin_shared", count = twin.shared));
+        ui.horizontal_wrapped(|ui| {
+            for (si, side) in twin.pair.iter().enumerate() {
+                let other = &twin.pair[1 - si];
+                let label = t!(
+                    "dupes.twin_trash",
+                    name = listing::file_name(&side.archive),
+                    folder = side.archive.parent().map(listing::file_name).unwrap_or_default(),
+                    size = i18n::file_size(side.size)
+                );
+                let why = match &side.blocked {
+                    Some(reason) if !reason.is_empty() => reason.clone(),
+                    _ => t!("dupes.twin_blocked", missing = side.members.saturating_sub(twin.shared)).into_owned(),
+                };
+                let can_go = twin.contained(si) && side.blocked.is_none();
+                let button = ui.add_enabled(can_go, egui::Button::new(label)).on_disabled_hover_text(why);
+                if button
+                    .on_hover_text(t!("dupes.twin_trash_hint", other = listing::file_name(&other.archive)))
+                    .clicked()
+                {
+                    action = Some(DupAction::TrashTwin(ti, si));
+                }
+            }
+        });
+    });
+    ui.add_space(6.0);
     action
 }
 
@@ -705,5 +828,44 @@ mod tests {
         assert_eq!(of(&["/lib/a.stl", "/lib/c.stl"]), Some((1, 2)), "a is through, c waits");
         assert_eq!(of(&["/lib/b.stl", "/lib/kept.stl"]), Some((1, 1)), "what stays does not count");
         assert_eq!(of(&["/lib/kept.stl"]), None, "not part of the cleanup");
+    }
+
+    #[test]
+    fn an_archive_contained_in_another_can_go() {
+        let (_dir, root) = library();
+        // other.zip (2 models) is all in castle.zip (3 models); more.zip shares one of its two.
+        let entries = vec![
+            entry(&root, "packs/castle.zip/a.stl", 10, 1),
+            entry(&root, "packs/other.zip/a.stl", 10, 1),
+            entry(&root, "packs/castle.zip/b.stl", 10, 1),
+            entry(&root, "packs/other.zip/sub/b.stl", 10, 1),
+            entry(&root, "packs/castle.zip/c.stl", 10, 1),
+            entry(&root, "packs/more.zip/c.stl", 10, 1),
+            entry(&root, "a/plain.stl", 10, 1), // plain copies are no pair of archives
+            entry(&root, "b/plain.stl", 10, 1),
+        ];
+        let groups = vec![
+            group(0..2, true, false),
+            group(2..4, true, false),
+            group(4..6, true, false),
+            group(6..8, true, false),
+        ];
+        let members = |a: &Path| match a.file_name().and_then(|n| n.to_str()) {
+            Some("castle.zip") => 3,
+            _ => 2,
+        };
+        let twins = twins_of(&entries, &groups, members);
+        assert_eq!(twins.len(), 1, "more.zip holds a model castle.zip has not: no side can go");
+        let twin = &twins[0];
+        assert_eq!(twin.pair[0].archive, root.join("packs").join("castle.zip"));
+        assert_eq!(twin.pair[1].archive, root.join("packs").join("other.zip"));
+        assert_eq!((twin.shared, &twin.groups), (2, &vec![0, 1]));
+        assert!(!twin.contained(0) && twin.contained(1), "other.zip can go, castle.zip holds more");
+        // The same models in both: either can go.
+        let same = twins_of(&entries, &groups[..2], |_| 2);
+        assert!(same[0].contained(0) && same[0].contained(1));
+        // Ignored groups do not count.
+        let ignored = vec![group(0..2, true, true), group(2..4, true, false)];
+        assert!(twins_of(&entries, &ignored, |_| 2).is_empty(), "one of two shared: not contained");
     }
 }

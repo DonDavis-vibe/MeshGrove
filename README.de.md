@@ -679,7 +679,10 @@ Klick: das Archiv behalten und seine entpackten Kopien in den Papierkorb, oder d
 und das Archiv in den Papierkorb – Letzteres erst, wenn jedes Modell darin entpackt ist (der Knopf
 sagt, wie viele sonst verloren gingen). Zwei Knöpfe über den Zeilen tun dasselbe für alle Archive
 auf einmal. Die Gruppen dieser Archive werden dort erledigt und sind unter den Gruppen eingeklappt
-(*Unten zeigen* listet sie); eine gesperrte Gruppe nennt ihr Archiv und verweist auf diese Zeile. Konfiguration: `duplicates_keep = "extracted" | "packed"`.
+(*Unten zeigen* listet sie); eine gesperrte Gruppe nennt ihr Archiv und verweist auf diese Zeile.
+*Archive mit denselben Modellen* listet Paare von Archiven, von denen eines nichts enthält, was
+das andere nicht auch hat (ein Paket, das zweimal in der Bibliothek liegt): Dieses kann als Ganzes
+in den Papierkorb, was Gruppen erledigt, deren Kopien beide in Archiven stecken. Konfiguration: `duplicates_keep = "extracted" | "packed"`.
 
 ### KI-Assistent und MCP (freiwillig)
 
