@@ -17,6 +17,7 @@ use crate::guest_files::GuestDirs;
 use crate::library::{Caller, LibraryAccess, Opened, Reading};
 use crate::staging::{Staging, new_uid};
 use crate::state::{self, CancelToken, Folders, Progress, Setup, State};
+use crate::targets::Target;
 use crate::{DEFAULT_MEMORY_MB, EVENT_DEADLINE, Error, TOOL_DEADLINE};
 
 /// Largest answer of a tool, as JSON.
@@ -113,32 +114,44 @@ pub struct StagedBundle {
     /// The library files the bundle puts its own beside (`next_to`), found when it was handed
     /// over, as far as whoever handed it over may read the library.
     pub sources: Vec<Source>,
+    /// The folder the user chose for it (`target`), as the panel that handed it over knew it.
+    pub target: Option<Target>,
 }
 
 impl StagedBundle {
     /// A bundle that goes into a folder of its own.
     pub fn new(plugin: &str, bundle: Bundle, staging: Staging) -> StagedBundle {
-        StagedBundle { plugin: plugin.to_owned(), bundle, staging, sources: Vec::new() }
+        StagedBundle { plugin: plugin.to_owned(), bundle, staging, sources: Vec::new(), target: None }
     }
 
     /// Checks the bundle against its files and finds its place in library `root` (by default
-    /// below `landing`), or beside the library files it names, wherever those are.
+    /// below `landing`), beside the library files it names, wherever those are, or in the
+    /// folder the user chose for it.
     pub fn resolve(&self, root: &Path, landing: &Path) -> Result<ResolvedBundle, Error> {
-        let mut resolved = match self.bundle.uses_next_to() {
-            true => meshgrove_core::bundle::resolve_beside(
-                &self.bundle,
-                self.staging.out(),
-                &self.sources,
-                Limits::DEFAULT,
-            )?,
-            false => meshgrove_core::bundle::resolve(&self.bundle, self.staging.out(), root, landing)?,
+        let out = self.staging.out();
+        let mut resolved = match (&self.target, self.bundle.uses_next_to()) {
+            (Some(target), _) => {
+                meshgrove_core::bundle::resolve_into(&self.bundle, out, &target.root, &target.dir, Limits::DEFAULT)?
+            }
+            (None, true) => meshgrove_core::bundle::resolve_beside(&self.bundle, out, &self.sources, Limits::DEFAULT)?,
+            (None, false) => meshgrove_core::bundle::resolve(&self.bundle, out, root, landing)?,
         };
         resolved.plugin = self.plugin.clone();
         Ok(resolved)
     }
 
-    /// [`StagedBundle::resolve`] into the library imports go to.
+    /// [`StagedBundle::resolve`] into the library imports go to, unless it has a place of its
+    /// own: beside library files, or the folder the user chose (in a library still known).
     pub fn resolve_for(&self, config: &Config) -> Result<ResolvedBundle, Error> {
+        if let Some(target) = &self.target {
+            if !config.library_roots.contains(&target.root) {
+                return Err(Error::Invalid(format!(
+                    "the library of the chosen folder {:?} is no library of Meshgrove's any more",
+                    target.label
+                )));
+            }
+            return self.resolve(Path::new(""), Path::new(""));
+        }
         match (config.import_root(), config.landing_dir()) {
             (Some(root), Some(landing)) => self.resolve(root, &landing),
             // Beside a library file: the library is the one that file is in.
@@ -146,10 +159,25 @@ impl StagedBundle {
             _ => Err(Error::Invalid("there is no library to put the files into".into())),
         }
     }
+
+    /// Whether the bundle has a place of its own (beside library files, or a chosen folder), so
+    /// it needs no library imports go to.
+    pub fn is_placed(&self) -> bool {
+        self.target.is_some() || self.bundle.uses_next_to()
+    }
 }
 
 fn load_error(e: wasmtime::Error) -> Error {
     Error::Load(e.to_string())
+}
+
+/// A tool's bundle naming a folder the user chose: those belong to panels.
+fn no_target_for_tools() -> Error {
+    Error::Invalid(
+        "target needs a folder the user chose in the plugin's panel (pick_folder); \
+         a tool's files go into the import folder, a folder of their own or beside a library file"
+            .into(),
+    )
 }
 
 fn plugin_error(e: PluginError) -> Error {
@@ -369,8 +397,12 @@ impl Plugin {
         staging: Staging,
         reading: &Reading,
         tmp: Option<&Path>,
+        target: Option<Target>,
     ) -> Result<StagedBundle, Error> {
         let sources = (|| {
+            if bundle.target.is_some() && target.is_none() {
+                return Err(no_target_for_tools());
+            }
             let dirs =
                 GuestDirs { data: self.data_dir(), tmp: tmp.map(Path::to_path_buf), scratch: self.scratch_dir() };
             crate::derive::derive_files(&bundle, staging.out(), reading, &dirs)?;
@@ -387,7 +419,7 @@ impl Plugin {
             Ok(sources)
         })();
         match sources {
-            Ok(sources) => Ok(StagedBundle { plugin: self.manifest.id.clone(), bundle, staging, sources }),
+            Ok(sources) => Ok(StagedBundle { plugin: self.manifest.id.clone(), bundle, staging, sources, target }),
             Err(e) => {
                 let _ = staging.remove();
                 Err(e)
@@ -426,6 +458,10 @@ impl Plugin {
         cancel: &CancelToken,
     ) -> Result<ToolOutcome, Error> {
         match self.run_tool(name, args, staging.out(), class, cancel) {
+            Ok((_, _, Some(bundle))) if bundle.target.is_some() => {
+                let _ = staging.remove();
+                Err(no_target_for_tools())
+            }
             // Files a job of the plugin is to make: they are staged once it has made them
             // ([`Plugin::finish_job`]); the staging folder waits for it.
             Ok((result, images, Some(bundle))) if bundle.job.is_some() => {
@@ -435,7 +471,7 @@ impl Plugin {
                 // What a tool puts its files beside, the AI that called it must be able to read.
                 let reading = self.reading(Caller::Ai(class), Opened::default());
                 // Its own /tmp went with its instance.
-                Ok(ToolOutcome { result, images, bundle: Some(self.stage(bundle, staging, &reading, None)?) })
+                Ok(ToolOutcome { result, images, bundle: Some(self.stage(bundle, staging, &reading, None, None)?) })
             }
             Ok((result, images, None)) => {
                 let _ = staging.remove();
@@ -571,7 +607,7 @@ impl Plugin {
         })();
         match made {
             // What it puts its files beside, the AI that called the tool must be able to read.
-            Ok(bundle) => self.stage(bundle, staging, &self.reading(Caller::Ai(class), Opened::default()), None),
+            Ok(bundle) => self.stage(bundle, staging, &self.reading(Caller::Ai(class), Opened::default()), None, None),
             Err(e) => {
                 let _ = staging.remove();
                 Err(e)

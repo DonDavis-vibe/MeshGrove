@@ -13,10 +13,11 @@ use meshgrove_core::ai::proposals::{self, Origin, ProposalStore};
 use meshgrove_core::config::{AccessClass, PluginConfig};
 use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Level, PickInto};
 use meshgrove_plugin_api::{FileType, HostInfo, Permission, Receive};
-use meshgrove_plugins::StagedBundle;
+use meshgrove_plugins::{StagedBundle, Target};
 
 use super::App;
 use crate::plugins::{BundleRoute, PanelAction, settle_bundle};
+use crate::ui::folder_pick::{self, FolderPick};
 use crate::ui::plugin_view::{self, MeshViewArgs};
 use crate::ui::settings::SettingsChange;
 
@@ -33,6 +34,15 @@ pub(super) enum PathPrompt {
         bundle_title: String,
         input: String,
     },
+}
+
+/// A panel waiting for the user to choose a folder (`Effect::PickFolder`); the first one asked
+/// for is shown, the others follow.
+pub(super) struct FolderAsk {
+    plugin: String,
+    panel: String,
+    id: String,
+    pick: FolderPick,
 }
 
 /// What the system's file dialog was opened for.
@@ -267,6 +277,7 @@ impl App {
                             None => self.toast(format!("{name}: {}", t!("plugins.no_such_file", path = path))),
                         }
                     }
+                    Effect::PickFolder { id, title } => self.ask_folder(plugin, panel, id, title),
                     Effect::OpenFileDialog { id, title, extensions, multiple, into } => {
                         let title = title.unwrap_or_else(|| t!("plugins.pick_file").into_owned());
                         let mut dialog = self.plugin_dialog.base.clone().set_title(title);
@@ -304,6 +315,46 @@ impl App {
         }
     }
 
+    /// Meshgrove's folder chooser for a panel: in the libraries, starting where the panel's
+    /// files went last, else at the root of the library imports go to.
+    fn ask_folder(&mut self, plugin: &str, panel: &str, id: String, title: Option<String>) {
+        let name = self.plugin_name(plugin);
+        let libraries: Vec<folder_pick::Library> = meshgrove_core::ai::scope::aliases(&self.config.library_roots)
+            .into_iter()
+            .map(|(root, alias)| folder_pick::Library {
+                read_only: meshgrove_core::fsinfo::is_read_only(&root),
+                root,
+                alias,
+            })
+            .collect();
+        if libraries.iter().all(|l| l.read_only) {
+            self.toast(format!("{name}: {}", t!("plugins.no_library")));
+            return;
+        }
+        let start = self
+            .plugins
+            .last_target(plugin, panel)
+            .map(|t| (t.root, t.dir))
+            .or_else(|| self.config.import_root().map(|root| (root.to_path_buf(), root.to_path_buf())));
+        let title = title.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| t!("folder_pick.title").into_owned());
+        let pick = FolderPick::new(title, name, libraries, start);
+        self.folder_asks.push_back(FolderAsk { plugin: plugin.to_owned(), panel: panel.to_owned(), id, pick });
+    }
+
+    /// The folder chooser, while a panel waits for one.
+    pub(super) fn folder_pick_modal(&mut self, ctx: &egui::Context) {
+        let Some(ask) = self.folder_asks.front_mut() else { return };
+        let Some(answer) = ask.pick.show(ctx) else { return };
+        let FolderAsk { plugin, panel, id, .. } = self.folder_asks.pop_front().expect("shown above");
+        // Cancelled: the panel hears nothing, as when a file dialog is closed.
+        if let folder_pick::Answer::Chosen(chosen) = answer {
+            let target = Target { root: chosen.root, dir: chosen.dir, label: chosen.label };
+            if let Err(e) = self.plugins.folder_picked(&plugin, &panel, &id, target) {
+                self.toast(format!("{}: {e}", self.plugin_name(&plugin)));
+            }
+        }
+    }
+
     /// The library file behind an id a plugin named, as far as the plugin may know of it: a
     /// file the user opened with that panel, one its grant to read the library shows, or (as
     /// before there were grants) one local AI may see.
@@ -329,8 +380,9 @@ impl App {
         let allowed = self.plugins.plugin(plugin).is_some_and(|p| p.may(Permission::Bundles));
         // No library yet (a fresh install): ask where the files should go. That folder becomes
         // the library, and the bundle follows once it is chosen.
-        // Files that go beside a library file need no asking: that file is in a library.
-        let placed = staged.bundle.uses_next_to();
+        // Files that go beside a library file or into a folder the user chose need no asking:
+        // those are in a library.
+        let placed = staged.is_placed();
         if allowed && !placed && self.config.import_root().is_none() && self.plugin_prompt.is_none() {
             let input = dirs::document_dir().or_else(dirs::home_dir).unwrap_or_default().join("Meshgrove");
             self.plugin_prompt = Some(PathPrompt::Library {
@@ -361,7 +413,8 @@ impl App {
         };
         let mut outcome = settle_bundle(allowed, staged, &self.config, route);
         // No library yet (a fresh install): say so in the user's language, with the way out.
-        if self.config.import_root().is_none()
+        if !placed
+            && self.config.import_root().is_none()
             && let Some(BundleOutcome::Failed { error }) = &mut outcome
         {
             *error = t!("plugins.no_library").into_owned();

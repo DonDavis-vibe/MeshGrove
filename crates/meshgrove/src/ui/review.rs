@@ -706,10 +706,16 @@ fn bundle_row(ui: &mut Ui, item: &mut ReviewItem) {
     });
     // Where it lands now: its place may have been taken while it waited.
     let bundle = bundle.at_free_place();
-    // A folder below its library, as the user knows it; the library itself by its name.
+    // A folder below its library, as the user knows it; the library itself by its name. A
+    // folder the user chose may be in any library: then the library comes first.
+    let library = meshgrove_core::listing::file_name(&bundle.root);
     let within = |dir: &std::path::Path| match dir.strip_prefix(&bundle.root) {
+        Ok(rel) if !rel.as_os_str().is_empty() && bundle.chosen => {
+            let rel = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+            format!("{library}/{rel}")
+        }
         Ok(rel) if !rel.as_os_str().is_empty() => rel.display().to_string(),
-        _ => meshgrove_core::listing::file_name(&bundle.root),
+        _ => library.clone(),
     };
     let loose = bundle.is_loose();
     // Loose files beside what they were made from: beside one file, or each beside its own.
@@ -721,6 +727,14 @@ fn bundle_row(ui: &mut Ui, item: &mut ReviewItem) {
             ui.label(match count {
                 1 => t!("review.bundle_beside_one", name = name, path = path),
                 _ => t!("review.bundle_beside", count = count, name = name, path = path),
+            });
+        }
+        // Loose in the folder the user chose.
+        (true, None) => {
+            let (count, path) = (bundle.files.len(), within(&bundle.to));
+            ui.label(match count {
+                1 => t!("review.bundle_into_one", path = path),
+                _ => t!("review.bundle_into", count = count, path = path),
             });
         }
         (true, _) => _ = ui.label(t!("review.bundle_beside_each", count = bundle.files.len())),

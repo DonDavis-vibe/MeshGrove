@@ -77,6 +77,10 @@ pub struct ResolvedBundle {
     /// tool's job made after the AI had its answer.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub review: bool,
+    /// It goes into a folder the user chose for it ([`resolve_into`]), maybe in another
+    /// library than imports go to: the review names the library.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub chosen: bool,
     pub files: Vec<ResolvedFile>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lists: Vec<ResolvedList>,
@@ -94,8 +98,8 @@ pub struct ResolvedFile {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// Where it lands as a loose file beside its source ([`resolve_beside`]); none: below the
-    /// bundle's folder, as `rel` says.
+    /// Where it lands as a loose file, beside its source ([`resolve_beside`]) or in the folder
+    /// the user chose ([`resolve_into`]); none: below the bundle's folder, as `rel` says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<PathBuf>,
     /// The name of the library file it lands beside, for the review.
@@ -144,6 +148,11 @@ pub fn resolve_with(
             "the bundle puts its files beside library files (next_to), which have to be found first".into(),
         ));
     }
+    if bundle.target.is_some() {
+        return Err(BundleError::Invalid(
+            "the bundle goes into a folder the user chose (target), which has to be found first".into(),
+        ));
+    }
     if !landing.starts_with(root) {
         return Err(BundleError::Invalid("the import folder is not in the library".into()));
     }
@@ -181,6 +190,9 @@ pub fn resolve_beside(
         return Err(BundleError::Invalid(
             "next_to and folder do not go together: files beside their source land loose, not in a folder".into(),
         ));
+    }
+    if bundle.target.is_some() {
+        return Err(next_to_and_target());
     }
     let mut checked = check(bundle, out, limits)?;
     let mut root: Option<&Path> = None;
@@ -221,6 +233,49 @@ pub fn resolve_beside(
     Ok(checked.placed(bundle, out, &root, to))
 }
 
+fn next_to_and_target() -> BundleError {
+    BundleError::Invalid(
+        "next_to and target do not go together: a file goes beside its source or into the chosen folder".into(),
+    )
+}
+
+/// Checks `bundle` against `out` like [`resolve`], for a bundle that goes into a folder the user
+/// chose ([`Bundle::target`]): `dir` in library `root`, which need not exist yet (copying makes
+/// it, the undo takes it away again). With a folder of its own ([`Bundle::folder`]) the bundle
+/// lands in that folder below `dir`, as a whole, numbered when taken (" (2)"); without, its files
+/// land loose in `dir`, each under its own name (a folder of its own below `out` is dropped) with
+/// a number where that is taken.
+pub fn resolve_into(
+    bundle: &Bundle,
+    out: &Path,
+    root: &Path,
+    dir: &Path,
+    limits: Limits,
+) -> Result<ResolvedBundle, BundleError> {
+    if bundle.uses_next_to() {
+        return Err(next_to_and_target());
+    }
+    if root.as_os_str().is_empty() || !dir.starts_with(root) {
+        return Err(BundleError::Invalid("the chosen folder is not in its library".into()));
+    }
+    let mut checked = check(bundle, out, limits)?;
+    if let Some(folder) = &bundle.folder {
+        let place = relative(folder)
+            .ok_or_else(|| BundleError::BadPath(folder.clone()))?
+            .split('/')
+            .fold(dir.to_path_buf(), |p, part| p.join(part));
+        return Ok(ResolvedBundle { chosen: true, ..checked.placed(bundle, out, root, free_folder(&place)) });
+    }
+    let mut taken: Vec<PathBuf> = Vec::new();
+    for file in &mut checked.files {
+        let name = file.rel.rsplit('/').next().unwrap_or(&file.rel);
+        let at = crate::import::free_target(dir, name, &taken);
+        taken.push(at.clone());
+        file.at = Some(at);
+    }
+    Ok(ResolvedBundle { chosen: true, ..checked.placed(bundle, out, root, dir.to_path_buf()) })
+}
+
 /// What of a bundle is the same wherever it goes.
 struct Checked {
     title: String,
@@ -240,6 +295,7 @@ impl Checked {
             to,
             seen: true,
             review: false,
+            chosen: false,
             files: self.files,
             lists: self.lists,
             bytes: self.bytes,
@@ -875,6 +931,89 @@ mod tests {
         let mut escape = textured();
         escape.files[0].path = "../rose.3mf".into();
         assert!(matches!(resolve_beside(&escape, &f.out, &sources, Limits::DEFAULT), Err(BundleError::BadPath(_))));
+    }
+
+    #[test]
+    fn a_bundle_lands_in_the_chosen_folder_as_a_whole_or_loose() {
+        let (f, mut lib) = fixture();
+        let chosen = f.root.join("Garten");
+        let into = |b: &Bundle| resolve_into(b, &f.out, &f.root, &chosen, Limits::DEFAULT);
+        let target = |folder: Option<&str>| Bundle {
+            target: Some("3f9a0c11d2e4b567".into()),
+            folder: folder.map(str::to_owned),
+            ..bundle()
+        };
+
+        // With a folder of its own: that folder below the chosen one, as a whole.
+        let whole = into(&target(Some("Schublade"))).unwrap();
+        assert_eq!(whole.to, chosen.join("Schublade"));
+        assert!(!whole.is_loose() && whole.chosen);
+        assert!(!resolve(&bundle(), &f.out, &f.root, &f.landing).unwrap().chosen);
+        std::fs::create_dir_all(chosen.join("Schublade")).unwrap();
+        assert_eq!(into(&target(Some("Schublade"))).unwrap().to, chosen.join("Schublade (2)"), "never onto it");
+        std::fs::remove_dir(chosen.join("Schublade")).unwrap();
+
+        // Without: loose in the chosen folder, own folders below /out dropped, taken names numbered.
+        std::fs::write(chosen.join("bin_1x1.stl"), "mine").unwrap();
+        let loose = into(&target(None)).unwrap();
+        assert!(loose.is_loose());
+        assert_eq!(loose.to, chosen);
+        assert_eq!(loose.path_of("parts/bin_1x1.stl"), chosen.join("bin_1x1 (2).stl"));
+        assert_eq!(loose.path_of("parts/bin_2x1.stl"), chosen.join("bin_2x1.stl"));
+        assert_eq!(loose.path_of("drawer.gridfinity.json"), chosen.join("drawer.gridfinity.json"));
+        assert!(loose.files.iter().all(|file| file.beside.is_none()), "no source to name");
+
+        let report = lib.apply_change("plugin:bingrove", &loose.title, &loose.ops()).unwrap();
+        assert_eq!(report.skipped, 0, "{report:?}");
+        assert_eq!(std::fs::read_to_string(chosen.join("bin_1x1.stl")).unwrap(), "mine", "the user's file stays");
+        assert!(chosen.join("bin_1x1 (2).stl").is_file() && chosen.join("rose.stl").is_file());
+        assert_eq!(quantities(&lib, "Schublade – Teile"), [("bin_1x1 (2).stl".into(), 7), ("bin_2x1.stl".into(), 2)]);
+        let project = chosen.join("drawer.gridfinity.json");
+        assert_eq!(tags(&lib, &project), ["Gridfinity", "Projekt"]);
+        lib.undo_change(report.id).unwrap();
+        assert!(!project.exists() && !chosen.join("bin_1x1 (2).stl").exists(), "the undo takes them back");
+        assert!(chosen.join("bin_1x1.stl").is_file() && chosen.join("rose.stl").is_file(), "and only them");
+    }
+
+    #[test]
+    fn a_new_chosen_folder_is_made_and_goes_again_with_the_undo() {
+        let (f, mut lib) = fixture();
+        let chosen = f.root.join("Werkstatt").join("Boxen");
+        for folder in [None, Some("Schublade 160".to_owned())] {
+            let b = Bundle { target: Some("t".into()), folder, ..bundle() };
+            let resolved = resolve_into(&b, &f.out, &f.root, &chosen, Limits::DEFAULT).unwrap();
+            let report = lib.apply_change("plugin:bingrove", &resolved.title, &resolved.ops()).unwrap();
+            assert_eq!(report.skipped, 0, "{report:?}");
+            let bin = resolved.path_of("parts/bin_1x1.stl");
+            assert!(bin.is_file() && bin.starts_with(&chosen), "{bin:?}");
+            assert!(lib.entry_of(&bin).unwrap().is_some(), "indexed");
+            lib.undo_change(report.id).unwrap();
+            assert!(!f.root.join("Werkstatt").exists(), "the folders the change made are gone again");
+        }
+    }
+
+    #[test]
+    fn a_chosen_folder_is_checked() {
+        let (f, _lib) = fixture();
+        let chosen = f.root.join("Garten");
+        let b = Bundle { target: Some("t".into()), folder: None, ..bundle() };
+        let outside = resolve_into(&b, &f.out, &f.root, Path::new("/elsewhere"), Limits::DEFAULT).unwrap_err();
+        assert!(outside.to_string().contains("not in its library"), "{outside}");
+        let beside = Bundle { next_to: Some("lib/Garten/rose.stl".into()), ..b.clone() };
+        let both = resolve_into(&beside, &f.out, &f.root, &chosen, Limits::DEFAULT).unwrap_err();
+        assert!(both.to_string().contains("next_to and target"), "{both}");
+        let source =
+            Source { reference: "lib/Garten/rose.stl".into(), root: f.root.clone(), path: chosen.join("rose.stl") };
+        let both = resolve_beside(&beside, &f.out, &[source], Limits::DEFAULT).unwrap_err();
+        assert!(both.to_string().contains("next_to and target"), "{both}");
+        // Not found first: the import folder would take it silently.
+        let unresolved = resolve(&b, &f.out, &f.root, &f.landing).unwrap_err();
+        assert!(unresolved.to_string().contains("chose (target)"), "{unresolved}");
+        let escape = Bundle { folder: Some("../outside".into()), ..b };
+        assert!(matches!(
+            resolve_into(&escape, &f.out, &f.root, &chosen, Limits::DEFAULT),
+            Err(BundleError::BadPath(_))
+        ));
     }
 
     #[test]

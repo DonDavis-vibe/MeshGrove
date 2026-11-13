@@ -281,6 +281,9 @@ pub struct App {
     /// A path asked for a plugin (a file to open or where to save one).
     #[cfg(feature = "plugins")]
     plugin_prompt: Option<plugins::PathPrompt>,
+    /// Panels waiting for the user to choose a folder.
+    #[cfg(feature = "plugins")]
+    folder_asks: std::collections::VecDeque<plugins::FolderAsk>,
     /// The system's file dialog for a plugin to install, and the one open now.
     #[cfg(feature = "plugins")]
     plugin_dialog: plugins::PluginDialog,
@@ -476,6 +479,8 @@ impl App {
             plugins: crate::plugins::PluginHost::new(cc.egui_ctx.clone()),
             #[cfg(feature = "plugins")]
             plugin_prompt: None,
+            #[cfg(feature = "plugins")]
+            folder_asks: std::collections::VecDeque::new(),
             #[cfg(feature = "plugins")]
             plugin_dialog: plugins::PluginDialog::new(cc),
             config,
@@ -3389,6 +3394,7 @@ impl eframe::App for App {
         {
             self.poll_plugins();
             self.plugin_prompt_modal(&ctx);
+            self.folder_pick_modal(&ctx);
         }
         let chat = self.chat_available();
         self.layout.show_chat(chat);

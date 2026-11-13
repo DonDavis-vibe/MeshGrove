@@ -668,6 +668,69 @@ fn a_box_made_for_a_model_lands_beside_it() {
     assert_eq!(resolved.files[0].beside.as_deref(), Some("topf.stl"));
 }
 
+/// "Folder …": the panel asks for Meshgrove's folder chooser, gets a token for the folder the
+/// user chose and names it in its bundle; the box lands there, in a library that is not the one
+/// imports go to. Tokens the host did not give, and tools, put nothing anywhere.
+#[test]
+fn a_box_lands_in_the_folder_the_user_chose() {
+    use meshgrove_plugins::{Target, Targets};
+    let Some(bytes) = wasm() else { return };
+    let (base, dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (imports, workshop) = (dir.path().join("Eigene"), dir.path().join("Werkstatt"));
+    std::fs::create_dir_all(&imports).unwrap();
+    std::fs::create_dir_all(workshop.join("Boxen").join("box")).unwrap();
+    let config =
+        meshgrove_core::config::Config { library_roots: vec![imports.clone(), workshop.clone()], ..Default::default() };
+    let plugin = Arc::new(load(&bytes, granted(base.path())));
+    let targets = Targets::default();
+    let panel = plugin.open_panel("box", None).unwrap().with_targets(targets.clone());
+
+    let effects = panel.event(&Event::Click { id: "folder".into() }).unwrap();
+    let [Effect::PickFolder { id, title: Some(_) }] = effects.as_slice() else { panic!("{effects:?}") };
+    // The user chose Werkstatt/Boxen: the host keeps it and tells the panel its token.
+    let chosen = Target { root: workshop.clone(), dir: workshop.join("Boxen"), label: "Werkstatt/Boxen".into() };
+    let token = targets.add(chosen);
+    let picked = Event::FolderPicked { id: id.clone(), target: token.clone(), label: "Werkstatt/Boxen".into() };
+    assert!(panel.event(&picked).unwrap().is_empty());
+    let view = serde_json::to_string(&panel.render().unwrap()).unwrap();
+    assert!(view.contains("Into Werkstatt/Boxen"), "{view}");
+
+    let effects = panel.event(&Event::Click { id: "apply".into() }).unwrap();
+    let [Effect::ApplyBundle { bundle }] = effects.as_slice() else { panic!("{effects:?}") };
+    assert_eq!((bundle.target.as_deref(), bundle.folder.as_deref()), (Some(token.as_str()), Some("box")));
+    let staged = panel.stage(bundle.clone()).unwrap();
+    assert!(staged.is_placed());
+    let resolved = staged.resolve_for(&config).unwrap();
+    assert_eq!(resolved.root, workshop);
+    assert_eq!(resolved.to, workshop.join("Boxen").join("box (2)"), "a folder of that name is there already");
+    let mut lib = Library::open_in_memory().unwrap();
+    lib.finish_baseline(&workshop).unwrap();
+    let report = lib.apply_change("plugin:hello-box", &resolved.title, &resolved.ops()).unwrap();
+    assert_eq!(report.skipped, 0, "{report:?}");
+    assert!(resolved.path_of("box_20x30x40.stl").is_file());
+    assert!(std::fs::read_dir(&imports).unwrap().next().is_none(), "nothing in the import library");
+
+    // The library left Meshgrove meanwhile: the bundle has no place.
+    std::fs::write(panel.out().join("box.stl"), support::stl([1.0, 2.0, 3.0])).unwrap();
+    let again = panel.stage(bundle.clone()).unwrap();
+    let only_imports = meshgrove_core::config::Config { library_roots: vec![imports.clone()], ..Default::default() };
+    let err = again.resolve_for(&only_imports).unwrap_err();
+    assert!(err.to_string().contains("Werkstatt/Boxen"), "{err}");
+
+    // A token the host did not give: refused before the files are taken.
+    std::fs::write(panel.out().join("box.stl"), support::stl([1.0, 2.0, 3.0])).unwrap();
+    let forged = meshgrove_plugin_api::Bundle { target: Some("0123456789abcdef".into()), ..bundle.clone() };
+    let err = panel.stage(forged).unwrap_err();
+    assert!(matches!(&err, Error::Invalid(m) if m.contains("pick_folder")), "{err}");
+    assert!(panel.out().join("box.stl").is_file(), "still there for the next try");
+
+    // A tool's bundle cannot name one: tools have no folders chosen for them.
+    let before = Staging::list(base.path(), "hello-box").len();
+    let err = plugin.call_tool("make_box", &json!({"target": token}), &CancelToken::new()).unwrap_err();
+    assert!(matches!(&err, Error::Invalid(m) if m.contains("pick_folder")), "{err}");
+    assert_eq!(Staging::list(base.path(), "hello-box").len(), before, "its staging folder went");
+}
+
 /// A bundle file that is a copy of a 3MF with one part swapped: the host makes it when the
 /// bundle is handed over, from the mesh the plugin wrote, which does not go into the library.
 #[test]
@@ -932,14 +995,14 @@ fn a_plugin_built_for_api_0_1_still_runs() {
 fn the_manifests_api_decides_not_the_worlds() {
     let Some(bytes) = wasm() else { return };
     let base = tempfile::tempdir().unwrap();
-    let later = load(&bytes, Settings { host_api: "0.3.0".into(), ..granted(base.path()) });
+    let later = load(&bytes, Settings { host_api: "0.4.0".into(), ..granted(base.path()) });
     assert!(later.call_tool("make_box", &json!({}), &CancelToken::new()).is_ok());
-    let older = Plugin::from_bytes(&bytes, Settings { host_api: "0.1.0".into(), ..granted(base.path()) });
-    let Err(Error::Load(why)) = older else { panic!("loaded by a 0.1 host") };
-    assert!(why.contains("built for plugin API 0.2.0") && why.contains("update Meshgrove"), "{why}");
+    let older = Plugin::from_bytes(&bytes, Settings { host_api: "0.2.0".into(), ..granted(base.path()) });
+    let Err(Error::Load(why)) = older else { panic!("loaded by a 0.2 host") };
+    assert!(why.contains("built for plugin API 0.3.0") && why.contains("update Meshgrove"), "{why}");
     let other = Plugin::from_bytes(&bytes, Settings { host_api: "1.0.0".into(), ..granted(base.path()) });
     let Err(Error::Load(why)) = other else { panic!("loaded by a 1.0 host") };
-    assert!(why.contains("built for plugin API 0.2.0") && why.contains("an older Meshgrove"), "{why}");
+    assert!(why.contains("built for plugin API 0.3.0") && why.contains("an older Meshgrove"), "{why}");
     // The old plugin on a host that says it is the old one, as on Meshgrove 0.8.
     assert!(Plugin::from_bytes(API_0_1, Settings { host_api: "0.1.0".into(), ..granted(base.path()) }).is_ok());
 }
