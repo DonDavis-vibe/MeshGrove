@@ -666,7 +666,7 @@ impl Gallery {
                     })
                     .collect();
                 let previews = self.cycled(ui.ctx(), index, &ready);
-                let color = if entry.is_dir() { icons::FOLDER_BLUE } else { icons::ARCHIVE_AMBER };
+                let color = if entry.is_dir() { icons::folder_color() } else { icons::ARCHIVE_AMBER };
                 if previews.is_empty() && entry.is_dir() {
                     icons::folder(&painter, img);
                 } else if previews.is_empty() {

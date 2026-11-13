@@ -15,7 +15,20 @@
 //! first model window that opens, which the hook's input cannot reach; `MESHGROVE_WINDOW_VIEW=top`
 //! (or `front`, `left` …) starts that window in a standard view.
 
+//! A run with the hook leaves the user's settings and pane layout files alone (a click of the hook
+//! on a setting once changed the real ones); `MESHGROVE_SCREENSHOT_SAVE=1` writes them as usual,
+//! to test that something is remembered.
+
 use std::time::{Duration, Instant};
+
+/// Whether this run must not write the settings and layout files: a run of the hook, unless it
+/// asks for them to be written.
+pub fn leaves_settings_alone() -> bool {
+    static LEAVES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *LEAVES.get_or_init(|| {
+        std::env::var_os("MESHGROVE_SCREENSHOT").is_some() && std::env::var_os("MESHGROVE_SCREENSHOT_SAVE").is_none()
+    })
+}
 
 pub struct ScreenshotHook {
     pub pointer: Option<egui::Pos2>,

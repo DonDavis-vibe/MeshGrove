@@ -1362,6 +1362,10 @@ Meshgrove is distributed in the hope that it will be useful, but WITHOUT ANY WAR
 without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See
 the [GNU General Public License](LICENSE) for more details.
 
+The interface themes and the controls drawn from them are SolidCraft's UI kit (MIT OR
+Apache-2.0), kept in `vendor/` with its theme files and icons in `assets/`; the theme font is IBM
+Plex Sans (SIL Open Font License 1.1).
+
 The STEP helper uses OpenCascade (LGPL-2.1 with an exception) as a separate program; PDF
 previews call poppler's `pdftoppm` (GPL) as an external program. The licenses of all libraries
 and fonts built into the program are listed in `THIRD-PARTY-LICENSES.md`, which comes with every

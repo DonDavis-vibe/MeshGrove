@@ -19,7 +19,7 @@ use meshgrove_core::lists::ListKind;
 
 use super::duplicates::{TileClick, tile};
 use super::gallery::Gallery;
-use super::settings_kit::GOOD;
+use super::settings_kit::good;
 use super::tags::{self, TagStyle};
 use crate::i18n;
 
@@ -281,7 +281,7 @@ pub fn show(
             if busy && sweep > 0.0 {
                 // Green from the left, as far as the library got; gone with the card.
                 let tint = Rect::from_min_size(rect.min, vec2(rect.width() * sweep, rect.height()));
-                let color = GOOD.gamma_multiply(TINT * (1.0 - fade));
+                let color = good().gamma_multiply(TINT * (1.0 - fade));
                 ui.painter().set(background, Shape::rect_filled(tint, rounding, color));
             }
             if fade >= 0.999 && remove.is_none() {

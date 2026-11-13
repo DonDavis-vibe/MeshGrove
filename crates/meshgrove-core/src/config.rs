@@ -202,6 +202,17 @@ pub enum PreviewQuality {
     Studio,
 }
 
+/// Who draws the main window's title bar.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleBar {
+    /// Meshgrove, in the theme's colours, with its own buttons for the window.
+    #[default]
+    App,
+    /// The desktop's decorations.
+    System,
+}
+
 /// What a double-click (or Enter) on a model does. Models the chosen program does not open
 /// go to a model window instead.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -719,6 +730,16 @@ pub struct Config {
     pub supported_first: bool,
     /// "de" / "en"; `None` follows the system language.
     pub language: Option<String>,
+    /// The interface theme (the id of a theme file, or "dark" / "light" for SolidCraft's own);
+    /// `None`: Meshgrove's own look, following the system's dark or light.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_theme: Option<String>,
+    /// The interface font: "system" for the desktop's, or an installed family's name;
+    /// `None`: the theme's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_font: Option<String>,
+    /// The main window's title bar: Meshgrove's own, or the desktop's.
+    pub title_bar: TitleBar,
     /// The slicers models can be sent to; `None`: take the ones found on this computer at startup.
     pub slicers: Option<Vec<Slicer>>,
     /// Name of the default slicer (double-click, the first "open in" entry); `None`: the first.
@@ -1194,6 +1215,9 @@ impl Default for Config {
             sort_descending: false,
             supported_first: true,
             language: None,
+            ui_theme: None,
+            ui_font: None,
+            title_bar: TitleBar::default(),
             slicers: None,
             default_slicer: None,
             slicer: None,

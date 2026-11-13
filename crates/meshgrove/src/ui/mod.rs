@@ -1,10 +1,13 @@
 #[cfg(feature = "plugins")]
+pub mod appearance;
 pub mod canvas;
 pub mod chat;
 pub mod chat_input;
 pub mod details;
 pub mod duplicates;
+pub mod fonts;
 pub mod gallery;
+pub mod glyphs;
 #[cfg(feature = "plugins")]
 pub mod grid_editor;
 pub mod icons;

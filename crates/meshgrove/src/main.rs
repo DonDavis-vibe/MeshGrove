@@ -60,6 +60,8 @@ fn main() -> eframe::Result {
             // Matches the .desktop file name so KDE shows the right icon on Wayland.
             .with_app_id("meshgrove")
             .with_icon(app_icon())
+            // Meshgrove's own title bar (the settings' choice) takes the place of the desktop's.
+            .with_decorations(!ui::appearance::own_title_bar(config.title_bar))
             .with_inner_size([1400.0, 860.0])
             .with_min_inner_size([720.0, 480.0]),
         renderer: eframe::Renderer::Wgpu,

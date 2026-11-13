@@ -113,7 +113,7 @@ fn hex(c: Color32) -> String {
 fn level_color(ui: &Ui, level: Level) -> Color32 {
     match level {
         Level::Info => ui.visuals().hyperlink_color,
-        Level::Success => Color32::from_rgb(60, 160, 80),
+        Level::Success => super::appearance::tokens().map_or(Color32::from_rgb(60, 160, 80), |t| t.form_success),
         Level::Warn => ui.visuals().warn_fg_color,
         Level::Error => ui.visuals().error_fg_color,
     }

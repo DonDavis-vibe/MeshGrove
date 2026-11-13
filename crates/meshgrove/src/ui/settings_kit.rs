@@ -5,8 +5,10 @@
 
 use egui::{Color32, CornerRadius, Label, Response, RichText, Sense, Stroke, TextStyle, Ui, pos2, vec2};
 
-/// Green of a state that is fine ("connected").
-pub const GOOD: Color32 = Color32::from_rgb(92, 178, 112);
+/// Green of a state that is fine ("connected"): the theme's own, or Meshgrove's without a theme.
+pub fn good() -> Color32 {
+    super::appearance::tokens().map_or(Color32::from_rgb(92, 178, 112), |t| t.form_success)
+}
 
 /// The width of the label column: wide enough for most labels, never most of a narrow page.
 fn label_width(ui: &Ui) -> f32 {

@@ -108,7 +108,7 @@ fn card(ui: &mut Ui, id: Id, flight: Option<(usize, usize)>, body: impl FnOnce(&
     if flight.is_some() && sweep > 0.0 {
         let rect = shown.inner.response.rect;
         let tint = Rect::from_min_size(rect.min, vec2(rect.width() * sweep, rect.height()));
-        let color = super::settings_kit::GOOD.gamma_multiply(TINT * (1.0 - 0.6 * dim));
+        let color = super::settings_kit::good().gamma_multiply(TINT * (1.0 - 0.6 * dim));
         ui.painter().set(background, Shape::rect_filled(tint, rounding, color));
     }
 }
@@ -342,7 +342,7 @@ pub fn show(
         let (done, total) = (c.done.min(c.order.len()), c.order.len());
         let bar = egui::ProgressBar::new(done as f32 / total.max(1) as f32)
             .text(t!("dupes.cleaning", done = done, total = total))
-            .fill(super::settings_kit::GOOD.gamma_multiply(0.6));
+            .fill(super::settings_kit::good().gamma_multiply(0.6));
         ui.add(bar);
         ui.add_space(4.0);
     }

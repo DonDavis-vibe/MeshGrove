@@ -24,6 +24,12 @@ use crate::spacemouse::Snapshot;
 
 pub enum SettingsChange {
     Language(Option<String>),
+    /// The interface theme; `None`: Meshgrove's own look.
+    UiTheme(Option<String>),
+    /// The interface font: "system", a family, or `None` for the theme's own.
+    UiFont(Option<String>),
+    /// Who draws the main window's title bar.
+    TitleBar(config::TitleBar),
     AddRoot(PathBuf),
     RemoveRoot(PathBuf),
     /// The slicer list and the name of the default one.
@@ -382,6 +388,16 @@ pub struct SettingsDialog {
     ai: super::settings_ai::AiSettings,
     /// The "Plugins" page.
     plugins: super::settings_plugins::PluginSettings,
+    /// What the footer (Restore defaults) took below the page in the last frame.
+    footer_height: Option<f32>,
+    /// The theme picker's cards.
+    themes: super::appearance::Picker,
+    /// The font list: what is typed into its search, the search its rows were made for, the
+    /// rows whose fonts are loaded, and their families.
+    font_filter: String,
+    font_query: String,
+    font_window: super::fonts::PreviewWindow,
+    font_previews: std::collections::BTreeSet<String>,
     /// The sample tile of the "Kacheln" page.
     tiles: super::settings_tiles::TileSettings,
     /// A new theme as typed.
@@ -462,6 +478,7 @@ fn category_item(ui: &mut Ui, category: Category, selected: bool) -> egui::Respo
 #[derive(Debug, Clone, Copy)]
 enum Section {
     Language,
+    Appearance,
     DoubleClick,
     Panes,
     Library,
@@ -499,6 +516,7 @@ impl Section {
     fn title(self) -> String {
         match self {
             Section::Language => t!("settings.language"),
+            Section::Appearance => t!("settings.appearance"),
             Section::DoubleClick => t!("settings.double_click"),
             Section::Panes => t!("settings.panes"),
             Section::Library => t!("settings.library"),
@@ -633,6 +651,9 @@ impl Category {
         match self {
             Category::General => {
                 put(config.language.is_some(), SettingsChange::Language(None));
+                put(config.ui_theme.is_some(), SettingsChange::UiTheme(None));
+                put(config.ui_font.is_some(), SettingsChange::UiFont(None));
+                put(config.title_bar != d.title_bar, SettingsChange::TitleBar(d.title_bar));
                 put(config.double_click != d.double_click, SettingsChange::DoubleClick(d.double_click));
                 put(config.lock_panes != d.lock_panes, SettingsChange::LockPanes(d.lock_panes));
                 put(config.fold_for_plugins != d.fold_for_plugins, SettingsChange::FoldForPlugins(d.fold_for_plugins));
@@ -760,6 +781,12 @@ fn dir_size(dir: &Path) -> u64 {
 }
 
 impl SettingsDialog {
+    /// The families the open font list shows in themselves; empty while it is closed. The app
+    /// loads them as preview fonts.
+    pub fn font_previews(&self) -> &std::collections::BTreeSet<String> {
+        &self.font_previews
+    }
+
     pub fn open(&mut self) {
         self.open = true;
         self.printer_form = printer_form(None);
@@ -884,13 +911,28 @@ impl SettingsDialog {
                         ui.add_space(2.0);
                         ui.heading(self.category.title());
                         hint(ui, self.category.intro());
-                        let footer = if self.category.has_defaults() { 34.0 } else { 0.0 };
+                        // The page gets what the footer leaves. The footer's height is the one
+                        // measured in the last frame: a guess that is a little short (other
+                        // fonts and paddings under a theme) makes the window taller with every
+                        // frame, for ever.
+                        let footer = if self.category.has_defaults() {
+                            self.footer_height.unwrap_or_else(|| {
+                                let spacing = ui.spacing();
+                                let button =
+                                    ui.text_style_height(&egui::TextStyle::Button) + 2.0 * spacing.button_padding.y;
+                                2.0 * spacing.item_spacing.y + 6.0 + button.max(spacing.interact_size.y)
+                            })
+                        } else {
+                            0.0
+                        };
                         egui::ScrollArea::vertical()
                             .auto_shrink(false)
                             .max_height((ui.available_height() - footer).max(80.0))
                             .show(ui, |ui| self.page(ui, config, slicers_editors_printers, &info, &mut changes));
                         if self.category.has_defaults() {
+                            let page_end = ui.min_rect().bottom();
                             self.restore_defaults(ui, config, &mut changes);
+                            self.footer_height = Some((ui.min_rect().bottom() - page_end).ceil());
                         }
                     });
                 });
@@ -910,7 +952,7 @@ impl SettingsDialog {
         changes: &mut Vec<SettingsChange>,
     ) {
         let sections: &[Section] = match self.category {
-            Category::General => &[Section::Language, Section::DoubleClick, Section::Panes],
+            Category::General => &[Section::Language, Section::Appearance, Section::DoubleClick, Section::Panes],
             Category::Library => &[Section::Library, Section::Inbox, Section::Duplicates, Section::Import],
             Category::Tags => {
                 &[Section::Tags, Section::Placement, Section::Themes, Section::Properties, Section::States]
@@ -941,6 +983,7 @@ impl SettingsDialog {
             let toggled =
                 kit::section(ui, &section.key(), &section.title(), &config.settings_folded, |ui| match section {
                     Section::Language => self.language(ui, config, changes),
+                    Section::Appearance => self.appearance(ui, config, changes),
                     Section::DoubleClick => double_click(ui, config, changes),
                     Section::Panes => panes(ui, config, changes),
                     Section::Library => self.library(ui, config, changes),
@@ -1124,6 +1167,119 @@ impl SettingsDialog {
                 changes.push(SettingsChange::Language(language.map(str::to_owned)));
             }
         });
+    }
+
+    /// The interface themes as thumbnail cards.
+    fn appearance(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+        hint(ui, t!("settings.appearance_hint"));
+        ui.add_space(4.0);
+        let labels =
+            [&*t!("settings.appearance_own"), &*t!("settings.appearance_dark"), &*t!("settings.appearance_light")];
+        if let Some(theme) = self.themes.show(ui, labels) {
+            changes.push(SettingsChange::UiTheme(theme));
+        }
+        row(ui, &t!("settings.font"), |ui| {
+            if let Some(font) = self.font_picker(ui, config.ui_font.as_deref()) {
+                changes.push(SettingsChange::UiFont(font));
+            }
+        });
+        // On macOS the system's title bar stays: its window buttons belong to it.
+        if cfg!(not(target_os = "macos")) {
+            row(ui, &t!("settings.title_bar"), |ui| {
+                let mut value = config.title_bar;
+                let options = [
+                    (config::TitleBar::App, t!("settings.title_bar_app").into_owned()),
+                    (config::TitleBar::System, t!("settings.title_bar_system").into_owned()),
+                ];
+                if segmented(ui, &mut value, &options) {
+                    changes.push(SettingsChange::TitleBar(value));
+                }
+                hint(ui, t!("settings.title_bar_hint"));
+            });
+        }
+    }
+
+    /// The interface font as a list that opens: the theme's font and the desktop's on top, then
+    /// every installed family, with a search. Gives the choice as the setting takes it.
+    fn font_picker(&mut self, ui: &mut Ui, setting: Option<&str>) -> Option<Option<String>> {
+        use super::fonts::{self, Choice};
+        use solidcraft_ui_kit as sc;
+        let (theme, system) = (t!("settings.font_theme"), t!("settings.font_system"));
+        let current = match Choice::of(setting) {
+            Choice::Theme => theme.to_string(),
+            Choice::System => system.to_string(),
+            Choice::Family(family) => family.to_owned(),
+        };
+        let families = fonts::families(ui.ctx());
+        let mut open = false;
+        let mut chosen = None;
+        ui.allocate_ui(egui::vec2(260.0_f32.min(ui.available_width()), 0.0), |ui| {
+            let close = egui::PopupCloseBehavior::CloseOnClickOutside;
+            sc::dropdown_menu_with_close_behavior(ui, "settings_ui_font", &current, close, |ui| {
+                open = true;
+                sc::hint_field(ui, &mut self.font_filter, &t!("settings.font_search"));
+                let query = self.font_filter.trim().to_lowercase();
+                if query != self.font_query {
+                    self.font_query = query.clone();
+                    self.font_window.reset();
+                }
+                let matches = |name: &str| query.is_empty() || name.to_lowercase().contains(&query);
+                // The two fixed choices, then the families: what a click sets, the label, and
+                // the family the row is written in.
+                let fixed =
+                    [(None, &*theme, fonts::theme_family()), (Some(fonts::SYSTEM), &*system, fonts::system_family())];
+                let rows: Vec<(Option<&str>, &str, egui::FontFamily)> = fixed
+                    .into_iter()
+                    .filter(|(_, label, _)| matches(label))
+                    .chain(
+                        families
+                            .into_iter()
+                            .flatten()
+                            .filter(|family| matches(family))
+                            .map(|family| (Some(family.as_str()), family.as_str(), fonts::preview_family(family))),
+                    )
+                    .collect();
+                let tokens = solidcraft_theme::Tokens::get();
+                let row_height = sc::row_height();
+                egui::ScrollArea::vertical()
+                    .id_salt("settings_ui_font_list")
+                    .max_height(tokens.space_24 * 10.0)
+                    .min_scrolled_height(tokens.space_24 * 10.0)
+                    .auto_shrink([false, false])
+                    .show_rows(ui, row_height, rows.len(), |ui, visible| {
+                        if self.font_window.follow(visible.clone(), rows.len()) {
+                            self.font_previews = rows[self.font_window.rows()]
+                                .iter()
+                                .filter_map(|(value, _, _)| value.filter(|v| *v != fonts::SYSTEM))
+                                .map(str::to_owned)
+                                .collect();
+                        }
+                        for (value, label, family) in &rows[visible] {
+                            let mut text = RichText::new(*label);
+                            if fonts::is_loaded(ui.ctx(), family) {
+                                text = text.family(family.clone()).size(tokens.font_body + 1.0);
+                            }
+                            let size = egui::vec2(ui.available_width(), row_height);
+                            if ui.add_sized(size, egui::Button::selectable(current == *label, text)).clicked() {
+                                chosen = Some(value.map(str::to_owned));
+                                ui.close();
+                            }
+                        }
+                    });
+                if families.is_none() {
+                    ui.label(RichText::new(t!("settings.font_listing")).weak());
+                }
+            });
+        });
+        if !open {
+            self.font_window.reset();
+            self.font_previews.clear();
+        }
+        if chosen.is_some() {
+            self.font_filter.clear();
+        }
+        hint(ui, t!("settings.font_hint"));
+        chosen
     }
 
     fn library(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {

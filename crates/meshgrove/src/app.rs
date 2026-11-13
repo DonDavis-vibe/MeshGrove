@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -275,6 +275,10 @@ pub struct App {
     /// Messages from actions that finish on a thread (e.g. copying files).
     messages: (Sender<String>, Receiver<String>),
     settings: SettingsDialog,
+    /// The preview fonts loaded for the settings' font list.
+    font_previews: BTreeSet<String>,
+    /// Meshgrove's icon, for its own title bar.
+    brand: egui::TextureHandle,
     /// The user's plugins: their panels, jobs and tools.
     #[cfg(feature = "plugins")]
     plugins: crate::plugins::PluginHost,
@@ -296,10 +300,14 @@ impl App {
         let rs = cc.wgpu_render_state.as_ref().context("eframe was not started with the wgpu renderer")?;
         // Ctrl +/- and Ctrl+wheel resize tiles instead of zooming the whole UI.
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-        use_system_ui_font(&cc.egui_ctx);
+        // The theme from the settings; `MESHGROVE_THEME` overrides it for one start (screenshots).
+        crate::ui::appearance::install();
+        let mut config = config;
+        let theme = std::env::var("MESHGROVE_THEME").ok().or_else(|| config.ui_theme.clone());
+        crate::ui::appearance::apply(&cc.egui_ctx, theme.as_deref().filter(|t| !t.is_empty()));
+        apply_fonts(&cc.egui_ctx, config.ui_font.as_deref(), &BTreeSet::new());
 
         // Slicers never chosen in the settings: take all that are installed.
-        let mut config = config;
         if config.slicers.is_none() {
             let found: Vec<Slicer> = programs::detect_slicers().into_iter().map(|d| d.program).collect();
             if !found.is_empty() {
@@ -472,6 +480,14 @@ impl App {
             toast: None,
             messages: unbounded(),
             settings: SettingsDialog::default(),
+            font_previews: BTreeSet::new(),
+            brand: {
+                let png = include_bytes!("../../../packaging/icons/meshgrove-64.png");
+                let icon = image::load_from_memory(png).expect("bundled icon is a valid PNG").into_rgba8();
+                let size = [icon.width() as usize, icon.height() as usize];
+                let icon = egui::ColorImage::from_rgba_unmultiplied(size, icon.as_raw());
+                cc.egui_ctx.load_texture("brand", icon, egui::TextureOptions::LINEAR)
+            },
             #[cfg(feature = "plugins")]
             plugins: crate::plugins::PluginHost::new(cc.egui_ctx.clone()),
             #[cfg(feature = "plugins")]
@@ -503,7 +519,9 @@ impl App {
 
     fn save_config(&mut self) {
         self.config.last_folder = Some(self.nav.current().to_path_buf());
-        if let Err(e) = self.config.save() {
+        if crate::screenshot::leaves_settings_alone() {
+            // A run of the screenshot hook: the settings apply, but the file stays the user's.
+        } else if let Err(e) = self.config.save() {
             log::warn!("could not save settings: {e}");
         }
         self.library.configure(self.config.clone());
@@ -1884,6 +1902,20 @@ impl App {
                     i18n::init(lang.as_deref());
                     self.config.language = lang;
                 }
+                SettingsChange::UiTheme(theme) => {
+                    crate::ui::appearance::apply(&self.egui_ctx, theme.as_deref());
+                    self.config.ui_theme = theme;
+                    apply_fonts(&self.egui_ctx, self.config.ui_font.as_deref(), &self.font_previews);
+                }
+                SettingsChange::TitleBar(title_bar) => {
+                    self.config.title_bar = title_bar;
+                    let own = crate::ui::appearance::own_title_bar(title_bar);
+                    self.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!own));
+                }
+                SettingsChange::UiFont(font) => {
+                    self.config.ui_font = font;
+                    apply_fonts(&self.egui_ctx, self.config.ui_font.as_deref(), &self.font_previews);
+                }
                 SettingsChange::AddRoot(path) => {
                     if !self.config.library_roots.contains(&path) {
                         self.config.library_roots.push(path);
@@ -2469,6 +2501,55 @@ impl App {
                     self.reapply_filter();
                 }
             }
+        }
+    }
+
+    /// Meshgrove's own title bar, in the theme's colours: the icon, the name and where the window
+    /// is, and the window's buttons at the right. Empty space moves the window, a double click
+    /// makes it fill the screen and back.
+    fn title_bar(&mut self, ui: &mut Ui) {
+        use solidcraft_ui_kit::{type_face, window_chrome};
+        let t = solidcraft_theme::Tokens::get();
+        let visuals = ui.visuals();
+        // Without a theme the bar is one with the toolbar below it.
+        let (fill, ink, dim) = match crate::ui::appearance::tokens() {
+            Some(t) => (t.app_bar, t.app_bar_text, t.app_bar_text.gamma_multiply(0.65)),
+            None => (visuals.panel_fill, visuals.strong_text_color(), visuals.weak_text_color()),
+        };
+        let place = self.nav.current().file_name().map(|name| name.to_string_lossy().into_owned());
+        let brand = self.brand.id();
+        let bar =
+            egui::Panel::top("title_bar").exact_size(t.control_height + t.space_8).frame(egui::Frame::NONE.fill(fill));
+        let action = bar
+            .show(ui, |ui| {
+                let chrome = window_chrome::TitleBar { traffic_lights: false, caption_buttons: true };
+                chrome.show(ui, ui.max_rect(), |ui, content| {
+                    let painter = ui.painter();
+                    let mark = egui::Rect::from_center_size(
+                        egui::pos2(content.left() + t.space_10 + t.space_8, content.center().y),
+                        egui::vec2(t.space_16, t.space_16),
+                    );
+                    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                    painter.image(brand, mark, uv, egui::Color32::WHITE);
+                    let at = egui::pos2(mark.right() + t.space_8, content.center().y);
+                    let font = type_face::semibold(t.font_label);
+                    let name = painter.text(at, egui::Align2::LEFT_CENTER, "Meshgrove", font, ink);
+                    if let Some(place) = place {
+                        let at = egui::pos2(name.right() + t.space_8, content.center().y);
+                        let font = egui::FontId::proportional(t.font_label);
+                        painter.with_clip_rect(content).text(
+                            at,
+                            egui::Align2::LEFT_CENTER,
+                            format!("·  {place}"),
+                            font,
+                            dim,
+                        );
+                    }
+                })
+            })
+            .inner;
+        if let Some(action) = action {
+            action.send(ui.ctx());
         }
     }
 
@@ -3238,13 +3319,9 @@ struct PaneHost<'a> {
     toggle_details: bool,
 }
 
-impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
-    fn pane_ui(&mut self, ui: &mut Ui, _tile_id: egui_tiles::TileId, pane: &mut Pane) -> egui_tiles::UiResponse {
-        let rs = self.rs;
-        let grip = !self.locked && grip_handle(ui);
-        ui.shrink_clip_rect(ui.max_rect());
-        // The margins the side and central panels had before the panes.
-        let margin = if *pane == Pane::Files { egui::Margin::same(8) } else { egui::Margin::symmetric(8, 2) };
+impl PaneHost<'_> {
+    /// What a pane shows.
+    fn pane_body(&mut self, ui: &mut Ui, pane: &mut Pane, margin: egui::Margin, rs: &egui_wgpu::RenderState) {
         egui::Frame::new().inner_margin(margin).show(ui, |ui| match pane {
             Pane::Places => self.app.pane_places(ui),
             Pane::Files => self.app.central(ui, rs),
@@ -3267,7 +3344,74 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
                 ui.weak(t!("plugins.not_in_build"));
             }
         });
+    }
+}
+
+impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
+    fn pane_ui(&mut self, ui: &mut Ui, _tile_id: egui_tiles::TileId, pane: &mut Pane) -> egui_tiles::UiResponse {
+        let rs = self.rs;
+        let grip = !self.locked && grip_handle(ui);
+        // The pane is drawn where it is on its way to its place after a change of the layout.
+        let place = ui.max_rect();
+        let shown = self.app.layout.slide.rect(pane, place, ui.input(|i| i.time));
+        let gliding = shown != place;
+        if gliding {
+            ui.ctx().request_repaint();
+        }
+        // The margins the side and central panels had before the panes.
+        let margin = if *pane == Pane::Files { egui::Margin::same(8) } else { egui::Margin::symmetric(8, 2) };
+        // Always in a Ui of its own, so what the pane remembers (scrolling) stays with it while it glides.
+        let body = egui::UiBuilder::new().id_salt("pane").max_rect(shown);
+        ui.scope_builder(body, |ui| {
+            ui.shrink_clip_rect(shown);
+            if gliding {
+                // Over the panes it passes.
+                ui.painter().rect_filled(shown, 0.0, ui.visuals().panel_fill);
+            }
+            self.pane_body(ui, pane, margin, rs);
+        });
         if grip { egui_tiles::UiResponse::DragStarted } else { egui_tiles::UiResponse::None }
+    }
+
+    /// When a pane is dragged: where it lands glows, as in LightGrove.
+    fn paint_drag_preview(
+        &self,
+        visuals: &egui::Visuals,
+        painter: &egui::Painter,
+        parent_rect: Option<egui::Rect>,
+        preview_rect: egui::Rect,
+    ) {
+        let accent = crate::ui::appearance::tokens().map_or(visuals.selection.stroke.color, |t| t.accent);
+        if let Some(parent) = parent_rect {
+            // The group it joins.
+            let stroke = egui::Stroke::new(1.0, accent.gamma_multiply(0.35));
+            painter.rect_stroke(parent, 2.0, stroke, egui::StrokeKind::Inside);
+        }
+        crate::ui::appearance::glow(painter, preview_rect.shrink(2.0), accent);
+    }
+
+    /// The dragged pane's name beside the pointer (a pane's tile is its group of tabs, which
+    /// has no name of its own).
+    fn drag_ui(&mut self, tiles: &egui_tiles::Tiles<Pane>, ui: &mut Ui, tile_id: egui_tiles::TileId) {
+        let mut tile = tile_id;
+        let title = loop {
+            match tiles.get(tile) {
+                Some(egui_tiles::Tile::Pane(pane)) => break self.tab_title_for_pane(pane),
+                Some(egui_tiles::Tile::Container(container)) => {
+                    let front = match container {
+                        egui_tiles::Container::Tabs(tabs) => tabs.active,
+                        _ => None,
+                    };
+                    match front.or_else(|| container.children().next().copied()) {
+                        Some(child) => tile = child,
+                        None => return,
+                    }
+                }
+                None => return,
+            }
+        };
+        let accent = crate::ui::appearance::tokens().map_or(ui.visuals().selection.stroke.color, |t| t.accent);
+        egui::Frame::popup(ui.style()).stroke(egui::Stroke::new(1.0, accent)).show(ui, |ui| ui.label(title));
     }
 
     fn tab_bar_hline_stroke(&self, visuals: &egui::Visuals) -> egui::Stroke {
@@ -3471,6 +3615,10 @@ impl eframe::App for App {
             hook.tick(&ctx);
         }
 
+        let own_title_bar = crate::ui::appearance::own_title_bar(self.config.title_bar);
+        if own_title_bar {
+            self.title_bar(ui);
+        }
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.add_space(3.0);
             self.toolbar(ui);
@@ -3484,6 +3632,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
             let details_folded = self.layout.details_folded();
             let mut tree = std::mem::replace(&mut self.layout.tree, Tree::empty(egui::Id::unique("layout")));
+            self.layout.slide.begin(crate::ui::layout::shape(&tree), ui.input(|i| i.time));
             let locked = self.config.lock_panes;
             let mut host = PaneHost { app: self, rs: &rs, locked, reset: false, details_folded, toggle_details: false };
             tree.ui(&mut host, ui);
@@ -3527,10 +3676,22 @@ impl eframe::App for App {
             info,
         );
         self.apply_settings(changes);
+        // The families the open font list shows in themselves, loaded as it scrolls.
+        if self.settings.font_previews() != &self.font_previews {
+            self.font_previews = self.settings.font_previews().clone();
+            apply_fonts(&ctx, self.config.ui_font.as_deref(), &self.font_previews);
+        }
         self.show_model_windows(&ctx, &rs);
+        if own_title_bar {
+            // Without the desktop's frame the window is resized at its edges by Meshgrove.
+            solidcraft_ui_kit::window_chrome::resize_zones(ui);
+        }
     }
 
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // The desktop took the press that started a move or resize of the window from Meshgrove's
+        // own title bar (X11 never sends its release).
+        solidcraft_ui_kit::window_chrome::release_press_taken_by_os(ctx, raw);
         if let Some(hook) = &mut self.screenshot {
             hook.inject(raw);
         }
@@ -3621,20 +3782,20 @@ fn list_title(list: &ListInfo) -> String {
     }
 }
 
-/// Use the desktop's UI font (Noto Sans on KDE) so the app does not look foreign;
-/// glyphs it lacks still fall back to egui's bundled fonts and the system fallback.
-fn use_system_ui_font(ctx: &egui::Context) {
-    let mut fonts = ui_fonts();
-    if let Some(path) = system_ui_font()
-        && let Ok(bytes) = std::fs::read(&path)
-    {
-        fonts.font_data.insert("system-ui".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
-        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-            family.insert(0, "system-ui".into());
-        }
+/// Set the interface fonts: the font chosen in the settings (`ui_font`) in front of the desktop's
+/// UI font (Noto Sans on KDE) and egui's bundled ones, which stay as fallbacks for the signs it
+/// lacks. `previews`: the families the settings' font list shows in themselves.
+fn apply_fonts(ctx: &egui::Context, ui_font: Option<&str>, previews: &BTreeSet<String>) {
+    use crate::ui::fonts;
+    static SYSTEM: std::sync::OnceLock<Option<std::sync::Arc<egui::FontData>>> = std::sync::OnceLock::new();
+    let system = SYSTEM.get_or_init(|| {
+        let path = system_ui_font()?;
+        let bytes = std::fs::read(&path).ok()?;
         log::info!("UI font: {}", path.display());
-    }
-    ctx.set_fonts(fonts);
+        Some(std::sync::Arc::new(egui::FontData::from_owned(bytes)))
+    });
+    let themed = crate::ui::appearance::tokens().is_some();
+    ctx.set_fonts(fonts::definitions(ui_fonts(), system.clone(), fonts::Choice::of(ui_font), themed, previews));
 }
 
 /// egui's bundled fonts, with Hack last in line for the interface's text too: of them only it

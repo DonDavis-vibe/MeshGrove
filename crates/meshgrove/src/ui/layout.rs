@@ -2,12 +2,14 @@
 //! Locked in the settings, they can only be resized. The chat and plugin panels come and go as tabs.
 //! Preview and Info fold away together (by hand, or while a plugin panel is in front).
 
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 use egui_tiles::{Container, Tile, TileId, Tiles, Tree};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Pane {
     Places,
     Files,
@@ -37,6 +39,85 @@ impl Pane {
 }
 
 const TREE_ID: &str = "meshgrove_layout";
+
+/// The shape of the layout: which panes sit where and which are folded away, but not how wide
+/// they are or which tab is in front. A change of it is what the panes glide for ([`Slide`]).
+pub fn shape(tree: &Tree<Pane>) -> u64 {
+    let of = |value: &dyn Fn(&mut std::collections::hash_map::DefaultHasher)| {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        value(&mut hasher);
+        hasher.finish()
+    };
+    // The tiles come in no fixed order: add their hashes up.
+    let mut sum = of(&|h| tree.root.hash(h));
+    for (id, tile) in tree.tiles.iter() {
+        sum = sum.wrapping_add(of(&|h| {
+            (id, tree.is_visible(*id)).hash(h);
+            match tile {
+                Tile::Pane(pane) => pane.hash(h),
+                Tile::Container(container) => {
+                    let kind = match container {
+                        Container::Tabs(_) => 0u8,
+                        Container::Linear(linear) => 1 + linear.dir as u8,
+                        Container::Grid(_) => 3,
+                    };
+                    kind.hash(h);
+                    container.children().for_each(|child| child.hash(h));
+                }
+            }
+        }));
+    }
+    sum
+}
+
+/// Panes glide to their new places when the layout's shape changes (a pane dropped somewhere
+/// else, the details folded away or back), as LightGrove's panels do. Dragging a border or the
+/// window is no change of shape: there the panes follow at once.
+#[derive(Default)]
+pub struct Slide {
+    shape: Option<u64>,
+    /// Where each pane was drawn in the last frame, and in this one so far.
+    last: HashMap<Pane, egui::Rect>,
+    drawn: HashMap<Pane, egui::Rect>,
+    /// Where the panes were when the shape changed, and when that was (egui's time).
+    from: HashMap<Pane, egui::Rect>,
+    started: f64,
+}
+
+impl Slide {
+    /// How long a pane takes to its new place, in seconds.
+    pub const SECONDS: f64 = 0.18;
+
+    /// Before the panes are drawn: the layout's [`shape`] now.
+    pub fn begin(&mut self, shape: u64, time: f64) {
+        self.last = std::mem::take(&mut self.drawn);
+        if self.shape.is_some_and(|before| before != shape) {
+            // From where they are shown now, also in the middle of an earlier glide.
+            self.from = self.last.clone();
+            self.started = time;
+        }
+        self.shape = Some(shape);
+    }
+
+    /// Where to draw `pane` now, whose place in the layout is `target`. A pane that was not
+    /// drawn before the change has nowhere to come from and is at its place at once.
+    pub fn rect(&mut self, pane: &Pane, target: egui::Rect, time: f64) -> egui::Rect {
+        let progress = if self.from.is_empty() { 1.0 } else { ((time - self.started) / Self::SECONDS).clamp(0.0, 1.0) };
+        if progress >= 1.0 {
+            self.from.clear();
+        }
+        let shown = match self.from.get(pane) {
+            Some(from) => {
+                // Fast at first, gently into place.
+                let eased = 1.0 - (1.0 - progress as f32).powi(3);
+                egui::Rect::from_min_max(from.min.lerp(target.min, eased), from.max.lerp(target.max, eased))
+            }
+            None => target,
+        };
+        self.drawn.insert(pane.clone(), shown);
+        shown
+    }
+}
 
 /// The panes that fold away together: the details beside the files.
 const DETAILS: [Pane; 2] = [Pane::Preview, Pane::Info];
@@ -156,6 +237,8 @@ pub struct Layout {
     /// The details were folded away because a plugin panel came to the front (not by the
     /// user): they come back when it goes, and they are saved unfolded.
     auto_folded: bool,
+    /// The panes' glide to their new places after a change of the layout.
+    pub slide: Slide,
 }
 
 impl Layout {
@@ -173,6 +256,7 @@ impl Layout {
             focus: None,
             plugin_front: None,
             auto_folded: false,
+            slide: Slide::default(),
         }
     }
 
@@ -182,7 +266,7 @@ impl Layout {
         self.stored = self.tree.clone();
         self.fresh = true;
         self.auto_folded = false;
-        if let Some(path) = path() {
+        if let Some(path) = path().filter(|_| !crate::screenshot::leaves_settings_alone()) {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -357,6 +441,9 @@ impl Layout {
             return;
         }
         self.stored = tree.clone();
+        if crate::screenshot::leaves_settings_alone() {
+            return;
+        }
         let Some(path) = path() else { return };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -374,6 +461,47 @@ impl Layout {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn panes_glide_only_when_the_shape_changes() {
+        use egui::{Rect, pos2};
+        let rect = |x: f32, w: f32| Rect::from_min_max(pos2(x, 0.0), pos2(x + w, 100.0));
+        let mut slide = Slide::default();
+        // The first frames, and a border being dragged: at the place at once.
+        slide.begin(1, 0.0);
+        assert_eq!(slide.rect(&Pane::Files, rect(0.0, 100.0), 0.0), rect(0.0, 100.0));
+        slide.begin(1, 0.1);
+        assert_eq!(slide.rect(&Pane::Files, rect(0.0, 140.0), 0.1), rect(0.0, 140.0));
+        // The shape changes: from where it was shown, on the way, then there.
+        slide.begin(2, 1.0);
+        assert_eq!(slide.rect(&Pane::Files, rect(200.0, 140.0), 1.0), rect(0.0, 140.0));
+        // A pane that was not drawn before has nowhere to come from.
+        assert_eq!(slide.rect(&Pane::Chat, rect(0.0, 50.0), 1.0), rect(0.0, 50.0));
+        slide.begin(2, 1.0 + Slide::SECONDS / 2.0);
+        let half = slide.rect(&Pane::Files, rect(200.0, 140.0), 1.0 + Slide::SECONDS / 2.0);
+        assert!(half.left() > 100.0 && half.left() < 200.0, "{half:?}");
+        slide.begin(2, 2.0);
+        assert_eq!(slide.rect(&Pane::Files, rect(200.0, 140.0), 2.0), rect(200.0, 140.0));
+    }
+
+    #[test]
+    fn the_shape_ignores_widths_and_the_tab_in_front() {
+        let mut tree = default_tree();
+        let before = shape(&tree);
+        for (_, tile) in tree.tiles.iter_mut() {
+            if let Tile::Container(Container::Linear(linear)) = tile {
+                let children: Vec<TileId> = linear.children.clone();
+                for (i, child) in children.into_iter().enumerate() {
+                    linear.shares.set_share(child, 0.1 + i as f32);
+                }
+            }
+        }
+        assert_eq!(shape(&tree), before);
+        fold(&mut tree, false);
+        assert_ne!(shape(&tree), before);
+        fold(&mut tree, true);
+        assert_eq!(shape(&tree), before);
+    }
+
     use super::*;
 
     fn shown(layout: &Layout, pane: &Pane) -> bool {

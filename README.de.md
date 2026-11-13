@@ -1430,6 +1430,10 @@ sogar ohne die implizite Gewährleistung der MARKTFÄHIGKEIT oder EIGNUNG FÜR E
 ZWECK. Details stehen in der [GNU General Public License](LICENSE). Rechtlich verbindlich ist
 der englische Lizenztext.
 
+Die Themes der Oberfläche und die daraus gezeichneten Bedienelemente sind das UI-Kit von
+SolidCraft (MIT OR Apache-2.0); es liegt in `vendor/`, seine Theme-Dateien und Icons in `assets/`.
+Die Theme-Schrift ist IBM Plex Sans (SIL Open Font License 1.1).
+
 Der STEP-Helfer nutzt OpenCascade (LGPL-2.1 mit Ausnahme) als eigenes Programm; für
 PDF-Vorschauen wird `pdftoppm` von poppler (GPL) als externes Programm aufgerufen. Die Lizenzen
 aller Bibliotheken und Schriften, die in das Programm eingebaut sind, stehen in

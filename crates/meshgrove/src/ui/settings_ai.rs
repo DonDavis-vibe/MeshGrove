@@ -114,8 +114,8 @@ impl AiSettings {
                     && let Some(f) = detection.and_then(|d| d.found.iter().find(|f| f.id == e.id))
                 {
                     let (text, color) = match f.login {
-                        Login::LooksLoggedIn => (t!("assistant.login_found"), kit::GOOD),
-                        Login::KeyInEnvironment => (t!("assistant.login_key"), kit::GOOD),
+                        Login::LooksLoggedIn => (t!("assistant.login_found"), kit::good()),
+                        Login::KeyInEnvironment => (t!("assistant.login_key"), kit::good()),
                         Login::NotLoggedIn => (t!("assistant.login_missing"), ui.visuals().warn_fg_color),
                         Login::Unknown => (t!("assistant.login_unknown"), ui.visuals().weak_text_color()),
                     };
@@ -319,7 +319,7 @@ impl AiSettings {
             Some(found) => {
                 for o in found {
                     let (text, color) = match &o.result {
-                        Ok(Some(Change::Unchanged)) => (t!("settings.mcp_state_connected"), kit::GOOD),
+                        Ok(Some(Change::Unchanged)) => (t!("settings.mcp_state_connected"), kit::good()),
                         Ok(Some(Change::Updated)) => (t!("settings.mcp_state_stale"), ui.visuals().text_color()),
                         Ok(Some(Change::Custom)) => (t!("settings.mcp_state_custom"), ui.visuals().text_color()),
                         Err(_) => (t!("settings.mcp_state_unreadable"), ui.visuals().warn_fg_color),
