@@ -664,8 +664,10 @@ ab, bei denen es passt (oder *Alle Vorschläge passen*), und *Ausgewählte berei
 alle mit einer Rückfrage auf. Kopien, die so bleiben sollen, bekommen *Ignorieren*: Die Gruppe
 wird nicht mehr gelistet, in der Seitenleiste gezählt oder auf ihren Kacheln markiert;
 *Ignorierte zeigen* listet solche Gruppen wieder, mit *Wieder beachten* zum Zurücknehmen. Was
-ignoriert ist, bleibt bei deinen Tags und Notizen (auch im Export der Benutzerdaten). Überall in
-der Galerie tragen Dateien mit Duplikaten eine `2×`/`3×`-Markierung.
+ignoriert ist, bleibt bei deinen Tags und Notizen (auch im Export der Benutzerdaten). Während
+eine Bereinigung läuft, zeigt ein Balken oben, wie viele Dateien durch sind, und jede Gruppe und
+jedes Archiv, dessen Kopien gerade gehen, färbt sich von links grün, so weit es ist; seine Knöpfe
+ruhen solange. Überall in der Galerie tragen Dateien mit Duplikaten eine `2×`/`3×`-Markierung.
 
 **Gepackt und entpackt.** Ein Modellpaket, das als ZIP und entpackt in der Bibliothek liegt,
 ergibt eine Gruppe je Modell, und ein Eintrag eines Archivs lässt sich nicht einzeln löschen. Die
@@ -675,8 +677,9 @@ alles auf einmal erledigt. Über den Gruppen listet *Archive mit entpackten Kopi
 Archiv mit der Zahl seiner entpackten Modelle und den Ordnern der Kopien und erledigt es mit einem
 Klick: das Archiv behalten und seine entpackten Kopien in den Papierkorb, oder die Kopien behalten
 und das Archiv in den Papierkorb – Letzteres erst, wenn jedes Modell darin entpackt ist (der Knopf
-sagt, wie viele sonst verloren gingen). Eine gesperrte Gruppe nennt ihr Archiv und verweist auf
-diese Zeile. Konfiguration: `duplicates_keep = "extracted" | "packed"`.
+sagt, wie viele sonst verloren gingen). Zwei Knöpfe über den Zeilen tun dasselbe für alle Archive
+auf einmal. Die Gruppen dieser Archive werden dort erledigt und sind unter den Gruppen eingeklappt
+(*Unten zeigen* listet sie); eine gesperrte Gruppe nennt ihr Archiv und verweist auf diese Zeile. Konfiguration: `duplicates_keep = "extracted" | "packed"`.
 
 ### KI-Assistent und MCP (freiwillig)
 

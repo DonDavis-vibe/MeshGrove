@@ -65,6 +65,16 @@ const INBOX_RECOUNT: Duration = Duration::from_secs(2);
 /// Files that were (to be) moved to the trash, and how it went.
 type TrashResult = (Vec<PathBuf>, Result<(), String>);
 
+/// Files go to the trash a few at a time, so the views can show how far it got.
+const TRASH_CHUNK: usize = 8;
+
+/// A cleanup on its way: the files in the order they go to the trash, and how many are through.
+struct TrashRun {
+    rx: Receiver<TrashResult>,
+    done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    order: HashMap<PathBuf, usize>,
+}
+
 /// What the gallery shows.
 enum View {
     /// The current folder, as listed by the navigator.
@@ -243,13 +253,15 @@ pub struct App {
     dupes_keep: HashSet<PathBuf>,
     /// The duplicates view lists the ignored groups too.
     dupes_show_ignored: bool,
+    /// The groups that belong to an archive with extracted copies are listed too.
+    dupes_show_archive_groups: bool,
     /// Groups just ignored (or watched again) here, before the index has it: key → ignored.
     dupes_ignored_now: HashMap<String, bool>,
     last_processed: usize,
     trash_confirm: Option<Vec<PathBuf>>,
     /// A switch to inches waiting for the answer to the question about imperial units.
     units_confirm: Option<PendingUnits>,
-    trash_rx: Option<Receiver<TrashResult>>,
+    trash_run: Option<TrashRun>,
     /// Waiting for the trash while a batch is on its way there.
     trash_queue: Vec<PathBuf>,
     /// Short message in the status bar (result of an action) and when it was set.
@@ -444,11 +456,12 @@ impl App {
             dupes_picked: HashSet::new(),
             dupes_keep: HashSet::new(),
             dupes_show_ignored: false,
+            dupes_show_archive_groups: false,
             dupes_ignored_now: HashMap::new(),
             last_processed: 0,
             trash_confirm: None,
             units_confirm: None,
-            trash_rx: None,
+            trash_run: None,
             trash_queue: Vec::new(),
             toast: None,
             messages: unbounded(),
@@ -1381,6 +1394,7 @@ impl App {
                 picked,
                 key: g.key,
                 ignored: g.ignored,
+                in_archive: false,
             };
             group.blocked = blocked_by(&group, &entries);
             group.picked &= group.blocked.is_none() && !group.ignored;
@@ -1391,6 +1405,15 @@ impl App {
         for a in &mut archives {
             a.size = a.archive.metadata().map_or(0, |m| m.len());
             a.blocked = actions::trash_blocked(std::slice::from_ref(&a.archive));
+            for &gi in &a.groups {
+                groups[gi].in_archive = true;
+            }
+        }
+        // Folded away, a group is not part of "clean up selected".
+        if !self.dupes_show_archive_groups {
+            for g in groups.iter_mut().filter(|g| g.in_archive) {
+                g.picked = false;
+            }
         }
         self.leave_search();
         self.flatten = false;
@@ -1425,6 +1448,26 @@ impl App {
                 self.dupes_show_ignored = on;
                 self.show_duplicates();
             }
+            Some(DupAction::ShowArchiveGroups(on)) => {
+                self.dupes_show_archive_groups = on;
+                self.show_duplicates();
+            }
+            Some(DupAction::TrashAllArchiveCopies) => {
+                let mut paths: Vec<PathBuf> = archives.iter().flat_map(|a| a.copies.iter().cloned()).collect();
+                paths.sort();
+                paths.dedup();
+                self.request_trash(paths);
+            }
+            Some(DupAction::TrashAllArchives) => {
+                let paths: Vec<PathBuf> = archives
+                    .iter()
+                    .filter(|a| a.complete() && a.blocked.is_none())
+                    .map(|a| a.archive.clone())
+                    .collect();
+                if !paths.is_empty() {
+                    self.request_trash(paths);
+                }
+            }
             Some(DupAction::Select(i)) => self.gallery.select(Some(i)),
             Some(DupAction::Open(i)) => self.open_entry(i),
             Some(DupAction::TrashOthers(g)) => {
@@ -1449,7 +1492,8 @@ impl App {
                 }
             }
             Some(DupAction::PickAll(on)) => {
-                for group in groups.iter_mut().filter(|g| g.blocked.is_none()) {
+                let shown = self.dupes_show_archive_groups;
+                for group in groups.iter_mut().filter(|g| g.blocked.is_none() && (shown || !g.in_archive)) {
                     pick_dupes(&mut self.dupes_picked, group, entries, on);
                 }
             }
@@ -2102,18 +2146,30 @@ impl App {
     }
 
     fn start_trash(&mut self) {
-        if self.trash_rx.is_some() || self.trash_queue.is_empty() {
+        if self.trash_run.is_some() || self.trash_queue.is_empty() {
             return;
         }
         let paths = std::mem::take(&mut self.trash_queue);
         let (tx, rx) = bounded(1);
         let ctx = self.egui_ctx.clone();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let order = paths.iter().enumerate().map(|(i, p)| (p.clone(), i)).collect();
+        let through = done.clone();
         std::thread::spawn(move || {
-            let result = trash::delete_all(&paths).map_err(|e| e.to_string());
-            let _ = tx.send((paths, result));
+            // A few at a time: the view shows how far it got, and what cannot go (a file in
+            // use, a drive gone) does not keep the rest from going.
+            let mut failed = None;
+            for chunk in paths.chunks(TRASH_CHUNK) {
+                if let Err(e) = trash::delete_all(chunk) {
+                    failed.get_or_insert(e.to_string());
+                }
+                through.fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed);
+                ctx.request_repaint();
+            }
+            let _ = tx.send((paths, failed.map_or(Ok(()), Err)));
             ctx.request_repaint();
         });
-        self.trash_rx = Some(rx);
+        self.trash_run = Some(TrashRun { rx, done, order });
     }
 
     /// Takes what the 3D mouse did since the last frame and moves the camera of the viewer that
@@ -2206,9 +2262,9 @@ impl App {
     }
 
     fn poll_trash(&mut self) {
-        let Some(rx) = &self.trash_rx else { return };
+        let Some(TrashRun { rx, .. }) = &self.trash_run else { return };
         let Ok((paths, result)) = rx.try_recv() else { return };
-        self.trash_rx = None;
+        self.trash_run = None;
         self.start_trash(); // what came in the meantime
         let message = match &result {
             Ok(()) => t!("toast.trashed", count = paths.len()),
@@ -2804,15 +2860,19 @@ impl App {
         }
         if let View::Duplicates { entries, groups, ignored, archives } = &self.view {
             let prefer_packed = self.config.duplicates_keep == DuplicatesKeep::Packed;
-            let action = duplicates::show(
-                ui,
-                entries,
-                groups,
-                (*ignored, self.dupes_show_ignored),
+            let cleanup = self.trash_run.as_ref().map(|run| duplicates::Cleanup {
+                done: run.done.load(std::sync::atomic::Ordering::Relaxed),
+                order: &run.order,
+            });
+            let shown = duplicates::Shown {
+                ignored: *ignored,
+                show_ignored: self.dupes_show_ignored,
                 archives,
                 prefer_packed,
-                &self.gallery,
-            );
+                show_archive_groups: self.dupes_show_archive_groups,
+                cleanup,
+            };
+            let action = duplicates::show(ui, entries, groups, &shown, &self.gallery);
             self.dupes_action(action);
             return;
         }

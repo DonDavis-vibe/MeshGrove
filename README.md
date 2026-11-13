@@ -627,6 +627,8 @@ confirmation. Once you have looked through them, tick the groups where the choic
 Copies you want to keep as they are get *Ignore*: the group is no longer listed, counted in the
 sidebar or badged on its tiles; *Show ignored* lists such groups again, with *Watch again* to
 undo it. What is ignored is kept with your tags and notes (and in the user-data export).
+While a cleanup runs, a bar on top says how many files are through, and each group or archive
+whose copies are going is tinted green from the left as far as it got, its buttons resting.
 Tiles everywhere in the gallery show a `2×` / `3×` badge for files that have duplicates.
 
 **Packed and extracted.** A model pack that lies in the library both as the ZIP and extracted
@@ -636,7 +638,9 @@ gives one group per model, and a member of an archive cannot be trashed by itsel
 the groups, *Archives with extracted copies* lists each such archive with how many of its models
 are extracted and where the copies lie, and settles it with one click: keep the archive and trash
 its extracted copies, or keep the copies and trash the archive, the latter only once every model
-in it is extracted (the button says how many would be lost otherwise). A locked group names the
+in it is extracted (the button says how many would be lost otherwise). Two buttons above the rows
+do the same for all archives at once. The groups that belong to these archives are settled there
+and are folded away among the groups (*Show them below* lists them); a locked group names the
 archive it belongs to and points to that row. Config: `duplicates_keep = "extracted" | "packed"`.
 
 ### AI assistant and MCP (optional)
