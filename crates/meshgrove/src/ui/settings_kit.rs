@@ -125,7 +125,7 @@ pub fn pill(ui: &mut Ui, text: impl Into<String>, color: Color32) -> Response {
 
 /// A control exactly `width` wide (less only where the page itself is narrower). The kit's
 /// controls take the room they are given, and a cell of a table gives them almost none.
-fn fixed_width<R>(ui: &mut Ui, width: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
+pub fn fixed_width<R>(ui: &mut Ui, width: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
     let size = egui::vec2(width, Tokens::get().control_height);
     ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.set_width(width);
@@ -192,4 +192,35 @@ pub fn slider<T: egui::emath::Numeric>(
         ..Default::default()
     };
     fixed_width(ui, width, |ui| sc::slider(ui, value, range, options))
+}
+
+/// One choice of a list of which exactly one is chosen, as the kit's round mark in a tile: the
+/// name, and what belongs to it at the right. `beside` is the room kept at the right of the tile
+/// for small buttons. True when it was clicked.
+pub fn choice_tile(ui: &mut Ui, chosen: bool, name: &str, about: &str, tooltip: &str, beside: f32) -> bool {
+    let width = (ui.available_width() - beside).max(160.0);
+    let tile = sc::SettingsChoice { key: name, icon: None, title: name, summary: about, detail: tooltip };
+    ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.set_width(width);
+        sc::settings_choice_row(ui, &tile, chosen).clicked()
+    })
+    .inner
+}
+
+/// A choice of a few as one row of joined icon buttons, the chosen one lit: "either this or
+/// that" at a glance. `options` are (the kit icon's name, what it stands for as the tooltip).
+/// True when the user picked another.
+pub fn icon_toggle<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T, &'static str, String)]) -> bool {
+    let segments: Vec<sc::IconSegment> =
+        options.iter().map(|(_, icon, tip)| sc::IconSegment { key: icon, icon, tip: tip.clone() }).collect();
+    let mut index = options.iter().position(|(option, _, _)| option == value).unwrap_or(0);
+    let width = options.len() as f32 * (Tokens::get().control_height + 4.0);
+    let picked = fixed_width(ui, width, |ui| sc::segmented_icons(ui, &mut index, &segments, &[]));
+    match options.get(index) {
+        Some((option, _, _)) if picked && option != value => {
+            *value = *option;
+            true
+        }
+        _ => false,
+    }
 }

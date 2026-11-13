@@ -1150,7 +1150,7 @@ settings.font_hint: "Die Theme-Schrift ist IBM Plex Sans; ohne Theme ist es die 
 settings.title_bar: "Titelleiste"
 settings.title_bar_app: "Meshgrove"
 settings.title_bar_system: "System"
-settings.title_bar_hint: "Meshgroves eigene Titelleiste nimmt die Farben des Themes. Modellfenster behalten die des Systems."
+settings.title_bar_hint: "Meshgroves eigene Titelleiste nimmt die Farben des Themes, auch in den Modellfenstern."
 settings.ok: "OK"
 settings.search: "Einstellungen durchsuchen …"
 settings.no_results: "Keine Einstellung passt."

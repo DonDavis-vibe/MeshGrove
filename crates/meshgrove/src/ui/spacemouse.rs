@@ -89,6 +89,29 @@ fn mouse_faces(motion: [f32; 6], active: [bool; 6]) -> Vec<Face> {
         &[grey(70), grey(90), grey(100), grey(110), grey(120), grey(128), grey(134), cap, cap, cap],
         &mut knob,
     );
+    // A pointer on the cap, from its middle towards the user: the knob is round, so without it
+    // a twist shows nothing in the picture. Dark on the cap, whichever colour that has.
+    let mark = Color32::from_rgb(28, 28, 32);
+    // The cap's height at a radius (its two top pieces), a hair above it.
+    let height = |r: f32| 0.012 + if r <= 0.6 { 0.95 - r / 0.6 * 0.02 } else { 0.93 - (r - 0.6) / 0.2 * 0.05 };
+    // (radius, half width): a shaft, then a head that comes to a point; a stop where the cap bends.
+    let outline = [(0.14, 0.045), (0.5, 0.045), (0.5, 0.11), (0.6, 0.071), (0.78, 0.0)];
+    for pair in outline.windows(2) {
+        let ((r0, w0), (r1, w1)) = (pair[0], pair[1]);
+        if r0 == r1 {
+            continue;
+        }
+        knob.push(Face {
+            corners: [
+                Vec3::new(-w0, -r0, height(r0)),
+                Vec3::new(w0, -r0, height(r0)),
+                Vec3::new(w1, -r1, height(r1)),
+                Vec3::new(-w1, -r1, height(r1)),
+            ],
+            normal: Vec3::Z,
+            color: mark,
+        });
+    }
     let m = |a: Axis| motion[a.index()];
     let pivot = Mat4::from_translation(Vec3::new(m(Axis::PushLr), m(Axis::PushFb), m(Axis::Lift)) * TRAVEL)
         * Mat4::from_rotation_z(-m(Axis::Twist) * TWIST_DEGREES.to_radians())
@@ -430,11 +453,11 @@ impl MouseSettings {
 
         let (twist, tilt) = (AxisMapping::twist_orbits(), AxisMapping::tilt_orbits());
         row(ui, &t!("mouse.mapping"), |ui| {
-            if ui.radio(c.mapping == twist, t!("mouse.preset_twist")).clicked() {
-                c.mapping = twist;
-            }
-            if ui.radio(c.mapping == tilt, t!("mouse.preset_tilt")).clicked() {
-                c.mapping = tilt;
+            // Neither is marked while the movements are chosen one by one below.
+            for (preset, name) in [(twist, t!("mouse.preset_twist")), (tilt, t!("mouse.preset_tilt"))] {
+                if super::settings_kit::choice_tile(ui, c.mapping == preset, &name, "", &name, 0.0) {
+                    c.mapping = preset;
+                }
             }
         });
         ui.collapsing(t!("mouse.custom_mapping"), |ui| {
@@ -556,6 +579,18 @@ mod tests {
         assert_eq!(still[0].corners, pushed[0].corners);
         let (a, b) = (still.last().unwrap().corners[0], pushed.last().unwrap().corners[0]);
         assert!(b.x > a.x + 0.3, "{a:?} -> {b:?}");
+    }
+
+    #[test]
+    fn a_twist_shows_in_the_picture() {
+        // The knob is round: only the pointer on its cap tells a twisted knob from a still one.
+        let still = mouse_faces([0.0; 6], [false; 6]);
+        let mut motion = [0.0; 6];
+        motion[Axis::Twist.index()] = 1.0;
+        let twisted = mouse_faces(motion, [false; 6]);
+        let tip = |faces: &[Face]| faces.last().unwrap().corners[2];
+        assert!(tip(&still).x.abs() < 1e-4 && tip(&still).y < -0.7, "towards the user: {:?}", tip(&still));
+        assert!(tip(&twisted).x.abs() > 0.2, "{:?} -> {:?}", tip(&still), tip(&twisted));
     }
 
     #[test]

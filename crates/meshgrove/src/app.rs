@@ -780,6 +780,8 @@ impl App {
             quality: self.config.preview_quality,
             can_log_prints: self.index.is_some(),
             icon: model_window::icon(crate::app_icon),
+            own_title_bar: crate::ui::appearance::own_title_bar(self.config.title_bar),
+            brand: self.brand.id(),
         };
         self.model_windows.retain_mut(|window| window.show(ctx, &mut cx, &mut actions));
         for action in actions {
@@ -2502,42 +2504,8 @@ impl App {
     /// is, and the window's buttons at the right. Empty space moves the window, a double click
     /// makes it fill the screen and back.
     fn title_bar(&mut self, ui: &mut Ui) {
-        use solidcraft_ui_kit::{type_face, window_chrome};
-        let t = crate::ui::appearance::tokens();
-        let (fill, ink, dim) = (t.app_bar, t.app_bar_text, t.app_bar_text.gamma_multiply(0.65));
         let place = self.nav.current().file_name().map(|name| name.to_string_lossy().into_owned());
-        let brand = self.brand.id();
-        let bar =
-            egui::Panel::top("title_bar").exact_size(t.control_height + t.space_8).frame(egui::Frame::NONE.fill(fill));
-        let action = bar
-            .show(ui, |ui| {
-                let chrome = window_chrome::TitleBar { traffic_lights: false, caption_buttons: true };
-                chrome.show(ui, ui.max_rect(), |ui, content| {
-                    let painter = ui.painter();
-                    let mark = egui::Rect::from_center_size(
-                        egui::pos2(content.left() + t.space_10 + t.space_8, content.center().y),
-                        egui::vec2(t.space_16, t.space_16),
-                    );
-                    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-                    painter.image(brand, mark, uv, egui::Color32::WHITE);
-                    let at = egui::pos2(mark.right() + t.space_8, content.center().y);
-                    let font = type_face::semibold(t.font_label);
-                    let name = painter.text(at, egui::Align2::LEFT_CENTER, "Meshgrove", font, ink);
-                    if let Some(place) = place {
-                        let at = egui::pos2(name.right() + t.space_8, content.center().y);
-                        let font = egui::FontId::proportional(t.font_label);
-                        painter.with_clip_rect(content).text(
-                            at,
-                            egui::Align2::LEFT_CENTER,
-                            format!("·  {place}"),
-                            font,
-                            dim,
-                        );
-                    }
-                })
-            })
-            .inner;
-        if let Some(action) = action {
+        if let Some(action) = crate::ui::appearance::title_bar(ui, self.brand.id(), "Meshgrove", place.as_deref()) {
             action.send(ui.ctx());
         }
     }
@@ -2545,7 +2513,7 @@ impl App {
     fn toolbar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             let nav_button = |ui: &mut Ui, icon: &str, enabled: bool, tip: std::borrow::Cow<str>| {
-                ui.add_enabled(enabled, Button::new(RichText::new(icon).size(16.0))).on_hover_text(tip).clicked()
+                crate::ui::settings_kit::small_if(ui, enabled, icon, &tip).clicked()
             };
             if nav_button(ui, "⬅", self.nav.can_go_back(), t!("nav.back")) {
                 self.leave_search();
@@ -2566,7 +2534,7 @@ impl App {
             ui.separator();
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(RichText::new("⚙").size(16.0)).on_hover_text(t!("settings.open")).clicked() {
+                if crate::ui::settings_kit::small(ui, "⚙", &t!("settings.open")).clicked() {
                     self.settings.open();
                 }
                 // Only with AI on and something to review (or the review open).
@@ -2574,8 +2542,9 @@ impl App {
                 let reviewing = matches!(self.view, View::Review { .. } | View::History { .. });
                 if self.reviews() && (pending > 0 || reviewing) {
                     let label = if pending > 0 { format!("✨ {pending}") } else { "✨".to_owned() };
-                    let button = Button::new(RichText::new(label).size(15.0)).selected(reviewing);
-                    if ui.add(button).on_hover_text(t!("review.open_hint")).clicked() {
+                    use solidcraft_ui_kit as sc;
+                    let kind = if reviewing { sc::Button::SmallSelected } else { sc::Button::Small };
+                    if sc::button(ui, label, kind).on_hover_text(t!("review.open_hint")).clicked() {
                         self.show_review();
                     }
                 }
@@ -2680,7 +2649,10 @@ impl App {
             Scope::Folder => t!("search.folder_hint"),
             Scope::Library => t!("search.library_hint"),
         };
-        let field = ui.add(egui::TextEdit::singleline(&mut self.search).hint_text(hint).desired_width(220.0));
+        // The kit's search field, with its magnifier.
+        let field = crate::ui::settings_kit::fixed_width(ui, 240.0, |ui| {
+            solidcraft_ui_kit::search_field(ui, egui::Id::unique("gallery_search"), &mut self.search, &hint)
+        });
         if std::mem::take(&mut self.focus_search) {
             field.request_focus();
         }
@@ -2690,9 +2662,13 @@ impl App {
             field.surrender_focus();
             changed = true;
         }
+        // One toggle: the search looks in this folder, or in the whole library.
         let mut scope = self.scope;
-        ui.selectable_value(&mut scope, Scope::Library, "📚").on_hover_text(t!("search.scope_library"));
-        ui.selectable_value(&mut scope, Scope::Folder, "📁").on_hover_text(t!("search.scope_folder"));
+        let options = [
+            (Scope::Folder, "folder", t!("search.scope_folder").into_owned()),
+            (Scope::Library, "library", t!("search.scope_library").into_owned()),
+        ];
+        crate::ui::settings_kit::icon_toggle(ui, &mut scope, &options);
         if scope != self.scope {
             self.set_scope(scope);
         }
@@ -2844,20 +2820,16 @@ impl App {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Preview size, as in a file manager's status bar (also Ctrl + mouse wheel over the files).
-                ui.spacing_mut().slider_width = 110.0;
-                ui.add(egui::Slider::new(&mut self.config.tile_size, TILE_SIZE).show_value(false))
+                crate::ui::settings_kit::slider(ui, &mut self.config.tile_size, TILE_SIZE, 120.0, None)
                     .on_hover_text(t!("gallery.tile_size"));
                 ui.weak("🔍");
                 ui.separator();
-                // Right to left: list, then grid.
-                for (view, icon, hint) in
-                    [(GalleryView::List, "☰", t!("view.list_hint")), (GalleryView::Grid, "⊞", t!("view.grid_hint"))]
-                {
-                    let on = self.config.gallery_view == view;
-                    if ui.add(Button::new(icon).selected(on).frame_when_inactive(false)).on_hover_text(hint).clicked() {
-                        self.config.gallery_view = view;
-                    }
-                }
+                // One toggle: the files as a grid of tiles, or as a list.
+                let options = [
+                    (GalleryView::Grid, "grid", t!("view.grid_hint").into_owned()),
+                    (GalleryView::List, "list", t!("view.list_hint").into_owned()),
+                ];
+                crate::ui::settings_kit::icon_toggle(ui, &mut self.config.gallery_view, &options);
                 ui.separator();
                 ui.weak(t!("status.gpu", name = self.gpu_name));
                 ui.separator();

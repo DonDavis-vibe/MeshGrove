@@ -107,10 +107,12 @@ impl AiSettings {
         }
         for e in &entries {
             ui.horizontal(|ui| {
-                if ui.radio(e.id == current, &e.name).clicked() && e.id != current {
+                // The tile keeps room at its right for the state and the button to remove it.
+                if super::settings_kit::choice_tile(ui, e.id == current, &e.name, &e.detail, &e.detail, 190.0)
+                    && e.id != current
+                {
                     changes.push(SettingsChange::Assistant(e.id.clone()));
                 }
-                ui.weak(&e.detail);
                 if e.found
                     && let Some(f) = detection.and_then(|d| d.found.iter().find(|f| f.id == e.id))
                 {

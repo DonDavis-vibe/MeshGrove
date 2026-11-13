@@ -1772,11 +1772,12 @@ impl SettingsDialog {
         }
         for (i, program) in programs.iter().enumerate() {
             ui.horizontal(|ui| {
-                if ui.radio(i == default, "").on_hover_text(t!("settings.slicers_default")).clicked() && i != default {
+                let path = program.program.display().to_string();
+                let tip = t!("settings.slicers_default");
+                if super::settings_kit::choice_tile(ui, i == default, &program.name, &path, &tip, 34.0) && i != default
+                {
                     send(programs.to_vec(), Some(program.name.clone()), changes);
                 }
-                ui.label(RichText::new(&program.name).strong());
-                ui.weak(program.program.display().to_string());
                 if super::settings_kit::small(ui, "✖", &t!("settings.slicers_remove")).clicked() {
                     let list: Vec<Program> = programs.iter().filter(|s| s.name != program.name).cloned().collect();
                     send(list, default_name.clone().filter(|n| *n != program.name), changes);
@@ -1874,11 +1875,12 @@ impl SettingsDialog {
         let units = config::display_units();
         for (i, p) in printers.iter().enumerate() {
             ui.horizontal(|ui| {
-                if ui.radio(i == default, "").on_hover_text(t!("settings.printers_default")).clicked() && i != default {
+                let tip = t!("settings.printers_default");
+                if super::settings_kit::choice_tile(ui, i == default, &p.name, &printer_summary(p), &tip, 68.0)
+                    && i != default
+                {
                     send(printers.to_vec(), Some(p.name.clone()), changes);
                 }
-                ui.label(RichText::new(&p.name).strong());
-                ui.weak(printer_summary(p));
                 if super::settings_kit::small(ui, "✏", &t!("settings.printers_edit")).clicked() {
                     self.printer_form = printer_form(Some(p));
                     self.printer_form_units = units;

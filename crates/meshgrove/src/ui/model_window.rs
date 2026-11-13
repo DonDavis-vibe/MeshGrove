@@ -43,6 +43,9 @@ pub struct WindowContext<'a> {
     /// The library index is open (prints are logged there).
     pub can_log_prints: bool,
     pub icon: Arc<egui::IconData>,
+    /// Meshgrove draws the title bar itself (the settings' choice), with its icon `brand`.
+    pub own_title_bar: bool,
+    pub brand: egui::TextureId,
 }
 
 pub struct ModelWindow {
@@ -98,6 +101,7 @@ impl ModelWindow {
             .with_title(format!("{name} – Meshgrove"))
             .with_app_id("meshgrove")
             .with_icon(cx.icon.clone())
+            .with_decorations(!cx.own_title_bar)
             .with_inner_size([1040.0, 720.0])
             .with_min_inner_size([480.0, 360.0]);
         let mut open = true;
@@ -113,8 +117,20 @@ impl ModelWindow {
             {
                 self.viewer.apply_space(input);
             }
+            if cx.own_title_bar {
+                // As the main window's: the model's name, and whose window it is.
+                use solidcraft_ui_kit::window_chrome::WindowAction as Button;
+                match super::appearance::title_bar(ui, cx.brand, &name, Some("Meshgrove")) {
+                    Some(Button::Close) => open = false,
+                    Some(button) => button.send(ui.ctx()),
+                    None => {}
+                }
+            }
             // Widget ids must not collide with the main window's or other model windows'.
             ui.push_id(self.id, |ui| self.contents(ui, &name, cx, actions));
+            if cx.own_title_bar {
+                solidcraft_ui_kit::window_chrome::resize_zones(ui);
+            }
         });
         open
     }

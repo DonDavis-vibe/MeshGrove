@@ -1150,7 +1150,7 @@ settings.font_hint: "The theme font is IBM Plex Sans; without a theme it is the 
 settings.title_bar: "Title bar"
 settings.title_bar_app: "Meshgrove"
 settings.title_bar_system: "System"
-settings.title_bar_hint: "Meshgrove's own title bar takes the theme's colours. Model windows keep the system's."
+settings.title_bar_hint: "Meshgrove's own title bar takes the theme's colours, on the model windows too."
 settings.ok: "OK"
 settings.search: "Search settings …"
 settings.no_results: "No setting matches."

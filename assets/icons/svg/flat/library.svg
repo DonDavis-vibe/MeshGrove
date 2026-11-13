@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Library</title>
+  <path d="M9 12L19 12L19 52L9 52ZM25 12L35 12L35 52L25 52Z" fill="none" stroke="currentColor" stroke-width="4.6" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M41 19L50.5 16.5L59 49.5L49.5 52Z" fill="none" stroke="currentColor" stroke-width="4.6" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

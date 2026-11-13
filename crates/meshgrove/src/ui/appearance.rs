@@ -134,6 +134,43 @@ pub fn own_title_bar(setting: meshgrove_core::config::TitleBar) -> bool {
     cfg!(not(target_os = "macos")) && setting == meshgrove_core::config::TitleBar::App
 }
 
+/// Meshgrove's own title bar across the top of a window, in the theme's colours: the icon
+/// (`brand`), `name` and, quieter, `about`, with the window's buttons at the right. Empty space
+/// moves the window, a double click makes it fill the screen and back. Gives the button pressed;
+/// the caller sends it on (or handles Close itself).
+pub fn title_bar(
+    ui: &mut Ui,
+    brand: egui::TextureId,
+    name: &str,
+    about: Option<&str>,
+) -> Option<kit::window_chrome::WindowAction> {
+    use kit::{type_face, window_chrome};
+    let t = tokens();
+    let (fill, ink, dim) = (t.app_bar, t.app_bar_text, t.app_bar_text.gamma_multiply(0.65));
+    let bar =
+        egui::Panel::top("title_bar").exact_size(t.control_height + t.space_8).frame(egui::Frame::NONE.fill(fill));
+    bar.show(ui, |ui| {
+        let chrome = window_chrome::TitleBar { traffic_lights: false, caption_buttons: true };
+        chrome.show(ui, ui.max_rect(), |ui, content| {
+            let painter = ui.painter().with_clip_rect(content);
+            let mark = egui::Rect::from_center_size(
+                egui::pos2(content.left() + t.space_10 + t.space_8, content.center().y),
+                egui::vec2(t.space_16, t.space_16),
+            );
+            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+            painter.image(brand, mark, uv, egui::Color32::WHITE);
+            let at = egui::pos2(mark.right() + t.space_8, content.center().y);
+            let name = painter.text(at, egui::Align2::LEFT_CENTER, name, type_face::semibold(t.font_label), ink);
+            if let Some(about) = about {
+                let at = egui::pos2(name.right() + t.space_8, content.center().y);
+                let font = egui::FontId::proportional(t.font_label);
+                painter.text(at, egui::Align2::LEFT_CENTER, format!("·  {about}"), font, dim);
+            }
+        })
+    })
+    .inner
+}
+
 /// A glowing outline around `rect` in `accent`, over a breath of it: where something dragged
 /// lands (LightGrove's drop outline).
 pub fn glow(painter: &egui::Painter, rect: egui::Rect, accent: egui::Color32) {
