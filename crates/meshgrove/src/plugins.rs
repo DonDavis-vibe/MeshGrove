@@ -15,7 +15,7 @@ use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Node, PickInto, Vie
 use meshgrove_plugin_api::{FileType, HostInfo};
 use meshgrove_plugins::deferred::DeferredJobs;
 use meshgrove_plugins::jobs::{JobEvent, JobPool};
-use meshgrove_plugins::{CancelToken, Opened, Plugin, Registry, Settings, StagedBundle};
+use meshgrove_plugins::{CancelToken, Opened, Plugin, Registry, Settings, StagedBundle, Target, Targets};
 
 use crate::library::{Applied, LibraryService};
 use crate::plugin_mesh::{Gpu, PreparedMesh, overlay_colors, plain_colors, prepare};
@@ -220,6 +220,8 @@ pub struct OpenPanel {
     folders: Option<(PathBuf, PathBuf)>,
     /// The library files the user opened with the panel: it and its jobs may read these.
     pub opened: Opened,
+    /// The folders the user chose for the panel: its bundles may go there.
+    pub targets: Targets,
     pub view: Option<View>,
     pub error: Option<String>,
     pub ui: PanelUiState,
@@ -408,6 +410,30 @@ impl PluginHost {
         self.base.join(plugin).join("state").join(format!("{panel}.opened.json"))
     }
 
+    /// Where the folders chosen for a panel are kept.
+    fn targets_file(&self, plugin: &str, panel: &str) -> PathBuf {
+        self.base.join(plugin).join("state").join(format!("{panel}.targets.json"))
+    }
+
+    /// The folder the user chose for a panel (`Effect::PickFolder`): kept for it, and the
+    /// panel hears its token, which its bundles may name from now on.
+    pub fn folder_picked(&mut self, plugin: &str, panel: &str, id: &str, target: Target) -> Result<(), String> {
+        let file = self.targets_file(plugin, panel);
+        let open = self.find(plugin, panel).ok_or("the panel is closed")?;
+        let label = target.label.clone();
+        let token = open.targets.add(target);
+        if let Err(e) = open.targets.save(&file) {
+            log::warn!("keeping the folders chosen for {plugin}/{panel}: {e}");
+        }
+        open.send(Event::FolderPicked { id: id.to_owned(), target: token, label });
+        Ok(())
+    }
+
+    /// The folder chosen for a panel last, where the chooser starts the next time.
+    pub fn last_target(&self, plugin: &str, panel: &str) -> Option<Target> {
+        self.panels.iter().find(|p| p.plugin == plugin && p.panel == panel)?.targets.last()
+    }
+
     /// Hands library files the user opened with a plugin (by their ids) to its panel, opening
     /// it if need be. From now on the panel and its jobs may read exactly these files.
     pub fn open_models(&mut self, plugin: &str, panel: &str, ids: Vec<String>) -> Result<(), String> {
@@ -435,14 +461,17 @@ impl PluginHost {
         let title = p.manifest().panels.iter().find(|d| d.id == panel).map(|d| d.title.clone());
         let title = title.ok_or_else(|| format!("{plugin} has no panel {panel}"))?;
         let state = state.or_else(|| std::fs::read_to_string(self.state_file(plugin, panel)).ok());
-        // What the user opened with the panel before stays readable for it.
+        // What the user opened with the panel before stays readable for it, and the folders
+        // they chose for it stay places for its files.
         let opened = Opened::load(&self.opened_file(plugin, panel));
+        let targets = Targets::load(&self.targets_file(plugin, panel));
         let (inputs, input_rx) = unbounded();
         let (output_tx, outputs) = unbounded();
         let (name, ctx, reads, gpu) = (panel.to_owned(), self.ctx.clone(), opened.clone(), self.gpu.clone());
+        let places = targets.clone();
         std::thread::Builder::new()
             .name(format!("plugin-ui-{plugin}"))
-            .spawn(move || work(&p, &name, state, reads, gpu, &input_rx, &output_tx, &ctx))
+            .spawn(move || work(&p, &name, state, (reads, places), gpu, &input_rx, &output_tx, &ctx))
             .map_err(|e| e.to_string())?;
         self.panels.push(OpenPanel {
             plugin: plugin.to_owned(),
@@ -452,6 +481,7 @@ impl PluginHost {
             outputs,
             folders: None,
             opened,
+            targets,
             view: None,
             error: None,
             ui: PanelUiState::default(),
@@ -814,7 +844,7 @@ fn work(
     plugin: &Arc<Plugin>,
     panel: &str,
     state: Option<String>,
-    opened: Opened,
+    (opened, targets): (Opened, Targets),
     gpu: Option<Gpu>,
     inputs: &Receiver<Input>,
     outputs: &Sender<Output>,
@@ -825,7 +855,7 @@ fn work(
         ctx.request_repaint();
     };
     let handle = match plugin.open_panel_with(panel, state, opened) {
-        Ok(h) => h,
+        Ok(h) => h.with_targets(targets),
         Err(e) => return send(Output::Failed(e.to_string())),
     };
     send(Output::Opened { out: handle.out().to_path_buf(), tmp: handle.tmp().to_path_buf() });
@@ -1016,7 +1046,9 @@ mod tests {
         let (output_tx, outputs) = unbounded();
         let ctx = egui::Context::default();
         let opened = Opened::default();
-        let worker = std::thread::spawn(move || work(&plugin, "box", None, opened, None, &input_rx, &output_tx, &ctx));
+        let worker = std::thread::spawn(move || {
+            work(&plugin, "box", None, (opened, Targets::default()), None, &input_rx, &output_tx, &ctx)
+        });
         let next = || outputs.recv_timeout(Duration::from_secs(60)).expect("the panel answers");
         assert!(matches!(next(), Output::Opened { .. }));
         match next() {
@@ -1181,6 +1213,67 @@ mod tests {
 
     /// hello-box's 3D view has an overlay: the worker asks for it with the mesh and again when
     /// its revision changes, and leaves out one of the wrong length.
+    /// The folder the user chose reaches the panel as a token; the bundle naming it is handed
+    /// over with that folder and lands there, also in a library imports do not go to. The
+    /// folder stays the panel's after a restart, and the chooser starts there next time.
+    #[test]
+    fn a_chosen_folder_reaches_the_panel_and_its_files_land_there() {
+        let Some(bytes) = test_plugin() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let (base, file) = (dir.path().join("plugins"), dir.path().join("hello_box.wasm"));
+        let (imports, workshop) = (dir.path().join("Eigene"), dir.path().join("Werkstatt"));
+        std::fs::write(&file, &bytes).unwrap();
+        let blake3 = Plugin::from_bytes(&bytes, Settings::new(&base)).unwrap().hash().to_owned();
+        let entry = meshgrove_core::config::PluginConfig {
+            id: "hello-box".into(),
+            file,
+            blake3,
+            enabled: true,
+            grants: meshgrove_core::config::PluginGrants { bundles: true, ..Default::default() },
+            memory_mb: None,
+        };
+        let config =
+            Config { plugins: vec![entry], library_roots: vec![imports, workshop.clone()], ..Config::default() };
+        let start = || {
+            let mut host = PluginHost::new(egui::Context::default());
+            host.base = base.clone();
+            let info = Settings::new(&base).info;
+            host.registry = Arc::new(Registry::load(&config, &base, &info, None));
+            assert_eq!(host.registry.problems(), [], "the plugin loads");
+            host.open("hello-box", "box", None).unwrap();
+            host
+        };
+        let chosen = Target { root: workshop.clone(), dir: workshop.join("Boxen"), label: "Werkstatt/Boxen".into() };
+
+        let mut host = start();
+        assert!(host.last_target("hello-box", "box").is_none());
+        host.folder_picked("hello-box", "box", "dest", chosen.clone()).unwrap();
+        let kept = base.join("hello-box").join("state").join("box.targets.json");
+        assert!(std::fs::read_to_string(&kept).unwrap().contains("Werkstatt/Boxen"));
+        host.find("hello-box", "box").unwrap().send(Event::Click { id: "apply".into() });
+        let until = Instant::now() + Duration::from_secs(60);
+        let staged = loop {
+            assert!(Instant::now() < until, "no bundle from the panel");
+            let (actions, _) = host.poll();
+            let bundle = actions.into_iter().find_map(|a| match a {
+                PanelAction::Bundle { staged, .. } => Some(staged),
+                _ => None,
+            });
+            match bundle {
+                Some(staged) => break staged.unwrap(),
+                None => std::thread::sleep(Duration::from_millis(5)),
+            }
+        };
+        assert_eq!(staged.target.as_ref(), Some(&chosen));
+        let resolved = staged.resolve_for(&config).unwrap();
+        assert!(resolved.chosen);
+        assert_eq!(resolved.to, workshop.join("Boxen").join("box"), "the box's own folder below the chosen one");
+        drop(host);
+
+        let host = start();
+        assert_eq!(host.last_target("hello-box", "box"), Some(chosen), "kept for the panel");
+    }
+
     #[test]
     fn the_worker_brings_the_overlay_and_leaves_out_one_that_does_not_fit() {
         let Some(bytes) = test_plugin() else { return };
@@ -1190,7 +1283,7 @@ mod tests {
         let (output_tx, outputs) = unbounded();
         let ctx = egui::Context::default();
         let worker = std::thread::spawn(move || {
-            work(&plugin, "box", None, Opened::default(), None, &input_rx, &output_tx, &ctx)
+            work(&plugin, "box", None, Default::default(), None, &input_rx, &output_tx, &ctx)
         });
         let grey = meshgrove_render::default_model_color();
         let mesh = next_matching(&outputs, |o| match o {

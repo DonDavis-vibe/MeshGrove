@@ -17,9 +17,14 @@
 //!   (`Event::ModelsOpened`), measures the first one and sizes the box to hold it. Those files it
 //!   may read without the `library_read` permission, because the user opened them with it. The
 //!   box then lands next to that model (`Bundle::next_to`), not in a folder of its own.
+//! - "Folder …" in the panel lets the user choose where boxes go, in Meshgrove's own folder
+//!   chooser (`Effect::PickFolder`, from API 0.3). The panel keeps the token it gets back
+//!   (`Event::FolderPicked`) and its boxes land in a folder named after the box below that one
+//!   (`Bundle::target`).
 //!
 //! With the feature `test-hooks` it has three more tools for Meshgrove's tests: `spin` never
-//! ends, `trap` eats all memory, `describe` passes on what `library.describe` says. Its panel then also answers `HostChanged` with a toast naming the
+//! ends, `trap` eats all memory, `describe` passes on what `library.describe` says, and
+//! `make_box` takes a `target` it puts into its bundle (a tool may not). Its panel then also answers `HostChanged` with a toast naming the
 //! language, a click on "future" with an effect no Meshgrove knows, and one on "bad_overlay" by
 //! giving an overlay of the wrong length.
 
@@ -86,14 +91,21 @@ impl BoxSpec {
         Ok(rel)
     }
 
-    /// The bundle for the box written to `rel` below `/out`. It goes into a folder of its own
-    /// ("Hello Box/<name>"), or, made for a library model (`beside`, its id), next to that
-    /// model as a loose file.
-    fn bundle(&self, rel: &str, beside: Option<&str>) -> Bundle {
+    /// The bundle for the box written to `rel` below `/out`. It goes into a folder of its own:
+    /// "<name>" below the folder the user chose (`target`, its token), or "Hello Box/<name>".
+    /// Made for a library model (`beside`, its id) and with no folder chosen, it lands next to
+    /// that model as a loose file.
+    fn bundle(&self, rel: &str, beside: Option<&str>, target: Option<&str>) -> Bundle {
         let size = format!("{} × {} × {} mm", self.width, self.depth, self.height);
+        let beside = beside.filter(|_| target.is_none());
+        let folder = match target {
+            Some(_) => Some(self.name.trim().to_owned()),
+            None => beside.is_none().then(|| format!("Hello Box/{}", self.name.trim())),
+        };
         Bundle {
             title: format!("Box {size}"),
-            folder: beside.is_none().then(|| format!("Hello Box/{}", self.name.trim())),
+            folder,
+            target: target.map(str::to_owned),
             next_to: beside.map(str::to_owned),
             files: vec![BundleFile {
                 path: rel.into(),
@@ -226,7 +238,14 @@ impl Guest for HelloBox {
                 guest::host::progress(0.5, "writing the STL");
                 let rel = spec.write()?;
                 let result = json!({"file": rel, "triangles": spec.mesh().triangles(), "copies": spec.copies});
-                Ok(guest::tool_output(&result, Some(&spec.bundle(&rel, None))))
+                #[cfg_attr(not(feature = "test-hooks"), allow(unused_mut))]
+                let mut bundle = spec.bundle(&rel, None, None);
+                #[cfg(feature = "test-hooks")]
+                {
+                    let args: serde_json::Value = serde_json::from_str(&args).unwrap_or_default();
+                    bundle.target = args.get("target").and_then(|t| t.as_str()).map(str::to_owned);
+                }
+                Ok(guest::tool_output(&result, Some(&bundle)))
             }
             // Nothing is written now: the job makes the box, and its answer brings the bundle.
             "make_box_later" => {
@@ -308,7 +327,7 @@ impl Guest for HelloBox {
                 }
                 let rel = spec.write()?;
                 guest::host::progress(1.0, "done");
-                Ok(guest::json(&json!({"file": rel, "bundle": spec.bundle(&rel, None)})))
+                Ok(guest::json(&json!({"file": rel, "bundle": spec.bundle(&rel, None, None)})))
             }
             // A job reads the files the user opened with its panel, as the panel does.
             #[cfg(feature = "test-hooks")]
@@ -345,6 +364,9 @@ struct PanelState {
     tint_revision: u64,
     /// Test hook: the overlay has the wrong length.
     bad_overlay: bool,
+    /// The folder the user chose for the boxes: its token and its name.
+    target: Option<String>,
+    target_label: Option<String>,
 }
 
 struct BoxPanel {
@@ -407,6 +429,22 @@ impl GuestPanel for BoxPanel {
                 }),
             },
             Node::row(vec![
+                Node::Label {
+                    text: match &s.target_label {
+                        Some(label) => format!("Into {label}"),
+                        None => "Into the import folder".into(),
+                    },
+                    style: TextStyle::Weak,
+                },
+                Node::Button { id: "folder".into(), label: "Folder …".into(), primary: false, enabled: true },
+                Node::Button {
+                    id: "no_folder".into(),
+                    label: "Import folder".into(),
+                    primary: false,
+                    enabled: s.target.is_some(),
+                },
+            ]),
+            Node::row(vec![
                 Node::Button { id: "apply".into(), label: "Add to library".into(), primary: true, enabled: !s.busy },
                 Node::Button {
                     id: "job".into(),
@@ -462,8 +500,21 @@ impl GuestPanel for BoxPanel {
                 s.tint_revision += 1;
                 Vec::new()
             }
+            Event::Click { id } if id == "folder" => {
+                vec![Effect::PickFolder { id: "dest".into(), title: Some("Where should the boxes go?".into()) }]
+            }
+            Event::FolderPicked { target, label, .. } => {
+                (s.target, s.target_label) = (Some(target), Some(label));
+                Vec::new()
+            }
+            Event::Click { id } if id == "no_folder" => {
+                (s.target, s.target_label) = (None, None);
+                Vec::new()
+            }
             Event::Click { id } if id == "apply" => match s.spec.write() {
-                Ok(rel) => vec![Effect::ApplyBundle { bundle: s.spec.bundle(&rel, s.source.as_deref()) }],
+                Ok(rel) => {
+                    vec![Effect::ApplyBundle { bundle: s.spec.bundle(&rel, s.source.as_deref(), s.target.as_deref()) }]
+                }
                 Err(e) => vec![Effect::Toast { text: message(&e), level: Level::Error }],
             },
             Event::Click { id } if id == "job" => match s.spec.check() {
@@ -479,7 +530,9 @@ impl GuestPanel for BoxPanel {
             Event::JobFinished { result: Some(result), .. } => {
                 s.busy = false;
                 match result.get("file").and_then(|f| f.as_str()) {
-                    Some(rel) => vec![Effect::ApplyBundle { bundle: s.spec.bundle(rel, s.source.as_deref()) }],
+                    Some(rel) => vec![Effect::ApplyBundle {
+                        bundle: s.spec.bundle(rel, s.source.as_deref(), s.target.as_deref()),
+                    }],
                     None => Vec::new(),
                 }
             }

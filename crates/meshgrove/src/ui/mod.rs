@@ -4,6 +4,8 @@ pub mod chat;
 pub mod chat_input;
 pub mod details;
 pub mod duplicates;
+#[cfg(feature = "plugins")]
+pub mod folder_pick;
 pub mod gallery;
 #[cfg(feature = "plugins")]
 pub mod grid_editor;

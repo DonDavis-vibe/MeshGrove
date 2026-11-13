@@ -20,6 +20,7 @@ use crate::library::{Caller, Opened};
 use crate::plugin::Plugin;
 use crate::staging::{Staging, new_uid};
 use crate::state::{self, CancelToken, State};
+use crate::targets::Targets;
 
 type Reply<T> = Sender<Result<T, Error>>;
 
@@ -42,6 +43,8 @@ pub struct PanelHandle {
     /// The panel's `/tmp`.
     tmp: PathBuf,
     opened: Opened,
+    /// The folders the user chose for the panel, which its bundles may name.
+    targets: Targets,
 }
 
 impl Plugin {
@@ -81,6 +84,7 @@ impl Plugin {
             out,
             tmp,
             opened,
+            targets: Targets::default(),
         };
         match is_open.recv() {
             Ok(Ok(())) => Ok(handle),
@@ -146,17 +150,33 @@ impl PanelHandle {
         Ok(Staging::take_from(&self.out, &self.plugin.settings.base, self.plugin.id())?)
     }
 
+    /// The folders the user chose for the panel ([`Targets`]), shared with whoever keeps them;
+    /// what is added later counts at once.
+    pub fn with_targets(mut self, targets: Targets) -> PanelHandle {
+        self.targets = targets;
+        self
+    }
+
     /// A bundle the panel hands over, with what it and its jobs wrote so far ([`Self::take_output`]).
     /// The library files it puts its own beside are found as the panel may read them: with
-    /// the plugin's grant, or because the user opened them with it.
+    /// the plugin's grant, or because the user opened them with it. The folder it names
+    /// (`target`) must be one the user chose for this panel.
     pub fn stage(&self, bundle: meshgrove_plugin_api::Bundle) -> Result<crate::StagedBundle, Error> {
+        let target = match bundle.target.as_deref() {
+            Some(token) => Some(self.targets.get(token).ok_or_else(|| {
+                Error::Invalid(format!(
+                    "the folder {token:?} was not chosen for this panel: let the user choose one (pick_folder)"
+                ))
+            })?),
+            None => None,
+        };
         let staging = self.take_output()?;
         // Not allowed to hand files over: whoever applies it refuses it, nothing is looked up.
         if !self.plugin.may(meshgrove_plugin_api::Permission::Bundles) {
-            return Ok(crate::StagedBundle::new(self.plugin.id(), bundle, staging));
+            return Ok(crate::StagedBundle { target, ..crate::StagedBundle::new(self.plugin.id(), bundle, staging) });
         }
         let reading = self.plugin.reading(Caller::User, self.opened.clone());
-        self.plugin.stage(bundle, staging, &reading, Some(&self.tmp))
+        self.plugin.stage(bundle, staging, &reading, Some(&self.tmp), target)
     }
 
     fn ask<T>(&self, request: impl FnOnce(Reply<T>) -> Request) -> Result<T, Error> {

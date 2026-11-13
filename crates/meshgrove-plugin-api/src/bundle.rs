@@ -2,8 +2,9 @@
 //! it is tagged and which lists it joins. Meshgrove applies a bundle as one change the user can
 //! undo; the files never replace anything there.
 //!
-//! They go into a folder of their own ([`Bundle::folder`]), or, as loose files, beside the
-//! library files they were made from ([`Bundle::next_to`], [`BundleFile::next_to`]).
+//! They go into a folder of their own ([`Bundle::folder`]), as loose files beside the library
+//! files they were made from ([`Bundle::next_to`], [`BundleFile::next_to`]), or into a folder the
+//! user chose ([`Bundle::target`]).
 
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +40,13 @@ pub struct Bundle {
     /// answer with them). From API 0.2; this Meshgrove refuses such a bundle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job: Option<BundleJob>,
+    /// A folder the user chose for this panel ([`crate::ui::Event::FolderPicked`]'s `target`):
+    /// the files land in it, loose, each under its own name (a folder of its own they had below
+    /// `/out` is dropped), with a number where the name is taken (" (2)"); with
+    /// [`Bundle::folder`] they land in that new folder below it, as a whole. Not together with
+    /// `next_to`. Only a panel's bundles have folders to go to: a tool's are refused. From API 0.3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -212,6 +220,18 @@ mod tests {
         let job: Bundle =
             serde_json::from_str(r#"{"title": "T", "job": {"kind": "export", "params": {"n": 1}}}"#).unwrap();
         assert_eq!(job.job.unwrap().kind, "export");
+    }
+
+    #[test]
+    fn a_bundle_goes_into_the_folder_the_user_chose() {
+        let json = serde_json::json!({"title": "Drawer", "target": "3f9a0c11d2e4b567", "folder": "Drawer 160",
+            "files": [{"path": "front.stl"}]});
+        let bundle: Bundle = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(bundle.target.as_deref(), Some("3f9a0c11d2e4b567"));
+        assert!(!bundle.uses_next_to());
+        assert_eq!(serde_json::to_value(&bundle).unwrap(), json);
+        let without = serde_json::to_value(Bundle { target: None, ..bundle }).unwrap();
+        assert!(without.get("target").is_none(), "{without}");
     }
 
     #[test]
