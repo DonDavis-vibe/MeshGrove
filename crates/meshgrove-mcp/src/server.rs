@@ -258,9 +258,19 @@ impl Meshgrove {
 /// The answer as structured content (with the same JSON as text for older clients).
 fn answer<T: Serialize>(result: ToolResult<T>) -> Result<CallToolResult, ErrorData> {
     Ok(match result.and_then(|v| serde_json::to_value(v).map_err(|e| ToolError::Invalid(e.to_string()))) {
-        Ok(value) => CallToolResult::structured(value),
+        Ok(value) => CallToolResult::structured(as_object(value)),
         Err(e) => failed(e),
     })
+}
+
+/// MCP wants structured content to be an object, and clients that check it refuse the whole
+/// answer otherwise: a list goes out as `{"items": [...]}`, anything else bare as `{"result": …}`.
+fn as_object(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(_) => value,
+        serde_json::Value::Array(_) => serde_json::json!({ "items": value }),
+        other => serde_json::json!({ "result": other }),
+    }
 }
 
 /// A tool error the AI reads (not a protocol error, which clients hide).
