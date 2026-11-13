@@ -19,6 +19,7 @@ egui_tiles.workspace = true
 # The interface themes and the controls drawn from them (vendor/README.md).
 solidcraft-theme.workspace = true
 solidcraft-ui-kit.workspace = true
+solidcraft-ui-text.workspace = true
 fontdb.workspace = true
 krilla.workspace = true
 epaint_default_fonts.workspace = true

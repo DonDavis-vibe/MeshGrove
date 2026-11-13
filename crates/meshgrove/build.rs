@@ -33,14 +33,19 @@ fn main() {
 /// (MIT OR Apache-2.0). Meshgrove has no workspace tabs, and the kit refuses a file naming a tab
 /// it does not know (one refused file drops them all), so per-tab tables are left out here.
 fn builtin_themes() -> Result<(), String> {
-    let dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?).join("../../assets/themes");
-    println!("cargo:rerun-if-changed={}", dir.display());
-    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .map_err(|e| format!("{}: {e}", dir.display()))?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|e| e == "json"))
-        .collect();
+    // SolidCraft's themes and Meshgrove's own two (assets/themes-meshgrove, made by
+    // scripts/meshgrove-themes.py). Ids must not collide across the two.
+    let mut files: Vec<PathBuf> = Vec::new();
+    for dir in ["themes", "themes-meshgrove"] {
+        let dir = assets().join(dir);
+        println!("cargo:rerun-if-changed={}", dir.display());
+        for entry in std::fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+            let path = entry.map_err(|e| e.to_string())?.path();
+            if path.extension().is_some_and(|e| e == "json") {
+                files.push(path);
+            }
+        }
+    }
     files.sort_by(|a, b| a.file_stem().cmp(&b.file_stem()));
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|e| e.to_string())?);
     let mut out = String::from("pub(crate) const BUILTIN: &[(&str, &str)] = &[\n");

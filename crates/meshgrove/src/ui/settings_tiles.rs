@@ -13,6 +13,7 @@ use super::settings::SettingsChange;
 use super::settings_kit::{hint, row, segmented, segmented_where};
 use super::tags::{self, Group, TagStyle};
 use super::tile_overlay::{self, Check, Overlays, PrintMark};
+use solidcraft_ui_kit as sc;
 
 /// The sample tile's picture: one of the author's designs as the thumbnailer renders it.
 const SAMPLE: &[u8] = include_bytes!("../../assets/tile-sample.png");
@@ -115,7 +116,8 @@ impl TileSettings {
         let layout = &config.tile_layout;
         let mut size = config.tile_size;
         row(ui, &t!("gallery.tile_size"), |ui| {
-            if ui.add(egui::Slider::new(&mut size, TILE_SIZE).show_value(false)).changed() {
+            super::settings_kit::slider(ui, &mut size, TILE_SIZE, 220.0, None);
+            if size != config.tile_size {
                 changes.push(SettingsChange::TileSize(size));
             }
         });
@@ -179,7 +181,7 @@ impl TileSettings {
             let current = layout.slot_of(badge);
             response.context_menu(|ui| {
                 for slot in TileSlot::CORNERS.into_iter().chain([TileSlot::Hidden]) {
-                    if ui.add_enabled(slot != current, egui::Button::new(slot_name(slot))).clicked() {
+                    if super::settings_kit::button_if(ui, slot != current, slot_name(slot)).clicked() {
                         let mut moved = layout.clone();
                         moved.place(badge, slot, usize::MAX);
                         changes.push(SettingsChange::TileLayout(moved));
@@ -290,7 +292,7 @@ impl TileSettings {
             });
             ui.horizontal(|ui| {
                 ui.label(t!("settings.tags_count"));
-                ui.add(egui::Slider::new(&mut count, TILE_TAG_COUNT));
+                super::settings_kit::slider(ui, &mut count, TILE_TAG_COUNT, 220.0, Some(|v| format!("{v:.0}")));
             });
         });
         row(ui, &t!("settings.tile_filaments"), |ui| {
@@ -314,10 +316,9 @@ impl TileSettings {
                 (2, t!("settings.tiles_name_two").into_owned()),
             ];
             segmented(ui, &mut layout.name_lines, &options);
-            ui.add_enabled(
-                layout.name_lines > 0,
-                egui::Checkbox::new(&mut layout.name_extension, t!("settings.tiles_extension")),
-            );
+            ui.add_enabled_ui(layout.name_lines > 0, |ui| {
+                sc::checkbox(ui, &t!("settings.tiles_extension"), &mut layout.name_extension);
+            });
         });
         hint(ui, t!("settings.tiles_look_hint"));
         if layout != config.tile_layout {

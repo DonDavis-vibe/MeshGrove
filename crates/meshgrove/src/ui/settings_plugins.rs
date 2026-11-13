@@ -1,6 +1,7 @@
 //! Settings → "Plugins": what is installed, what each plugin asks for and what the user grants,
 //! switching them on and off, installing a `.wasm` file and removing one.
 
+use solidcraft_ui_kit as sc;
 use std::path::PathBuf;
 
 use egui::{RichText, Ui};
@@ -87,17 +88,17 @@ impl PluginSettings {
         }
         ui.add_space(10.0);
         ui.horizontal_wrapped(|ui| {
-            if ui.button(t!("plugins.browse")).clicked() {
+            if sc::button(ui, t!("plugins.browse"), sc::Button::Normal).clicked() {
                 changes.push(SettingsChange::PickPlugin);
                 self.error = None;
             }
-            if ui.button(t!("plugins.open_folder")).clicked() {
+            if sc::button(ui, t!("plugins.open_folder"), sc::Button::Normal).clicked() {
                 changes.push(SettingsChange::OpenPluginFolder);
             }
             #[cfg(feature = "plugins")]
             {
                 let searching = self.search_rx.is_some();
-                if ui.add_enabled(!searching, egui::Button::new(t!("plugins.search_again"))).clicked() {
+                if super::settings_kit::button_if(ui, !searching, t!("plugins.search_again")).clicked() {
                     self.searched = false;
                 }
                 if searching {
@@ -179,7 +180,7 @@ impl PluginSettings {
                         ui.label(RichText::new(format!("{} · {}", offer.version, offer.id)).weak());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let label = if installed.is_some() { t!("plugins.update") } else { t!("plugins.install") };
-                            if ui.button(label).clicked() {
+                            if sc::button(ui, label, sc::Button::Normal).clicked() {
                                 changes.push(SettingsChange::InstallPlugin(found.path.clone()));
                                 self.error = None;
                             }
@@ -214,14 +215,14 @@ impl PluginSettings {
         let changed_file = row.hash.as_deref().is_some_and(|h| !h.eq_ignore_ascii_case(&entry.blake3));
         ui.horizontal(|ui| {
             let mut on = entry.enabled && !changed_file;
-            if ui.checkbox(&mut on, RichText::new(&row.name).strong()).changed() {
+            if sc::checkbox(ui, &row.name, &mut on).changed() {
                 changes.push(SettingsChange::PluginEnabled { id: row.id.clone(), enabled: on });
             }
             ui.label(RichText::new(format!("{} · {}", row.version, row.id)).weak());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let confirm = self.confirm_remove.as_deref() == Some(row.id.as_str());
                 let label = if confirm { t!("plugins.remove_confirm") } else { t!("plugins.remove") };
-                if ui.small_button(label).clicked() {
+                if sc::button(ui, label, sc::Button::Normal).clicked() {
                     if confirm {
                         changes.push(SettingsChange::RemovePlugin(row.id.clone()));
                         self.confirm_remove = None;

@@ -27,6 +27,8 @@ const PRELOAD_PAGES: usize = 2;
 const MAX_PREVIEW_BYTES: usize = 12 << 20;
 
 const PLEX_SANS: &[u8] = include_bytes!("../../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Variable.ttf");
+/// The theme's fixed-width face: the kit writes the text in its fields with it.
+const PLEX_MONO: &[u8] = include_bytes!("../../../../assets/fonts/ibm-plex-mono/IBMPlexMono-Regular.ttf");
 /// The kit's sans families in `sans_families()` order (regular, medium, semibold, bold), as
 /// (font data name, weight).
 const WEIGHTS: [(&str, u16); 4] =
@@ -123,6 +125,11 @@ pub fn definitions(
         .families
         .insert(theme_family(), std::iter::once("plex-sans".to_owned()).chain(fallbacks.iter().cloned()).collect());
     fonts.families.insert(system_family(), system_first);
+    if plex {
+        // Under a theme its fixed-width face leads too; egui's own stays behind it.
+        fonts.font_data.insert("plex-mono".to_owned(), Arc::new(FontData::from_static(PLEX_MONO)));
+        fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "plex-mono".to_owned());
+    }
     let mut cache = PREVIEWS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // Faces that left the window go; the ones still in it are reused, not read again.
     cache.retain(|name, _| previews.contains(name));

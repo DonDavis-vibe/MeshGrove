@@ -2092,12 +2092,6 @@ impl App {
                     self.gallery.tag_style = self.tag_style.clone();
                 }
                 SettingsChange::ResetLayout => self.layout.reset(),
-                SettingsChange::FoldSection { key, folded } => {
-                    self.config.settings_folded.retain(|k| *k != key);
-                    if folded {
-                        self.config.settings_folded.push(key);
-                    }
-                }
                 SettingsChange::DoubleClick(action) => self.config.double_click = action,
                 SettingsChange::DuplicatesKeep(keep) => {
                     self.config.duplicates_keep = keep;
@@ -2238,7 +2232,7 @@ impl App {
         let presses = self.spacemouse.take_presses();
         let config = &self.config.spacemouse;
         // The settings (calibration) read the knob without steering the views behind them.
-        if !config.enabled || self.settings.open {
+        if !config.enabled || self.settings.is_open() {
             return;
         }
         let motion = config.camera(config.process(self.mouse_state.raw));
@@ -2509,13 +2503,8 @@ impl App {
     /// makes it fill the screen and back.
     fn title_bar(&mut self, ui: &mut Ui) {
         use solidcraft_ui_kit::{type_face, window_chrome};
-        let t = solidcraft_theme::Tokens::get();
-        let visuals = ui.visuals();
-        // Without a theme the bar is one with the toolbar below it.
-        let (fill, ink, dim) = match crate::ui::appearance::tokens() {
-            Some(t) => (t.app_bar, t.app_bar_text, t.app_bar_text.gamma_multiply(0.65)),
-            None => (visuals.panel_fill, visuals.strong_text_color(), visuals.weak_text_color()),
-        };
+        let t = crate::ui::appearance::tokens();
+        let (fill, ink, dim) = (t.app_bar, t.app_bar_text, t.app_bar_text.gamma_multiply(0.65));
         let place = self.nav.current().file_name().map(|name| name.to_string_lossy().into_owned());
         let brand = self.brand.id();
         let bar =
@@ -3376,12 +3365,12 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
     /// When a pane is dragged: where it lands glows, as in LightGrove.
     fn paint_drag_preview(
         &self,
-        visuals: &egui::Visuals,
+        _visuals: &egui::Visuals,
         painter: &egui::Painter,
         parent_rect: Option<egui::Rect>,
         preview_rect: egui::Rect,
     ) {
-        let accent = crate::ui::appearance::tokens().map_or(visuals.selection.stroke.color, |t| t.accent);
+        let accent = crate::ui::appearance::tokens().accent;
         if let Some(parent) = parent_rect {
             // The group it joins.
             let stroke = egui::Stroke::new(1.0, accent.gamma_multiply(0.35));
@@ -3410,7 +3399,7 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
                 None => return,
             }
         };
-        let accent = crate::ui::appearance::tokens().map_or(ui.visuals().selection.stroke.color, |t| t.accent);
+        let accent = crate::ui::appearance::tokens().accent;
         egui::Frame::popup(ui.style()).stroke(egui::Stroke::new(1.0, accent)).show(ui, |ui| ui.label(title));
     }
 
@@ -3490,6 +3479,8 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let rs = frame.wgpu_render_state().expect("wgpu renderer").clone();
+        crate::ui::appearance::follow_system(&ctx);
+        let _language = crate::ui::appearance::language();
         if self.nav.poll() {
             self.on_listing_arrived();
         }
@@ -3794,7 +3785,7 @@ fn apply_fonts(ctx: &egui::Context, ui_font: Option<&str>, previews: &BTreeSet<S
         log::info!("UI font: {}", path.display());
         Some(std::sync::Arc::new(egui::FontData::from_owned(bytes)))
     });
-    let themed = crate::ui::appearance::tokens().is_some();
+    let themed = crate::ui::appearance::themed();
     ctx.set_fonts(fonts::definitions(ui_fonts(), system.clone(), fonts::Choice::of(ui_font), themed, previews));
 }
 

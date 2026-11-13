@@ -1,7 +1,7 @@
 //! The interface's look: SolidCraft's theme files on its token contract (`vendor/`, MIT OR
 //! Apache-2.0). A theme sets egui's visuals, so every stock control takes its colours, and the
-//! kit's own controls draw from the same tokens. With no theme chosen Meshgrove looks as it
-//! always did: egui's own dark or light, following the system.
+//! kit's own controls draw from the same tokens. With no theme chosen Meshgrove wears its own:
+//! neutral greys and a Breeze blue, dark or light as the system is.
 
 use std::collections::BTreeMap;
 
@@ -38,8 +38,23 @@ static ICONS: IconSet = IconSet::new(IconData {
 /// The kit's own two palettes, which are no files.
 const OWN: [(&str, &str); 2] = [("dark", "SolidCraft Dark"), ("light", "SolidCraft Light")];
 
+/// The kit's own words (tooltips of its controls, its menus) in Meshgrove's two languages: the
+/// ids are SolidCraft's, the texts as LightGrove carries them. Meshgrove's own texts stay in its
+/// locale files and reach the kit already translated.
+static KIT_ENGLISH: solidcraft_ui_text::Catalog =
+    solidcraft_ui_text::Catalog::new("en", "English", include_str!("../../kit-texts/en.json"));
+static KIT_GERMAN: solidcraft_ui_text::Catalog =
+    solidcraft_ui_text::Catalog::new("de", "Deutsch", include_str!("../../kit-texts/de.json"));
+static KIT_TEXTS: [&solidcraft_ui_text::Catalog; 2] = [&KIT_ENGLISH, &KIT_GERMAN];
+
+/// The kit speaks the interface's language for as long as the guard lives: hold it for a frame.
+pub fn language() -> solidcraft_ui_text::LanguageScope {
+    solidcraft_ui_text::scope(&rust_i18n::locale())
+}
+
 /// Before the first frame and before any theme is read.
 pub fn install() {
+    solidcraft_ui_text::install(&KIT_TEXTS);
     // Before any theme file is read: they are validated against the icon set.
     icons::install(&ICONS);
     icons::glyphs::install(&super::glyphs::GLYPHS);
@@ -61,41 +76,56 @@ fn theme(id: &str) -> Option<(bool, Option<&'static ThemeFile>)> {
     Some((file.base.is_dark(), Some(file)))
 }
 
+/// Meshgrove's own look, a theme like the others (assets/themes-meshgrove): the dark or the light
+/// one, as the system is.
+const OWN_LOOK: [&str; 2] = ["meshgrove", "meshgrove-light"];
+
 thread_local! {
-    /// The theme the interface has now (`None`: Meshgrove's own look), as the picker marks it.
+    /// The theme chosen (`None`: Meshgrove's own look), as the picker marks it.
     static CURRENT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// Whether Meshgrove's own look was last applied dark.
+    static OWN_DARK: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
-/// The palette of the theme that is on; `None` in Meshgrove's own look, whose colours are egui's
-/// and the ones written into the code.
-pub fn tokens() -> Option<Tokens> {
-    CURRENT.with_borrow(Option::is_some).then(Tokens::get)
+/// The palette the interface draws with now.
+pub fn tokens() -> Tokens {
+    Tokens::get()
+}
+
+/// Whether one of SolidCraft's themes is on, not Meshgrove's own look (dark or light, chosen or
+/// following the system).
+pub fn themed() -> bool {
+    CURRENT.with_borrow(|current| current.as_deref().is_some_and(|id| !OWN_LOOK.contains(&id)))
+}
+
+fn system_dark(ctx: &Context) -> bool {
+    ctx.system_theme().is_none_or(|theme| theme == egui::Theme::Dark)
 }
 
 /// Give the interface theme `id`, or Meshgrove's own look (`None`, and for an id no longer
-/// known). True when `id` was applied.
+/// known), dark or light as the system is. True when `id` was applied.
 pub fn apply(ctx: &Context, id: Option<&str>) -> bool {
-    let Some((dark, file)) = id.and_then(theme) else {
-        // egui's own visuals and spacing again, dark or light as the system says.
-        ctx.set_visuals_of(egui::Theme::Dark, egui::Visuals::dark());
-        ctx.set_visuals_of(egui::Theme::Light, egui::Visuals::light());
-        ctx.all_styles_mut(|style| style.spacing = egui::Spacing::default());
-        ctx.set_theme(egui::ThemePreference::System);
-        // The kit's own controls (the theme cards, the font list) as dark or light as egui.
-        solidcraft_theme::set_dark(ctx.system_theme().is_none_or(|theme| theme == egui::Theme::Dark));
-        solidcraft_theme::set_custom(None);
-        icons::set_theme_palette(None);
-        CURRENT.set(None);
-        ctx.request_repaint();
-        return false;
-    };
+    let chosen = id.and_then(theme);
+    let (dark, file) = chosen.unwrap_or_else(|| {
+        let dark = system_dark(ctx);
+        OWN_DARK.set(dark);
+        (dark, theme_files::find(OWN_LOOK[usize::from(!dark)], &[]))
+    });
     let values = BTreeMap::new();
     solidcraft_theme::set_dark(dark);
     solidcraft_theme::set_custom(file.map(|file| Custom { dark, tokens: theme_files::resolve_with(file, &values) }));
     icons::set_theme_palette(file.and_then(|file| theme_files::resolve_icon_palette(file, &values)).map(|p| (dark, p)));
     solidcraft_theme::apply(ctx);
-    CURRENT.set(id.map(str::to_owned));
-    true
+    CURRENT.set(id.filter(|_| chosen.is_some()).map(str::to_owned));
+    chosen.is_some()
+}
+
+/// With no theme chosen, Meshgrove's own look follows the system from dark to light and back.
+/// Call once a frame.
+pub fn follow_system(ctx: &Context) {
+    if CURRENT.with_borrow(Option::is_none) && system_dark(ctx) != OWN_DARK.get() {
+        apply(ctx, None);
+    }
 }
 
 /// Whether Meshgrove draws the main window's title bar itself. On macOS the system's stays: its
@@ -107,7 +137,7 @@ pub fn own_title_bar(setting: meshgrove_core::config::TitleBar) -> bool {
 /// A glowing outline around `rect` in `accent`, over a breath of it: where something dragged
 /// lands (LightGrove's drop outline).
 pub fn glow(painter: &egui::Painter, rect: egui::Rect, accent: egui::Color32) {
-    let radius = tokens().map_or(6.0, |t| f32::from(t.radius_lg));
+    let radius = f32::from(tokens().radius_lg);
     painter.rect_filled(rect, radius, accent.gamma_multiply(0.08));
     for (grow, alpha) in [(9.0, 0.05), (6.0, 0.09), (3.0, 0.16)] {
         let stroke = egui::Stroke::new(3.0, accent.gamma_multiply(alpha));
@@ -121,10 +151,21 @@ const CARD_WIDTH: f32 = 132.0;
 
 /// One card of the theme picker.
 struct Card {
-    id: Option<&'static str>,
+    id: &'static str,
     name: String,
     sample: ThemeSample,
     dark: bool,
+}
+
+impl Card {
+    fn of(theme: &'static ThemeFile) -> Card {
+        Card {
+            id: theme.id.as_str(),
+            name: theme.name.clone(),
+            sample: ThemeSample::from_tokens(&theme_files::resolve_with(theme, &BTreeMap::new())),
+            dark: theme.base.is_dark(),
+        }
+    }
 }
 
 /// The theme picker's cards, made once: their thumbnails are painted from each theme's tokens.
@@ -134,54 +175,32 @@ pub struct Picker {
 }
 
 impl Picker {
-    fn cards(&mut self, own_name: &str, system_dark: bool) -> &[Card] {
+    fn cards(&mut self) -> &[Card] {
         if self.cards.is_empty() {
-            // Meshgrove's own look, shown in egui's colours.
-            let v = if system_dark { egui::Visuals::dark() } else { egui::Visuals::light() };
-            let mut own = if system_dark { Tokens::dark() } else { Tokens::light() };
-            (own.panel, own.dialog_bg, own.dialog_body, own.dialog_footer) =
-                (v.panel_fill, v.window_fill, v.panel_fill, v.faint_bg_color);
-            (own.control_fill, own.viewport_top, own.viewport_bottom) =
-                (v.widgets.inactive.bg_fill, v.extreme_bg_color, v.extreme_bg_color);
-            (own.form_primary, own.accent, own.form_ink, own.form_dim) =
-                (v.selection.bg_fill, v.selection.bg_fill, v.text_color(), v.weak_text_color());
-            self.cards.push(Card {
-                id: None,
-                name: own_name.to_owned(),
-                sample: ThemeSample::from_tokens(&own),
-                dark: system_dark,
-            });
+            // Meshgrove's own two first, then SolidCraft's own two, then its theme files.
+            let files = |own: bool| themes().iter().filter(move |theme| OWN_LOOK.contains(&theme.id.as_str()) == own);
+            for theme in files(true) {
+                self.cards.push(Card::of(theme));
+            }
             for (id, name) in OWN {
                 let dark = id == "dark";
                 let tokens = if dark { Tokens::dark() } else { Tokens::light() };
-                self.cards.push(Card {
-                    id: Some(id),
-                    name: name.to_owned(),
-                    sample: ThemeSample::from_tokens(&tokens),
-                    dark,
-                });
+                self.cards.push(Card { id, name: name.to_owned(), sample: ThemeSample::from_tokens(&tokens), dark });
             }
-            for theme in themes() {
-                let tokens = theme_files::resolve_with(theme, &BTreeMap::new());
-                self.cards.push(Card {
-                    id: Some(theme.id.as_str()),
-                    name: theme.name.clone(),
-                    sample: ThemeSample::from_tokens(&tokens),
-                    dark: theme.base.is_dark(),
-                });
+            for theme in files(false) {
+                self.cards.push(Card::of(theme));
             }
         }
         &self.cards
     }
 
-    /// All themes as thumbnail cards, as many to a row as fit. Gives the theme the user picked
-    /// (`Some(None)`: Meshgrove's own look).
-    pub fn show(&mut self, ui: &mut Ui, labels: [&str; 3]) -> Option<Option<String>> {
-        let [own_name, dark, light] = labels;
+    /// All themes as thumbnail cards, as many to a row as fit. Gives the theme the user picked.
+    /// With none chosen yet, Meshgrove's own dark or light is marked, whichever the system has on.
+    pub fn show(&mut self, ui: &mut Ui, labels: [&str; 2]) -> Option<String> {
+        let [dark, light] = labels;
         let selected = CURRENT.with_borrow(Clone::clone);
-        let selected = selected.as_deref();
-        let system_dark = ui.ctx().system_theme().is_none_or(|theme| theme == egui::Theme::Dark);
-        let cards = self.cards(own_name, system_dark);
+        let selected = selected.as_deref().unwrap_or(OWN_LOOK[usize::from(!OWN_DARK.get())]);
+        let cards = self.cards();
         let gap = Tokens::get().space_8;
         let available = ui.available_width();
         let columns = (((available + gap) / (CARD_WIDTH + gap)).floor() as usize).max(1);
@@ -207,7 +226,7 @@ impl Picker {
                                 night: false,
                             };
                             if kit::theme_card(ui, &shown, CARD_WIDTH).clicked() {
-                                chosen = Some(card.id.map(str::to_owned));
+                                chosen = Some(card.id.to_owned());
                             }
                         }
                     });
@@ -223,11 +242,31 @@ impl Picker {
 mod tests {
     use super::*;
 
+    /// Writes SolidCraft's two built-in palettes as theme files into scratch/, the base
+    /// `scripts/meshgrove-themes.py` makes Meshgrove's own themes from:
+    /// `cargo test -p meshgrove dump_builtin_palettes -- --ignored`.
+    #[test]
+    #[ignore = "a tool, not a check"]
+    fn dump_builtin_palettes() {
+        install();
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scratch");
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, base, tokens) in [
+            ("builtin-dark", theme_files::Base::Dark, Tokens::dark()),
+            ("builtin-light", theme_files::Base::Light, Tokens::light()),
+        ] {
+            let value = theme_files::export(name, base, &tokens, None);
+            std::fs::write(dir.join(format!("{name}.json")), serde_json::to_string_pretty(&value).unwrap()).unwrap();
+        }
+    }
+
     #[test]
     fn every_embedded_theme_is_valid_and_resolves() {
         install();
         let themes = theme_files::read_builtin(builtin::BUILTIN).expect("the embedded themes are valid");
-        assert_eq!(themes.len(), 25);
+        // SolidCraft's 25 and Meshgrove's own two.
+        assert_eq!(themes.len(), 27);
+        assert!(OWN_LOOK.iter().all(|id| theme(id).is_some()));
         for file in &themes {
             assert!(theme(&file.id).is_some(), "{}", file.id);
         }

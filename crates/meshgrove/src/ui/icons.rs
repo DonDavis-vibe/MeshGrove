@@ -4,12 +4,9 @@ use std::sync::Arc;
 
 use egui::{Align2, Color32, FontId, Galley, Painter, Pos2, Rect, Stroke, StrokeKind, Vec2, pos2, vec2};
 
-/// KDE Breeze folder blue: the folders of Meshgrove's own look.
-const FOLDER_BLUE: Color32 = Color32::from_rgb(61, 174, 233);
-
-/// The colour of folders: the theme's accent, or Breeze blue without a theme.
+/// The colour of folders: the theme's accent (Breeze blue in Meshgrove's own look).
 pub fn folder_color() -> Color32 {
-    super::appearance::tokens().map_or(FOLDER_BLUE, |t| t.accent)
+    super::appearance::tokens().accent
 }
 /// Archives get a warm tone so they stand apart from folders.
 pub const ARCHIVE_AMBER: Color32 = Color32::from_rgb(222, 164, 66);
