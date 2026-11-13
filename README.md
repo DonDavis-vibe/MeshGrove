@@ -627,6 +627,8 @@ confirmation. Once you have looked through them, tick the groups where the choic
 Copies you want to keep as they are get *Ignore*: the group is no longer listed, counted in the
 sidebar or badged on its tiles; *Show ignored* lists such groups again, with *Watch again* to
 undo it. What is ignored is kept with your tags and notes (and in the user-data export).
+While a cleanup runs, a bar on top says how many files are through, and each group or archive
+whose copies are going is tinted green from the left as far as it got, its buttons resting.
 Tiles everywhere in the gallery show a `2×` / `3×` badge for files that have duplicates.
 
 **Packed and extracted.** A model pack that lies in the library both as the ZIP and extracted
