@@ -2,11 +2,11 @@
 //! suggestion which copy to keep (or the user's choice) and a way to move the others to the
 //! trash: group by group, or every group ticked as fine at once.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use egui::{Color32, RichText, Sense, Ui, vec2};
+use egui::{Color32, Id, Rect, RichText, Sense, Shape, Ui, vec2};
 use meshgrove_core::listing::{self, Entry};
 
 use super::gallery::{Gallery, Thumb};
@@ -43,6 +43,72 @@ pub struct Shown<'a> {
     pub prefer_packed: bool,
     /// The groups that belong to those archives are listed too.
     pub show_archive_groups: bool,
+    /// Files are on their way to the trash.
+    pub cleanup: Option<Cleanup<'a>>,
+}
+
+/// A cleanup on its way: the files in the order they go to the trash, and how many are through.
+#[derive(Clone, Copy)]
+pub struct Cleanup<'a> {
+    pub done: usize,
+    pub order: &'a HashMap<PathBuf, usize>,
+}
+
+impl Cleanup<'_> {
+    /// Of `paths`, how many are through and how many are part of the cleanup at all; `None`
+    /// when none of them is.
+    pub fn of<'p>(&self, paths: impl Iterator<Item = &'p Path>) -> Option<(usize, usize)> {
+        let (mut done, mut total) = (0, 0);
+        for path in paths {
+            if let Some(&at) = self.order.get(path) {
+                total += 1;
+                done += usize::from(at < self.done);
+            }
+        }
+        (total > 0).then_some((done, total))
+    }
+}
+
+/// How long the green sweep takes to catch up with the trash, and a finished card to dim.
+const SWEEP_TIME: f32 = 0.25;
+const DIM_TIME: f32 = 0.45;
+/// The green of a card being cleaned up, at its strongest.
+const TINT: f32 = 0.35;
+
+/// A group's or an archive's card. While its files go to the trash (`flight`: how many are
+/// through, of how many) its buttons rest and a green sweep from the left says how far it is;
+/// once all are through it dims until the view is built anew without it.
+fn card(ui: &mut Ui, id: Id, flight: Option<(usize, usize)>, body: impl FnOnce(&mut Ui)) {
+    let ctx = ui.ctx().clone();
+    let target = match flight {
+        // A sliver while it waits its turn says it is on its way.
+        Some((done, total)) if total > 0 => (done as f32 / total as f32).max(0.08),
+        _ => 0.0,
+    };
+    let sweep = ctx.animate_value_with_time(id.with("sweep"), target, SWEEP_TIME);
+    let through = flight.is_some_and(|(done, total)| done >= total);
+    let dim = ctx.animate_value_with_time(id.with("dim"), if through { 1.0 } else { 0.0 }, DIM_TIME);
+    // Painted once the card's place is known: behind it.
+    let background = ui.painter().add(Shape::Noop);
+    let rounding = ui.style().visuals.widgets.noninteractive.corner_radius;
+    let shown = ui.scope(|ui| {
+        if flight.is_some() {
+            ui.disable();
+        }
+        if dim > 0.0 {
+            ui.multiply_opacity(1.0 - 0.6 * dim);
+        }
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            body(ui);
+        })
+    });
+    if flight.is_some() && sweep > 0.0 {
+        let rect = shown.inner.response.rect;
+        let tint = Rect::from_min_size(rect.min, vec2(rect.width() * sweep, rect.height()));
+        let color = super::settings_kit::GOOD.gamma_multiply(TINT * (1.0 - 0.6 * dim));
+        ui.painter().set(background, Shape::rect_filled(tint, rounding, color));
+    }
 }
 
 /// An archive whose models have extracted copies among the duplicates: one decision for all
@@ -182,7 +248,7 @@ pub fn show(
     view: &Shown,
     gallery: &Gallery,
 ) -> Option<DupAction> {
-    let Shown { ignored, show_ignored, archives, prefer_packed, show_archive_groups } = *view;
+    let Shown { ignored, show_ignored, archives, prefer_packed, show_archive_groups, cleanup } = *view;
     // An archive's groups are settled with its row; among the groups they would be one locked
     // card per model.
     let folded = |g: &GroupInfo| g.in_archive && !show_archive_groups;
@@ -206,6 +272,15 @@ pub fn show(
     });
     ui.weak(t!("dupes.explain"));
     ui.add_space(4.0);
+    if let Some(c) = cleanup {
+        // How far the cleanup is, above everything that scrolls.
+        let (done, total) = (c.done.min(c.order.len()), c.order.len());
+        let bar = egui::ProgressBar::new(done as f32 / total.max(1) as f32)
+            .text(t!("dupes.cleaning", done = done, total = total))
+            .fill(super::settings_kit::GOOD.gamma_multiply(0.6));
+        ui.add(bar);
+        ui.add_space(4.0);
+    }
     let open: Vec<&GroupInfo> = groups.iter().filter(|g| g.blocked.is_none() && !g.ignored && !folded(g)).collect();
     let picked: Vec<&GroupInfo> = open.iter().copied().filter(|g| g.picked).collect();
     ui.horizontal(|ui| {
@@ -238,7 +313,9 @@ pub fn show(
                 action = Some(act);
             }
             for (ai, a) in archives.iter().enumerate() {
-                if let Some(act) = archive_row(ui, a, prefer_packed, ai) {
+                let paths = a.copies.iter().chain(std::iter::once(&a.archive)).map(PathBuf::as_path);
+                let flight = cleanup.and_then(|c| c.of(paths));
+                if let Some(act) = archive_row(ui, a, prefer_packed, ai, flight) {
                     action = Some(act);
                 }
             }
@@ -254,8 +331,10 @@ pub fn show(
             ui.add_space(10.0);
         }
         for (gi, group) in groups.iter().enumerate().filter(|(_, g)| !folded(g)) {
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.set_width(ui.available_width());
+            // The copies that go: every file of the group but the one kept.
+            let others = group.range.clone().filter(|&i| i != group.keep).map(|i| entries[i].path.as_path());
+            let flight = cleanup.and_then(|c| c.of(others));
+            card(ui, Id::unique(("dupes_group", &group.key)), flight, |ui| {
                 ui.horizontal_top(|ui| {
                     let mut on = group.picked;
                     let check = egui::Checkbox::without_text(&mut on);
@@ -377,10 +456,15 @@ fn all_archives(ui: &mut Ui, archives: &[ArchiveInfo], prefer_packed: bool) -> O
 
 /// One archive with extracted copies: what it holds, where the copies are, and the two ways to
 /// settle it. The way the setting prefers is the main button.
-fn archive_row(ui: &mut Ui, a: &ArchiveInfo, prefer_packed: bool, ai: usize) -> Option<DupAction> {
+fn archive_row(
+    ui: &mut Ui,
+    a: &ArchiveInfo,
+    prefer_packed: bool,
+    ai: usize,
+    flight: Option<(usize, usize)>,
+) -> Option<DupAction> {
     let mut action = None;
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width());
+    card(ui, Id::unique(("dupes_archive", &a.archive)), flight, |ui| {
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("📦 {}", listing::file_name(&a.archive))).strong());
             ui.add(
@@ -610,5 +694,16 @@ mod tests {
         assert!(all[0].complete());
         let groups = vec![group(0..3, true, true), group(3..5, true, false)];
         assert_eq!(archives_of(&entries, &groups, |_| 2)[0].covered, 1);
+    }
+
+    #[test]
+    fn a_cleanup_says_how_far_each_card_is() {
+        let order: HashMap<PathBuf, usize> =
+            ["/lib/a.stl", "/lib/b.stl", "/lib/c.stl"].iter().enumerate().map(|(i, p)| (PathBuf::from(p), i)).collect();
+        let run = Cleanup { done: 2, order: &order };
+        let of = |paths: &[&str]| run.of(paths.iter().map(Path::new));
+        assert_eq!(of(&["/lib/a.stl", "/lib/c.stl"]), Some((1, 2)), "a is through, c waits");
+        assert_eq!(of(&["/lib/b.stl", "/lib/kept.stl"]), Some((1, 1)), "what stays does not count");
+        assert_eq!(of(&["/lib/kept.stl"]), None, "not part of the cleanup");
     }
 }
