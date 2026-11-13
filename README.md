@@ -636,7 +636,9 @@ gives one group per model, and a member of an archive cannot be trashed by itsel
 the groups, *Archives with extracted copies* lists each such archive with how many of its models
 are extracted and where the copies lie, and settles it with one click: keep the archive and trash
 its extracted copies, or keep the copies and trash the archive, the latter only once every model
-in it is extracted (the button says how many would be lost otherwise). A locked group names the
+in it is extracted (the button says how many would be lost otherwise). Two buttons above the rows
+do the same for all archives at once. The groups that belong to these archives are settled there
+and are folded away among the groups (*Show them below* lists them); a locked group names the
 archive it belongs to and points to that row. Config: `duplicates_keep = "extracted" | "packed"`.
 
 ### AI assistant and MCP (optional)

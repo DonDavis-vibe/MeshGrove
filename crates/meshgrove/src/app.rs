@@ -243,6 +243,8 @@ pub struct App {
     dupes_keep: HashSet<PathBuf>,
     /// The duplicates view lists the ignored groups too.
     dupes_show_ignored: bool,
+    /// The groups that belong to an archive with extracted copies are listed too.
+    dupes_show_archive_groups: bool,
     /// Groups just ignored (or watched again) here, before the index has it: key → ignored.
     dupes_ignored_now: HashMap<String, bool>,
     last_processed: usize,
@@ -444,6 +446,7 @@ impl App {
             dupes_picked: HashSet::new(),
             dupes_keep: HashSet::new(),
             dupes_show_ignored: false,
+            dupes_show_archive_groups: false,
             dupes_ignored_now: HashMap::new(),
             last_processed: 0,
             trash_confirm: None,
@@ -1381,6 +1384,7 @@ impl App {
                 picked,
                 key: g.key,
                 ignored: g.ignored,
+                in_archive: false,
             };
             group.blocked = blocked_by(&group, &entries);
             group.picked &= group.blocked.is_none() && !group.ignored;
@@ -1391,6 +1395,15 @@ impl App {
         for a in &mut archives {
             a.size = a.archive.metadata().map_or(0, |m| m.len());
             a.blocked = actions::trash_blocked(std::slice::from_ref(&a.archive));
+            for &gi in &a.groups {
+                groups[gi].in_archive = true;
+            }
+        }
+        // Folded away, a group is not part of "clean up selected".
+        if !self.dupes_show_archive_groups {
+            for g in groups.iter_mut().filter(|g| g.in_archive) {
+                g.picked = false;
+            }
         }
         self.leave_search();
         self.flatten = false;
@@ -1425,6 +1438,26 @@ impl App {
                 self.dupes_show_ignored = on;
                 self.show_duplicates();
             }
+            Some(DupAction::ShowArchiveGroups(on)) => {
+                self.dupes_show_archive_groups = on;
+                self.show_duplicates();
+            }
+            Some(DupAction::TrashAllArchiveCopies) => {
+                let mut paths: Vec<PathBuf> = archives.iter().flat_map(|a| a.copies.iter().cloned()).collect();
+                paths.sort();
+                paths.dedup();
+                self.request_trash(paths);
+            }
+            Some(DupAction::TrashAllArchives) => {
+                let paths: Vec<PathBuf> = archives
+                    .iter()
+                    .filter(|a| a.complete() && a.blocked.is_none())
+                    .map(|a| a.archive.clone())
+                    .collect();
+                if !paths.is_empty() {
+                    self.request_trash(paths);
+                }
+            }
             Some(DupAction::Select(i)) => self.gallery.select(Some(i)),
             Some(DupAction::Open(i)) => self.open_entry(i),
             Some(DupAction::TrashOthers(g)) => {
@@ -1449,7 +1482,8 @@ impl App {
                 }
             }
             Some(DupAction::PickAll(on)) => {
-                for group in groups.iter_mut().filter(|g| g.blocked.is_none()) {
+                let shown = self.dupes_show_archive_groups;
+                for group in groups.iter_mut().filter(|g| g.blocked.is_none() && (shown || !g.in_archive)) {
                     pick_dupes(&mut self.dupes_picked, group, entries, on);
                 }
             }
@@ -2804,15 +2838,14 @@ impl App {
         }
         if let View::Duplicates { entries, groups, ignored, archives } = &self.view {
             let prefer_packed = self.config.duplicates_keep == DuplicatesKeep::Packed;
-            let action = duplicates::show(
-                ui,
-                entries,
-                groups,
-                (*ignored, self.dupes_show_ignored),
+            let shown = duplicates::Shown {
+                ignored: *ignored,
+                show_ignored: self.dupes_show_ignored,
                 archives,
                 prefer_packed,
-                &self.gallery,
-            );
+                show_archive_groups: self.dupes_show_archive_groups,
+            };
+            let action = duplicates::show(ui, entries, groups, &shown, &self.gallery);
             self.dupes_action(action);
             return;
         }

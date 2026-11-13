@@ -675,8 +675,9 @@ alles auf einmal erledigt. Über den Gruppen listet *Archive mit entpackten Kopi
 Archiv mit der Zahl seiner entpackten Modelle und den Ordnern der Kopien und erledigt es mit einem
 Klick: das Archiv behalten und seine entpackten Kopien in den Papierkorb, oder die Kopien behalten
 und das Archiv in den Papierkorb – Letzteres erst, wenn jedes Modell darin entpackt ist (der Knopf
-sagt, wie viele sonst verloren gingen). Eine gesperrte Gruppe nennt ihr Archiv und verweist auf
-diese Zeile. Konfiguration: `duplicates_keep = "extracted" | "packed"`.
+sagt, wie viele sonst verloren gingen). Zwei Knöpfe über den Zeilen tun dasselbe für alle Archive
+auf einmal. Die Gruppen dieser Archive werden dort erledigt und sind unter den Gruppen eingeklappt
+(*Unten zeigen* listet sie); eine gesperrte Gruppe nennt ihr Archiv und verweist auf diese Zeile. Konfiguration: `duplicates_keep = "extracted" | "packed"`.
 
 ### KI-Assistent und MCP (freiwillig)
 
