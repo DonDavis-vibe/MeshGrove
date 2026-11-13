@@ -29,6 +29,16 @@ const SETTLE: Duration = Duration::from_millis(1500);
 /// per-user instance limit is easily exhausted on a busy desktop), rarely otherwise.
 const RESCAN_WITHOUT_WATCHER: Duration = Duration::from_secs(60);
 const RESCAN_WITH_WATCHER: Duration = Duration::from_secs(600);
+/// While facts keep coming in, the files are counted again this often at most.
+const RECOUNT: Duration = Duration::from_secs(2);
+/// Folders that keep changing (a long download) are listed after this long all the same.
+const SETTLE_AT_MOST: Duration = Duration::from_secs(10);
+
+/// When changed folders are listed: [`SETTLE`] after the last change (`now`), but no later
+/// than [`SETTLE_AT_MOST`] after the `first` one that is still waiting.
+fn settle_due(first: Instant, now: Instant) -> Instant {
+    (now + SETTLE).min(first + SETTLE_AT_MOST)
+}
 /// Daily backups of tags and notes kept in `userdata::backup_dir()`.
 const KEEP_BACKUPS: usize = 7;
 
@@ -444,9 +454,38 @@ impl Worker {
         let interval = if watcher.is_some() { RESCAN_WITH_WATCHER } else { RESCAN_WITHOUT_WATCHER };
         let mut next_full = Instant::now() + interval;
         let mut dirty: BTreeSet<PathBuf> = BTreeSet::new();
+        // When the changed folders are listed: a moment after the last change. Other commands
+        // do not put it off: a stream of thumbnail facts kept a rescan waiting for minutes.
+        let mut dirty_due: Option<Instant> = None;
+        let mut dirty_since: Option<Instant> = None;
+        // Facts were stored since the files were counted. Counting walks every file of the
+        // index, so it is done once the queue is empty (or now and then), not once per fact.
+        let mut counts_stale = false;
+        let mut counted = Instant::now();
         loop {
             let now = Instant::now();
-            let deadline = if dirty.is_empty() { next_full } else { (now + SETTLE).min(next_full) };
+            if counts_stale && (rx.is_empty() || now.duration_since(counted) >= RECOUNT) {
+                counts_stale = false;
+                counted = now;
+                self.refresh_counts(&lib);
+            }
+            if now >= next_full {
+                dirty.clear();
+                (dirty_due, dirty_since) = (None, None);
+                let starts: Vec<(PathBuf, PathBuf)> = self.roots.iter().map(|r| (r.clone(), r.clone())).collect();
+                self.scan(&mut lib, &starts, Force::Nothing);
+                backup(&lib);
+                next_full = Instant::now() + interval;
+                continue;
+            }
+            if dirty_due.is_some_and(|due| now >= due) {
+                (dirty_due, dirty_since) = (None, None);
+                let starts: Vec<(PathBuf, PathBuf)> =
+                    std::mem::take(&mut dirty).into_iter().filter_map(|dir| Some((self.root_of(&dir)?, dir))).collect();
+                self.scan(&mut lib, &starts, Force::Start);
+                continue;
+            }
+            let deadline = dirty_due.map_or(next_full, |due| due.min(next_full));
             let cmd = rx.recv_timeout(deadline.saturating_duration_since(now));
             match cmd {
                 Ok(Cmd::SetRoots(roots)) => {
@@ -484,6 +523,8 @@ impl Worker {
                             if path.is_dir() { path } else { path.parent().map(Path::to_path_buf).unwrap_or(path) };
                         dirty.insert(dir);
                     }
+                    let now = Instant::now();
+                    dirty_due = Some(settle_due(*dirty_since.get_or_insert(now), now));
                 }
                 Ok(Cmd::Tag(paths, tag)) => {
                     match lib.tag(&paths, &tag) {
@@ -538,7 +579,7 @@ impl Worker {
                     if let Err(e) = lib.store_meta(&path, &key, &meta) {
                         log::warn!("storing facts for {} failed: {e}", path.display());
                     }
-                    self.refresh_counts(&lib);
+                    counts_stale = true;
                 }
                 Ok(Cmd::InboxDone(paths)) => {
                     let result = match &paths {
@@ -695,20 +736,8 @@ impl Worker {
                     }
                     self.send(LibEvent::ChecksStored);
                 }
-                Err(RecvTimeoutError::Timeout) if Instant::now() >= next_full => {
-                    dirty.clear();
-                    let starts: Vec<(PathBuf, PathBuf)> = self.roots.iter().map(|r| (r.clone(), r.clone())).collect();
-                    self.scan(&mut lib, &starts, Force::Nothing);
-                    backup(&lib);
-                    next_full = Instant::now() + interval;
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    let starts: Vec<(PathBuf, PathBuf)> = std::mem::take(&mut dirty)
-                        .into_iter()
-                        .filter_map(|dir| Some((self.root_of(&dir)?, dir)))
-                        .collect();
-                    self.scan(&mut lib, &starts, Force::Start);
-                }
+                // A scan is due: the top of the loop runs it.
+                Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
                     backup(&lib);
                     return;
@@ -918,6 +947,16 @@ fn proposal_uid(lib: &Library, id: i64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changed_folders_are_listed_soon_after_the_last_change_but_not_put_off_forever() {
+        let first = Instant::now();
+        assert_eq!(settle_due(first, first), first + SETTLE);
+        let later = first + Duration::from_secs(3);
+        assert_eq!(settle_due(first, later), later + SETTLE, "another change: a moment after it");
+        let much_later = first + Duration::from_secs(9);
+        assert_eq!(settle_due(first, much_later), first + SETTLE_AT_MOST, "a folder that keeps changing");
+    }
     use notify::event::{AccessKind, CreateKind, MetadataKind, ModifyKind, RenameMode};
 
     #[test]
