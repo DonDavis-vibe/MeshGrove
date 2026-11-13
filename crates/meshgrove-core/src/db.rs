@@ -295,6 +295,19 @@ impl Library {
             .ok()?
     }
 
+    /// Every indexed folder (and archive) below `root`, at any depth.
+    pub fn indexed_dirs_below(&self, root: &Path) -> Vec<PathBuf> {
+        let Some(prefix) = path_str(root) else { return Vec::new() };
+        let Ok(mut stmt) = self.conn.prepare("SELECT path FROM dirs WHERE substr(path, 1, ?2) = ?1") else {
+            return Vec::new();
+        };
+        stmt.query_map(params![prefix, prefix.chars().count() as i64], |r| r.get::<_, String>(0))
+            .map(|rows| {
+                rows.filter_map(Result::ok).map(PathBuf::from).filter(|p| p != root && p.starts_with(root)).collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn child_dirs(&self, dir: &Path) -> Vec<PathBuf> {
         let Some(dir) = path_str(dir) else { return Vec::new() };
         let Ok(mut stmt) = self.conn.prepare_cached("SELECT path FROM dirs WHERE parent = ?1") else {

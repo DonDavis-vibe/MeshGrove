@@ -33,10 +33,23 @@ pub enum Force {
 pub fn scan(lib: &mut Library, root: &Path, start: &Path, force: Force, cancel: &AtomicBool) -> io::Result<ScanReport> {
     let mut report = ScanReport::default();
     let mut seen = HashSet::new();
+    if start == root {
+        // Rows of hidden folders from before they were told apart (a trash folder the watcher
+        // reported): a walk from the root never reaches them, so they go here.
+        for dir in lib.indexed_dirs_below(root).into_iter().filter(|d| hidden_below(root, d)) {
+            lib.remove_tree(&dir).map_err(io::Error::other)?;
+        }
+    }
     let mut stack = vec![(start.to_path_buf(), force != Force::Nothing)];
     while let Some((dir, forced)) = stack.pop() {
         if cancel.load(Ordering::Relaxed) {
             break;
+        }
+        // The walk leaves hidden folders out; a scan started inside one (the watcher saw the
+        // trash folder change, or a rescan was asked for) must not bring them in either.
+        if hidden_below(root, &dir) {
+            lib.remove_tree(&dir).map_err(io::Error::other)?;
+            continue;
         }
         let meta = match std::fs::metadata(&dir) {
             Ok(m) if m.is_dir() || (m.is_file() && archive::is_archive_file(&dir)) => m,
@@ -81,6 +94,13 @@ pub fn scan(lib: &mut Library, root: &Path, start: &Path, force: Force, cancel: 
     Ok(report)
 }
 
+/// Whether `dir` is, or lies in, a hidden folder below `root` (`.Trash-1000`, `$RECYCLE.BIN`,
+/// `.git` …). What the root itself is called, or lies in, does not count: the user chose it.
+pub fn hidden_below(root: &Path, dir: &Path) -> bool {
+    dir.strip_prefix(root)
+        .is_ok_and(|rel| rel.components().any(|c| listing::is_hidden(&c.as_os_str().to_string_lossy())))
+}
+
 /// What makes a folder the same folder when reached through different (symlinked) paths.
 #[cfg(unix)]
 fn folder_id(_dir: &Path, meta: &std::fs::Metadata) -> (u64, u64) {
@@ -101,6 +121,40 @@ mod tests {
 
     fn names(lib: &Library, q: &str) -> Vec<String> {
         lib.search(&query::parse(q), 100).unwrap().into_iter().map(|e| e.name).collect()
+    }
+
+    #[test]
+    fn hidden_folders_stay_out_wherever_the_scan_starts() {
+        let tmp = tempfile::tempdir().unwrap();
+        // The library itself may lie in a hidden folder: only what is below it counts.
+        let root = tmp.path().join(".local").join("lib");
+        let trash = root.join(".Trash-1000").join("files").join("old pack");
+        fs::create_dir_all(&trash).unwrap();
+        fs::create_dir_all(root.join("minis")).unwrap();
+        fs::write(trash.join("thrown.stl"), b"x").unwrap();
+        fs::write(root.join("minis").join("kept.stl"), b"x").unwrap();
+        let mut lib = Library::open_in_memory().unwrap();
+        let no = AtomicBool::new(false);
+        assert!(
+            hidden_below(&root, &trash) && !hidden_below(&root, &root.join("minis")) && !hidden_below(&root, &root)
+        );
+
+        scan(&mut lib, &root, &root, Force::Nothing, &no).unwrap();
+        assert_eq!(names(&lib, "stl"), ["kept.stl"]);
+        // The watcher reports the trash folder, or the user asks for a rescan in it.
+        for force in [Force::Start, Force::Tree] {
+            let report = scan(&mut lib, &root, &trash, force, &no).unwrap();
+            assert_eq!(report.dirs_visited, 0);
+            assert_eq!(names(&lib, "stl"), ["kept.stl"]);
+        }
+        // Rows from before (indexed by an older version) go with the next walk from the root,
+        // though no indexed folder leads to them.
+        let entries = listing::list_dir(&trash).unwrap();
+        lib.update_dir(&root, &trash, 1, &entries, &[]).unwrap();
+        assert_eq!(names(&lib, "stl").len(), 2);
+        scan(&mut lib, &root, &root, Force::Nothing, &no).unwrap();
+        assert_eq!(names(&lib, "stl"), ["kept.stl"]);
+        assert!(lib.indexed_dirs_below(&root).iter().all(|d| !hidden_below(&root, d)));
     }
 
     #[test]
