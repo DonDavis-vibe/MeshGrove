@@ -641,7 +641,10 @@ its extracted copies, or keep the copies and trash the archive, the latter only 
 in it is extracted (the button says how many would be lost otherwise). Two buttons above the rows
 do the same for all archives at once. The groups that belong to these archives are settled there
 and are folded away among the groups (*Show them below* lists them); a locked group names the
-archive it belongs to and points to that row. Config: `duplicates_keep = "extracted" | "packed"`.
+archive it belongs to and points to that row. *Archives that hold the same models* lists pairs of
+archives of which one holds nothing the other does not (a pack that is in the library twice):
+that one can go to the trash as a whole, which settles groups whose copies are both inside
+archives. Config: `duplicates_keep = "extracted" | "packed"`.
 
 ### AI assistant and MCP (optional)
 
