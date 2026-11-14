@@ -214,10 +214,13 @@ impl AcpBackend {
                         } else if what == Pending::SetModel {
                             out.push(Event::ModelRejected(message));
                         } else {
+                            // The reason first: the chat puts it under the answer still being
+                            // written and marks that answer as failed. After the turn's end
+                            // there is no such answer any more, and the reason was only a toast.
+                            out.push(Event::Error(message));
                             if what == Pending::Prompt {
                                 out.push(Event::TurnEnded { reason: "error".into() });
                             }
-                            out.push(Event::Error(message));
                         }
                     }
                 }
@@ -430,6 +433,24 @@ mod tests {
         assert!(
             matches!(&events[..], [Event::Permission { name: None, kind: None, .. }]),
             "an unknown call: {events:?}"
+        );
+        b.shutdown(true);
+    }
+
+    /// An answer the agent fails: why comes before the turn's end, so the chat can put it
+    /// under the answer.
+    #[test]
+    fn a_failed_answer_says_why_before_the_turn_ends() {
+        let mut b = backend();
+        let mut events = Vec::new();
+        b.handle(Incoming::Reply { id: 1, result: Ok(json!({})) }, &mut events);
+        b.handle(Incoming::Reply { id: 2, result: Ok(json!({"sessionId": "s"})) }, &mut events);
+        events.clear();
+        b.prompt(&[PromptPart::Text("hello".into())]);
+        b.handle(Incoming::Reply { id: b.next_id, result: Err((-32603, "broken".into())) }, &mut events);
+        assert!(
+            matches!(&events[..], [Event::Error(why), Event::TurnEnded { reason }] if why == "broken" && reason == "error"),
+            "{events:?}"
         );
         b.shutdown(true);
     }

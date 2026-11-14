@@ -225,6 +225,7 @@ impl App {
                     self.reveal(&path);
                 }
             }
+            Some(ChatAction::Follow(reference)) => self.follow_reference(reference),
             None => {}
         }
     }
@@ -312,6 +313,39 @@ impl App {
                 (false, true) => self.library.redo(c.id),
                 _ => {}
             }
+        }
+    }
+
+    /// Goes to what a reference of a message stands for. What is gone meanwhile (a file, a list)
+    /// says so instead.
+    fn follow_reference(&mut self, reference: Reference) {
+        let gone = |what: String| t!("chat.follow_gone", what = what).into_owned();
+        match reference {
+            // Several files: the first one, in its folder.
+            Reference::Files { paths } => match paths.iter().find(|p| p.exists()) {
+                Some(path) => self.reveal(&path.clone()),
+                None => {
+                    let name = paths.first().map(|p| listing::file_name(p)).unwrap_or_default();
+                    self.toast(gone(name));
+                }
+            },
+            Reference::Folder { path } if path.is_dir() => {
+                self.leave_search();
+                self.view = View::Folder;
+                self.navigate(path);
+            }
+            Reference::Folder { path } => self.toast(gone(path.display().to_string())),
+            Reference::List { name } => match self.lists.iter().find(|l| l.name == name).map(|l| l.id) {
+                Some(id) => self.show_list(id, true),
+                None => self.toast(gone(name)),
+            },
+            Reference::Tag { name } => self.search_library(if name.contains(' ') {
+                format!("tag:\"{name}\"")
+            } else {
+                format!("tag:{name}")
+            }),
+            Reference::Search { query } => self.search_library(query),
+            Reference::Printer { .. } => self.settings.open_at("printer"),
         }
     }
 

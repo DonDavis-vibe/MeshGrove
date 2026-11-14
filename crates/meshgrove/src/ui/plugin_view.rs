@@ -163,11 +163,9 @@ fn action_button(ui: &mut Ui, key: &str, label: &str, enabled: bool, primary: bo
     ui.add_enabled_ui(enabled, |ui| sc::button_at(ui, key, rect, label, look)).inner
 }
 
-/// The kit's checkbox with a label that is never cut short. The kit lays a label that may not
-/// wrap out a second time at the width it measured, and rounding then cuts some labels with
-/// "…"; a label that may wrap is painted as measured. So every label here may wrap: it does so
-/// only when it is longer than its line. In a row that wraps, a checkbox that does not fit
-/// what is left of the line goes to the next one first.
+/// The kit's checkbox with a label that is never cut short ([`settings_kit::checkbox`]). In a
+/// row that wraps, a checkbox that does not fit what is left of the line goes to the next one
+/// first.
 fn checkbox(ui: &mut Ui, label: &str, on: &mut bool) -> egui::Response {
     if ui.layout().main_wrap {
         let t = Tokens::get();
@@ -178,11 +176,7 @@ fn checkbox(ui: &mut Ui, label: &str, on: &mut bool) -> egui::Response {
             ui.end_row();
         }
     }
-    let before = ui.style().wrap_mode;
-    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-    let response = sc::checkbox(ui, label, on);
-    ui.style_mut().wrap_mode = before;
-    response
+    settings_kit::checkbox(ui, label, on)
 }
 
 /// One of a few as the kit's joined buttons; as single buttons that wrap where they are too

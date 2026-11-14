@@ -921,6 +921,17 @@ impl App {
         }
     }
 
+    /// Searches the whole library for `query` (a tag of the sidebar, a reference of the chat);
+    /// leaving the search later goes back to where the search field looked before.
+    fn search_library(&mut self, query: String) {
+        if self.scope != Scope::Library {
+            self.scope_before_tags = Some(self.scope);
+        }
+        self.scope = Scope::Library;
+        self.search = query;
+        self.run_search();
+    }
+
     fn run_search(&mut self) {
         if self.search.trim().is_empty() {
             if matches!(self.view, View::Search(_)) {
@@ -3048,16 +3059,11 @@ impl App {
                 self.library.set_roots(self.config.library_roots.clone());
             }
             Some(SidebarAction::SearchTags(tags)) => {
-                if self.scope != Scope::Library {
-                    self.scope_before_tags = Some(self.scope);
-                }
-                self.scope = Scope::Library;
                 let terms: Vec<String> = tags
                     .iter()
                     .map(|t| if t.contains(' ') { format!("tag:\"{t}\"") } else { format!("tag:{t}") })
                     .collect();
-                self.search = terms.join(" ");
-                self.run_search();
+                self.search_library(terms.join(" "));
             }
             Some(SidebarAction::ShowDuplicates) => self.show_duplicates(),
             Some(SidebarAction::ShowInbox) => self.show_inbox(),

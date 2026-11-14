@@ -72,6 +72,11 @@ pub fn show(ui: &mut Ui, p: Picker<'_>) -> egui::InnerResponse<Option<Picked>> {
                 .height(ROW_HEIGHT * 16.0)
                 .selected_text(compact(p.current, LABEL_CAP))
                 .truncate()
+                // The kit's arrow, as its own dropdowns have, not egui's triangle.
+                .icon(|ui, rect, _, _| {
+                    let ink = solidcraft_theme::Tokens::get().text_dim;
+                    solidcraft_ui_kit::dropdown_indicator(ui.painter(), rect, ink);
+                })
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .show_ui(ui, |ui| picked = popup(ui, &p, state))
                 .response;

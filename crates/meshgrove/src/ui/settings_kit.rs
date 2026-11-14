@@ -152,7 +152,53 @@ pub fn text_field(ui: &mut Ui, value: &mut String, hint: &str, width: f32) -> Re
 /// A list that opens, `width` wide, showing `current`; `choices` draws its rows ([`choice`],
 /// [`choice_row`]).
 pub fn dropdown(ui: &mut Ui, id: impl egui::AsIdSalt, current: &str, width: f32, choices: impl FnOnce(&mut Ui)) {
-    fixed_width(ui, width, |ui| sc::dropdown_menu(ui, id, current, choices));
+    fixed_width(ui, width, |ui| {
+        // One line, also where the texts around it wrap: a long choice is cut short.
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        sc::dropdown_menu(ui, id, current, choices)
+    });
+}
+
+/// The kit's checkbox with a label that wraps where it is longer than its line, and is never
+/// cut short. (The kit lays a label that may not wrap out a second time at the width it
+/// measured, and rounding then cuts some labels with "…"; one that may wrap is painted as
+/// measured.)
+pub fn checkbox(ui: &mut Ui, label: &str, value: &mut bool) -> Response {
+    let before = ui.style().wrap_mode;
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+    let response = sc::checkbox(ui, label, value);
+    ui.style_mut().wrap_mode = before;
+    response
+}
+
+/// One of several of which exactly one is chosen, as a round mark with its label (which wraps):
+/// the kit's checkbox in the round. Clicked when the user picks it.
+pub fn radio(ui: &mut Ui, label: &str, chosen: bool) -> Response {
+    let t = Tokens::get();
+    let mark = t.space_14;
+    let font = egui::FontId::proportional(t.font_label);
+    let room = (ui.available_width() - mark - t.space_6).max(0.0);
+    let galley = ui.painter().layout(label.to_owned(), font, t.form_ink, room);
+    let size = egui::vec2(
+        (mark + t.space_6 + galley.size().x).min(ui.available_width().max(0.0)),
+        galley.size().y.max(t.control_height - t.space_4),
+    );
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let center = egui::pos2(rect.left() + mark / 2.0, rect.center().y);
+        let lit = chosen || response.hovered() || response.has_focus();
+        let (fill, border) = if chosen { (t.form_primary, t.form_primary) } else { (t.control_fill, t.control_border) };
+        ui.painter().circle_filled(center, mark / 2.0, fill);
+        let stroke = if lit { egui::Stroke::new(1.0, t.form_primary) } else { t.control_border_stroke(border) };
+        ui.painter().circle_stroke(center, mark / 2.0 - stroke.width / 2.0, stroke);
+        if chosen {
+            ui.painter().circle_filled(center, mark / 5.0, t.on_accent);
+        }
+        let at = egui::pos2(rect.left() + mark + t.space_6, rect.center().y - galley.size().y / 2.0);
+        ui.painter().galley(at, galley, t.form_ink);
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, ui.is_enabled(), chosen, label));
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// One row of an open list. True when it was clicked.
