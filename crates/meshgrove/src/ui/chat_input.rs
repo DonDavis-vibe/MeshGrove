@@ -350,25 +350,15 @@ pub fn show(
         let field = output.response.response.rect;
         let at = egui::pos2(field.left() - t.space_10, field.top() - t.space_8 - t.space_4);
         let width = field.width() + 2.0 * t.space_10;
-        let mut clicked = None;
-        egui::Area::new(id.with("mentions"))
-            .order(egui::Order::Foreground)
-            .pivot(egui::Align2::LEFT_BOTTOM)
-            .fixed_pos(at)
-            .show(ui.ctx(), |ui| {
-                solidcraft_ui_kit::Menu::frame().show(ui, |ui| {
-                    ui.set_width((width - t.space_6 * 2.0 - 2.0).max(0.0));
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    for (i, c) in list.iter().enumerate() {
-                        // Lit is the one Enter takes: the first, until an arrow key picks.
-                        let row = mention_row(ui, &c.label, &c.detail, highlighted.unwrap_or(0) == i);
-                        down |= row.is_pointer_button_down_on();
-                        if row.clicked() {
-                            clicked = Some(i);
-                        }
-                    }
-                });
-            });
+        let rows: Vec<suggest::Offer> = list
+            .iter()
+            .map(|c| suggest::Offer { name: format!("@{}", c.label), about: c.detail.clone(), dot: None })
+            .collect();
+        // Lit is the one Enter takes: the first, until an arrow key picks.
+        let place = (at, egui::Align2::LEFT_BOTTOM);
+        let (clicked, held) =
+            suggest::floating_list(ui, id.with("mentions"), place, width, &rows, Some(highlighted.unwrap_or(0)));
+        down = held;
         if let Some(i) = clicked {
             let pill = list.swap_remove(i).value;
             let after = input.insert_pill(range.clone(), pill);
@@ -398,36 +388,6 @@ pub fn show(
         set_cursor(ui, id, char_index(&input.text, at));
     }
     out
-}
-
-/// One row of the reference list: "@name" and, quieter, what it is. Lit while it is the one
-/// Enter takes, or under the pointer. It takes clicks but never the keyboard's focus.
-fn mention_row(ui: &mut Ui, label: &str, detail: &str, lit: bool) -> egui::Response {
-    let t = solidcraft_theme::Tokens::get();
-    let size = egui::vec2(ui.available_width(), t.control_height);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::CLICK);
-    if ui.is_rect_visible(rect) {
-        if lit || response.hovered() {
-            ui.painter().rect_filled(rect, t.radius_sm, if lit { t.selected_bg } else { t.hover });
-        }
-        let ink = if lit { t.selected_ink } else { t.form_ink };
-        let face = solidcraft_ui_kit::type_face::semibold(t.font_label);
-        let name = ui.painter().layout_no_wrap(format!("@{label}"), face, ink);
-        let left = rect.left() + t.space_8;
-        let after = left + name.size().x + t.space_8;
-        ui.painter().galley(egui::pos2(left, rect.center().y - name.size().y / 2.0), name, ink);
-        // What it is, cut short where the row ends.
-        let mut job = LayoutJob::simple_singleline(detail.to_owned(), FontId::proportional(t.font_small), t.form_dim);
-        job.wrap = egui::text::TextWrapping {
-            max_width: (rect.right() - t.space_8 - after).max(0.0),
-            max_rows: 1,
-            break_anywhere: true,
-            overflow_character: Some('…'),
-        };
-        let about = ui.fonts_mut(|f| f.layout_job(job));
-        ui.painter().galley(egui::pos2(after, rect.center().y - about.size().y / 2.0), about, t.form_dim);
-    }
-    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 fn set_cursor(ui: &Ui, id: egui::Id, chars: usize) {

@@ -10,7 +10,7 @@ use meshgrove_core::listing::{self, Entry};
 
 use super::duplicates::{TILE_WIDTH, TileClick, tile};
 use super::gallery::Gallery;
-use super::settings_kit::segmented;
+use super::settings_kit::{self, segmented};
 
 /// What the view knows about one candidate besides its entry.
 pub struct ImportItemInfo {
@@ -24,6 +24,8 @@ pub struct ImportItemInfo {
     pub name_taken: bool,
     /// For archives: members, and how many of them are models.
     pub archive: Option<(usize, usize)>,
+    /// For a folder: how many files to print lie in it. It comes in as a whole.
+    pub folder: Option<usize>,
 }
 
 impl ImportItemInfo {
@@ -65,6 +67,19 @@ pub fn show(
     archives: ArchiveImport,
     scanning: bool,
 ) -> Option<ImportAction> {
+    // One of the kit's forms: its controls, its fields, its label font.
+    settings_kit::pane(ui, |ui| import(ui, entries, groups, gallery, target, archives, scanning))
+}
+
+fn import(
+    ui: &mut Ui,
+    entries: &[Entry],
+    groups: &[ImportGroupInfo],
+    gallery: &Gallery,
+    target: &str,
+    archives: ArchiveImport,
+    scanning: bool,
+) -> Option<ImportAction> {
     let mut action = None;
     let importable: usize = groups.iter().map(|g| g.items.iter().filter(|i| i.importable()).count()).sum();
     let picked: usize = groups.iter().map(|g| g.items.iter().filter(|i| i.picked).count()).sum();
@@ -76,16 +91,16 @@ pub fn show(
                 0 => t!("import.none"),
                 n => t!("import.summary", count = n, target = target),
             };
-            ui.label(RichText::new(summary).strong());
+            ui.label(settings_kit::strong(summary));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(t!("import.open_settings")).clicked() {
+                if settings_kit::action(ui, t!("import.open_settings"), true).clicked() {
                     action = Some(ImportAction::OpenSettings);
                 }
-                if ui.add_enabled(!scanning, egui::Button::new(t!("import.reload"))).clicked() {
+                if settings_kit::action(ui, t!("import.reload"), !scanning).clicked() {
                     action = Some(ImportAction::Reload);
                 }
                 if scanning {
-                    ui.spinner();
+                    settings_kit::busy(ui);
                 }
             });
         });
@@ -94,10 +109,10 @@ pub fn show(
         if importable > 0 {
             ui.horizontal(|ui| {
                 let label = t!("import.import_picked", count = picked);
-                if ui.add_enabled(picked > 0, egui::Button::new(RichText::new(label).strong())).clicked() {
+                if settings_kit::primary(ui, label, picked > 0).clicked() {
                     action = Some(ImportAction::ImportPicked);
                 }
-                if picked < importable && ui.button(t!("import.import_all", count = importable)).clicked() {
+                if picked < importable && settings_kit::action(ui, t!("import.import_all", count = importable), true).clicked() {
                     action = Some(ImportAction::ImportAll);
                 }
                 if any_archive {
@@ -120,16 +135,16 @@ pub fn show(
             }
             let here = group.items.iter().filter(|i| i.importable()).count();
             let here_picked = group.items.iter().filter(|i| i.picked).count();
-            egui::Frame::group(ui.style()).show(ui, |ui| {
+            settings_kit::card_frame().show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     let mut all = here > 0 && here_picked == here;
                     let some = here_picked > 0 && !all;
-                    let check = egui::Checkbox::without_text(&mut all).indeterminate(some);
-                    if ui.add_enabled(here > 0, check).on_hover_text(t!("import.toggle_group")).changed() {
+                    let check = settings_kit::check_mark(ui, &mut all, some, here > 0);
+                    if check.on_hover_text(t!("import.toggle_group")).changed() {
                         action = Some(ImportAction::ToggleGroup(n, all));
                     }
-                    let title = RichText::new(format!("📁 {}", group.title)).strong();
+                    let title = settings_kit::strong(format!("📁 {}", group.title));
                     ui.add(egui::Label::new(title).truncate()).on_hover_text(group.folder.display().to_string());
                     let known = group.items.len() - here;
                     let mut facts = vec![t!("import.new", count = here).into_owned()];
@@ -166,13 +181,15 @@ fn item(
         ui.set_width(TILE_WIDTH);
         ui.horizontal(|ui| {
             let mut on = info.picked;
-            if ui.add_enabled(info.importable(), egui::Checkbox::without_text(&mut on)).changed() {
+            if settings_kit::check_mark(ui, &mut on, false, info.importable()).changed() {
                 *action = Some(ImportAction::Toggle(i));
             }
             let note = if let Some(at) = &info.in_library {
                 Some((t!("import.in_library").into_owned(), at.display().to_string()))
             } else if info.busy {
                 Some((t!("import.busy").into_owned(), String::new()))
+            } else if let Some(files) = info.folder {
+                Some((t!("import.folder_facts", count = files).into_owned(), String::new()))
             } else if let Some((members, models)) = info.archive {
                 Some((t!("import.archive_facts", models = models, members = members).into_owned(), String::new()))
             } else if info.name_taken {

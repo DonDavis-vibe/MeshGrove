@@ -157,7 +157,7 @@ pub fn preview(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         match cx.model {
             ModelStatus::Loading => {
-                child.centered_and_justified(|ui| ui.spinner());
+                child.centered_and_justified(|ui| crate::ui::loading::mark_sized(ui, 44.0));
             }
             ModelStatus::Failed(e) => {
                 child.centered_and_justified(|ui| ui.colored_label(ui.visuals().error_fg_color, e));
@@ -183,7 +183,7 @@ fn text_view(ui: &mut Ui, preview: &mut TextPreview, folder: Option<&mut Details
     let text = match &preview.state {
         TextState::Ready(text) => text,
         TextState::Loading => {
-            ui.centered_and_justified(|ui| ui.spinner());
+            ui.centered_and_justified(|ui| crate::ui::loading::mark_sized(ui, 44.0));
             return;
         }
         TextState::Failed(e) => {
@@ -474,7 +474,7 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
         .on_hover_text(t!("tags.suggestions_hint"));
         match ed.ai {
             Some((_, true)) => {
-                ui.spinner().on_hover_text(t!("actions.tags_asking"));
+                crate::ui::loading::mark(ui).on_hover_text(t!("actions.tags_asking"));
             }
             Some((_, false))
                 if super::settings_kit::bar_button(ui, "✨").on_hover_text(t!("actions.tags_hint")).clicked() =>

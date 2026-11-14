@@ -2,7 +2,8 @@
 //! window once the delay has passed (thumbnails had time to load) and then quits.
 //! Lets us check the UI from scripts and CI without capturing the user's desktop.
 //! `MESHGROVE_POINTER=x,y` additionally pins the mouse pointer (logical points) to test hover effects,
-//! `MESHGROVE_SEARCH=query` starts with a library search, `MESHGROVE_HOLD=1` holds the left button down
+//! `MESHGROVE_LOADING=grove|unfold|light` shows that loading animation at every wait (read in
+//! `ui/loading.rs`), `MESHGROVE_SEARCH=query` starts with a library search, `MESHGROVE_HOLD=1` holds the left button down
 //! at the pointer from 0.7 s on and `MESHGROVE_WHEEL=dy` turns the mouse wheel there for half a second after 1 s.
 //! `MESHGROVE_CLICKS=x,y;x,y;…` clicks those points one after the other, from 3 s on, every 0.8 s
 //! (`x,y*2` double-clicks, `x,y*r` right-clicks, `x,y*s` clicks with Shift held), and `MESHGROVE_TYPE=text` types the text after the last click; steps
@@ -162,6 +163,10 @@ impl ScreenshotHook {
         if self.pointer.is_none() && self.clicks.is_empty() && self.typing.is_empty() && self.release.is_none() {
             return;
         }
+        // The scripted run has the keyboard whatever window the desktop has in front: egui
+        // drops a field's focus (and with it a list open under the field) when its window is
+        // not the active one, and a run in the background would show another picture.
+        raw.focused = true;
         raw.events.retain(|e| {
             !matches!(
                 e,
@@ -169,6 +174,7 @@ impl ScreenshotHook {
                     | egui::Event::PointerGone
                     | egui::Event::PointerButton { .. }
                     | egui::Event::MouseWheel { .. }
+                    | egui::Event::WindowFocused(_)
             )
         });
         let t = self.started.elapsed().as_secs_f32();

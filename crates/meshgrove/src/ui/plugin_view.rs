@@ -211,28 +211,9 @@ fn one_of(ui: &mut Ui, labels: &[&str], current: usize) -> Option<usize> {
     picked
 }
 
-/// The kit's thin bar of something under way: filled to `fraction`, or with a piece that
-/// travels along it when nobody knows how far it is.
+/// The kit's thin bar of something under way ([`settings_kit::progress`]).
 pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>) {
-    let t = Tokens::get();
-    match fraction {
-        Some(fraction) => {
-            sc::progress(ui, "plugin", fraction);
-        }
-        None => {
-            let size = vec2(ui.available_width().max(0.0), t.space_6);
-            let (bar, _) = ui.allocate_exact_size(size, Sense::hover());
-            ui.painter().rect_filled(bar, t.space_3, t.dialog_rule);
-            const PIECE: f32 = 0.3;
-            let at = (ui.input(|i| i.time) * 0.7).fract() as f32 * (1.0 + PIECE) - PIECE;
-            let piece = Rect::from_min_max(
-                pos2(bar.left() + bar.width() * at.max(0.0), bar.top()),
-                pos2(bar.left() + bar.width() * (at + PIECE).min(1.0), bar.bottom()),
-            );
-            ui.painter().rect_filled(piece, t.space_3, t.form_primary);
-            ui.ctx().request_repaint();
-        }
-    }
+    settings_kit::progress(ui, fraction);
 }
 
 impl Draw<'_> {

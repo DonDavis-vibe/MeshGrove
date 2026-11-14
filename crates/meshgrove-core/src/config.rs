@@ -554,6 +554,9 @@ pub struct AiConfig {
     /// of a run, and every one-click action), Meshgrove says what goes out and asks. The
     /// question's "don't ask again" turns this off; the settings turn it on again.
     pub cloud_ask: bool,
+    /// The toolbar's review button is always there (with AI or placement on), not only while
+    /// suggestions wait: the way to the review and its history when nothing is pending.
+    pub review_button_always: bool,
     /// Since when (Unix seconds) suggestions are accepted without the review: those of the AI
     /// apps and of the one-click actions, never moves; the chat has its own switch. `None`: all
     /// wait for the user.
@@ -578,6 +581,7 @@ impl Default for AiConfig {
             cross_library_moves: false,
             connect_apps: true,
             cloud_ask: true,
+            review_button_always: false,
             auto_accept_since: None,
         }
     }
@@ -896,7 +900,8 @@ pub enum LibraryRead {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ImportConfig {
-    /// The folders looked at (their top level only); none: no import.
+    /// The folders looked at: the files at their top level, and the folders there that hold
+    /// models (each as a whole). None: no import.
     pub folders: Vec<PathBuf>,
     /// The library the files go to; `None`: the first one.
     pub library: Option<PathBuf>,

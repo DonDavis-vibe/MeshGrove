@@ -180,7 +180,7 @@ impl ModelWindow {
         });
         egui::CentralPanel::default().show(ui, |ui| match &self.model {
             ModelStatus::Loading | ModelStatus::Idle => {
-                ui.centered_and_justified(|ui| ui.spinner());
+                ui.centered_and_justified(|ui| crate::ui::loading::mark_sized(ui, 44.0));
             }
             ModelStatus::Failed(e) => {
                 ui.centered_and_justified(|ui| ui.colored_label(ui.visuals().error_fg_color, e));

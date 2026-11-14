@@ -289,7 +289,7 @@ pub fn show(
                     action = Some(a);
                 }
                 if busy && view.questions.is_empty() && asks.is_empty() {
-                    sc::assistant_tool_status(ui, sc::AssistantToolState::Running);
+                    crate::ui::loading::mark(ui);
                 }
             });
         });
@@ -431,7 +431,7 @@ fn assistant_row(ui: &mut Ui, view: &ChatView) -> Option<ChatAction> {
             quiet(ui, name);
         }
         if view.looking {
-            sc::assistant_tool_status(ui, sc::AssistantToolState::Running);
+            crate::ui::loading::mark(ui);
             quiet(ui, &t!("assistant.looking"));
         }
         let Some((_, picked_name)) = picked else { return };
@@ -579,10 +579,10 @@ pub fn ask_card(ui: &mut Ui, card: &mut AskCard) -> Option<ChatAction> {
         ui.add_space(t.space_2);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = t.space_6;
-            if sc::icon_label_action(ui, &t!("chat.answer"), None, card.complete(), true).clicked() {
+            if settings_kit::primary(ui, &t!("chat.answer"), card.complete()).clicked() {
                 action = Some(ChatAction::Answer { uid: card.uid.clone(), cancel: false });
             }
-            if sc::icon_label_action(ui, &t!("chat.answer_cancel"), None, true, false).clicked() {
+            if settings_kit::action(ui, &t!("chat.answer_cancel"), true).clicked() {
                 action = Some(ChatAction::Answer { uid: card.uid.clone(), cancel: true });
             }
         });
@@ -598,11 +598,11 @@ fn question(ui: &mut Ui, q: &Question) -> Option<ChatAction> {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(t.space_6, t.space_6);
             for (id, name) in &q.options {
-                if sc::icon_label_action(ui, name, None, true, false).clicked() {
+                if settings_kit::action(ui, name, true).clicked() {
                     action = Some(ChatAction::Permission { key: q.key, option: Some(id.clone()) });
                 }
             }
-            if sc::icon_label_action(ui, &t!("trash.cancel"), None, true, false).clicked() {
+            if settings_kit::action(ui, &t!("trash.cancel"), true).clicked() {
                 action = Some(ChatAction::Permission { key: q.key, option: None });
             }
         });
@@ -619,7 +619,7 @@ fn sign_in(ui: &mut Ui, methods: &[AuthRow]) -> Option<ChatAction> {
         card_title(ui, &t!("assistant.sign_in_title"));
         for m in methods {
             if m.by_agent {
-                if sc::icon_label_action(ui, &m.name, None, true, false).on_hover_text(&m.description).clicked() {
+                if settings_kit::action(ui, &m.name, true).on_hover_text(&m.description).clicked() {
                     action = Some(ChatAction::Authenticate(m.id.clone()));
                 }
             } else {
@@ -762,7 +762,7 @@ fn message(ui: &mut Ui, m: &ChatMsg, view: &ChatView, md: &mut CommonMarkCache) 
                     let state = view.card_states.get(batch).map_or("pending", String::as_str);
                     card_state(ui, state, *items);
                     if matches!(state, "pending" | "partly")
-                        && sc::icon_label_action(ui, &t!("chat.card_review"), None, true, true).clicked()
+                        && settings_kit::primary(ui, &t!("chat.card_review"), true).clicked()
                     {
                         action = Some(ChatAction::Review);
                     }

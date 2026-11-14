@@ -159,6 +159,177 @@ pub fn dropdown(ui: &mut Ui, id: impl egui::AsIdSalt, current: &str, width: f32,
     });
 }
 
+/// A pane's content as one of the kit's forms: the height of its controls, its fields' fills,
+/// its label font. The kit's forms cut their texts short; a pane's texts wrap, as they did.
+pub fn pane<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    sc::scope(ui, |ui| {
+        ui.style_mut().wrap_mode = None;
+        add(ui)
+    })
+}
+
+/// The frame of a card in a pane: the theme's fine border around what belongs together.
+pub fn card_frame() -> egui::Frame {
+    let t = Tokens::get();
+    egui::Frame::NONE
+        .fill(t.dialog_body)
+        .stroke(t.tertiary_border(t.dialog_rule))
+        .corner_radius(t.radius_lg)
+        .inner_margin(t.space_10)
+}
+
+/// Text that stands out: the kit's heavier face. (The kit's forms give every text one ink, so
+/// egui's "strong", another ink, shows nothing there.)
+pub fn strong(text: impl Into<String>) -> RichText {
+    let t = Tokens::get();
+    RichText::new(text).font(sc::type_face::semibold(t.font_label)).color(t.form_ink)
+}
+
+/// A button of a pane that does something, as high as the kit's fields.
+pub fn action(ui: &mut Ui, label: impl AsRef<str>, enabled: bool) -> Response {
+    kit_button(ui, label.as_ref(), enabled, sc::Button::Normal)
+}
+
+/// The button a card or a pane is about, in the accent colour.
+pub fn primary(ui: &mut Ui, label: impl AsRef<str>, enabled: bool) -> Response {
+    kit_button(ui, label.as_ref(), enabled, sc::Button::Primary)
+}
+
+/// The kit's button with its room taken in the row itself: a row that wraps moves it to the
+/// next line whole, and only a label longer than a whole line is cut short. Named by its place
+/// among the widgets, as egui names its own: two may carry the same label.
+fn kit_button(ui: &mut Ui, label: &str, enabled: bool, look: sc::Button) -> Response {
+    let t = Tokens::get();
+    let line = ui.max_rect().width();
+    let room = if line.is_finite() && line > 0.0 { line } else { f32::INFINITY };
+    let pad = if matches!(look, sc::Button::Primary) { t.space_16 } else { t.space_12 };
+    let width = bar_button_width(ui, label) - 2.0 * t.space_8 + 2.0 * pad;
+    let key = format!("{label}#{}", ui.next_auto_id().value());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width.min(room), t.control_height), egui::Sense::hover());
+    ui.add_enabled_ui(enabled, |ui| sc::button_at(ui, &key, rect, label, look)).inner
+}
+
+/// A checkbox without a text: the tick of a row or of a whole card. `mixed` draws it as
+/// "some of them"; a click then ticks all.
+pub fn check_mark(ui: &mut Ui, value: &mut bool, mixed: bool, enabled: bool) -> Response {
+    ui.add_enabled_ui(enabled, |ui| {
+        // As high as a line of text, not as a field: beside a title at the top of a card it
+        // stands level with the title then.
+        let t = Tokens::get();
+        ui.spacing_mut().interact_size.y = t.space_16 + t.space_4;
+        sc::checkbox_indeterminate(ui, "", value, mixed)
+    })
+    .inner
+}
+
+/// The mark of something under way: the logo's tree, in one of its three animations.
+pub fn busy(ui: &mut Ui) {
+    super::loading::mark(ui);
+}
+
+/// The kit's thin bar of something under way: filled to `fraction`, or with a piece that
+/// travels along it when nobody knows how far it is.
+pub fn progress(ui: &mut Ui, fraction: Option<f32>) {
+    let t = Tokens::get();
+    match fraction {
+        Some(fraction) => {
+            sc::progress(ui, "pane", fraction);
+        }
+        None => {
+            let size = egui::vec2(ui.available_width().max(0.0), t.space_6);
+            let (bar, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            ui.painter().rect_filled(bar, t.space_3, t.dialog_rule);
+            const PIECE: f32 = 0.3;
+            let at = (ui.input(|i| i.time) * 0.7).fract() as f32 * (1.0 + PIECE) - PIECE;
+            let piece = egui::Rect::from_min_max(
+                egui::pos2(bar.left() + bar.width() * at.max(0.0), bar.top()),
+                egui::pos2(bar.left() + bar.width() * (at + PIECE).min(1.0), bar.bottom()),
+            );
+            ui.painter().rect_filled(piece, t.space_3, t.form_primary);
+            ui.ctx().request_repaint();
+        }
+    }
+}
+
+/// The ink for text and signs on a fill of the form's primary colour (a badge, a button of our
+/// own, the round mark's dot): the theme's `on_accent`, unless that can hardly be read there
+/// (below 3:1). Then black or white, whichever reads better. That is so in Meshgrove Dark
+/// (white on a light blue) and in the two 1-bit themes (whose `on_accent` pairs with `accent`,
+/// the opposite of their primary colour); every other theme keeps its own ink.
+pub fn ink_on_accent() -> Color32 {
+    let t = Tokens::get();
+    let fill = t.form_primary;
+    if solidcraft_theme::contrast_ratio(t.on_accent, fill) >= 3.0 {
+        return t.on_accent;
+    }
+    let (black, white) = (Color32::BLACK, Color32::WHITE);
+    let better = solidcraft_theme::contrast_ratio(black, fill) >= solidcraft_theme::contrast_ratio(white, fill);
+    if better { black } else { white }
+}
+
+/// [`text_field`] that keeps its identity (and with it the keyboard's focus) while what
+/// stands before it in its row comes and goes: named by `id`, which has to be one of a kind in
+/// the whole window (a row's own number in it), not by its place among the widgets.
+pub fn text_field_named(
+    ui: &mut Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut String,
+    hint: &str,
+    width: f32,
+) -> Response {
+    text_field_named_reserving(ui, id, value, hint, width, 0.0)
+}
+
+/// [`text_field_named`] whose text stops `reserve` points short of its right edge, for a
+/// button drawn inside the field there ([`field_button`]).
+pub fn text_field_named_reserving(
+    ui: &mut Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut String,
+    hint: &str,
+    width: f32,
+    reserve: f32,
+) -> Response {
+    let size = egui::vec2(width.min(ui.available_width().max(60.0)), Tokens::get().control_height);
+    // Its room first, in the row itself, so a row that wraps moves it as one piece.
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    // A scope with a name of its own: one salted with a name still counts the widgets before
+    // it in its parent, and a chip more in the row would make this another field to egui.
+    let place = egui::UiBuilder::new()
+        .scope_id(egui::Id::unique(("named-field", id)))
+        .max_rect(rect)
+        .layout(egui::Layout::left_to_right(egui::Align::Center));
+    ui.scope_builder(place, |ui| {
+        ui.set_width(rect.width());
+        sc::text_field_reserving(ui, value, hint, reserve).1
+    })
+    .inner
+}
+
+/// How much room [`field_button`] takes at a field's right end.
+pub fn field_button_room() -> f32 {
+    Tokens::get().control_height
+}
+
+/// A small button inside a field, at its right end, in the accent colour with one of the kit's
+/// icons: what the field can also be filled with (a folder from the system's dialog). The
+/// field keeps [`field_button_room`] free for it. It takes clicks but never the keyboard.
+pub fn field_button(ui: &mut Ui, field: &Response, icon: &str, tooltip: &str) -> Response {
+    let t = Tokens::get();
+    let room = field_button_room();
+    let slot = egui::Rect::from_min_max(egui::pos2(field.rect.right() - room, field.rect.top()), field.rect.max)
+        .shrink(t.space_3);
+    let response = ui.interact(slot, field.id.with("field-button"), egui::Sense::CLICK);
+    if ui.is_rect_visible(slot) {
+        let fill = if response.hovered() { t.form_primary.gamma_multiply(0.85) } else { t.form_primary };
+        ui.painter().rect_filled(slot, t.radius_sm, fill);
+        let side = (slot.height() - 2.0 * t.space_4).max(8.0);
+        let sign = egui::Rect::from_center_size(slot.center(), egui::vec2(side, side));
+        sc::icons::paint_ink(ui.painter(), sign, icon, ink_on_accent());
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tooltip)
+}
+
 /// The kit's checkbox with a label that wraps where it is longer than its line, and is never
 /// cut short. (The kit lays a label that may not wrap out a second time at the width it
 /// measured, and rounding then cuts some labels with "…"; one that may wrap is painted as
@@ -192,7 +363,7 @@ pub fn radio(ui: &mut Ui, label: &str, chosen: bool) -> Response {
         let stroke = if lit { egui::Stroke::new(1.0, t.form_primary) } else { t.control_border_stroke(border) };
         ui.painter().circle_stroke(center, mark / 2.0 - stroke.width / 2.0, stroke);
         if chosen {
-            ui.painter().circle_filled(center, mark / 5.0, t.on_accent);
+            ui.painter().circle_filled(center, mark / 5.0, ink_on_accent());
         }
         let at = egui::pos2(rect.left() + mark + t.space_6, rect.center().y - galley.size().y / 2.0);
         ui.painter().galley(at, galley, t.form_ink);

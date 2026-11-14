@@ -103,7 +103,7 @@ impl Turntable {
             MeshState::Loading => {
                 let spinner =
                     Rect::from_min_size(tile.image_rect.right_top() + egui::vec2(-22.0, 4.0), egui::vec2(18.0, 18.0));
-                egui::Spinner::new().size(16.0).paint_at(ui, spinner);
+                super::loading::paint_at(ui, spinner, egui::Id::unique("tile-loading"));
             }
             MeshState::Failed(_) => {}
             MeshState::Ready(loaded) => {

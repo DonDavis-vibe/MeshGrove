@@ -98,7 +98,7 @@ impl AiSettings {
         let current = agents::current(&config.ai, detection).map(|e| e.id).unwrap_or_default();
         if detection.is_none() {
             ui.horizontal(|ui| {
-                ui.spinner();
+                crate::ui::loading::mark(ui);
                 ui.weak(t!("assistant.looking"));
             });
         }
@@ -232,6 +232,10 @@ impl AiSettings {
             if check(ui, &mut ask, t!("settings.ai_cloud_ask"), t!("settings.ai_cloud_ask_hint")) {
                 changes.push(SettingsChange::AiCloudAsk(ask));
             }
+            let mut always = config.ai.review_button_always;
+            if check(ui, &mut always, t!("settings.ai_review_button"), t!("settings.ai_review_button_hint")) {
+                changes.push(SettingsChange::AiReviewButton(always));
+            }
             ui.horizontal(|ui| {
                 if sc::button(ui, t!("settings.ai_review", count = self.pending), sc::Button::Normal).clicked() {
                     changes.push(SettingsChange::ShowAiReview);
@@ -313,7 +317,7 @@ impl AiSettings {
         ui.add_space(4.0);
         match &self.assistants {
             None => {
-                ui.spinner();
+                crate::ui::loading::mark(ui);
             }
             Some(found) if found.is_empty() => hint(ui, t!("settings.mcp_none_found")),
             Some(found) => {
@@ -513,7 +517,7 @@ impl AiSettings {
                 self.tested = None;
             }
             if self.test.is_some() {
-                ui.spinner();
+                crate::ui::loading::mark(ui);
             }
             let ready = !form.base_url.trim().is_empty() && !form.model.trim().is_empty();
             if super::settings_kit::button_if(ui, ready, t!("settings.apply")).clicked() {

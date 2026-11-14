@@ -37,6 +37,9 @@ pub struct Candidate {
     pub name_taken: bool,
     /// Still being written, by the look of it.
     pub busy: bool,
+    /// For a folder: how many models, G-code files and archives with models lie in it, at any
+    /// depth. It comes into the library as a whole, with what else is in it.
+    pub folder: Option<usize>,
 }
 
 impl Candidate {
@@ -53,9 +56,21 @@ pub struct Scan {
     pub candidates: Vec<Candidate>,
 }
 
-/// Looks at the top level of `folder` for models, G-code and archives with models in them.
-/// `landing` is where they would go (to see whose name is taken), `lib` and `cache` tell
-/// which of them the library has already.
+/// Folders deeper than this in a folder of an import folder are not looked into.
+const FOLDER_DEPTH: usize = 6;
+/// A folder with more files than this is not hashed to see whether the library has it all.
+const FOLDER_HASHED: usize = 300;
+/// And no more than this many of its entries are looked at.
+const FOLDER_ENTRIES: usize = 5000;
+/// Archives in a folder are opened to see whether they hold models: this many at most, and
+/// none larger than [`FOLDER_ARCHIVE_SIZE`]. What is not opened does not count.
+const FOLDER_ARCHIVES: usize = 8;
+const FOLDER_ARCHIVE_SIZE: u64 = 256 << 20;
+
+/// Looks at the top level of `folder` for models, G-code and archives with models in them, and
+/// for folders that hold any of these (at any depth): such a folder is one candidate and comes
+/// in as a whole. `landing` is where they would go (to see whose name is taken), `lib` and
+/// `cache` tell which of them the library has already.
 pub fn scan(
     folder: &Path,
     landing: &Path,
@@ -68,7 +83,24 @@ pub fn scan(
     let mut candidates = Vec::new();
     for e in &entries {
         // Links are not moved (the file they point at stays where it is).
-        if e.is_dir() || e.path.symlink_metadata().is_ok_and(|m| m.is_symlink()) {
+        if e.path.symlink_metadata().is_ok_and(|m| m.is_symlink()) {
+            continue;
+        }
+        if e.is_dir() {
+            let inside = worth_importing(&e.path);
+            if inside.is_empty() {
+                continue;
+            }
+            let fresh = |f: &Entry| f.modified.is_some_and(|m| now.duration_since(m).is_ok_and(|age| age < SETTLE));
+            candidates.push(Candidate {
+                entry: e.clone(),
+                archive: None,
+                content_hash: None,
+                in_library: lib.and_then(|lib| all_in_library(lib, &inside, cache)),
+                name_taken: landing.join(&e.name).symlink_metadata().is_ok(),
+                busy: inside.iter().any(fresh) || has_partial(&e.path),
+                folder: Some(inside.len()),
+            });
             continue;
         }
         let archive = match e.kind {
@@ -101,9 +133,94 @@ pub fn scan(
             in_library,
             name_taken: landing.join(&e.name).symlink_metadata().is_ok(),
             busy: fresh || partial,
+            folder: None,
         });
     }
     Ok(Scan { folder: folder.to_path_buf(), candidates })
+}
+
+/// The models, G-code files and archives with models in `dir` and the folders below it. An
+/// archive counts like one at the top level does: only when a model is in it (a program's
+/// folder is full of archives that hold none).
+fn worth_importing(dir: &Path) -> Vec<Entry> {
+    let mut found = Vec::new();
+    let mut level = vec![dir.to_path_buf()];
+    let (mut seen, mut opened) = (0, 0);
+    let mut holds_models = |e: &Entry| {
+        if opened >= FOLDER_ARCHIVES || e.size > FOLDER_ARCHIVE_SIZE {
+            return false;
+        }
+        opened += 1;
+        archive::list(&e.path).is_ok_and(|members| members.iter().any(|m| Kind::from_file_name(&m.name).is_model()))
+    };
+    for _ in 0..FOLDER_DEPTH {
+        let mut next = Vec::new();
+        for d in &level {
+            let Ok(entries) = listing::list_dir(d) else { continue };
+            seen += entries.len();
+            for e in entries {
+                match e.kind {
+                    Kind::Folder => next.push(e.path),
+                    Kind::Archive if holds_models(&e) => found.push(e),
+                    kind if kind.is_printable() => found.push(e),
+                    _ => {}
+                }
+            }
+            if seen >= FOLDER_ENTRIES {
+                return found;
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        level = next;
+    }
+    found
+}
+
+/// Whether a download is still coming in somewhere in `dir` (a browser's partial file).
+fn has_partial(dir: &Path) -> bool {
+    let mut level = vec![dir.to_path_buf()];
+    for _ in 0..FOLDER_DEPTH {
+        let mut next = Vec::new();
+        for d in &level {
+            let Ok(items) = std::fs::read_dir(d) else { continue };
+            for item in items.flatten() {
+                let name = item.file_name().to_string_lossy().to_ascii_lowercase();
+                if PARTIAL.iter().any(|ext| name.ends_with(ext)) {
+                    return true;
+                }
+                if item.file_type().is_ok_and(|t| t.is_dir()) {
+                    next.push(item.path());
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        level = next;
+    }
+    false
+}
+
+/// Where the library has a folder's files already, when it has every one of them (by content;
+/// archives by name and size): the place of the first. `None` as soon as one is new, and for a
+/// folder too large to hash here.
+fn all_in_library(lib: &Library, files: &[Entry], cache: Option<&ThumbCache>) -> Option<PathBuf> {
+    if files.len() > FOLDER_HASHED {
+        return None;
+    }
+    let mut first = None;
+    for e in files {
+        let at = if e.kind == Kind::Archive {
+            lib.file_like(&e.name, e.size).ok().flatten()
+        } else {
+            let hash = hash_of(e, cache)?;
+            lib.paths_with_hash(&hash).ok().and_then(|p| p.into_iter().next())
+        };
+        first = first.or(Some(at?));
+    }
+    first
 }
 
 /// The content of a file: from its cached thumbnail where the folder was browsed, else hashed.
@@ -140,7 +257,8 @@ impl Library {
 /// What the import does with one candidate.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlanItem {
-    Move { from: Target, to: PathBuf },
+    /// A file, or (`folder`) a folder with all that is in it.
+    Move { from: Target, to: PathBuf, folder: bool },
     Extract { archive: Target, into: PathBuf },
 }
 
@@ -177,7 +295,7 @@ pub fn plan(scan: &Scan, root: &Path, landing: &Path, archives: ArchiveImport, p
         }
         let to = free_target(landing, &e.name, &used);
         used.push(to.clone());
-        plan.items.push(PlanItem::Move { from: target, to });
+        plan.items.push(PlanItem::Move { from: target, to, folder: c.folder.is_some() });
     }
     plan
 }
@@ -187,8 +305,8 @@ pub fn to_ops(plan: &Plan) -> Vec<ApplyOp> {
     plan.items
         .iter()
         .map(|item| match item {
-            PlanItem::Move { from, to } => {
-                ApplyOp::Import { root: plan.root.clone(), from: from.clone(), to: to.clone(), folder: false }
+            PlanItem::Move { from, to, folder } => {
+                ApplyOp::Import { root: plan.root.clone(), from: from.clone(), to: to.clone(), folder: *folder }
             }
             PlanItem::Extract { archive, into } => {
                 ApplyOp::Extract { root: plan.root.clone(), archive: archive.clone(), into: into.clone() }
@@ -284,6 +402,58 @@ mod tests {
         (dir, downloads, root, lib)
     }
 
+    /// A folder dropped into the import folder: one candidate when it holds models (at any
+    /// depth), moved into the library as a whole; none when it holds nothing to print, and "in
+    /// the library already" when the library has every file of it.
+    #[test]
+    fn a_folder_with_models_comes_in_as_a_whole() {
+        let (_dir, downloads, root, mut lib) = scene();
+        let landing = root.join("Import");
+        let project = downloads.join("Pebo Adapter");
+        std::fs::create_dir_all(project.join("Parts")).unwrap();
+        std::fs::create_dir_all(downloads.join("Notes only")).unwrap();
+        std::fs::create_dir_all(downloads.join("Known")).unwrap();
+        // A program as it is downloaded: archives, none with a model in it.
+        let program = downloads.join("PitWall-Linux").join("deb");
+        std::fs::create_dir_all(&program).unwrap();
+        std::fs::write(program.join("control.tar.gz"), "not a model").unwrap();
+        let mut texts = zip::ZipWriter::new(std::fs::File::create(program.join("data.zip")).unwrap());
+        texts.start_file("readme.txt", zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut texts, b"only text").unwrap();
+        texts.finish().unwrap();
+        // And a folder whose only model is in an archive.
+        std::fs::create_dir_all(downloads.join("Packed")).unwrap();
+        crate::archive::tests::make_zip(&downloads.join("Packed").join("pack.zip"));
+        backdate(&downloads.join("Packed").join("pack.zip"));
+        for (path, content) in [
+            (project.join("grip.stl"), "grip"),
+            (project.join("Parts").join("pin.stl"), "pin"),
+            (project.join("readme.txt"), "how to"),
+            (downloads.join("Notes only").join("readme.txt"), "text"),
+            (downloads.join("Known").join("copy.stl"), "abc"),
+        ] {
+            std::fs::write(&path, content).unwrap();
+            backdate(&path);
+        }
+        let scan = scan(&downloads, &landing, Some(&lib), None, SystemTime::now()).unwrap();
+        let by = |name: &str| scan.candidates.iter().find(|c| c.entry.name == name);
+        let folder = by("Pebo Adapter").expect("a folder with models is a candidate");
+        assert_eq!(folder.folder, Some(2), "its models, also those in a folder below");
+        assert!(folder.importable() && !folder.busy);
+        assert!(by("Notes only").is_none(), "nothing to print in it");
+        assert!(by("PitWall-Linux").is_none(), "archives without a model are nothing to print either");
+        assert_eq!(by("Packed").and_then(|c| c.folder), Some(1), "an archive with a model counts");
+        let known = by("Known").expect("listed, but not to import");
+        assert_eq!(known.in_library.as_deref(), Some(root.join("known.stl").as_path()), "the library has all of it");
+        let index = scan.candidates.iter().position(|c| c.entry.name == "Pebo Adapter").unwrap();
+        let plan = plan(&scan, &root, &landing, ArchiveImport::Whole, &[index]);
+        let to = landing.join("Pebo Adapter");
+        assert!(matches!(&plan.items[..], [PlanItem::Move { folder: true, to: at, .. }] if *at == to), "{plan:?}");
+        let report = lib.apply_change("import", "Downloads", &to_ops(&plan)).unwrap();
+        assert_eq!((report.applied, report.skipped), (1, 0));
+        assert!(to.join("Parts").join("pin.stl").is_file() && to.join("readme.txt").is_file() && !project.exists());
+    }
+
     #[test]
     fn candidates_in_a_downloads_folder() {
         let (_dir, downloads, root, lib) = scene();
@@ -314,7 +484,7 @@ mod tests {
             .items
             .iter()
             .filter_map(|i| match i {
-                PlanItem::Move { from, to } => Some((
+                PlanItem::Move { from, to, .. } => Some((
                     from.path.file_name().unwrap().to_string_lossy().into_owned(),
                     to.strip_prefix(&landing).unwrap().to_string_lossy().into_owned(),
                 )),

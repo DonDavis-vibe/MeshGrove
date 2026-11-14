@@ -45,6 +45,8 @@ enum DialogFor {
     Save { from: PathBuf },
     /// The folder for the question where a plugin's files should go ([`PathPrompt::Library`]).
     Library,
+    /// The folder a suggested move (the proposal of this id) should go to, in the review.
+    MoveTarget(i64),
 }
 
 /// What the user picked in a dialog; nothing when they closed it.
@@ -188,7 +190,30 @@ impl App {
                     *input = first.display().to_string();
                 }
             }
+            // The review may have moved on meanwhile: then nothing is there to place.
+            DialogFor::MoveTarget(proposal) => {
+                if let super::View::Review { batches, .. } = &mut self.view
+                    && let Some(item) =
+                        batches.iter_mut().flat_map(|b| &mut b.items).find(|i| i.proposal.id == proposal)
+                {
+                    crate::ui::review::move_into(item, &first);
+                }
+            }
         }
+    }
+
+    /// Opens the system's folder dialog for a suggested move's new place (the review's folder
+    /// button); its answer goes into that move's field.
+    pub(super) fn pick_move_folder(&mut self, proposal: i64, start: Option<PathBuf>) {
+        if self.plugin_dialog.open.is_some() {
+            return;
+        }
+        let mut folders = self.plugin_dialog.base.clone().set_title(t!("review.pick_folder_title"));
+        if let Some(dir) = start {
+            folders = folders.set_directory(dir);
+        }
+        self.plugin_dialog
+            .ask(DialogFor::MoveTarget(proposal), move || Box::pin(async move { paths(folders.pick_folder().await) }));
     }
 
     fn plugin_name(&self, id: &str) -> String {
@@ -477,7 +502,7 @@ impl App {
         let Some(open) = self.plugins.find(plugin, panel) else { return };
         let Some(view) = open.view.clone() else {
             ui.horizontal(|ui| {
-                ui.spinner();
+                crate::ui::loading::mark(ui);
                 ui.weak(t!("plugins.loading"));
             });
             return;
@@ -490,7 +515,7 @@ impl App {
             let size = egui::vec2(ui.available_width(), args.height);
             let Some(m) = meshes.get_mut(args.key) else {
                 ui.allocate_ui(size, |ui| {
-                    ui.centered_and_justified(|ui| ui.spinner());
+                    ui.centered_and_justified(|ui| crate::ui::loading::mark_sized(ui, 44.0));
                 });
                 return;
             };

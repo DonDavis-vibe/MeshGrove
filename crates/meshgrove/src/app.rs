@@ -144,6 +144,8 @@ pub struct App {
     /// Read connection to the index (search, folder mosaics); the service owns the writer.
     /// Opened after the first scan has created the index.
     index: Option<Library>,
+    /// The first scan is through and the index could still not be opened: it is not coming.
+    index_missing: bool,
     renderer: Renderer,
     viewer: ModelViewer,
     /// The selected readme or note, or the selected folder's readme.
@@ -379,6 +381,7 @@ impl App {
             library,
             db_path,
             index: None,
+            index_missing: false,
             renderer: Renderer::new(&rs.device, &rs.adapter),
             viewer: ModelViewer::new(),
             text: TextPreview::default(),
@@ -983,6 +986,7 @@ impl App {
                     let first = self.index.is_none();
                     if first {
                         self.index = Library::open_reader(&self.db_path);
+                        self.index_missing = self.index.is_none();
                         if let Some(index) = &mut self.index
                             && let Err(e) = index.set_printers(&self.printers)
                         {
@@ -2014,6 +2018,7 @@ impl App {
                 }
                 SettingsChange::AiCrossLibraryMoves(on) => self.config.ai.cross_library_moves = on,
                 SettingsChange::AiCloudAsk(on) => self.config.ai.cloud_ask = on,
+                SettingsChange::AiReviewButton(on) => self.config.ai.review_button_always = on,
                 SettingsChange::AiConnectNow => self.ai_connect.connect_now(),
                 SettingsChange::AiLibrary(library) => {
                     match self.config.ai.libraries.iter_mut().find(|l| l.root == library.root) {
@@ -2563,10 +2568,11 @@ impl App {
                 if crate::ui::settings_kit::small(ui, "⚙", &t!("settings.open")).clicked() {
                     self.settings.open();
                 }
-                // Only with AI on and something to review (or the review open).
+                // Only with AI on and something to review (or the review open), unless the
+                // settings keep it there always.
                 let pending = self.pending_proposals();
                 let reviewing = matches!(self.view, View::Review { .. } | View::History { .. });
-                if self.reviews() && (pending > 0 || reviewing) {
+                if self.reviews() && (pending > 0 || reviewing || self.config.ai.review_button_always) {
                     let label = if pending > 0 { format!("✨ {pending}") } else { "✨".to_owned() };
                     let button = crate::ui::settings_kit::bar_button_if(ui, &label, true, reviewing);
                     if button.on_hover_text(t!("review.open_hint")).clicked() {
@@ -2624,6 +2630,8 @@ impl App {
         let mut changed = false;
         let models_only = self.config.only_models;
         let mut flatten = self.flatten;
+        // The review (true) or the history (false), picked in the menu.
+        let mut go = None;
         use crate::ui::menus;
         // The menu stays open on clicks inside, so the tile size can be dragged; its rows close
         // it as in the other menus.
@@ -2662,7 +2670,20 @@ impl App {
                 self.layout.save();
                 ui.close();
             }
+            // Always reachable from here: the toolbar's button comes and goes with what waits.
+            menus::separator(ui);
+            if self.reviews() && menus::item(ui, "inspect", &t!("review.menu")) {
+                go = Some(true);
+            }
+            if menus::item(ui, "restore", &t!("review.history")) {
+                go = Some(false);
+            }
         });
+        match go {
+            Some(true) => self.show_review(),
+            Some(false) => self.show_history(),
+            None => {}
+        }
         if flatten != self.flatten {
             self.set_flatten(flatten);
         }
@@ -2897,17 +2918,32 @@ impl App {
         }
         ui.weak(t!("library.files", files = i18n::count(c.files), models = i18n::count(c.models)));
         if status.scanning {
-            ui.spinner().on_hover_text(t!("library.scanning"));
+            crate::ui::loading::mark(ui).on_hover_text(t!("library.scanning"));
         }
     }
 
     fn central(&mut self, ui: &mut Ui, rs: &egui_wgpu::RenderState) {
         let message = match (&self.view, &self.nav.listing) {
             (View::Folder, Listing::Loading) | (View::Flatten { entries: None, .. }, _) => {
-                ui.centered_and_justified(|ui| ui.spinner().on_hover_text(t!("gallery.loading")));
+                ui.centered_and_justified(|ui| crate::ui::loading::mark_sized(ui, 44.0).on_hover_text(t!("gallery.loading")));
                 return;
             }
             (View::Folder, Listing::Error(e)) => Some(t!("error.read_dir", error = e).into_owned()),
+            // At the start the index is opened once the library's folders were looked through,
+            // which takes a while on a large library: say that, not "not available".
+            (View::Search(results), _)
+                if results.is_empty()
+                    && self.index.is_none()
+                    && !self.index_missing
+                    && !self.config.library_roots.is_empty() =>
+            {
+                ui.vertical_centered(|ui| {
+                    ui.add_space((ui.available_height() * 0.4).max(0.0));
+                    crate::ui::settings_kit::busy(ui);
+                    ui.weak(t!("search.opening"));
+                });
+                return;
+            }
             (View::Search(results), _) if results.is_empty() => {
                 Some(if self.index.is_none() { t!("search.unavailable") } else { t!("search.none") }.into_owned())
             }
@@ -2958,7 +2994,8 @@ impl App {
         }
         if let View::Review { entries, batches } = &mut self.view {
             let applying = self.library.status().applying;
-            let action = review_view::show(ui, entries, batches, &self.gallery, &self.tag_style, applying);
+            let tags = (&self.tag_style, self.all_tags.as_slice());
+            let action = review_view::show(ui, entries, batches, &self.gallery, tags, applying);
             self.review_action(action);
             return;
         }
@@ -3192,7 +3229,7 @@ impl App {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                     match &self.model {
                         ModelStatus::Loading => {
-                            child.centered_and_justified(|ui| ui.spinner());
+                            child.centered_and_justified(|ui| crate::ui::loading::mark_sized(ui, 44.0));
                         }
                         ModelStatus::Failed(e) => {
                             child.centered_and_justified(|ui| ui.colored_label(ui.visuals().error_fg_color, e));

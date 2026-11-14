@@ -102,7 +102,7 @@ impl PluginSettings {
                     self.searched = false;
                 }
                 if searching {
-                    ui.spinner();
+                    crate::ui::loading::mark(ui);
                     ui.label(RichText::new(t!("plugins.searching")).weak());
                 }
             }

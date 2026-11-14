@@ -90,6 +90,7 @@ pub enum SettingsChange {
     /// The AI may suggest moves into another library.
     AiCrossLibraryMoves(bool),
     AiCloudAsk(bool),
+    AiReviewButton(bool),
     /// Connect the AI apps found now.
     AiConnectNow,
     /// What a library shows to which AI.
@@ -896,6 +897,9 @@ fn changes_towards(config: &Config, target: &Config) -> Vec<SettingsChange> {
         SettingsChange::AiAutoAccept(t.ai.auto_accept_since.is_some())
     });
     put(c.ai.cloud_ask != t.ai.cloud_ask, &|| SettingsChange::AiCloudAsk(t.ai.cloud_ask));
+    put(c.ai.review_button_always != t.ai.review_button_always, &|| {
+        SettingsChange::AiReviewButton(t.ai.review_button_always)
+    });
     put(c.ai.cross_library_moves != t.ai.cross_library_moves, &|| {
         SettingsChange::AiCrossLibraryMoves(t.ai.cross_library_moves)
     });
@@ -1817,7 +1821,7 @@ impl SettingsDialog {
                 self.rescan_slicers();
             }
             if self.detect_rx.is_some() {
-                ui.spinner();
+                crate::ui::loading::mark(ui);
             }
         });
         let by_hand = if editors { "settings.editors_by_hand" } else { "settings.slicers_by_hand" };
@@ -2075,7 +2079,7 @@ impl SettingsDialog {
             ui.horizontal(|ui| {
                 match self.cache_size {
                     Some(size) => ui.label(t!("settings.cache_size", size = i18n::file_size(size))),
-                    None => ui.spinner(),
+                    None => crate::ui::loading::mark(ui),
                 };
                 if sc::button(ui, t!("settings.clear_cache"), sc::Button::Normal)
                     .on_hover_text(t!("settings.clear_cache_hint"))

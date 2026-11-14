@@ -680,9 +680,10 @@ impl Gallery {
             }
             (_, Some(Thumb::Pending)) => {
                 icons::file(&painter, img, "", paper.linear_multiply(0.5), ink.linear_multiply(0.3));
-                egui::Spinner::new()
-                    .size((w * 0.16).clamp(12.0, 28.0))
-                    .paint_at(ui, Rect::from_center_size(img.center(), vec2(32.0, 32.0)));
+                // One name for all tiles: a folder being read shows one animation, not a mix.
+                let side = (w * 0.22).clamp(16.0, 36.0);
+                let mark = Rect::from_center_size(img.center(), vec2(side, side));
+                super::loading::paint_at(ui, mark, egui::Id::unique("tile-loading"));
             }
             (_, Some(Thumb::Failed(_))) => {
                 icons::file(&painter, img, "⚠", paper, visuals.warn_fg_color);

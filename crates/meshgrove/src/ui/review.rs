@@ -19,7 +19,10 @@ use meshgrove_core::lists::ListKind;
 
 use super::duplicates::{TileClick, tile};
 use super::gallery::Gallery;
-use super::settings_kit::good;
+use solidcraft_ui_kit as sc;
+
+use super::suggest::{self, Candidate};
+use super::settings_kit::{self, good};
 use super::tags::{self, TagStyle};
 use crate::i18n;
 
@@ -135,6 +138,27 @@ pub enum ReviewAction {
     /// A finished batch has faded away: take it out of the list.
     Remove(usize),
     History,
+    /// Choose the folder a move (the proposal of this id) goes to, in the system's dialog.
+    PickFolder(i64),
+}
+
+/// The folder the user chose in the system's dialog for a move: the file keeps its name and
+/// goes there. A folder outside the move's library says so under the field instead.
+pub fn move_into(item: &mut ReviewItem, folder: &std::path::Path) {
+    let Ok(m) = serde_json::from_value::<MovePayload>(item.proposal.payload.clone()) else { return };
+    let Some(from) = item.proposal.target.as_ref().map(|t| t.path.clone()) else { return };
+    let chosen = item.picked.to.clone().unwrap_or_else(|| m.to.clone());
+    let (Some(name), Ok(below)) = (chosen.file_name(), folder.strip_prefix(&m.root)) else {
+        item.draft.path_error = Some(t!("review.place_outside", library = listing::file_name(&m.root)).into_owned());
+        return;
+    };
+    let to = folder.join(name);
+    // As the field shows a place: below the library, with the library's name for another one.
+    let shown = below.join(name).display().to_string();
+    let cross = !from.starts_with(&m.root);
+    item.draft.path = Some(if cross { format!("{}/{shown}", listing::file_name(&m.root)) } else { shown });
+    item.draft.path_error = None;
+    item.picked.to = (to != m.to).then_some(to);
 }
 
 /// The scroll area's pending offset, set by a click and read the next frame.
@@ -168,17 +192,29 @@ pub fn show(
     entries: &[Entry],
     batches: &mut [ReviewBatch],
     gallery: &Gallery,
-    style: &TagStyle,
+    (style, tags): (&TagStyle, &[(String, usize)]),
+    applying: Option<(i64, usize, usize)>,
+) -> Option<ReviewAction> {
+    // One of the kit's forms: its controls, its fields, its label font.
+    settings_kit::pane(ui, |ui| review(ui, entries, batches, gallery, (style, tags), applying))
+}
+
+fn review(
+    ui: &mut Ui,
+    entries: &[Entry],
+    batches: &mut [ReviewBatch],
+    gallery: &Gallery,
+    (style, tags): (&TagStyle, &[(String, usize)]),
     applying: Option<(i64, usize, usize)>,
 ) -> Option<ReviewAction> {
     let mut action = None;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(t!("review.summary", count = batches.len())).strong());
+        ui.label(settings_kit::strong(t!("review.summary", count = batches.len())));
         if let Some((_, done, total)) = applying {
             ui.weak(t!("review.applying", done = done, total = total));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button(t!("review.history")).clicked() {
+            if settings_kit::action(ui, t!("review.history"), true).clicked() {
                 action = Some(ReviewAction::History);
             }
         });
@@ -200,7 +236,7 @@ pub fn show(
     let mut remove = None;
     let shown = area.show(ui, |ui| {
         let viewport_h = ui.clip_rect().height();
-        let rounding = ui.style().visuals.widgets.noninteractive.corner_radius;
+        let rounding = egui::CornerRadius::same(solidcraft_theme::Tokens::get().radius_lg);
         for (bi, batch) in batches.iter_mut().enumerate() {
             let busy = batch.flight.is_some();
             // Painted once the card's place is known: behind it.
@@ -214,20 +250,20 @@ pub fn show(
                 if fade > 0.0 {
                     ui.multiply_opacity(1.0 - fade);
                 }
-                egui::Frame::group(ui.style()).show(ui, |ui| {
+                settings_kit::card_frame().show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add_enabled(!busy, egui::Button::new(t!("review.reject"))).clicked() {
+                            if settings_kit::action(ui, t!("review.reject"), !busy).clicked() {
                                 action = Some(ReviewAction::Reject(bi));
                                 clicked = Some(bi);
                             }
-                            if ui.add_enabled(!busy, egui::Button::new(t!("review.accept_all"))).clicked() {
+                            if settings_kit::primary(ui, t!("review.accept_all"), !busy).clicked() {
                                 action = Some(ReviewAction::Accept { batch: bi, all: true });
                                 clicked = Some(bi);
                             }
                             let any = batch.items.iter().any(|i| !i.picked.is_empty() && !i.stale);
-                            if ui.add_enabled(any && !busy, egui::Button::new(t!("review.accept_picked"))).clicked() {
+                            if settings_kit::action(ui, t!("review.accept_picked"), any && !busy).clicked() {
                                 action = Some(ReviewAction::Accept { batch: bi, all: false });
                                 clicked = Some(bi);
                             }
@@ -235,14 +271,14 @@ pub fn show(
                                 let picked = batch.items.iter().filter(|i| !i.picked.is_empty()).count();
                                 let mut all = picked == batch.items.len();
                                 let some = picked > 0 && !all;
-                                let check = egui::Checkbox::without_text(&mut all).indeterminate(some);
-                                if ui.add_enabled(!busy, check).on_hover_text(t!("review.toggle_batch")).changed() {
+                                let check = settings_kit::check_mark(ui, &mut all, some, !busy);
+                                if check.on_hover_text(t!("review.toggle_batch")).changed() {
                                     for item in &mut batch.items {
                                         item.picked = if all { Picked::all(&item.proposal) } else { Picked::default() };
                                     }
                                 }
                                 ui.add(
-                                    egui::Label::new(RichText::new(format!("✨ {}", batch.title)).strong()).truncate(),
+                                    egui::Label::new(settings_kit::strong(&batch.title)).truncate(),
                                 );
                                 let mut facts = vec![
                                     batch.source.clone(),
@@ -270,7 +306,7 @@ pub fn show(
                     ui.add_enabled_ui(!busy, |ui| {
                         for item in &mut batch.items {
                             ui.separator();
-                            if let Some(a) = item_row(ui, entries, item, gallery, style) {
+                            if let Some(a) = item_row(ui, entries, item, gallery, (style, tags)) {
                                 action = Some(a);
                             }
                         }
@@ -327,7 +363,7 @@ fn item_row(
     entries: &[Entry],
     item: &mut ReviewItem,
     gallery: &Gallery,
-    style: &TagStyle,
+    (style, tags): (&TagStyle, &[(String, usize)]),
 ) -> Option<ReviewAction> {
     let mut action = None;
     ui.horizontal_top(|ui| {
@@ -343,10 +379,14 @@ fn item_row(
         ui.vertical(|ui| {
             let p = &item.proposal;
             match p.kind {
-                ProposalKind::Tags => tags_row(ui, item, style),
+                ProposalKind::Tags => tags_row(ui, item, style, tags),
                 ProposalKind::Note => note_row(ui, item),
                 ProposalKind::List => list_row(ui, item),
-                ProposalKind::Move => move_row(ui, item),
+                ProposalKind::Move => {
+                    if let Some(a) = move_row(ui, item) {
+                        action = Some(a);
+                    }
+                }
                 ProposalKind::Bundle => bundle_row(ui, item),
                 ProposalKind::Delete => delete_row(ui, item),
                 ProposalKind::Archive => archive_row(ui, item),
@@ -383,14 +423,14 @@ fn target_name(item: &ReviewItem) -> String {
     item.proposal.target.as_ref().map(|t| listing::file_name(&t.path)).unwrap_or_default()
 }
 
-fn tags_row(ui: &mut Ui, item: &mut ReviewItem, style: &TagStyle) {
+fn tags_row(ui: &mut Ui, item: &mut ReviewItem, style: &TagStyle, tags: &[(String, usize)]) {
     ui.horizontal(|ui| {
         // The file as a whole: all its tags, or none.
         let mut on = !item.picked.is_empty();
-        if ui.checkbox(&mut on, "").on_hover_text(t!("review.toggle_file")).changed() {
+        if sc::checkbox(ui, "", &mut on).on_hover_text(t!("review.toggle_file")).changed() {
             item.picked = if on { Picked::all(&item.proposal) } else { Picked::default() };
         }
-        ui.label(RichText::new(target_name(item)).strong());
+        ui.label(settings_kit::strong(target_name(item)));
     });
     let Ok(payload) = serde_json::from_value::<TagsPayload>(item.proposal.payload.clone()) else { return };
     ui.horizontal_wrapped(|ui| {
@@ -421,20 +461,68 @@ fn tags_row(ui: &mut Ui, item: &mut ReviewItem, style: &TagStyle) {
                 toggle(&mut item.picked.add, &tag);
             }
         }
-        let field = ui.add(
-            egui::TextEdit::singleline(&mut item.draft.tag)
-                .hint_text(t!("review.add_tag_hint"))
-                .desired_width(120.0)
-                .id_salt(("own_tag", item.proposal.id)),
-        );
+        let hint = t!("review.add_tag_hint");
+        let field =
+            settings_kit::text_field_named(ui, ("own_tag", item.proposal.id), &mut item.draft.tag, &hint, 130.0);
+        // The library's tags that match what is typed, in a list floating under the field:
+        // Up and Down pick one, Enter or a click takes it; Enter with none picked takes what
+        // is typed, as before.
+        let needle = item.draft.tag.trim().to_lowercase();
+        let held_id = field.id.with("list-held");
+        let held = ui.data(|d| d.get_temp::<bool>(held_id)).unwrap_or(false);
+        let active = field.has_focus() || field.lost_focus() || held;
+        let wanted = |tag: &str| !item.picked.add.iter().any(|t| t.eq_ignore_ascii_case(tag));
+        let known: Vec<Candidate<usize>> = if active && !needle.is_empty() {
+            let candidate =
+                |tag: String, files: usize| Candidate { label: tag, detail: String::new(), existing: files > 0, value: files };
+            let mut all: Vec<Candidate<usize>> =
+                tags.iter().filter(|(tag, _)| wanted(tag)).map(|(tag, files)| candidate(tag.clone(), *files)).collect();
+            // And the suggested tags of the settings that no file carries yet, as the info pane
+            // offers them.
+            for group in tags::Group::SUGGESTED {
+                for tag in tags::suggested(group, style) {
+                    if wanted(&tag) && !all.iter().any(|c| c.label.eq_ignore_ascii_case(&tag)) {
+                        all.push(candidate(tag, 0));
+                    }
+                }
+            }
+            suggest::rank(&needle, all, 8)
+        } else {
+            Vec::new()
+        };
+        let lit = suggest::highlight(ui, field.id.with("pick"), &needle, known.len(), field.has_focus());
+        let mut take = None;
         let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if entered {
-            let tag = std::mem::take(&mut item.draft.tag);
-            let tag = tag.trim();
-            if !tag.is_empty() && !item.picked.add.iter().any(|t| t.eq_ignore_ascii_case(tag)) {
-                item.picked.add.push(tag.to_owned());
+            take = Some(match lit.and_then(|i| known.get(i)) {
+                Some(picked) => picked.label.clone(),
+                None => item.draft.tag.trim().to_owned(),
+            });
+        }
+        let mut down = false;
+        if !known.is_empty() {
+            let about = |files: usize| match files {
+                0 => t!("review.tag_suggested").into_owned(),
+                n => t!("review.tag_files", count = n).into_owned(),
+            };
+            let rows: Vec<suggest::Offer> = known
+                .iter()
+                .map(|c| suggest::Offer { name: c.label.clone(), about: about(c.value), dot: Some(style.colors(&c.label).0) })
+                .collect();
+            let place = (field.rect.left_bottom() + vec2(0.0, 2.0), egui::Align2::LEFT_TOP);
+            let (clicked, on_list) = suggest::floating_list(ui, field.id.with("tags"), place, 240.0, &rows, lit);
+            down = on_list;
+            if let Some(i) = clicked {
+                take = Some(known[i].label.clone());
+            }
+        }
+        ui.data_mut(|d| d.insert_temp(held_id, down));
+        if let Some(tag) = take {
+            item.draft.tag.clear();
+            if !tag.is_empty() && !item.picked.add.iter().any(|t| t.eq_ignore_ascii_case(&tag)) {
                 // A removal of the same tag makes no sense any more.
-                item.picked.remove.retain(|t| !t.eq_ignore_ascii_case(tag));
+                item.picked.remove.retain(|t| !t.eq_ignore_ascii_case(&tag));
+                item.picked.add.push(tag);
             }
             field.request_focus();
         }
@@ -464,8 +552,8 @@ fn toggle(list: &mut Vec<String>, tag: &str) {
 /// The note as suggested, to rewrite before accepting; and whether it replaces the old one.
 fn note_row(ui: &mut Ui, item: &mut ReviewItem) {
     ui.horizontal(|ui| {
-        ui.checkbox(&mut item.picked.whole, "");
-        ui.label(RichText::new(target_name(item)).strong());
+        sc::checkbox(ui, "", &mut item.picked.whole);
+        ui.label(settings_kit::strong(target_name(item)));
     });
     let Ok(note) = serde_json::from_value::<NotePayload>(item.proposal.payload.clone()) else { return };
     let has_old = item.note_before.as_deref().is_some_and(|b| !b.is_empty());
@@ -475,15 +563,17 @@ fn note_row(ui: &mut Ui, item: &mut ReviewItem) {
         ui.label(if *append { text } else { text.strikethrough() });
     }
     let text = item.picked.note.get_or_insert_with(|| note.text.clone());
+    // The kit has one line fields; several lines are egui's in the same fill.
     ui.add(
         egui::TextEdit::multiline(text)
             .desired_rows(2)
             .desired_width(f32::INFINITY)
+            .background_color(solidcraft_theme::Tokens::get().input_fill())
             .id_salt(("note_text", item.proposal.id)),
     )
     .on_hover_text(t!("review.note_edit_hint"));
     if has_old {
-        ui.checkbox(append, t!("review.note_append_check"));
+        settings_kit::checkbox(ui, &t!("review.note_append_check"), append);
     }
     if text.trim().is_empty() {
         ui.colored_label(ui.visuals().warn_fg_color, t!("review.note_empty"));
@@ -491,9 +581,10 @@ fn note_row(ui: &mut Ui, item: &mut ReviewItem) {
 }
 
 /// Old and new place, relative to the library; folders the move makes.
-fn move_row(ui: &mut Ui, item: &mut ReviewItem) {
-    let Ok(m) = serde_json::from_value::<MovePayload>(item.proposal.payload.clone()) else { return };
-    let Some(from) = item.proposal.target.as_ref().map(|t| t.path.clone()) else { return };
+fn move_row(ui: &mut Ui, item: &mut ReviewItem) -> Option<ReviewAction> {
+    let mut action = None;
+    let m = serde_json::from_value::<MovePayload>(item.proposal.payload.clone()).ok()?;
+    let from = item.proposal.target.as_ref().map(|t| t.path.clone())?;
     // The new place is told from the library it goes to; a move into another library names it.
     let cross = !from.starts_with(&m.root);
     let rel = |p: &std::path::Path| match p.strip_prefix(&m.root) {
@@ -503,10 +594,10 @@ fn move_row(ui: &mut Ui, item: &mut ReviewItem) {
     };
     let rename = !cross && from.parent() == m.to.parent();
     ui.horizontal(|ui| {
-        ui.checkbox(&mut item.picked.whole, "");
+        sc::checkbox(ui, "", &mut item.picked.whole);
         let icon = if m.folder { "📁" } else { "📄" };
         let what = if rename { t!("review.rename") } else { t!("review.move") };
-        ui.label(RichText::new(format!("{icon} {what}")).strong());
+        ui.label(settings_kit::strong(format!("{icon} {what}")));
     });
     let mut chosen = item.picked.to.clone().unwrap_or_else(|| m.to.clone());
     let old = if rename { listing::file_name(&from) } else { rel(&from) };
@@ -518,9 +609,14 @@ fn move_row(ui: &mut Ui, item: &mut ReviewItem) {
     let shown = |p: &std::path::Path| if rename { listing::file_name(p) } else { rel(p) };
     let typed = item.draft.path.get_or_insert_with(|| shown(&chosen));
     ui.horizontal(|ui| {
-        ui.label(RichText::new("→").strong());
-        let field =
-            ui.add(egui::TextEdit::singleline(typed).desired_width(320.0).id_salt(("move_to_text", item.proposal.id)));
+        ui.label(settings_kit::strong("→"));
+        // The system's folder dialog, for a place that is easier shown than typed: a button
+        // inside the field. Not for a rename (the file stays in its folder), and only where
+        // the dialog is built in.
+        let picks = !rename && cfg!(feature = "plugins");
+        let room = if picks { settings_kit::field_button_room() } else { 0.0 };
+        let name = ("move_to_text", item.proposal.id);
+        let field = settings_kit::text_field_named_reserving(ui, name, typed, "", 320.0 + room, room);
         if field.changed() {
             match place_from(&m.root, &from, rename, typed) {
                 Ok(to) => {
@@ -530,6 +626,9 @@ fn move_row(ui: &mut Ui, item: &mut ReviewItem) {
                 }
                 Err(why) => item.draft.path_error = Some(why),
             }
+        }
+        if picks && settings_kit::field_button(ui, &field, "folder", &t!("review.pick_folder")).clicked() {
+            action = Some(ReviewAction::PickFolder(item.proposal.id));
         }
     });
     if let Some(why) = &item.draft.path_error {
@@ -545,24 +644,23 @@ fn move_row(ui: &mut Ui, item: &mut ReviewItem) {
         };
         ui.horizontal(|ui| {
             ui.weak(t!("review.also_fits"));
-            egui::ComboBox::from_id_salt(("move_to", item.proposal.id)).selected_text(folder_label(&chosen)).show_ui(
-                ui,
-                |ui| {
-                    for option in std::iter::once(&m.to).chain(&m.alternatives) {
-                        if ui.selectable_label(*option == chosen, folder_label(option)).clicked() {
-                            item.picked.to = (*option != m.to).then(|| option.clone());
-                            item.draft.path = Some(shown(option));
-                            item.draft.path_error = None;
-                        }
+            let width = ui.available_width().clamp(120.0, 320.0);
+            settings_kit::dropdown(ui, ("move_to", item.proposal.id), &folder_label(&chosen), width, |ui| {
+                for option in std::iter::once(&m.to).chain(&m.alternatives) {
+                    if settings_kit::choice_row(ui, *option == chosen, &folder_label(option)) {
+                        item.picked.to = (*option != m.to).then(|| option.clone());
+                        item.draft.path = Some(shown(option));
+                        item.draft.path_error = None;
                     }
-                },
-            );
+                }
+            });
         });
     }
     let made = meshgrove_core::moves::missing_folders(&m.root, chosen.parent().unwrap_or(&m.root));
     if let Some(last) = made.last() {
         ui.weak(t!("review.new_folder", path = rel(last)));
     }
+    action
 }
 
 /// The place the user typed for a move: a name beside the old place (a rename), or a path below
@@ -601,9 +699,9 @@ fn delete_row(ui: &mut Ui, item: &mut ReviewItem) {
     let Some(path) = item.proposal.target.as_ref().map(|t| t.path.clone()) else { return };
     let rel = path.strip_prefix(&d.root).unwrap_or(&path).display().to_string();
     ui.horizontal(|ui| {
-        ui.checkbox(&mut item.picked.whole, "");
+        sc::checkbox(ui, "", &mut item.picked.whole);
         let icon = if d.folder { "📁" } else { "📄" };
-        ui.label(RichText::new(format!("🗑 {icon} {}", t!("review.delete"))).strong());
+        ui.label(settings_kit::strong(format!("🗑 {icon} {}", t!("review.delete"))));
     });
     ui.label(RichText::new(rel).strikethrough());
     ui.weak(t!("review.delete_hint"));
@@ -621,8 +719,8 @@ fn archive_row(ui: &mut Ui, item: &mut ReviewItem) {
         ArchiveOp::Add { sources, .. } => t!("review.archive_add", name = name, count = sources.len()),
     };
     ui.horizontal(|ui| {
-        ui.checkbox(&mut item.picked.whole, "");
-        ui.label(RichText::new(format!("📦 {text}")).strong());
+        sc::checkbox(ui, "", &mut item.picked.whole);
+        ui.label(settings_kit::strong(format!("📦 {text}")));
     });
     if let ArchiveOp::Add { prefix, .. } = &a.op
         && !prefix.is_empty()
@@ -645,17 +743,17 @@ fn list_row(ui: &mut Ui, item: &mut ReviewItem) {
     let kind = item.picked.list_kind.get_or_insert_with(|| list.kind.clone());
     let name = item.picked.list_name.get_or_insert_with(|| list.name.clone());
     ui.horizontal(|ui| {
-        ui.checkbox(&mut item.picked.whole, "");
+        sc::checkbox(ui, "", &mut item.picked.whole);
         if list.query.is_none() {
             let mut print = kind == "print";
             let options = [(true, t!("review.print_list").into_owned()), (false, t!("review.collection").into_owned())];
-            if super::settings_kit::segmented(ui, &mut print, &options) {
+            if settings_kit::segmented(ui, &mut print, &options) {
                 *kind = if print { "print".into() } else { "collection".into() };
             }
         } else {
-            ui.label(RichText::new(t!("review.collection")).strong());
+            ui.label(settings_kit::strong(t!("review.collection")));
         }
-        ui.add(egui::TextEdit::singleline(name).desired_width(220.0).id_salt(("list_name", id)))
+        settings_kit::text_field_named(ui, ("list_name", id), name, "", 220.0)
             .on_hover_text(t!("review.list_name_hint"));
     });
     if let Some(q) = &list.query {
@@ -674,7 +772,7 @@ fn list_row(ui: &mut Ui, item: &mut ReviewItem) {
         ui.horizontal(|ui| {
             let at = kept.iter().position(|(k, _)| *k == i);
             let mut on = at.is_some();
-            if ui.checkbox(&mut on, "").on_hover_text(t!("review.toggle")).changed() {
+            if sc::checkbox(ui, "", &mut on).on_hover_text(t!("review.toggle")).changed() {
                 match at {
                     Some(pos) => {
                         kept.remove(pos);
@@ -698,8 +796,8 @@ fn bundle_row(ui: &mut Ui, item: &mut ReviewItem) {
     const SHOWN: usize = 12;
     let Ok(bundle) = serde_json::from_value::<ResolvedBundle>(item.proposal.payload.clone()) else { return };
     ui.horizontal(|ui| {
-        ui.checkbox(&mut item.picked.whole, "");
-        ui.label(RichText::new(&bundle.title).strong());
+        sc::checkbox(ui, "", &mut item.picked.whole);
+        ui.label(settings_kit::strong(&bundle.title));
         if !bundle.plugin.is_empty() {
             ui.weak(format!("· {}", bundle.plugin));
         }
@@ -767,11 +865,15 @@ fn bundle_row(ui: &mut Ui, item: &mut ReviewItem) {
 }
 
 pub fn show_history(ui: &mut Ui, changes: &[ChangeInfo]) -> Option<HistoryAction> {
+    settings_kit::pane(ui, |ui| history(ui, changes))
+}
+
+fn history(ui: &mut Ui, changes: &[ChangeInfo]) -> Option<HistoryAction> {
     let mut action = None;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(t!("history.title")).strong());
+        ui.label(settings_kit::strong(t!("history.title")));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button(t!("history.review")).clicked() {
+            if settings_kit::action(ui, t!("history.review"), true).clicked() {
                 action = Some(HistoryAction::Review);
             }
         });
@@ -795,10 +897,11 @@ pub fn show_history(ui: &mut Ui, changes: &[ChangeInfo]) -> Option<HistoryAction
                 ui.label(title);
                 ui.weak(t!("history.steps", count = c.steps));
                 if c.undone_ns.is_some() {
-                    if ui.button(t!("history.redo")).on_hover_text(t!("history.redo_hint")).clicked() {
+                    if settings_kit::action(ui, t!("history.redo"), true).on_hover_text(t!("history.redo_hint")).clicked() {
                         action = Some(HistoryAction::Redo(c.id));
                     }
-                } else if ui.button(t!("history.undo")).on_hover_text(t!("history.undo_hint")).clicked() {
+                } else if settings_kit::action(ui, t!("history.undo"), true).on_hover_text(t!("history.undo_hint")).clicked()
+                {
                     action = Some(HistoryAction::Undo(c.id));
                 }
                 ui.end_row();
@@ -806,6 +909,144 @@ pub fn show_history(ui: &mut Ui, changes: &[ChangeInfo]) -> Option<HistoryAction
         });
     });
     action
+}
+
+#[cfg(test)]
+mod tag_tests {
+    use super::*;
+
+    /// A tag suggestion for one file, drawn in a headless egui; `run` is one frame.
+    struct Row {
+        ctx: egui::Context,
+        item: ReviewItem,
+        time: f64,
+        shapes: Vec<egui::epaint::ClippedShape>,
+    }
+
+    impl Row {
+        fn new() -> Row {
+            let payload = serde_json::json!({"add": [{"name": "garden", "status": "suggested"}]});
+            let proposal = Proposal {
+                id: 7,
+                batch_id: 1,
+                kind: ProposalKind::Tags,
+                target: None,
+                payload,
+                reason: None,
+                confidence: None,
+                state: "pending".into(),
+            };
+            let item = ReviewItem {
+                picked: Picked::all(&proposal),
+                proposal,
+                entry: None,
+                moved_to: None,
+                stale: false,
+                copies: 1,
+                note_before: None,
+                taken: false,
+                draft: ItemDraft::default(),
+            };
+            let mut row = Row { ctx: egui::Context::default(), item, time: 0.0, shapes: Vec::new() };
+            row.run(Vec::new());
+            row.run(Vec::new());
+            row
+        }
+
+        fn run(&mut self, events: Vec<egui::Event>) {
+            self.time += 0.05;
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(500.0, 400.0))),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            };
+            let item = &mut self.item;
+            let tags = [("holder".to_owned(), 3), ("hook".to_owned(), 1), ("garden".to_owned(), 9)];
+            let mut output = self.ctx.run_ui(raw, |ui| {
+                settings_kit::pane(ui, |ui| tags_row(ui, item, &TagStyle::default(), &tags));
+            });
+            output.textures_delta.clear();
+            self.shapes = output.shapes;
+        }
+
+        fn find(&self, text: &str) -> Option<Rect> {
+            fn walk(shape: &Shape, text: &str, out: &mut Option<Rect>) {
+                match shape {
+                    Shape::Text(t) if t.galley.text() == text => *out = Some(Rect::from_min_size(t.pos, t.galley.size())),
+                    Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, text, out)),
+                    _ => {}
+                }
+            }
+            let mut out = None;
+            self.shapes.iter().for_each(|s| walk(&s.shape, text, &mut out));
+            out
+        }
+
+        fn click(&mut self, at: egui::Pos2) {
+            let button = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            self.run(vec![egui::Event::PointerMoved(at), button(true)]);
+            self.run(vec![button(false)]);
+            self.run(Vec::new());
+        }
+
+        /// Types into the field (a click on its hint gives it the keyboard first), and lets
+        /// the list settle.
+        fn text(&mut self, text: &str) {
+            self.run(vec![egui::Event::Text(text.into())]);
+            self.run(Vec::new());
+            self.run(Vec::new());
+        }
+
+        fn key(&mut self, key: egui::Key) {
+            let event = |pressed| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            self.run(vec![event(true)]);
+            self.run(vec![event(false)]);
+        }
+    }
+
+    /// Typing a tag of one's own opens a list of the library's tags that match; a click takes
+    /// one, the field is empty again and keeps the keyboard.
+    #[test]
+    fn a_typed_tag_offers_the_librarys_tags_and_a_click_takes_one() {
+        let mut row = Row::new();
+        let hint = row.find(&t!("review.add_tag_hint")).expect("the field's hint");
+        row.click(hint.center());
+        row.text("ho");
+        let offered = row.find("holder").expect("the list is open");
+        assert!(row.find("hook").is_some() && row.find("garden").is_none(), "what matches, without what is on already");
+        row.click(offered.center());
+        assert_eq!(row.item.picked.add, ["garden", "holder"]);
+        assert!(row.item.draft.tag.is_empty());
+        row.text("x");
+        assert_eq!(row.item.draft.tag, "x", "the field kept the keyboard");
+    }
+
+    /// Down and Enter take the tag the list offers; Enter alone takes what is typed.
+    #[test]
+    fn the_arrow_keys_pick_a_tag_and_enter_takes_it() {
+        let mut row = Row::new();
+        let hint = row.find(&t!("review.add_tag_hint")).expect("the field's hint");
+        row.click(hint.center());
+        row.text("ho");
+        row.key(egui::Key::ArrowDown);
+        row.key(egui::Key::Enter);
+        assert_eq!(row.item.picked.add, ["garden", "holder"]);
+        row.text("own");
+        row.key(egui::Key::Enter);
+        assert_eq!(row.item.picked.add, ["garden", "holder", "own"]);
+    }
 }
 
 #[cfg(test)]
