@@ -318,6 +318,10 @@ impl App {
     /// Meshgrove's folder chooser for a panel: in the libraries, starting where the panel's
     /// files went last, else at the root of the library imports go to.
     fn ask_folder(&mut self, plugin: &str, panel: &str, id: String, title: Option<String>) {
+        // A double click on the panel's button asks twice before the chooser shows: one is enough.
+        if self.folder_asks.iter().any(|a| a.plugin == plugin && a.panel == panel && a.id == id) {
+            return;
+        }
         let name = self.plugin_name(plugin);
         let libraries: Vec<folder_pick::Library> = meshgrove_core::ai::scope::aliases(&self.config.library_roots)
             .into_iter()
