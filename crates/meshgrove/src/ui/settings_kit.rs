@@ -166,6 +166,42 @@ pub fn button_if(ui: &mut Ui, enabled: bool, label: impl Into<egui::WidgetText>)
     ui.add_enabled_ui(enabled, |ui| sc::button(ui, label, sc::Button::Normal)).inner
 }
 
+/// A button as high as the kit's fields and toggles, for a row of controls that should line up
+/// (the toolbar, the bar over a 3D view, the rows of the info pane).
+pub fn bar_button(ui: &mut Ui, label: &str) -> Response {
+    bar_button_if(ui, label, true, false)
+}
+
+/// How wide [`bar_button`] is with this label: to see beforehand whether a row of them fits.
+pub fn bar_button_width(ui: &Ui, label: &str) -> f32 {
+    let t = Tokens::get();
+    let text = egui::WidgetText::from(label).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Button,
+    );
+    (text.size().x + 2.0 * t.space_8).max(t.control_height)
+}
+
+/// [`bar_button`] at most `room` wide: a label too long for it is cut short with "…".
+pub fn bar_button_within(ui: &mut Ui, label: &str, room: f32) -> Response {
+    sized_bar_button(ui, label, room, true, false)
+}
+
+/// [`bar_button`] that can only be pressed while `enabled`, drawn as switched on while `on`.
+pub fn bar_button_if(ui: &mut Ui, label: &str, enabled: bool, on: bool) -> Response {
+    sized_bar_button(ui, label, f32::INFINITY, enabled, on)
+}
+
+fn sized_bar_button(ui: &mut Ui, label: &str, room: f32, enabled: bool, on: bool) -> Response {
+    let t = Tokens::get();
+    let size = egui::vec2(bar_button_width(ui, label).min(room), t.control_height);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let look = if on { sc::Button::SmallSelected } else { sc::Button::Normal };
+    ui.add_enabled_ui(enabled, |ui| sc::button_at(ui, label, rect, label, look)).inner
+}
+
 /// A small square button with a sign on it (✖, ✏, ▲ …) and what it does as its tooltip.
 pub fn small(ui: &mut Ui, sign: &str, tooltip: &str) -> Response {
     sc::compact_button(ui, sign, tooltip, true, false)

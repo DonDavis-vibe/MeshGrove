@@ -179,13 +179,15 @@ impl TileSettings {
                 ui.painter().rect_stroke(rect.expand(2.0), 4.0, stroke, StrokeKind::Outside);
             }
             let current = layout.slot_of(badge);
-            response.context_menu(|ui| {
+            // Where the mark sits has the tick.
+            super::menus::context(&response, |ui| {
+                super::menus::heading(ui, &badge_name(badge));
+                let mut chosen = current;
                 for slot in TileSlot::CORNERS.into_iter().chain([TileSlot::Hidden]) {
-                    if super::settings_kit::button_if(ui, slot != current, slot_name(slot)).clicked() {
+                    if super::menus::choice(ui, &mut chosen, slot, "", &slot_name(slot)) {
                         let mut moved = layout.clone();
                         moved.place(badge, slot, usize::MAX);
                         changes.push(SettingsChange::TileLayout(moved));
-                        ui.close();
                     }
                 }
             });

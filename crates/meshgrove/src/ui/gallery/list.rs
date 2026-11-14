@@ -69,6 +69,22 @@ impl Column {
         }
     }
 
+    /// Its icon in the menu of the column titles (a name from the kit's icon set).
+    pub fn icon(self) -> &'static str {
+        match self {
+            Column::Preview => "canvas",
+            Column::Name => "text",
+            Column::Folder => "folder",
+            Column::Type => "component",
+            Column::Size => "scale",
+            Column::Dimensions => "dimension",
+            Column::Modified => "restore",
+            Column::Tags => "checkpoint",
+            Column::Favorite => "star",
+            Column::Print => "activate",
+        }
+    }
+
     pub fn title(self) -> Cow<'static, str> {
         match self {
             Column::Preview => t!("list.col_preview"),
@@ -199,6 +215,8 @@ impl Gallery {
         let mut visible = HashSet::new();
         let mut widths = Vec::new();
         let mut hide: Option<(Column, bool)> = None;
+        // A right click on any column title this frame.
+        let mut menu_wanted = false;
         let mut hovered = None;
         let mut tile_dragged = false;
         // The table keeps its widths by this id: a preview column that follows the zoom starts
@@ -254,14 +272,14 @@ impl Gallery {
                                     if button.clicked() {
                                         action = Some(Action::SortBy(key));
                                     }
-                                    column_menu(&button, columns, self.show_folders, &mut hide);
+                                    menu_wanted |= button.secondary_clicked();
                                 }
                                 None => {
                                     ui.add(egui::Label::new(title).truncate());
                                 }
                             }
                         });
-                        column_menu(&response, columns, self.show_folders, &mut hide);
+                        menu_wanted |= response.secondary_clicked();
                     }
                 })
                 .body(|body| {
@@ -300,6 +318,14 @@ impl Gallery {
                 });
         });
 
+        // The menu hangs on something that stays: the table's titles are made anew (under new
+        // ids) whenever a column comes or goes, which closed a menu hanging on one of them.
+        let anchor = ui.interact(
+            egui::Rect::from_min_size(viewport.min, egui::Vec2::ZERO),
+            ui.scope_id().with("list_columns_menu"),
+            Sense::hover(),
+        );
+        column_menu(&anchor, menu_wanted, columns, self.show_folders, &mut hide);
         if let Some((c, show)) = hide {
             columns.hidden.retain(|h| h != c.id());
             if !show {
@@ -487,20 +513,22 @@ impl Gallery {
 
 /// Right-click on a column title: show or hide columns (the name always stays).
 fn column_menu(
-    response: &egui::Response,
+    anchor: &egui::Response,
+    open: bool,
     columns: &ListColumns,
     show_folders: bool,
     change: &mut Option<(Column, bool)>,
 ) {
-    response.context_menu(|ui| {
-        ui.label(RichText::new(t!("list.columns")).weak());
+    // Stays open, so several columns can be switched in one go.
+    crate::ui::menus::context_from(anchor, open, |ui| {
+        crate::ui::menus::heading(ui, &t!("list.columns"));
         for c in Column::ALL.into_iter().filter(|c| *c != Column::Name) {
             let mut on = !columns.hidden.iter().any(|h| h == c.id());
             let mut label = c.title().into_owned();
             if c == Column::Folder && !show_folders {
                 label = format!("{label} {}", t!("list.folder_hint"));
             }
-            if ui.checkbox(&mut on, label).changed() {
+            if crate::ui::menus::check(ui, c.icon(), &label, &mut on).changed() {
                 *change = Some((c, on));
             }
         }

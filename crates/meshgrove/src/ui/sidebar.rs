@@ -9,6 +9,7 @@ use meshgrove_core::config::Config;
 use meshgrove_core::listing;
 use meshgrove_core::lists::{ListInfo, ListKind};
 
+use super::menus;
 use super::tags::{self, Group, PALETTE, TagStyle};
 
 pub enum SidebarAction {
@@ -119,14 +120,12 @@ impl Sidebar {
             section(ui, &t!("sidebar.library"));
             for root in &config.library_roots {
                 let response = place(ui, "📚", &listing::file_name(root), root, current, &mut action);
-                response.context_menu(|ui| {
-                    if ui.button(t!("menu.rescan")).clicked() {
+                menus::context(&response, |ui| {
+                    if menus::item(ui, "compute", &t!("menu.rescan")) {
                         action = Some(SidebarAction::Rescan(root.clone()));
-                        ui.close();
                     }
-                    if ui.button(t!("sidebar.remove_root")).clicked() {
+                    if menus::item(ui, "close", &t!("sidebar.remove_root")) {
                         action = Some(SidebarAction::RemoveRoot(root.clone()));
-                        ui.close();
                     }
                 });
             }
@@ -249,7 +248,7 @@ impl Sidebar {
             if response.clicked() {
                 *action = Some(SidebarAction::OpenList(list.id));
             }
-            super::context_menu_with_field(&response, |ui| self.list_menu(ui, list, action));
+            menus::context(&response, |ui| self.list_menu(ui, list, action));
         }
         let archived: Vec<&ListInfo> = library.lists.iter().filter(|l| l.archived).collect();
         if !archived.is_empty() {
@@ -265,89 +264,96 @@ impl Sidebar {
                         if response.clicked() {
                             *action = Some(SidebarAction::OpenList(list.id));
                         }
-                        super::context_menu_with_field(&response, |ui| self.list_menu(ui, list, action));
+                        menus::context(&response, |ui| self.list_menu(ui, list, action));
                     }
                 });
         }
-        egui::containers::menu::MenuButton::new(t!("lists.new").into_owned()).config(super::typing_menu()).ui(
-            ui,
-            |ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.list_name).hint_text(t!("lists.name_hint")));
-                let name = self.list_name.trim().to_owned();
-                ui.horizontal(|ui| {
-                    for (kind, label) in
-                        [(ListKind::Print, t!("lists.new_print")), (ListKind::Collection, t!("lists.new_collection"))]
-                    {
-                        if ui.add_enabled(!name.is_empty(), egui::Button::new(label)).clicked() {
-                            *action = Some(SidebarAction::CreateList(kind, name.clone()));
-                            self.list_name.clear();
-                            ui.close();
-                        }
-                    }
-                });
-                if library.ai_lists {
-                    ui.separator();
-                    ui.label(RichText::new(t!("actions.list_title")).strong());
+        // Stays open on clicks inside: the name is typed in it.
+        menus::button_staying(ui, &t!("lists.new"), |ui| {
+            menus::inset(ui, |ui| {
+                let width = ui.available_width();
+                super::settings_kit::text_field(ui, &mut self.list_name, &t!("lists.name_hint"), width);
+            });
+            let name = self.list_name.trim().to_owned();
+            for (kind, icon, label) in [
+                (ListKind::Print, "list", t!("lists.new_print")),
+                (ListKind::Collection, "library", t!("lists.new_collection")),
+            ] {
+                if menus::item_if(ui, icon, &label, !name.is_empty(), &t!("lists.name_first"), false) {
+                    *action = Some(SidebarAction::CreateList(kind, name.clone()));
+                    self.list_name.clear();
+                }
+            }
+            if library.ai_lists {
+                menus::separator(ui);
+                menus::note(ui, &t!("actions.list_title"));
+                menus::inset(ui, |ui| {
                     ui.add(
                         egui::TextEdit::multiline(&mut self.list_description)
                             .hint_text(t!("actions.list_hint"))
                             .desired_rows(2)
-                            .desired_width(260.0),
+                            .desired_width(ui.available_width()),
                     );
-                    let description = self.list_description.trim().to_owned();
-                    ui.horizontal(|ui| {
-                        for (print, label) in [(true, t!("actions.list_print")), (false, t!("actions.list_collection"))]
-                        {
-                            if ui.add_enabled(!description.is_empty(), egui::Button::new(label)).clicked() {
-                                *action = Some(SidebarAction::ListFromDescription(description.clone(), print));
-                                self.list_description.clear();
-                                ui.close();
-                            }
-                        }
-                    });
-                    ui.weak(t!("actions.list_explain"));
+                });
+                let description = self.list_description.trim().to_owned();
+                for (print, icon, label) in
+                    [(true, "list", t!("actions.list_print")), (false, "library", t!("actions.list_collection"))]
+                {
+                    if menus::item_if(ui, icon, &label, !description.is_empty(), &t!("actions.list_describe_first"), false)
+                    {
+                        *action = Some(SidebarAction::ListFromDescription(description.clone(), print));
+                        self.list_description.clear();
+                    }
                 }
-            },
-        );
+                menus::note(ui, &t!("actions.list_explain"));
+            }
+        });
     }
 
     fn list_menu(&mut self, ui: &mut Ui, list: &ListInfo, action: &mut Option<SidebarAction>) {
         if list.kind == ListKind::Print {
-            let (label, archive) = if list.archived { (t!("lists.reopen"), false) } else { (t!("lists.finish"), true) };
-            if ui.button(label).on_hover_text(t!("lists.finish_hint")).clicked() {
+            let (icon, label, archive) = if list.archived {
+                ("restore", t!("lists.reopen"), false)
+            } else {
+                ("activate", t!("lists.finish"), true)
+            };
+            let row = menus::step(ui, icon, &label, true, false).on_hover_text(t!("lists.finish_hint"));
+            if row.clicked() {
                 *action = Some(SidebarAction::ArchiveList(list.id, archive));
                 ui.close();
             }
             for (format, label) in
                 [(ListExport::Pdf, t!("lists.export_pdf")), (ListExport::Csv, t!("lists.export_csv"))]
             {
-                if ui.button(label).clicked() {
+                if menus::item(ui, "export", &label) {
                     *action = Some(SidebarAction::ExportList(list.id, format));
-                    ui.close();
                 }
             }
-            ui.separator();
+            menus::separator(ui);
         }
-        ui.label(RichText::new(t!("lists.rename")).weak());
+        menus::heading(ui, &t!("lists.rename"));
         if self.list_name.is_empty() {
             self.list_name = list.name.clone();
         }
-        let field = ui.text_edit_singleline(&mut self.list_name);
+        let field = menus::inset(ui, |ui| {
+            super::settings_kit::text_field(ui, &mut self.list_name, &t!("lists.name_hint"), 220.0)
+        });
         let name = self.list_name.trim().to_owned();
         let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if (ui.button(t!("lists.rename_apply")).clicked() || enter) && !name.is_empty() && name != list.name {
+        let renamed = !name.is_empty() && name != list.name;
+        if (menus::item_if(ui, "rename", &t!("lists.rename_apply"), renamed, "", false) || enter) && renamed {
             *action = Some(SidebarAction::RenameList(list.id, name));
             self.list_name.clear();
             ui.close();
         }
-        ui.separator();
+        menus::separator(ui);
+        // Two clicks: the first only asks, so the menu stays.
         if self.confirm_delete == Some(list.id) {
-            if ui.button(RichText::new(t!("lists.delete_confirm")).color(ui.visuals().warn_fg_color)).clicked() {
+            if menus::item_if(ui, "delete", &t!("lists.delete_confirm"), true, "", true) {
                 *action = Some(SidebarAction::DeleteList(list.id));
                 self.confirm_delete = None;
-                ui.close();
             }
-        } else if ui.button(t!("lists.delete")).clicked() {
+        } else if menus::step(ui, "delete", &t!("lists.delete"), true, true).clicked() {
             self.confirm_delete = Some(list.id);
         }
     }
@@ -390,10 +396,9 @@ impl Sidebar {
                     *action = Some(SidebarAction::Navigate(path.to_path_buf()));
                 }
                 if roots.iter().any(|r| path.starts_with(r)) {
-                    response.context_menu(|ui| {
-                        if ui.button(t!("menu.rescan")).clicked() {
+                    menus::context(&response, |ui| {
+                        if menus::item(ui, "compute", &t!("menu.rescan")) {
                             *action = Some(SidebarAction::Rescan(path.to_path_buf()));
-                            ui.close();
                         }
                     });
                 }
@@ -508,22 +513,24 @@ fn tag_row(ui: &mut Ui, library: &LibraryInfo, tag: &String, count: usize, actio
             *action = Some(SidebarAction::SearchTags(wanted));
         }
     }
-    response.context_menu(|ui| {
-        ui.label(RichText::new(t!("tags.color")).weak());
-        ui.horizontal_wrapped(|ui| {
-            ui.set_max_width(6.0 * 26.0);
-            for (slot, (bg, _)) in PALETTE.iter().enumerate() {
-                let fill = Color32::from_rgb(bg[0], bg[1], bg[2]);
-                let swatch = egui::Button::new("").fill(fill).min_size(egui::vec2(20.0, 20.0)).corner_radius(10.0);
-                if ui.add(swatch).clicked() {
-                    *action = Some(SidebarAction::TagColor(tag.clone(), Some(slot as u8)));
-                    ui.close();
+    menus::context(&response, |ui| {
+        menus::heading(ui, &t!("tags.color"));
+        menus::inset(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.set_max_width(6.0 * 26.0);
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                for (slot, (bg, _)) in PALETTE.iter().enumerate() {
+                    let fill = Color32::from_rgb(bg[0], bg[1], bg[2]);
+                    let swatch = egui::Button::new("").fill(fill).min_size(egui::vec2(20.0, 20.0)).corner_radius(10.0);
+                    if ui.add(swatch).clicked() {
+                        *action = Some(SidebarAction::TagColor(tag.clone(), Some(slot as u8)));
+                        ui.close();
+                    }
                 }
-            }
+            });
         });
-        if ui.button(t!("tags.color_auto")).clicked() {
+        if menus::item(ui, "appearance", &t!("tags.color_auto")) {
             *action = Some(SidebarAction::TagColor(tag.clone(), None));
-            ui.close();
         }
     });
 }

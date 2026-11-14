@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
-use egui::{RichText, Ui};
+use egui::Ui;
 use meshgrove_core::ai::proposals::{self, Origin, ProposalStore};
 use meshgrove_core::config::{AccessClass, PluginConfig};
 use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Level, PickInto};
@@ -418,26 +418,42 @@ impl App {
             }
             return;
         }
-        if !open.jobs.is_empty() {
-            let mut cancel = None;
-            for job in &open.jobs {
-                ui.horizontal(|ui| {
-                    if ui.small_button("✖").on_hover_text(t!("plugins.cancel_job")).clicked() {
-                        cancel = Some(job.id.clone());
+        // The work the panel has running, in one line that is always there: a bar that came and
+        // went with every job pushed the whole panel down and up again, and so did a second
+        // line whenever two jobs ran at once (a quick series of moves in a grid). The line shows
+        // the job that started first and how many wait behind it; ✖ stops the one shown.
+        let mut cancel = None;
+        ui.horizontal(|ui| {
+            let job = open.jobs.first();
+            let stop = ui.add_enabled(job.is_some(), egui::Button::new("✖").small());
+            if let Some(job) = job
+                && stop.on_hover_text(t!("plugins.cancel_job")).clicked()
+            {
+                cancel = Some(job.id.clone());
+            }
+            let bar = match job {
+                Some(job) => {
+                    let mut text = job.label.clone();
+                    if !job.message.is_empty() {
+                        text = format!("{text}: {}", job.message);
                     }
-                    let text = if job.message.is_empty() {
-                        job.label.clone()
-                    } else {
-                        format!("{}: {}", job.label, job.message)
-                    };
-                    ui.add(egui::ProgressBar::new(job.fraction.clamp(0.0, 1.0)).text(text));
-                });
+                    if open.jobs.len() > 1 {
+                        text = format!("{text}  (+{})", open.jobs.len() - 1);
+                    }
+                    egui::ProgressBar::new(job.fraction.clamp(0.0, 1.0)).text(text)
+                }
+                None => egui::ProgressBar::new(0.0).text(egui::RichText::new(t!("plugins.idle")).weak()),
+            };
+            let bar = ui.add(bar);
+            if open.jobs.len() > 1 {
+                let all: Vec<&str> = open.jobs.iter().map(|j| j.label.as_str()).collect();
+                bar.on_hover_text(all.join("\n"));
             }
-            if let Some(job) = cancel {
-                self.plugins.cancel_job(plugin, panel, &job);
-            }
-            ui.separator();
+        });
+        if let Some(job) = cancel {
+            self.plugins.cancel_job(plugin, panel, &job);
         }
+        ui.separator();
         let Some(open) = self.plugins.find(plugin, panel) else { return };
         let Some(view) = open.view.clone() else {
             ui.horizontal(|ui| {
@@ -486,12 +502,13 @@ impl App {
         }
         let defs = self.plugins.panel_defs();
         let several = defs.iter().map(|d| &d.0).collect::<std::collections::HashSet<_>>().len() > 1;
-        ui.menu_button(format!("{} ▾", t!("plugins.menu")), |ui| {
+        use crate::ui::menus;
+        menus::button(ui, &format!("{} ▾", t!("plugins.menu")), |ui| {
             if defs.is_empty() {
-                ui.label(RichText::new(t!("plugins.no_panels")).weak());
+                menus::heading(ui, &t!("plugins.no_panels"));
             }
             for (plugin, panel, title, name) in &defs {
-                if ui.button(menu_label(name, title, several)).clicked() {
+                if menus::item(ui, "settings_plug", &menu_label(name, title, several)) {
                     match self.plugins.open(plugin, panel, None) {
                         Ok(()) => self.layout.focus_plugin(plugin, panel),
                         Err(e) => self.toast(e),
@@ -499,8 +516,8 @@ impl App {
                     ui.close();
                 }
             }
-            ui.separator();
-            if ui.button(t!("plugins.settings")).clicked() {
+            menus::separator(ui);
+            if menus::item(ui, "settings", &t!("plugins.settings")) {
                 self.settings.open_at("plugins");
                 ui.close();
             }

@@ -512,7 +512,7 @@ and Noto Emoji's pictures (📁 📏 🔍 🔒 …); plain `+` and `×` are safe
   sends `Selected {items}`.
 - **Moving:** dragging an item sends `Moved {item, x, y}`, its new top-left snapped to
   `1/snap_div` of a cell.
-  - It is sent even when the item lands on another one (the ghost turns red): the plugin decides.
+  - It is sent even when the item lands on another one (the items it lands on are outlined; the ghost is red only where it leaves the allowed area): the plugin decides.
   - Moves stay within the grid and the `accepts_items` zones.
 - **Resizing:** dragging an edge or corner sends `Resized {item, x, y, w, h}`.
 - **Drawing:** dragging on free cells sends `Created {x, y, w, h}`, only when it fits.

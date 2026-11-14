@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, bounded};
-use egui::{Color32, PointerButton, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Color32, PointerButton, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use glam::{Vec2, Vec3};
 use meshgrove_core::bvh::Bvh;
 use meshgrove_core::config::PreviewQuality;
@@ -638,33 +638,46 @@ impl ModelViewer {
         mesh: &GpuMesh,
     ) -> Option<String> {
         let mut message = None;
-        let bar = Rect::from_min_size(rect.min + vec2(6.0, 6.0), vec2(rect.width() - 12.0, 24.0));
+        let height = solidcraft_theme::Tokens::get().control_height;
+        let bar = Rect::from_min_size(rect.min + vec2(6.0, 6.0), vec2(rect.width() - 12.0, height));
         let mut child =
             ui.new_child(egui::UiBuilder::new().max_rect(bar).layout(egui::Layout::left_to_right(egui::Align::Center)));
         let ui = &mut child;
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.menu_button(RichText::new(format!("🎥 {} ▾", t!("viewer.views"))).small(), |ui| {
+        // One kind of button along the bar, all as high as the menu's. Where the view is too
+        // narrow for their words, the signs alone stand (the words are in the tooltips).
+        use super::settings_kit::{bar_button_if, bar_button_width};
+        let can_measure = self.painting.as_ref().is_none_or(|p| p.leaving);
+        let words = [
+            (true, format!("🎥 {} ▾", t!("viewer.views"))),
+            (can_measure, format!("📏 {}", t!("viewer.measure"))),
+            (self.frame.is_some(), format!("⬜ {}", t!("viewer.frame"))),
+            (true, format!("📷 {}", t!("viewer.picture"))),
+        ];
+        let needed: f32 =
+            words.iter().filter(|(shown, _)| *shown).map(|(_, text)| bar_button_width(ui, text) + 4.0).sum();
+        let short = needed > bar.width();
+        let label = |index: usize, sign: &str| if short { sign.to_owned() } else { words[index].1.clone() };
+        let views = super::menus::button(ui, &label(0, "🎥 ▾"), |ui| {
             for &(key, az, el) in PRESETS {
-                if ui.button(t!(key)).clicked() {
+                if super::menus::item(ui, "camera", &t!(key)) {
                     self.view = self.looking_from(az, el);
                     self.dirty = true;
-                    ui.close();
                 }
             }
         });
+        if short {
+            views.response.on_hover_text(t!("viewer.views"));
+        }
         // While painting the left button is the tool's: no measuring.
         let measuring = self.measure.is_some();
-        if self.painting.as_ref().is_none_or(|p| p.leaving)
-            && ui
-                .selectable_label(measuring, RichText::new(format!("📏 {}", t!("viewer.measure"))).small())
-                .on_hover_text(t!("viewer.measure_hint"))
-                .clicked()
+        if can_measure
+            && bar_button_if(ui, &label(1, "📏"), true, measuring).on_hover_text(t!("viewer.measure_hint")).clicked()
         {
             self.measure = if measuring { None } else { Some(Measure::default()) };
         }
         if self.frame.is_some()
-            && ui
-                .selectable_label(self.frame_shown, RichText::new(format!("⬜ {}", t!("viewer.frame"))).small())
+            && bar_button_if(ui, &label(2, "⬜"), true, self.frame_shown)
                 .on_hover_text(t!("viewer.frame_hint"))
                 .clicked()
         {
@@ -672,9 +685,7 @@ impl ModelViewer {
             self.dirty = true;
         }
         let saving = self.saving.is_some();
-        let picture = ui
-            .add_enabled(!saving, egui::Button::new(RichText::new(format!("📷 {}", t!("viewer.picture"))).small()))
-            .on_hover_text(t!("viewer.picture_hint"));
+        let picture = bar_button_if(ui, &label(3, "📷"), !saving, false).on_hover_text(t!("viewer.picture_hint"));
         if picture.clicked() {
             message = self.save_picture(rs, renderer, mesh, rect.aspect_ratio()).err();
         }

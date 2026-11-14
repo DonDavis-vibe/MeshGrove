@@ -2542,9 +2542,8 @@ impl App {
                 let reviewing = matches!(self.view, View::Review { .. } | View::History { .. });
                 if self.reviews() && (pending > 0 || reviewing) {
                     let label = if pending > 0 { format!("✨ {pending}") } else { "✨".to_owned() };
-                    use solidcraft_ui_kit as sc;
-                    let kind = if reviewing { sc::Button::SmallSelected } else { sc::Button::Small };
-                    if sc::button(ui, label, kind).on_hover_text(t!("review.open_hint")).clicked() {
+                    let button = crate::ui::settings_kit::bar_button_if(ui, &label, true, reviewing);
+                    if button.on_hover_text(t!("review.open_hint")).clicked() {
                         self.show_review();
                     }
                 }
@@ -2564,23 +2563,26 @@ impl App {
     /// shows first. Its label says how the gallery is sorted now.
     fn sort_menu(&mut self, ui: &mut Ui) {
         let names = [
-            (SortKey::Name, t!("sort.name")),
-            (SortKey::Modified, t!("sort.modified")),
-            (SortKey::Size, t!("sort.size")),
-            (SortKey::Type, t!("sort.type")),
+            (SortKey::Name, "text", t!("sort.name")),
+            (SortKey::Modified, "restore", t!("sort.modified")),
+            (SortKey::Size, "scale", t!("sort.size")),
+            (SortKey::Type, "component", t!("sort.type")),
         ];
-        let current = names.iter().find(|(k, _)| *k == self.config.sort_by).map(|(_, n)| n.clone()).unwrap_or_default();
+        let current =
+            names.iter().find(|(k, _, _)| *k == self.config.sort_by).map(|(_, _, n)| n.clone()).unwrap_or_default();
         let arrow = if self.config.sort_descending { "↓" } else { "↑" };
         let mut changed = false;
-        ui.menu_button(format!("{arrow} {current} ▾"), |ui| {
-            ui.label(RichText::new(t!("gallery.sort")).weak());
-            for (key, name) in names {
-                changed |= ui.radio_value(&mut self.config.sort_by, key, name).changed();
+        use crate::ui::menus;
+        menus::button(ui, &format!("{arrow} {current} ▾"), |ui| {
+            menus::heading(ui, &t!("gallery.sort"));
+            for (key, icon, name) in names {
+                changed |= menus::choice(ui, &mut self.config.sort_by, key, icon, &name);
             }
-            changed |= ui.checkbox(&mut self.config.sort_descending, t!("gallery.descending")).changed();
-            ui.separator();
-            changed |= ui
-                .checkbox(&mut self.config.supported_first, t!("sort.supported_first"))
+            // The direction is not one more thing to sort by: a rule keeps it apart.
+            menus::separator(ui);
+            changed |= menus::check(ui, "reorder", &t!("gallery.descending"), &mut self.config.sort_descending).changed();
+            menus::separator(ui);
+            changed |= menus::check(ui, "mesh_body", &t!("sort.supported_first"), &mut self.config.supported_first)
                 .on_hover_text(t!("sort.supported_first_hint"))
                 .changed();
         })
@@ -2596,30 +2598,43 @@ impl App {
         let mut changed = false;
         let models_only = self.config.only_models;
         let mut flatten = self.flatten;
-        ui.menu_button(format!("{} ▾", t!("view.menu")), |ui| {
-            ui.radio_value(&mut self.config.gallery_view, GalleryView::Grid, t!("view.grid"));
-            ui.radio_value(&mut self.config.gallery_view, GalleryView::List, t!("view.list"));
-            ui.separator();
-            changed |= ui.checkbox(&mut self.config.only_models, t!("gallery.only_models")).changed();
-            ui.checkbox(&mut flatten, t!("gallery.flatten")).on_hover_text(t!("gallery.flatten_hint"));
-            ui.separator();
-            ui.label(RichText::new(t!("print.filter")).weak());
-            for (filter, name) in [
-                (PrintFilter::All, t!("print.filter_all")),
-                (PrintFilter::Unprinted, t!("print.filter_unprinted")),
-                (PrintFilter::Printed, t!("print.filter_printed")),
-                (PrintFilter::Failed, t!("print.filter_failed")),
-            ] {
-                changed |= ui.radio_value(&mut self.config.print_filter, filter, name).changed();
+        use crate::ui::menus;
+        // The menu stays open on clicks inside, so the tile size can be dragged; its rows close
+        // it as in the other menus.
+        menus::button_staying(ui, &format!("{} ▾", t!("view.menu")), |ui| {
+            menus::choice(ui, &mut self.config.gallery_view, GalleryView::Grid, "pattern", &t!("view.grid"));
+            menus::choice(ui, &mut self.config.gallery_view, GalleryView::List, "list", &t!("view.list"));
+            menus::separator(ui);
+            if menus::check(ui, "box", &t!("gallery.only_models"), &mut self.config.only_models).changed() {
+                changed = true;
+                ui.close();
             }
-            ui.separator();
-            ui.label(RichText::new(t!("gallery.tile_size")).weak());
-            ui.add(egui::Slider::new(&mut self.config.tile_size, TILE_SIZE).show_value(false));
-            ui.separator();
+            let subfolders = menus::check(ui, "folder", &t!("gallery.flatten"), &mut flatten);
+            if subfolders.on_hover_text(t!("gallery.flatten_hint")).changed() {
+                ui.close();
+            }
+            menus::separator(ui);
+            menus::heading(ui, &t!("print.filter"));
+            for (filter, icon, name) in [
+                (PrintFilter::All, "dots", t!("print.filter_all")),
+                (PrintFilter::Unprinted, "revert", t!("print.filter_unprinted")),
+                (PrintFilter::Printed, "activate", t!("print.filter_printed")),
+                (PrintFilter::Failed, "status_error", t!("print.filter_failed")),
+            ] {
+                changed |= menus::choice(ui, &mut self.config.print_filter, filter, icon, &name);
+            }
+            menus::separator(ui);
+            menus::heading(ui, &t!("gallery.tile_size"));
+            menus::inset(ui, |ui| {
+                let width = ui.available_width();
+                crate::ui::settings_kit::slider(ui, &mut self.config.tile_size, TILE_SIZE, width, None);
+            });
+            menus::separator(ui);
             let mut details = !self.layout.details_folded();
-            if ui.checkbox(&mut details, t!("pane.details_menu")).changed() {
+            if menus::check(ui, "canvas", &t!("pane.details_menu"), &mut details).changed() {
                 self.layout.show_details(details);
                 self.layout.save();
+                ui.close();
             }
         });
         if flatten != self.flatten {
@@ -2665,8 +2680,8 @@ impl App {
         // One toggle: the search looks in this folder, or in the whole library.
         let mut scope = self.scope;
         let options = [
-            (Scope::Folder, "folder", t!("search.scope_folder").into_owned()),
-            (Scope::Library, "library", t!("search.scope_library").into_owned()),
+            (Scope::Folder, "scope_folder", t!("search.scope_folder").into_owned()),
+            (Scope::Library, "scope_library", t!("search.scope_library").into_owned()),
         ];
         crate::ui::settings_kit::icon_toggle(ui, &mut scope, &options);
         if scope != self.scope {
@@ -2685,19 +2700,22 @@ impl App {
             View::Search(results) => {
                 let text = t!("search.results", count = i18n::count(results.len()));
                 ui.label(RichText::new(format!("🔍 {text}")).strong());
-                if ui.button(t!("search.close")).clicked() {
+                if crate::ui::settings_kit::bar_button(ui, &t!("search.close")).clicked() {
                     self.leave_search();
                     self.on_listing_arrived();
                     return;
                 }
                 if self.index.is_some() {
-                    let save = egui::containers::menu::MenuButton::new(t!("lists.save_search").into_owned());
-                    save.config(crate::ui::typing_menu()).ui(ui, |ui| {
-                        ui.label(t!("lists.save_search_hint"));
-                        let field = ui
-                            .add(egui::TextEdit::singleline(&mut self.new_list_name).hint_text(t!("lists.name_hint")));
+                    use crate::ui::{menus, settings_kit};
+                    menus::button_staying(ui, &t!("lists.save_search"), |ui| {
+                        menus::note(ui, &t!("lists.save_search_hint"));
+                        let field = menus::inset(ui, |ui| {
+                            let width = ui.available_width();
+                            settings_kit::text_field(ui, &mut self.new_list_name, &t!("lists.name_hint"), width)
+                        });
                         let enter = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                        if (ui.button(t!("lists.create")).clicked() || enter) && !self.new_list_name.trim().is_empty() {
+                        let named = !self.new_list_name.trim().is_empty();
+                        if (menus::item_if(ui, "new", &t!("lists.create"), named, "", false) || enter) && named {
                             let name = std::mem::take(&mut self.new_list_name);
                             self.toast(t!("toast.list_created", list = name).into_owned());
                             self.library.list(ListOp::CreateSmart(name, self.search.clone()));
@@ -2713,7 +2731,7 @@ impl App {
                     ui.label(RichText::new(format!("{} {}", list_icon(list), list_title(list))).strong());
                 }
                 ui.weak(t!("lists.count", count = i18n::count(count)));
-                if ui.button(t!("lists.close")).clicked() {
+                if crate::ui::settings_kit::bar_button(ui, &t!("lists.close")).clicked() {
                     self.view = View::Folder;
                     self.on_listing_arrived();
                 }
@@ -2827,7 +2845,7 @@ impl App {
                 // One toggle: the files as a grid of tiles, or as a list.
                 let options = [
                     (GalleryView::Grid, "grid", t!("view.grid_hint").into_owned()),
-                    (GalleryView::List, "list", t!("view.list_hint").into_owned()),
+                    (GalleryView::List, "view_list", t!("view.list_hint").into_owned()),
                 ];
                 crate::ui::settings_kit::icon_toggle(ui, &mut self.config.gallery_view, &options);
                 ui.separator();
