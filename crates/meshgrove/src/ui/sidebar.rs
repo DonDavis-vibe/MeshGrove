@@ -5,12 +5,14 @@ use std::path::{Path, PathBuf};
 
 use egui::collapsing_header::CollapsingState;
 use egui::{Color32, RichText, Ui};
+use solidcraft_theme::Tokens;
+use solidcraft_ui_kit as sc;
 use meshgrove_core::config::Config;
 use meshgrove_core::listing;
 use meshgrove_core::lists::{ListInfo, ListKind};
 
 use super::menus;
-use super::tags::{self, Group, PALETTE, TagStyle};
+use super::tags::{Group, PALETTE, TagStyle};
 
 pub enum SidebarAction {
     Navigate(PathBuf),
@@ -114,47 +116,65 @@ impl Sidebar {
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             section(ui, &t!("sidebar.places"));
             if let Some(home) = self.home.clone() {
-                place(ui, "🏠", &t!("sidebar.home"), &home, current, &mut action);
+                place(ui, "home", &t!("sidebar.home"), &home, current, &mut action);
             }
 
             section(ui, &t!("sidebar.library"));
             for root in &config.library_roots {
-                let response = place(ui, "📚", &listing::file_name(root), root, current, &mut action);
-                menus::context(&response, |ui| {
-                    if menus::item(ui, "compute", &t!("menu.rescan")) {
-                        action = Some(SidebarAction::Rescan(root.clone()));
-                    }
-                    if menus::item(ui, "close", &t!("sidebar.remove_root")) {
-                        action = Some(SidebarAction::RemoveRoot(root.clone()));
-                    }
-                });
+                let response = place(ui, "library", &listing::file_name(root), root, current, &mut action);
+                if let Some(response) = response {
+                    menus::context(&response, |ui| {
+                        if menus::item(ui, "compute", &t!("menu.rescan")) {
+                            action = Some(SidebarAction::Rescan(root.clone()));
+                        }
+                        if menus::item(ui, "close", &t!("sidebar.remove_root")) {
+                            action = Some(SidebarAction::RemoveRoot(root.clone()));
+                        }
+                    });
+                }
             }
             if library.duplicate_groups > 0 {
-                let label = format!("🗐  {}", t!("sidebar.duplicates", count = library.duplicate_groups));
-                if ui.selectable_label(library.showing_duplicates, label).clicked() {
+                let label = t!("sidebar.duplicates", count = library.duplicate_groups);
+                let look = sc::Row { icon: "copy", selected: library.showing_duplicates, ..named(&label) };
+                if row(ui, "duplicates", look).clicked {
                     action = Some(SidebarAction::ShowDuplicates);
                 }
             }
             // Only once something arrived: an empty inbox would just take room.
             if let Some(count) = library.inbox.filter(|&n| n > 0 || library.showing_inbox) {
-                let label = format!("📥  {}", t!("sidebar.inbox", count = count));
-                if ui.selectable_label(library.showing_inbox, label).on_hover_text(t!("sidebar.inbox_hint")).clicked() {
+                let (label, hint) = (t!("sidebar.inbox", count = count), t!("sidebar.inbox_hint"));
+                let look =
+                    sc::Row { icon: "import_tray", selected: library.showing_inbox, tip: Some(&hint), ..named(&label) };
+                if row(ui, "inbox", look).clicked {
                     action = Some(SidebarAction::ShowInbox);
                 }
             }
             if let Some(count) = library.import {
-                let title = t!("sidebar.import");
-                let label = if count > 0 { format!("⬇  {title}  ({count})") } else { format!("⬇  {title}") };
-                if ui.selectable_label(library.showing_import, label).on_hover_text(t!("sidebar.import_hint")).clicked()
-                {
+                let (label, hint) = (t!("sidebar.import"), t!("sidebar.import_hint"));
+                let count = if count > 0 { count.to_string() } else { String::new() };
+                let look = sc::Row {
+                    icon: "import",
+                    selected: library.showing_import,
+                    count: &count,
+                    tip: Some(&hint),
+                    ..named(&label)
+                };
+                if row(ui, "import", look).clicked {
                     action = Some(SidebarAction::ShowImport);
                 }
             }
             if !config.library_roots.iter().any(|r| current.starts_with(r)) {
                 if config.library_roots.is_empty() {
-                    ui.weak(t!("sidebar.library_empty"));
+                    note(ui, &t!("sidebar.library_empty"));
                 }
-                if ui.button(t!("sidebar.add_root")).on_hover_text(current.display().to_string()).clicked() {
+                // Cut to the pane's width: a button wider than the pane would widen every row
+                // after it and push their counts out of sight.
+                let label = t!("sidebar.add_root");
+                let add = inset(ui, |ui| {
+                    let room = ui.available_width();
+                    super::settings_kit::bar_button_within(ui, &label, room)
+                });
+                if add.on_hover_text(format!("{label}\n{}", current.display())).clicked() {
                     action = Some(SidebarAction::AddRoot(current.to_path_buf()));
                 }
             }
@@ -180,7 +200,7 @@ impl Sidebar {
                 let devices = self.devices.clone();
                 if folding_section(ui, &t!("sidebar.devices"), "devices", devices.len(), folded, |ui| {
                     for dev in &devices {
-                        place(ui, "🖴", &listing::file_name(dev), dev, current, &mut action);
+                        place(ui, "save", &listing::file_name(dev), dev, current, &mut action);
                     }
                 }) {
                     action = Some(SidebarAction::Fold("devices".into()));
@@ -190,7 +210,7 @@ impl Sidebar {
             section(ui, &t!("sidebar.folders"));
             let tree_root = self.tree_root(config, current);
             let reveal = self.revealed.as_deref() != Some(current);
-            self.node(ui, &tree_root, current, &config.library_roots, reveal, &mut action);
+            self.node(ui, &tree_root, 0, current, &config.library_roots, reveal, &mut action);
             self.revealed = Some(current.to_path_buf());
         });
         action
@@ -198,76 +218,99 @@ impl Sidebar {
 
     /// Favourites, the last prints, print lists and collections, and "new list".
     fn lists(&mut self, ui: &mut Ui, library: &LibraryInfo, action: &mut Option<SidebarAction>) {
-        let favorites = library.lists.iter().find(|l| l.kind == ListKind::Favorites);
-        let label = format!("★  {}  ({})", t!("lists.favorites"), favorites.map_or(0, |l| l.count));
-        match favorites {
-            Some(list) => {
-                if ui.selectable_label(library.showing_list == Some(list.id), label).clicked() {
-                    *action = Some(SidebarAction::OpenList(list.id));
-                }
+        // Favourites and the last prints are there from the start, greyed until they hold something.
+        let mut fixed = |ui: &mut Ui, kind: ListKind, icon: &str, label: &str, hint: &str, empty: &str| {
+            let list = library.lists.iter().find(|l| l.kind == kind);
+            let count = list.map_or(0, |l| l.count).to_string();
+            let look = sc::Row {
+                icon,
+                count: &count,
+                selected: list.is_some_and(|l| library.showing_list == Some(l.id)),
+                dim: list.is_none(),
+                tip: Some(if list.is_some() { hint } else { empty }),
+                ..named(label)
+            };
+            let out = row(ui, ("fixed-list", icon), look);
+            if let Some(list) = list
+                && out.clicked
+            {
+                *action = Some(SidebarAction::OpenList(list.id));
             }
-            None => {
-                ui.add_enabled(false, egui::Button::selectable(false, label))
-                    .on_disabled_hover_text(t!("lists.favorites_empty"));
-            }
-        }
+        };
+        let favorites = t!("lists.favorites");
+        fixed(ui, ListKind::Favorites, "star", &favorites, &favorites, &t!("lists.favorites_empty"));
         if library.recent {
-            let last = library.lists.iter().find(|l| l.kind == ListKind::Recent);
-            let label = format!("🕘  {}  ({})", t!("lists.recent"), last.map_or(0, |l| l.count));
-            match last {
-                Some(list) => {
-                    let response = ui.selectable_label(library.showing_list == Some(list.id), label);
-                    if response.on_hover_text(t!("lists.recent_hint")).clicked() {
-                        *action = Some(SidebarAction::OpenList(list.id));
-                    }
-                }
-                None => {
-                    ui.add_enabled(false, egui::Button::selectable(false, label))
-                        .on_disabled_hover_text(t!("lists.recent_empty"));
-                }
-            }
+            fixed(ui, ListKind::Recent, "restore", &t!("lists.recent"), &t!("lists.recent_hint"), &t!("lists.recent_empty"));
         }
         let own = |l: &&ListInfo| !matches!(l.kind, ListKind::Favorites | ListKind::Recent) && !l.archived;
         for list in library.lists.iter().filter(own) {
             let icon = match (list.kind, &list.query) {
-                (ListKind::Print, _) => "🖶",
-                (_, Some(_)) => "🔍",
-                _ => "📁",
+                (ListKind::Print, _) => "list",
+                (_, Some(_)) => "inspect",
+                _ => "feature_group",
             };
             let count = if list.kind == ListKind::Print {
                 t!("lists.open_of", open = list.open, count = list.count).into_owned()
             } else {
                 list.count.to_string()
             };
-            let response =
-                ui.selectable_label(library.showing_list == Some(list.id), format!("{icon}  {}  ({count})", list.name));
-            let response = match &list.query {
-                Some(q) => response.on_hover_text(t!("lists.saved_search", query = q)),
-                None => response,
+            let hint = match &list.query {
+                Some(q) => t!("lists.saved_search", query = q).into_owned(),
+                None => list.name.clone(),
             };
-            if response.clicked() {
-                *action = Some(SidebarAction::OpenList(list.id));
-            }
-            menus::context(&response, |ui| self.list_menu(ui, list, action));
+            self.list_row(ui, library, list, 0, icon, &count, &hint, action);
         }
         let archived: Vec<&ListInfo> = library.lists.iter().filter(|l| l.archived).collect();
         if !archived.is_empty() {
-            egui::CollapsingHeader::new(RichText::new(t!("lists.archived", count = archived.len())).weak())
-                .id_salt("archived-lists")
-                .default_open(false)
-                .show(ui, |ui| {
-                    for list in archived {
-                        let response = ui.selectable_label(
-                            library.showing_list == Some(list.id),
-                            format!("🖶  {}  ({})", list.name, list.count),
-                        );
-                        if response.clicked() {
-                            *action = Some(SidebarAction::OpenList(list.id));
-                        }
-                        menus::context(&response, |ui| self.list_menu(ui, list, action));
-                    }
-                });
+            // Folded away until asked for; egui remembers which, and slides them in and out.
+            let id = egui::Id::unique("sidebar-archived-lists");
+            let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
+            let title = t!("lists.archived", count = archived.len());
+            let head = row(ui, "archived-lists", sc::Row { fold: Some(state.is_open()), dim: true, ..named(&title) });
+            if head.clicked || head.fold {
+                state.toggle(ui);
+            }
+            state.show_body_unindented(ui, |ui| {
+                for list in archived {
+                    self.list_row(ui, library, list, 1, "list", &list.count.to_string(), &list.name, action);
+                }
+            });
         }
+        inset(ui, |ui| self.new_list(ui, library, action));
+    }
+
+    /// One list: a click opens it, a right click has its menu.
+    #[allow(clippy::too_many_arguments)]
+    fn list_row(
+        &mut self,
+        ui: &mut Ui,
+        library: &LibraryInfo,
+        list: &ListInfo,
+        depth: usize,
+        icon: &str,
+        count: &str,
+        hint: &str,
+        action: &mut Option<SidebarAction>,
+    ) {
+        let look = sc::Row {
+            depth,
+            icon,
+            count,
+            selected: library.showing_list == Some(list.id),
+            tip: Some(hint),
+            ..named(&list.name)
+        };
+        let out = row(ui, ("list", list.id), look);
+        if out.clicked {
+            *action = Some(SidebarAction::OpenList(list.id));
+        }
+        if let Some(response) = out.resp {
+            menus::context(&response, |ui| self.list_menu(ui, list, action));
+        }
+    }
+
+    /// "New list …": a name, then which kind; with the user's AI also from a description.
+    fn new_list(&mut self, ui: &mut Ui, library: &LibraryInfo, action: &mut Option<SidebarAction>) {
         // Stays open on clicks inside: the name is typed in it.
         menus::button_staying(ui, &t!("lists.new"), |ui| {
             menus::inset(ui, |ui| {
@@ -277,7 +320,7 @@ impl Sidebar {
             let name = self.list_name.trim().to_owned();
             for (kind, icon, label) in [
                 (ListKind::Print, "list", t!("lists.new_print")),
-                (ListKind::Collection, "library", t!("lists.new_collection")),
+                (ListKind::Collection, "feature_group", t!("lists.new_collection")),
             ] {
                 if menus::item_if(ui, icon, &label, !name.is_empty(), &t!("lists.name_first"), false) {
                     *action = Some(SidebarAction::CreateList(kind, name.clone()));
@@ -297,7 +340,7 @@ impl Sidebar {
                 });
                 let description = self.list_description.trim().to_owned();
                 for (print, icon, label) in
-                    [(true, "list", t!("actions.list_print")), (false, "library", t!("actions.list_collection"))]
+                    [(true, "list", t!("actions.list_print")), (false, "feature_group", t!("actions.list_collection"))]
                 {
                     if menus::item_if(ui, icon, &label, !description.is_empty(), &t!("actions.list_describe_first"), false)
                     {
@@ -371,51 +414,67 @@ impl Sidebar {
             .unwrap_or_else(|| current.ancestors().last().unwrap_or(current).to_path_buf())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn node(
         &mut self,
         ui: &mut Ui,
         path: &Path,
+        depth: usize,
         current: &Path,
         roots: &[PathBuf],
         reveal: bool,
         action: &mut Option<SidebarAction>,
     ) {
-        let id = ui.make_persistent_id(("tree", path));
+        let id = egui::Id::unique(("sidebar-tree", path));
         let on_way = current.starts_with(path) && current != path;
+        // Whether it is open is kept as egui keeps it for its own folding headers.
         let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, on_way);
         if reveal && on_way {
             state.set_open(true);
         }
+        let open = state.is_open();
         let name = listing::file_name(path);
         let is_current = path == current;
-        state
-            .show_header(ui, |ui| {
-                let text = if is_current { RichText::new(&name).strong() } else { RichText::new(&name) };
-                let response = ui.selectable_label(is_current, text);
-                if response.clicked() {
-                    *action = Some(SidebarAction::Navigate(path.to_path_buf()));
-                }
-                if roots.iter().any(|r| path.starts_with(r)) {
-                    menus::context(&response, |ui| {
-                        if menus::item(ui, "compute", &t!("menu.rescan")) {
-                            *action = Some(SidebarAction::Rescan(path.to_path_buf()));
-                        }
-                    });
-                }
-            })
-            .body(|ui| {
-                let children = self
-                    .children
-                    .entry(path.to_path_buf())
-                    .or_insert_with(|| listing::subdirs(path).unwrap_or_default())
-                    .clone();
-                if children.is_empty() {
-                    ui.weak(t!("sidebar.no_subfolders"));
-                }
-                for child in children {
-                    self.node(ui, &child, current, roots, reveal, action);
+        let tip = path.display().to_string();
+        let look = sc::Row {
+            depth,
+            fold: Some(open),
+            icon: if is_current { "open" } else { "folder" },
+            selected: is_current,
+            tip: Some(&tip),
+            ..named(&name)
+        };
+        let out = row(ui, ("tree", path), look);
+        if out.fold {
+            state.toggle(ui);
+        }
+        if out.clicked {
+            *action = Some(SidebarAction::Navigate(path.to_path_buf()));
+        }
+        if let Some(response) = out.resp
+            && roots.iter().any(|r| path.starts_with(r))
+        {
+            menus::context(&response, |ui| {
+                if menus::item(ui, "compute", &t!("menu.rescan")) {
+                    *action = Some(SidebarAction::Rescan(path.to_path_buf()));
                 }
             });
+        }
+        // The folders below slide in and out; while it is shut nothing is read from the disk.
+        state.show_body_unindented(ui, |ui| {
+            let children = self
+                .children
+                .entry(path.to_path_buf())
+                .or_insert_with(|| listing::subdirs(path).unwrap_or_default())
+                .clone();
+            if children.is_empty() {
+                let none = t!("sidebar.no_subfolders");
+                row(ui, ("tree-empty", path), sc::Row { depth: depth + 1, dim: true, ..named(&none) });
+            }
+            for child in children {
+                self.node(ui, &child, depth + 1, current, roots, reveal, action);
+            }
+        });
     }
 }
 
@@ -425,7 +484,7 @@ impl Sidebar {
 fn tag_groups(ui: &mut Ui, library: &LibraryInfo, folded: &[String], action: &mut Option<SidebarAction>) {
     if library.flat_tags {
         for (tag, count) in alphabetical(library.tags) {
-            tag_row(ui, library, tag, *count, action);
+            tag_row(ui, library, tag, *count, 0, action);
         }
         return;
     }
@@ -437,16 +496,14 @@ fn tag_groups(ui: &mut Ui, library: &LibraryInfo, folded: &[String], action: &mu
         }
         let key = format!("tags:{}", group.key());
         let open = !folded.contains(&key);
-        let title = if open { group.title() } else { format!("{}  ({})", group.title(), in_group.len()) };
-        let response = egui::CollapsingHeader::new(RichText::new(title).small().weak())
-            .id_salt(("sidebar", key.as_str()))
-            .open(Some(open))
-            .show_unindented(ui, |ui| {
-                for (tag, count) in in_group {
-                    tag_row(ui, library, tag, *count, action);
-                }
-            });
-        if response.header_response.clicked() {
+        let (title, hidden) = (group.title(), if open { String::new() } else { in_group.len().to_string() });
+        let head = row(ui, key.as_str(), sc::Row { fold: Some(open), dim: true, count: &hidden, ..named(&title) });
+        fold_body(ui, key.as_str(), open, |ui| {
+            for (tag, count) in in_group {
+                tag_row(ui, library, tag, *count, 0, action);
+            }
+        });
+        if head.clicked || head.fold {
             *action = Some(SidebarAction::Fold(key));
         }
     }
@@ -481,16 +538,27 @@ fn sort_key(name: &str) -> String {
         .collect()
 }
 
-fn tag_row(ui: &mut Ui, library: &LibraryInfo, tag: &String, count: usize, action: &mut Option<SidebarAction>) {
+fn tag_row(
+    ui: &mut Ui,
+    library: &LibraryInfo,
+    tag: &String,
+    count: usize,
+    depth: usize,
+    action: &mut Option<SidebarAction>,
+) {
     let active = library.active_tags.contains(&tag.to_lowercase());
-    let response = ui
-        .horizontal(|ui| {
-            tags::dot(ui, library.tag_style, tag);
-            ui.selectable_label(active, format!("{tag}  ({count})"))
-        })
-        .inner
-        .on_hover_text(t!("tags.sidebar_hint"));
-    if response.clicked() {
+    let (count, hint) = (count.to_string(), t!("tags.sidebar_hint"));
+    let look = sc::Row {
+        depth,
+        swatch: Some(library.tag_style.colors(tag).0),
+        count: &count,
+        selected: active,
+        tip: Some(&hint),
+        ..named(tag)
+    };
+    let out = row(ui, ("tag", tag), look);
+    let Some(response) = out.resp else { return };
+    if out.clicked {
         let mut wanted: Vec<String> = Vec::new();
         if ui.input(|i| i.modifiers.command) {
             wanted = library
@@ -535,9 +603,73 @@ fn tag_row(ui: &mut Ui, library: &LibraryInfo, tag: &String, count: usize, actio
     });
 }
 
+/// A row of the sidebar: the kit's tree row (its fold arrow, icon or colour dot, name, a count
+/// at the end, the theme's colours for the one that is chosen). `key` tells the rows apart.
+fn row(ui: &mut Ui, key: impl std::hash::Hash + std::fmt::Debug, look: sc::Row<'_>) -> sc::RowResp {
+    // An id of its own, whatever ui the row is drawn in: a fold's body is a ui of its own, and
+    // a menu hanging on a row must not lose it when rows above come or go.
+    sc::tree_row(ui, egui::Id::unique(("sidebar-row", key)), &look)
+}
+
+/// A row's text as it is: a folder's, list's or tag's name, or a text of ours that is
+/// translated already (the kit would otherwise look the text up as one of its own).
+fn named(label: &str) -> sc::Row<'_> {
+    sc::Row { label, name: true, ..Default::default() }
+}
+
+/// Something that is not a row (a button, a sentence), set in to where the rows' names begin.
+/// What a fold hides, sliding in and out as egui's own folding headers do: `open` is where it
+/// is going, `key` tells the folds apart.
+fn fold_body(ui: &mut Ui, key: impl std::hash::Hash + std::fmt::Debug, open: bool, body: impl FnOnce(&mut Ui)) {
+    let id = egui::Id::unique(("sidebar-fold", key));
+    let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, open);
+    state.set_open(open);
+    state.show_body_unindented(ui, body);
+}
+
+fn inset<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.horizontal(|ui| {
+        ui.add_space(SECTION_INSET);
+        add(ui)
+    })
+    .inner
+}
+
+fn note(ui: &mut Ui, text: &str) {
+    inset(ui, |ui| ui.label(RichText::new(text).weak()));
+}
+
+/// Where a section's title starts: behind the room for its fold arrow, so the titles line up.
+const SECTION_INSET: f32 = 16.0;
+
 fn section(ui: &mut Ui, title: &str) {
+    section_title(ui, title, None);
+}
+
+/// A section's title: small capitals in the quiet ink, as the kit writes the headings of its
+/// menus and settings, with the kit's fold arrow when it folds (`open`). True when clicked.
+fn section_title(ui: &mut Ui, title: &str, open: Option<bool>) -> bool {
     ui.add_space(6.0);
-    ui.label(RichText::new(title).small().strong().weak());
+    let t = Tokens::get();
+    let sense = if open.is_some() { egui::Sense::click() } else { egui::Sense::hover() };
+    let (r, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), t.space_24), sense);
+    let hot = open.is_some() && response.hovered();
+    let ink = if hot { t.text } else { t.text_dim };
+    if let Some(open) = open {
+        sc::disclosure(ui.painter(), egui::pos2(r.left() + 8.0, r.center().y), open, ink);
+    }
+    let mut job =
+        egui::text::LayoutJob::simple_singleline(title.to_uppercase(), sc::type_face::semibold(t.font_small), ink);
+    for section in &mut job.sections {
+        section.format.extra_letter_spacing = t.font_small * t.font_section_tracking;
+    }
+    let galley = ui.painter().layout_job(job);
+    let at = egui::pos2(r.left() + SECTION_INSET, r.center().y - galley.size().y / 2.0);
+    ui.painter().with_clip_rect(ui.clip_rect().intersect(r)).galley(at, galley, ink);
+    if hot {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response.clicked()
 }
 
 /// A section that folds away with a click on its title, showing how many entries it hides;
@@ -550,17 +682,15 @@ fn folding_section(
     folded: &[String],
     body: impl FnOnce(&mut Ui),
 ) -> bool {
-    ui.add_space(6.0);
     let open = !folded.iter().any(|f| f == key);
     let title = if open { title.to_owned() } else { format!("{title}  ({count})") };
-    egui::CollapsingHeader::new(RichText::new(title).small().strong().weak())
-        .id_salt(("sidebar", key))
-        .open(Some(open))
-        .show_unindented(ui, body)
-        .header_response
-        .clicked()
+    let clicked = section_title(ui, &title, Some(open));
+    fold_body(ui, ("section", key), open, body);
+    clicked
 }
 
+/// A place to go to: a click shows the folder. Its response (for a menu), unless it is
+/// scrolled out of view.
 fn place(
     ui: &mut Ui,
     icon: &str,
@@ -568,13 +698,15 @@ fn place(
     path: &Path,
     current: &Path,
     action: &mut Option<SidebarAction>,
-) -> egui::Response {
-    let response =
-        ui.selectable_label(current == path, format!("{icon}  {label}")).on_hover_text(path.display().to_string());
-    if response.clicked() {
+) -> Option<egui::Response> {
+    let tip = path.display().to_string();
+    // The icon is part of the key: a drive that is also a library folder has two rows.
+    let look = sc::Row { icon, selected: current == path, tip: Some(&tip), ..named(label) };
+    let out = row(ui, ("place", icon, path), look);
+    if out.clicked {
         *action = Some(SidebarAction::Navigate(path.to_path_buf()));
     }
-    response
+    out.resp
 }
 
 /// Removable and extra drives as KDE shows them: mounts below /run/media/<user> and /mnt.

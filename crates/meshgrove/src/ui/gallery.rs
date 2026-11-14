@@ -925,7 +925,7 @@ pub(super) fn entry_menu(
             }
             rows.submenu(ui, "list", t!("menu.add_to_list"), |ui, rows| {
                 for (id, kind, name) in &menu.lists {
-                    let icon = if *kind == ListKind::Print { "list" } else { "library" };
+                    let icon = if *kind == ListKind::Print { "list" } else { "feature_group" };
                     rows.item(ui, icon, name.into(), Action::AddToList(*id));
                 }
                 if !menu.lists.is_empty() {

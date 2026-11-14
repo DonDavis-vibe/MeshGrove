@@ -115,12 +115,21 @@ pub fn segmented_where<T: PartialEq + Copy>(
 
 /// A small coloured label for a state or a count.
 pub fn pill(ui: &mut Ui, text: impl Into<String>, color: Color32) -> Response {
-    egui::Frame::new()
-        .fill(color.gamma_multiply(0.16))
-        .corner_radius(8)
-        .inner_margin(egui::Margin::symmetric(8, 0))
-        .show(ui, |ui| ui.label(RichText::new(text.into()).color(color)))
-        .response
+    // A widget of its own size: as a frame it took the whole height of the row it stood in,
+    // and stood as a block beside what it belongs to instead of level with it.
+    let text = egui::WidgetText::from(RichText::new(text.into()).color(color)).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Body,
+    );
+    let size = egui::vec2(text.size().x + 16.0, text.size().y + 6.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter().rect_filled(rect, rect.height() / 2.0, color.gamma_multiply(0.16));
+        ui.painter().galley(rect.center() - text.size() / 2.0, text, color);
+    }
+    response
 }
 
 /// A control exactly `width` wide (less only where the page itself is narrower). The kit's
@@ -236,7 +245,12 @@ pub fn slider<T: egui::emath::Numeric>(
 pub fn choice_tile(ui: &mut Ui, chosen: bool, name: &str, about: &str, tooltip: &str, beside: f32) -> bool {
     let width = (ui.available_width() - beside).max(160.0);
     let tile = sc::SettingsChoice { key: name, icon: None, title: name, summary: about, detail: tooltip };
-    ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+    // The room is asked for at the tile's own height (the kit's choice row): asked for without
+    // a height, the tile hung below the middle of its row, and what stood beside it (a state,
+    // the small buttons) was not level with it.
+    let t = Tokens::get();
+    let height = t.space_24 + t.space_16;
+    ui.allocate_ui_with_layout(egui::vec2(width, height), egui::Layout::top_down(egui::Align::Min), |ui| {
         ui.set_width(width);
         sc::settings_choice_row(ui, &tile, chosen).clicked()
     })

@@ -143,12 +143,6 @@ pub fn chip(ui: &mut Ui, style: &TagStyle, tag: &str, label: &str) -> egui::Resp
     ui.add(egui::Button::new(text).fill(bg).stroke(Stroke::NONE).corner_radius(9.0))
 }
 
-/// A small coloured dot in front of a tag's name (sidebar, menus).
-pub fn dot(ui: &mut Ui, style: &TagStyle, tag: &str) {
-    let (rect, _) = ui.allocate_exact_size(vec2(10.0, 10.0), egui::Sense::hover());
-    ui.painter().circle_filled(rect.center(), 4.0, style.colors(tag).0);
-}
-
 /// Paints a tag's colour dot (with a thin dark ring, so it shows on any thumbnail) whose right
 /// edge sits at `right_top`, on a 13 px row. Returns its rectangle.
 pub fn paint_dot(p: &Painter, right_top: Pos2, color: Color32) -> Rect {
