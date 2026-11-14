@@ -35,7 +35,7 @@ pub const WIT_VERSION: &str = "0.1.0";
 /// Version of the JSON shapes in this crate (manifests, widgets, events, effects, bundles), which
 /// is what a plugin names in [`Manifest::api`]. It grows by new fields with defaults and new
 /// variants; what a host does not know it skips ([`ui::Node::Unknown`], [`ui::Effect::Unknown`]).
-pub const API_VERSION: &str = "0.2.0";
+pub const API_VERSION: &str = "0.3.0";
 
 /// Whether a plugin built against API `version` runs on this one ([`api_check`]).
 pub fn api_compatible(version: &str) -> bool {
@@ -74,8 +74,11 @@ mod tests {
     #[test]
     fn api_versions() {
         assert!(api_compatible("0.1.0") && api_compatible("0.1.7") && api_compatible("0.1"));
-        assert!(api_compatible("0.2.0") && api_compatible(API_VERSION), "plugins of this API and the one before");
-        assert!(!api_compatible("0.3.0") && !api_compatible("1.0.0") && !api_compatible("x"));
+        assert!(
+            api_compatible("0.2.0") && api_compatible("0.3.0") && api_compatible(API_VERSION),
+            "this API and before"
+        );
+        assert!(!api_compatible("0.4.0") && !api_compatible("1.0.0") && !api_compatible("x"));
         // The world a plugin links against has a version of its own, which stays through 0.x.
         assert!(WIT.contains(&format!("package meshgrove:plugin@{WIT_VERSION};")));
         assert_eq!(WIT_VERSION, "0.1.0", "a new WIT version would stop every installed plugin from loading");

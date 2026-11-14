@@ -9,6 +9,8 @@ pub mod loading;
 pub mod program_icons;
 pub mod duplicates;
 pub mod fonts;
+#[cfg(feature = "plugins")]
+pub mod folder_pick;
 pub mod gallery;
 pub mod glyphs;
 #[cfg(feature = "plugins")]

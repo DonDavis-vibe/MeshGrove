@@ -300,7 +300,10 @@ mod tests {
         assert!(newer.contains("update Meshgrove"), "a 0.2 plugin on a 0.1 host: {newer}");
         let one = Manifest { api: "1.0.0".into(), ..manifest() };
         assert!(one.check_for("0.2.0").unwrap_err().contains("built for plugin API 1.0.0"));
-        assert_eq!(manifest().check_for("0.2.0"), Ok(()), "a 0.2 host runs 0.1 plugins");
+        assert_eq!(manifest().check_for("0.3.0"), Ok(()), "a host runs plugins of its own API");
+        let older = Manifest { api: "0.2.0".into(), ..manifest() };
+        assert_eq!(older.check_for("0.3.0"), Ok(()), "a 0.3 host runs 0.2 plugins");
+        assert!(manifest().check_for("0.2.0").unwrap_err().contains("update Meshgrove"), "a 0.3 plugin on 0.2");
         let twice = vec![PanelDef { id: "a".into(), title: "A".into() }; 2];
         assert!(Manifest { panels: twice, ..manifest() }.check().is_err());
         let unknown: Manifest = serde_json::from_str(

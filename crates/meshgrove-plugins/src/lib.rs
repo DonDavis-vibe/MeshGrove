@@ -25,6 +25,7 @@ mod plugin;
 pub mod registry;
 pub mod staging;
 mod state;
+pub mod targets;
 
 use std::time::Duration;
 
@@ -34,6 +35,7 @@ pub use plugin::{Image, Plugin, Settings, StagedBundle, ToolOutcome};
 pub use registry::Registry;
 pub use staging::Staging;
 pub use state::{CancelToken, Progress};
+pub use targets::{Target, Targets};
 
 /// How long a panel may take for one event (render, mesh and snapshot included).
 pub const EVENT_DEADLINE: Duration = Duration::from_secs(2);

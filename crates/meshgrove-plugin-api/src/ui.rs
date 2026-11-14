@@ -676,6 +676,16 @@ pub enum Event {
     ModelsOpened {
         ids: Vec<String>,
     },
+    /// The folder the user chose after [`Effect::PickFolder`]. `target` stands for it: put it in
+    /// a bundle's [`crate::Bundle::target`] and the files land there. It is good for this panel
+    /// (also after a restart), and says nothing about where the folder is. `label` names it for
+    /// the user ("Werkstatt/Boxen": library, then the folders below it); the folder may not
+    /// exist yet (the user named a new one), it is made when files land in it. From API 0.3.
+    FolderPicked {
+        id: String,
+        target: String,
+        label: String,
+    },
     /// An event of a newer API than this crate's: nothing to do.
     #[serde(other)]
     Unknown,
@@ -816,6 +826,14 @@ pub enum Effect {
     /// Render again after this long (an animation, polling).
     RepaintAfter {
         ms: u32,
+    },
+    /// Let the user choose a folder in one of the libraries, with Meshgrove's own folder
+    /// chooser; it arrives as [`Event::FolderPicked`], nothing arrives when the user cancels.
+    /// `title` heads the chooser ("Where should the drawer go?"). From API 0.3.
+    PickFolder {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
     },
     /// An effect of a newer API than this Meshgrove's: it is skipped, the others are done.
     #[serde(other)]
@@ -1174,6 +1192,11 @@ mod tests {
             Event::FilePicked { id: "photo".into(), name: "a.png".into(), path: "/tmp/picked/a.png".into() },
             Event::HostChanged { info: HostInfo { language: "de".into(), ..HostInfo::default() } },
             Event::ModelsOpened { ids: vec!["Eigene/box.stl".into(), "Eigene/lid.3mf".into()] },
+            Event::FolderPicked {
+                id: "dest".into(),
+                target: "3f9a0c11d2e4b567".into(),
+                label: "Werkstatt/Boxen".into(),
+            },
         ];
         events.iter().for_each(round_trip);
         assert_eq!(serde_json::to_value(&events[0]).unwrap(), json!({"type": "click", "id": "apply"}));
@@ -1196,6 +1219,7 @@ mod tests {
             Effect::OpenPanel { panel: "box".into(), state: None },
             Effect::SelectModel { id: "Eigene/box.stl".into() },
             Effect::RepaintAfter { ms: 100 },
+            Effect::PickFolder { id: "dest".into(), title: Some("Where should the drawer go?".into()) },
         ];
         effects.iter().for_each(round_trip);
         let toast: Effect = serde_json::from_str(r#"{"type":"toast","text":"hi"}"#).unwrap();
@@ -1212,6 +1236,12 @@ mod tests {
         assert_eq!(dialog, plain);
         assert_eq!(serde_json::to_value(&plain).unwrap(), json!({"type": "open_file_dialog", "id": "photo"}));
         assert_eq!(serde_json::to_value(&effects[6]).unwrap()["into"], "data");
+        let pick: Effect = serde_json::from_str(r#"{"type":"pick_folder","id":"dest"}"#).unwrap();
+        assert_eq!(pick, Effect::PickFolder { id: "dest".into(), title: None });
+        assert_eq!(
+            serde_json::to_value(events.last().unwrap()).unwrap(),
+            json!({"type": "folder_picked", "id": "dest", "target": "3f9a0c11d2e4b567", "label": "Werkstatt/Boxen"})
+        );
     }
 
     #[test]
