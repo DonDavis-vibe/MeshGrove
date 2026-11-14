@@ -397,10 +397,14 @@ impl App {
                 true => job.plugin_name.clone(),
                 false => format!("{}: {}", job.plugin_name, job.message),
             };
-            ui.add(egui::ProgressBar::new(job.fraction.clamp(0.0, 1.0)).desired_width(90.0).desired_height(10.0))
-                .on_hover_text(t!("plugins.job_hint", tool = job.tool.as_str()));
+            let bar = egui::vec2(90.0, ui.spacing().interact_size.y);
+            ui.allocate_ui_with_layout(bar, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                crate::ui::plugin_view::progress_bar(ui, Some(job.fraction));
+            })
+            .response
+            .on_hover_text(t!("plugins.job_hint", tool = job.tool.as_str()));
             ui.label(text);
-            if ui.small_button("✖").on_hover_text(t!("plugins.cancel_job")).clicked() {
+            if crate::ui::settings_kit::small(ui, "✖", &t!("plugins.cancel_job")).clicked() {
                 self.plugins.deferred().cancel(&job.id);
             }
         }
@@ -417,7 +421,7 @@ impl App {
         open.upload_meshes(&rs.device, &rs.queue);
         if let Some(e) = open.error.clone() {
             ui.colored_label(ui.visuals().error_fg_color, format!("✖ {e}"));
-            if ui.button(t!("plugins.reopen")).clicked() {
+            if crate::ui::settings_kit::bar_button(ui, &t!("plugins.reopen")).clicked() {
                 let (plugin, panel) = (open.plugin.clone(), open.panel.clone());
                 self.plugins.close(&plugin, &panel);
                 if let Err(e) = self.plugins.open(&plugin, &panel, None) {
@@ -432,14 +436,16 @@ impl App {
         // the job that started first and how many wait behind it; ✖ stops the one shown.
         let mut cancel = None;
         ui.horizontal(|ui| {
+            use crate::ui::settings_kit;
+            let t = solidcraft_theme::Tokens::get();
             let job = open.jobs.first();
-            let stop = ui.add_enabled(job.is_some(), egui::Button::new("✖").small());
+            let stop = settings_kit::small_if(ui, job.is_some(), "✖", &t!("plugins.cancel_job"));
             if let Some(job) = job
-                && stop.on_hover_text(t!("plugins.cancel_job")).clicked()
+                && stop.clicked()
             {
                 cancel = Some(job.id.clone());
             }
-            let bar = match job {
+            let text = match job {
                 Some(job) => {
                     let mut text = job.label.clone();
                     if !job.message.is_empty() {
@@ -448,15 +454,21 @@ impl App {
                     if open.jobs.len() > 1 {
                         text = format!("{text}  (+{})", open.jobs.len() - 1);
                     }
-                    egui::ProgressBar::new(job.fraction.clamp(0.0, 1.0)).text(text)
+                    text
                 }
-                None => egui::ProgressBar::new(0.0).text(egui::RichText::new(t!("plugins.idle")).weak()),
+                None => t!("plugins.idle").into_owned(),
             };
-            let bar = ui.add(bar);
+            // What is being done, then the kit's thin bar over what is left of the line.
+            let text = egui::RichText::new(text).size(t.font_small).color(t.form_dim);
+            let said = ui.add(egui::Label::new(text).truncate().selectable(false));
             if open.jobs.len() > 1 {
                 let all: Vec<&str> = open.jobs.iter().map(|j| j.label.as_str()).collect();
-                bar.on_hover_text(all.join("\n"));
+                said.on_hover_text(all.join("\n"));
             }
+            let bar = egui::vec2(ui.available_width().max(0.0), t.control_height);
+            ui.allocate_ui_with_layout(bar, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                crate::ui::plugin_view::progress_bar(ui, Some(job.map_or(0.0, |job| job.fraction)));
+            });
         });
         if let Some(job) = cancel {
             self.plugins.cancel_job(plugin, panel, &job);
