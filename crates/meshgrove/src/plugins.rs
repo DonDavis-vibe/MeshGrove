@@ -1211,8 +1211,6 @@ mod tests {
         (overlays, meshes)
     }
 
-    /// hello-box's 3D view has an overlay: the worker asks for it with the mesh and again when
-    /// its revision changes, and leaves out one of the wrong length.
     /// The folder the user chose reaches the panel as a token; the bundle naming it is handed
     /// over with that folder and lands there, also in a library imports do not go to. The
     /// folder stays the panel's after a restart, and the chooser starts there next time.
@@ -1274,6 +1272,8 @@ mod tests {
         assert_eq!(host.last_target("hello-box", "box"), Some(chosen), "kept for the panel");
     }
 
+    /// hello-box's 3D view has an overlay: the worker asks for it with the mesh and again when
+    /// its revision changes, and leaves out one of the wrong length.
     #[test]
     fn the_worker_brings_the_overlay_and_leaves_out_one_that_does_not_fit() {
         let Some(bytes) = test_plugin() else { return };
