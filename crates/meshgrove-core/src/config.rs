@@ -749,6 +749,9 @@ pub struct Config {
     pub ui_font: Option<String>,
     /// The main window's title bar: Meshgrove's own, or the desktop's.
     pub title_bar: TitleBar,
+    /// Slicers and editors show the icon they bring themselves (the settings' Programs page,
+    /// the info pane's buttons, the open-with menus) instead of Meshgrove's own sign.
+    pub program_icons: bool,
     /// The slicers models can be sent to; `None`: take the ones found on this computer at startup.
     pub slicers: Option<Vec<Slicer>>,
     /// Name of the default slicer (double-click, the first "open in" entry); `None`: the first.
@@ -1228,6 +1231,7 @@ impl Default for Config {
             ui_theme: None,
             ui_font: None,
             title_bar: TitleBar::default(),
+            program_icons: true,
             slicers: None,
             default_slicer: None,
             slicer: None,

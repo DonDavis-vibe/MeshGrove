@@ -1935,6 +1935,7 @@ impl App {
                     self.config.ui_theme = theme;
                     apply_fonts(&self.egui_ctx, self.config.ui_font.as_deref(), &self.font_previews);
                 }
+                SettingsChange::ProgramIcons(on) => self.config.program_icons = on,
                 SettingsChange::TitleBar(title_bar) => {
                     self.config.title_bar = title_bar;
                     let own = crate::ui::appearance::own_title_bar(title_bar);
@@ -3700,6 +3701,8 @@ impl eframe::App for App {
         }
         let chat = self.chat_available();
         self.layout.show_chat(chat);
+        // Which programs there are, for the places that show their own icons beside their names.
+        crate::ui::program_icons::publish(self.slicers.iter().chain(&self.editors), self.config.program_icons);
         self.shortcuts(&ctx);
         if let Some(changed) = self.search_changed {
             if changed.elapsed() >= SEARCH_DEBOUNCE {

@@ -6,6 +6,7 @@ pub mod chat_input;
 pub mod details;
 pub mod dialogs;
 pub mod loading;
+pub mod program_icons;
 pub mod duplicates;
 pub mod fonts;
 pub mod gallery;

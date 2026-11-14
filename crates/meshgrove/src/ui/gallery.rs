@@ -844,6 +844,14 @@ impl MenuRows<'_> {
         self.rows_since_separator = true;
     }
 
+    /// A row that opens something with the program `program`: its own icon, or `icon`.
+    fn program(&mut self, ui: &mut Ui, program: &str, icon: &str, text: std::borrow::Cow<str>, act: Action) {
+        if super::menus::item_program(ui, program, icon, &text) {
+            *self.action = Some(act);
+        }
+        self.rows_since_separator = true;
+    }
+
     fn submenu(&mut self, ui: &mut Ui, icon: &str, text: std::borrow::Cow<str>, add: impl FnOnce(&mut Ui, &mut Self)) {
         super::menus::submenu(ui, icon, &text, |ui| add(ui, self));
         self.rows_since_separator = true;
@@ -887,7 +895,7 @@ pub(super) fn entry_menu(
         }
         let slicer = if sliceable { menu.slicers.get(menu.default_slicer) } else { None };
         if let Some(slicer) = slicer {
-            rows.item(ui, "explode", t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);
+            rows.program(ui, slicer, "explode", t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);
         }
         let other_slicers: Vec<(usize, &String)> = if slicer.is_some() {
             menu.slicers.iter().enumerate().filter(|(i, _)| *i != menu.default_slicer).collect()
@@ -901,10 +909,10 @@ pub(super) fn entry_menu(
                     rows.item(ui, "open", t!("menu.default_app"), Action::OpenWithDefaultApp(entry));
                 }
                 for (index, editor) in editors {
-                    rows.item(ui, "edit", editor.into(), Action::OpenInEditor(*index));
+                    rows.program(ui, editor, "edit", editor.into(), Action::OpenInEditor(*index));
                 }
                 for (i, other) in &other_slicers {
-                    rows.item(ui, "explode", (*other).into(), Action::OpenInSlicerWith(*i));
+                    rows.program(ui, other, "explode", (*other).into(), Action::OpenInSlicerWith(*i));
                 }
                 for (id, label) in &menu.plugin_openers {
                     rows.item(ui, "settings_plug", label.into(), Action::OpenWithPlugin(id.clone()));

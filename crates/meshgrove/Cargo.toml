@@ -38,6 +38,8 @@ sys-locale.workspace = true
 chrono.workspace = true
 crossbeam-channel.workspace = true
 image.workspace = true
+# Programs' own icons that only come as SVG (Blender); no text, no pictures inside pictures.
+resvg = { version = "0.48", default-features = false }
 dirs.workspace = true
 notify.workspace = true
 trash.workspace = true

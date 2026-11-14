@@ -474,6 +474,62 @@ pub fn choice_tile(ui: &mut Ui, chosen: bool, name: &str, about: &str, tooltip: 
     .inner
 }
 
+/// [`choice_tile`] with a picture inside it, between the round mark and the name: `picture`
+/// paints it into the square it is given (a program's own icon). The kit's row has no room
+/// for a picture of the caller's, so this is that row painted here, token for token.
+pub fn choice_tile_with(
+    ui: &mut Ui,
+    chosen: bool,
+    (name, about, tooltip): (&str, &str, &str),
+    beside: f32,
+    picture: impl FnOnce(&Ui, egui::Rect),
+) -> bool {
+    let t = Tokens::get();
+    let accent = solidcraft_theme::TabAccent::current(ui.ctx());
+    let size = egui::vec2((ui.available_width() - beside).max(160.0), t.space_24 + t.space_16);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let fill = if chosen {
+            accent.soft
+        } else if response.hovered() {
+            t.hover
+        } else {
+            t.control_fill
+        };
+        let border =
+            if chosen { egui::Stroke::new(1.0, accent.color) } else { t.control_border_stroke(t.control_border) };
+        ui.painter().rect(rect, t.radius_lg, fill, border, egui::StrokeKind::Inside);
+        let radio = egui::pos2(rect.left() + t.space_16, rect.center().y);
+        ui.painter().circle(radio, t.space_6, t.control_fill, border);
+        if chosen {
+            ui.painter().circle_filled(radio, t.space_3, accent.color);
+        }
+        // The picture, as high as the row's text line allows, then the name.
+        let side = t.space_24;
+        let slot = egui::Rect::from_center_size(
+            egui::pos2(radio.x + t.space_12 + side / 2.0, rect.center().y),
+            egui::vec2(side, side),
+        );
+        picture(ui, slot);
+        let about_font = egui::FontId::proportional(t.font_small);
+        let about_width = ui.painter().layout_no_wrap(about.to_owned(), about_font.clone(), t.form_dim).size().x;
+        let about_width = about_width.min((rect.width() * 0.6).max(0.0));
+        let title = egui::Rect::from_min_max(
+            egui::pos2(slot.right() + t.space_8, rect.top()),
+            egui::pos2(rect.right() - t.space_8 - about_width - t.space_8, rect.bottom()),
+        );
+        let ink = if chosen { accent.ink } else { t.form_ink };
+        sc::paint_text(ui, title, name, sc::type_face::semibold(t.font_label), ink, false);
+        let body = egui::Rect::from_min_max(
+            egui::pos2(rect.right() - t.space_8 - about_width, rect.top()),
+            rect.max - egui::vec2(t.space_8, 0.0),
+        );
+        sc::paint_text(ui, body, about, about_font, t.form_dim, false);
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, ui.is_enabled(), chosen, name));
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tooltip).clicked()
+}
+
 /// A choice of a few as one row of joined icon buttons, the chosen one lit: "either this or
 /// that" at a glance. `options` are (the kit icon's name, what it stands for as the tooltip).
 /// True when the user picked another.

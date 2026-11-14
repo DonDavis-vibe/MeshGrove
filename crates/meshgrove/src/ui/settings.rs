@@ -32,6 +32,7 @@ pub enum SettingsChange {
     UiFont(Option<String>),
     /// Who draws the main window's title bar.
     TitleBar(config::TitleBar),
+    ProgramIcons(bool),
     AddRoot(PathBuf),
     RemoveRoot(PathBuf),
     /// The slicer list and the name of the default one.
@@ -832,6 +833,7 @@ fn changes_towards(config: &Config, target: &Config) -> Vec<SettingsChange> {
     put(c.ui_theme != t.ui_theme, &|| SettingsChange::UiTheme(t.ui_theme.clone()));
     put(c.ui_font != t.ui_font, &|| SettingsChange::UiFont(t.ui_font.clone()));
     put(c.title_bar != t.title_bar, &|| SettingsChange::TitleBar(t.title_bar));
+    put(c.program_icons != t.program_icons, &|| SettingsChange::ProgramIcons(t.program_icons));
     put(c.double_click != t.double_click, &|| SettingsChange::DoubleClick(t.double_click));
     put(c.lock_panes != t.lock_panes, &|| SettingsChange::LockPanes(t.lock_panes));
     put(c.fold_for_plugins != t.fold_for_plugins, &|| SettingsChange::FoldForPlugins(t.fold_for_plugins));
@@ -1127,7 +1129,14 @@ impl SettingsDialog {
                 Section::SpaceMouse => self.mouse.section(ui, config, info.mouse, info.render, changes),
                 Section::Models => models(ui, config, changes),
                 Section::Units => units(ui, config, changes),
-                Section::Slicer => self.program_list(ui, false, slicers, default_slicer, changes),
+                Section::Slicer => {
+                    let mut icons = config.program_icons;
+                    let (label, hint) = (t!("settings.program_icons"), t!("settings.program_icons_hint"));
+                    if super::settings_kit::check(ui, &mut icons, label, hint) {
+                        changes.push(SettingsChange::ProgramIcons(icons));
+                    }
+                    self.program_list(ui, false, slicers, default_slicer, changes);
+                }
                 Section::RecentPrints => recent_prints(ui, config, changes),
                 Section::Editor => self.program_list(ui, true, editors, default_editor, changes),
                 Section::Printer => self.printers(ui, printers, default_printer, changes),
@@ -1780,7 +1789,22 @@ impl SettingsDialog {
             ui.horizontal(|ui| {
                 let path = program.program.display().to_string();
                 let tip = t!("settings.slicers_default");
-                if super::settings_kit::choice_tile(ui, i == default, &program.name, &path, &tip, 34.0) && i != default
+                // With the programs' icons on, each row has its picture inside the tile,
+                // between the round mark and the name; one without its own gets our sign,
+                // so the names stay in line.
+                let picked = if super::program_icons::enabled() {
+                    let texts = (program.name.as_str(), path.as_str(), tip.as_ref());
+                    super::settings_kit::choice_tile_with(ui, i == default, texts, 34.0, |ui, slot| {
+                        if !super::program_icons::paint(ui, slot, &program.name) {
+                            let sign = if editors { "edit" } else { "explode" };
+                            let ink = solidcraft_theme::Tokens::get().form_dim;
+                            sc::icons::paint_ink(ui.painter(), slot.shrink(4.0), sign, ink);
+                        }
+                    })
+                } else {
+                    super::settings_kit::choice_tile(ui, i == default, &program.name, &path, &tip, 34.0)
+                };
+                if picked && i != default
                 {
                     send(programs.to_vec(), Some(program.name.clone()), changes);
                 }

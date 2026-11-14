@@ -90,6 +90,25 @@ pub fn item(ui: &mut Ui, icon: &str, label: &str) -> bool {
     item_if(ui, icon, label, true, "", false)
 }
 
+/// [`item`] for opening something with the program shown as `program`: the row carries the
+/// program's own icon where it brings one (and the settings want them), else `icon`.
+pub fn item_program(ui: &mut Ui, program: &str, icon: &str, label: &str) -> bool {
+    if super::program_icons::of(ui.ctx(), program).is_none() {
+        return item(ui, icon, label);
+    }
+    // The kit's row without its sign, and the program's picture where the sign would be.
+    let response = step(ui, "", label, true, false);
+    let t = solidcraft_theme::Tokens::get();
+    let side = t.space_16 + t.space_2;
+    let slot = egui::pos2(response.rect.left() + t.control_height / 2.0, response.rect.center().y);
+    super::program_icons::paint(ui, egui::Rect::from_center_size(slot, egui::vec2(side, side)), program);
+    let clicked = response.clicked();
+    if clicked {
+        ui.close();
+    }
+    clicked
+}
+
 /// [`item`] that can only be chosen while `enabled`; resting on it says `why_not` otherwise.
 /// `danger` draws it in the colour of what cannot be taken back lightly.
 pub fn item_if(ui: &mut Ui, icon: &str, label: &str, enabled: bool, why_not: &str, danger: bool) -> bool {

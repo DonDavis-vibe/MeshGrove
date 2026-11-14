@@ -278,6 +278,22 @@ pub fn open_buttons(
         let room = (ui.available_width() - beside).max(60.0);
         super::settings_kit::bar_button_within(ui, &text, room).on_hover_text(text)
     };
+    // With the programs' icons on, every button has a picture in front: the program's own
+    // icon, or our sign for a program without one and for a plugin (plugins bring no icon of
+    // their own yet). So all the buttons start in one line.
+    let icons = super::program_icons::enabled();
+    let icon = |ui: &mut Ui, program: Option<&str>, sign: &str| {
+        if !icons {
+            return;
+        }
+        let t = solidcraft_theme::Tokens::get();
+        let (slot, _) = ui.allocate_exact_size(egui::vec2(22.0, t.control_height), egui::Sense::hover());
+        let at = egui::Rect::from_center_size(slot.center(), egui::vec2(20.0, 20.0));
+        if !program.is_some_and(|name| super::program_icons::paint(ui, at, name)) {
+            solidcraft_ui_kit::icons::paint_ink(ui.painter(), at.shrink(2.0), sign, t.form_dim);
+        }
+        ui.add_space(3.0);
+    };
     let row = |ui: &mut Ui, add: &mut dyn FnMut(&mut Ui)| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
@@ -287,13 +303,15 @@ pub fn open_buttons(
     if let Some(name) = slicers.names.get(slicers.default) {
         let others = slicers.names.len() > 1;
         row(ui, &mut |ui| {
+            icon(ui, Some(name), "explode");
             if button(ui, t!("menu.open_in_slicer", name = name), if others { more } else { 0.0 }).clicked() {
                 clicked.0 = Some(slicers.default);
             }
             if others {
                 super::menus::button(ui, "▾", |ui| {
                     for (i, other) in slicers.names.iter().enumerate().filter(|(i, _)| *i != slicers.default) {
-                        if super::menus::item(ui, "explode", &t!("menu.open_in_slicer", name = other)) {
+                        let label = t!("menu.open_in_slicer", name = other);
+                        if super::menus::item_program(ui, other, "explode", &label) {
                             clicked.0 = Some(i);
                         }
                     }
@@ -306,13 +324,15 @@ pub fn open_buttons(
     if let Some((index, name)) = usable.first() {
         let others = usable.len() > 1;
         row(ui, &mut |ui| {
+            icon(ui, Some(name), "edit");
             if button(ui, t!("menu.open_in_editor", name = name), if others { more } else { 0.0 }).clicked() {
                 clicked.1 = Some(*index);
             }
             if others {
                 super::menus::button(ui, "▾", |ui| {
                     for (index, other) in &usable[1..] {
-                        if super::menus::item(ui, "edit", &t!("menu.open_in_editor", name = other)) {
+                        let label = t!("menu.open_in_editor", name = other);
+                        if super::menus::item_program(ui, other, "edit", &label) {
                             clicked.1 = Some(*index);
                         }
                     }
@@ -322,12 +342,12 @@ pub fn open_buttons(
             }
         });
     }
-    if !plugins.is_empty() {
-        ui.horizontal_wrapped(|ui| {
-            for (id, label) in plugins {
-                if button(ui, label.into(), 0.0).clicked() {
-                    clicked.2 = Some(id.clone());
-                }
+    // A row per plugin, like the programs: its sign in front, then its button.
+    for (id, label) in plugins {
+        row(ui, &mut |ui| {
+            icon(ui, None, "settings_plug");
+            if button(ui, label.into(), 0.0).clicked() {
+                clicked.2 = Some(id.clone());
             }
         });
     }
