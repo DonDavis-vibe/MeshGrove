@@ -3,7 +3,7 @@
 //! so a startup rescan of a big library on a spinning disk costs one `stat` per folder.
 //! Archives are treated as folders: their members are indexed below the archive's path.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,10 +33,12 @@ pub enum Force {
 pub fn scan(lib: &mut Library, root: &Path, start: &Path, force: Force, cancel: &AtomicBool) -> io::Result<ScanReport> {
     let mut report = ScanReport::default();
     let mut seen = HashSet::new();
+    let mut hidden = HashMap::new();
     if start == root {
         // Rows of hidden folders from before they were told apart (a trash folder the watcher
         // reported): a walk from the root never reaches them, so they go here.
-        for dir in lib.indexed_dirs_below(root).into_iter().filter(|d| hidden_below(root, d)) {
+        let dirs = lib.indexed_dirs_below(root);
+        for dir in dirs.into_iter().filter(|d| hidden_below_with(root, d, &mut hidden)) {
             lib.remove_tree(&dir).map_err(io::Error::other)?;
         }
     }
@@ -47,7 +49,7 @@ pub fn scan(lib: &mut Library, root: &Path, start: &Path, force: Force, cancel: 
         }
         // The walk leaves hidden folders out; a scan started inside one (the watcher saw the
         // trash folder change, or a rescan was asked for) must not bring them in either.
-        if hidden_below(root, &dir) {
+        if hidden_below_with(root, &dir, &mut hidden) {
             lib.remove_tree(&dir).map_err(io::Error::other)?;
             continue;
         }
@@ -95,10 +97,25 @@ pub fn scan(lib: &mut Library, root: &Path, start: &Path, force: Force, cancel: 
 }
 
 /// Whether `dir` is, or lies in, a hidden folder below `root` (`.Trash-1000`, `$RECYCLE.BIN`,
-/// `.git` …). What the root itself is called, or lies in, does not count: the user chose it.
+/// `.git` …, and on Windows a folder with the hidden attribute, like `AppData`). What the root
+/// itself is called, or lies in, does not count: the user chose it.
 pub fn hidden_below(root: &Path, dir: &Path) -> bool {
-    dir.strip_prefix(root)
-        .is_ok_and(|rel| rel.components().any(|c| listing::is_hidden(&c.as_os_str().to_string_lossy())))
+    hidden_below_with(root, dir, &mut HashMap::new())
+}
+
+/// [`hidden_below`] for many folders: `attributes` keeps what Windows said about each folder on
+/// the way, so a scan asks once per folder.
+fn hidden_below_with(root: &Path, dir: &Path, attributes: &mut HashMap<PathBuf, bool>) -> bool {
+    let Ok(rel) = dir.strip_prefix(root) else { return false };
+    let mut at = root.to_path_buf();
+    rel.components().any(|c| {
+        at.push(c);
+        listing::is_hidden(&c.as_os_str().to_string_lossy())
+            || cfg!(windows)
+                && *attributes
+                    .entry(at.clone())
+                    .or_insert_with(|| std::fs::metadata(&at).is_ok_and(|m| listing::has_hidden_attribute(&m)))
+    })
 }
 
 /// What makes a folder the same folder when reached through different (symlinked) paths.
@@ -155,6 +172,36 @@ mod tests {
         scan(&mut lib, &root, &root, Force::Nothing, &no).unwrap();
         assert_eq!(names(&lib, "stl"), ["kept.stl"]);
         assert!(lib.indexed_dirs_below(&root).iter().all(|d| !hidden_below(&root, d)));
+    }
+
+    /// Windows hides folders by an attribute too (`AppData` in a home folder used as a library).
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_windows_hides_stays_out_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("lib");
+        let inside = root.join("AppData").join("Local");
+        fs::create_dir_all(&inside).unwrap();
+        fs::write(inside.join("cache.stl"), b"x").unwrap();
+        fs::write(root.join("kept.stl"), b"x").unwrap();
+        let attrib = std::process::Command::new("attrib").arg("+h").arg(root.join("AppData")).status().unwrap();
+        assert!(attrib.success());
+        let mut lib = Library::open_in_memory().unwrap();
+        let no = AtomicBool::new(false);
+        assert!(hidden_below(&root, &inside) && !hidden_below(&root, &root));
+
+        scan(&mut lib, &root, &root, Force::Nothing, &no).unwrap();
+        assert_eq!(names(&lib, "stl"), ["kept.stl"]);
+        // The watcher reports a change inside the hidden folder.
+        let report = scan(&mut lib, &root, &inside, Force::Start, &no).unwrap();
+        assert_eq!(report.dirs_visited, 0);
+        assert_eq!(names(&lib, "stl"), ["kept.stl"]);
+        // Rows an older version indexed that way go with the next walk from the root.
+        let entries = listing::list_dir(&inside).unwrap();
+        lib.update_dir(&root, &inside, 1, &entries, &[]).unwrap();
+        assert_eq!(names(&lib, "stl").len(), 2);
+        scan(&mut lib, &root, &root, Force::Nothing, &no).unwrap();
+        assert_eq!(names(&lib, "stl"), ["kept.stl"]);
     }
 
     #[test]
