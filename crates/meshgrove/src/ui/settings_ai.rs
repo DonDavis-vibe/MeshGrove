@@ -228,6 +228,10 @@ impl AiSettings {
             if check(ui, &mut cross, t!("settings.ai_cross_moves"), t!("settings.ai_cross_moves_hint")) {
                 changes.push(SettingsChange::AiCrossLibraryMoves(cross));
             }
+            let mut ask = config.ai.cloud_ask;
+            if check(ui, &mut ask, t!("settings.ai_cloud_ask"), t!("settings.ai_cloud_ask_hint")) {
+                changes.push(SettingsChange::AiCloudAsk(ask));
+            }
             ui.horizontal(|ui| {
                 if sc::button(ui, t!("settings.ai_review", count = self.pending), sc::Button::Normal).clicked() {
                     changes.push(SettingsChange::ShowAiReview);

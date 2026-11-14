@@ -4,6 +4,7 @@ pub mod canvas;
 pub mod chat;
 pub mod chat_input;
 pub mod details;
+pub mod dialogs;
 pub mod duplicates;
 pub mod fonts;
 pub mod gallery;

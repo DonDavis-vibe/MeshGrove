@@ -89,6 +89,7 @@ pub enum SettingsChange {
     AiAutoAccept(bool),
     /// The AI may suggest moves into another library.
     AiCrossLibraryMoves(bool),
+    AiCloudAsk(bool),
     /// Connect the AI apps found now.
     AiConnectNow,
     /// What a library shows to which AI.
@@ -894,6 +895,7 @@ fn changes_towards(config: &Config, target: &Config) -> Vec<SettingsChange> {
     put(c.ai.auto_accept_since.is_some() != t.ai.auto_accept_since.is_some(), &|| {
         SettingsChange::AiAutoAccept(t.ai.auto_accept_since.is_some())
     });
+    put(c.ai.cloud_ask != t.ai.cloud_ask, &|| SettingsChange::AiCloudAsk(t.ai.cloud_ask));
     put(c.ai.cross_library_moves != t.ai.cross_library_moves, &|| {
         SettingsChange::AiCrossLibraryMoves(t.ai.cross_library_moves)
     });

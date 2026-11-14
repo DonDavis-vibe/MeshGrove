@@ -550,6 +550,10 @@ pub struct AiConfig {
     /// While AI is on, Meshgrove adds itself to the AI assistants installed on this computer
     /// (and takes itself out again when this or AI is turned off).
     pub connect_apps: bool,
+    /// Before something goes to an assistant outside this computer or network (the first message
+    /// of a run, and every one-click action), Meshgrove says what goes out and asks. The
+    /// question's "don't ask again" turns this off; the settings turn it on again.
+    pub cloud_ask: bool,
     /// Since when (Unix seconds) suggestions are accepted without the review: those of the AI
     /// apps and of the one-click actions, never moves; the chat has its own switch. `None`: all
     /// wait for the user.
@@ -573,6 +577,7 @@ impl Default for AiConfig {
             chat_mode: ChatMode::Review,
             cross_library_moves: false,
             connect_apps: true,
+            cloud_ask: true,
             auto_accept_since: None,
         }
     }

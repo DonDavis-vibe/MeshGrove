@@ -54,6 +54,8 @@ pub struct ChatState {
     pub(super) cloud_ok: bool,
     /// Waiting for the OK to go to a cloud endpoint: what goes out, and what does.
     pub confirm: Option<(String, Pending)>,
+    /// "Don't ask again" is ticked in that question.
+    pub(super) confirm_forget: bool,
     /// The agent of this computer answering the chat, while it runs.
     pub agent: Option<AgentChat>,
     /// An agent that did not start (by its id): not tried again until a message is sent.
@@ -343,7 +345,7 @@ impl App {
         let Some(endpoint) = self.config.ai.endpoint.clone() else { return };
         let (text, pills) = self.chat.input.take_message();
         let pictures = if endpoint.vision { self.pictures_for(&pills).len() } else { 0 };
-        if !endpoint.local && !self.chat.cloud_ok && !confirmed {
+        if !endpoint.local && self.asks_before_cloud() && !confirmed {
             let host = host_of(&endpoint.base_url);
             let text = t!("chat.confirm_text", host = host, refs = pills.len(), pictures = pictures).into_owned();
             self.chat.confirm = Some((text, Pending::Message));
@@ -442,15 +444,15 @@ impl App {
         let mut answered = None;
         for card in self.chat.asks.iter_mut().filter(|c| c.from.is_some()) {
             let title = t!("chat.question_from", client = card.from.clone().unwrap_or_default());
-            egui::Window::new(title.as_ref())
-                .id(egui::Id::unique(("ask_window", &card.uid)))
-                .collapsible(false)
-                .default_width(380.0)
-                .show(ctx, |ui| {
-                    if let Some(ChatAction::Answer { uid, cancel }) = chat_view::ask_card(ui, card) {
-                        answered = Some((uid, cancel));
-                    }
-                });
+            // The kit's window: its header with the title, movable, and no way to close it but
+            // the card's own two answers.
+            let id = egui::Id::unique(("ask_window", &card.uid));
+            solidcraft_ui_kit::Window::new(id, "agent_chat", title.as_ref()).required().show_body(ctx, |ui| {
+                ui.style_mut().wrap_mode = None;
+                if let Some(ChatAction::Answer { uid, cancel }) = chat_view::ask_card(ui, card) {
+                    answered = Some((uid, cancel));
+                }
+            });
         }
         if let Some((uid, cancel)) = answered {
             self.answer_question(&uid, cancel);
@@ -577,6 +579,12 @@ impl App {
         (out, images)
     }
 
+    /// Whether a message to a cloud asks first: until the user said yes once this run, and not
+    /// at all once they ticked "don't ask again" (Settings, AI & MCP turns it on again).
+    pub(super) fn asks_before_cloud(&self) -> bool {
+        self.config.ai.cloud_ask && !self.chat.cloud_ok
+    }
+
     /// Asks before a message goes to a cloud endpoint for the first time this session, and
     /// before every one-click action does.
     pub(super) fn chat_confirm_modal(&mut self, ctx: &egui::Context) {
@@ -586,21 +594,33 @@ impl App {
             Pending::Action { .. } => t!("actions.confirm_hint"),
             _ => t!("chat.confirm_hint"),
         };
-        let mut decision = None;
-        egui::Modal::new(egui::Id::unique("chat_confirm")).show(ctx, |ui| {
-            ui.set_max_width(460.0);
-            ui.heading(t!("chat.confirm_title"));
-            ui.label(text);
-            ui.weak(hint);
-            ui.horizontal(|ui| {
-                if ui.button(t!("chat.confirm_send")).clicked() {
-                    decision = Some(true);
-                }
-                if ui.button(t!("trash.cancel")).clicked() {
-                    decision = Some(false);
-                }
-            });
+        use crate::ui::dialogs::{self, Dialog, Tone};
+        // Enter answers Cancel: what leaves the computer is never sent by a key pressed for
+        // something else.
+        let dialog = Dialog {
+            id: "chat_confirm",
+            icon: "agent_chat",
+            title: &t!("chat.confirm_title"),
+            tone: Tone::Warning,
+            yes: &t!("chat.confirm_send"),
+            no: &t!("trash.cancel"),
+            enter_declines: true,
+            cards: 1.75,
+        };
+        let mut forget = self.chat.confirm_forget;
+        let decision = dialog.show(ctx, true, |ui| {
+            dialogs::say(ui, &text);
+            dialogs::quiet(ui, &hint);
+            ui.add_space(4.0);
+            solidcraft_ui_kit::checkbox(ui, &t!("chat.confirm_forget"), &mut forget)
+                .on_hover_text(t!("chat.confirm_forget_hint"));
         });
+        self.chat.confirm_forget = forget && decision.is_none();
+        // Only a "Send" takes the tick along: declining leaves the question as it is.
+        if decision == Some(true) && forget {
+            self.config.ai.cloud_ask = false;
+            self.save_config();
+        }
         match decision.and_then(|yes| Some((yes, self.chat.confirm.take()?.1))) {
             Some((true, Pending::Message)) => self.send_chat(true),
             Some((true, Pending::Action { title, user_text, llm, files, action })) => {
@@ -635,7 +655,7 @@ impl App {
         };
         if !assistant.is_endpoint() {
             // The agent does it, with its own tools, in a conversation of its own.
-            if !assistant.local && !self.chat.cloud_ok && !confirmed {
+            if !assistant.local && self.asks_before_cloud() && !confirmed {
                 let text = t!("actions.confirm_text", host = assistant.name.clone(), files = files, pictures = 0);
                 self.chat.confirm = Some((text.into_owned(), Pending::Action { title, user_text, llm, files, action }));
                 return;
@@ -647,7 +667,8 @@ impl App {
             return;
         }
         let Some(endpoint) = self.config.ai.endpoint.clone() else { return };
-        if !endpoint.local && !confirmed {
+        // A one-click action asks every time, unless the user said not to ask at all.
+        if !endpoint.local && self.config.ai.cloud_ask && !confirmed {
             let pictures = if endpoint.vision { files } else { 0 };
             let text =
                 t!("actions.confirm_text", host = host_of(&endpoint.base_url), files = files, pictures = pictures);

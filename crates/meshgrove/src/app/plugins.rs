@@ -43,6 +43,8 @@ enum DialogFor {
     Pick { plugin: String, panel: String, id: String, extensions: Vec<String>, into: PickInto },
     /// Where to save a file a plugin wrote (`Effect::SaveFile`).
     Save { from: PathBuf },
+    /// The folder for the question where a plugin's files should go ([`PathPrompt::Library`]).
+    Library,
 }
 
 /// What the user picked in a dialog; nothing when they closed it.
@@ -180,6 +182,12 @@ impl App {
                 Ok(_) => self.toast(t!("plugins.saved", path = first.display().to_string()).into_owned()),
                 Err(e) => self.toast(format!("{}: {e}", first.display())),
             },
+            // Into the question's field, where it can still be changed; the question may be gone.
+            DialogFor::Library => {
+                if let Some(PathPrompt::Library { input, .. }) = &mut self.plugin_prompt {
+                    *input = first.display().to_string();
+                }
+            }
         }
     }
 
@@ -527,28 +535,47 @@ impl App {
     /// The question for a path, while one is asked.
     pub(super) fn plugin_prompt_modal(&mut self, ctx: &egui::Context) {
         let Some(prompt) = &mut self.plugin_prompt else { return };
-        let mut decision = None;
         let PathPrompt::Library { title, input, .. } = prompt;
         if let Some(path) = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf())) {
             *input = path.display().to_string();
         }
-        egui::Modal::new(egui::Id::unique("plugin_prompt")).show(ctx, |ui| {
-            ui.set_max_width(520.0);
-            ui.heading(title.as_str());
-            ui.weak(t!("plugins.pick_library_hint"));
-            let r = ui.add(egui::TextEdit::singleline(input).desired_width(500.0));
-            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                decision = Some(true);
-            }
+        use crate::ui::dialogs::{self, Dialog, Tone};
+        // Enter takes the path, as it did in the field.
+        let named = !input.trim().is_empty();
+        let dialog = Dialog {
+            id: "plugin_prompt",
+            icon: "folder",
+            title: title.as_str(),
+            tone: Tone::Info,
+            yes: &t!("plugins.ok"),
+            no: &t!("trash.cancel"),
+            enter_declines: false,
+            cards: 2.0,
+        };
+        // Typed or pasted, dropped on the window, or chosen in the system's folder dialog.
+        let choose = t!("plugins.choose_folder");
+        let mut browse = false;
+        let decision = dialog.show(ctx, named, |ui| {
+            use crate::ui::settings_kit;
+            dialogs::quiet(ui, &t!("plugins.pick_library_hint"));
             ui.horizontal(|ui| {
-                if ui.button(t!("plugins.ok")).clicked() {
-                    decision = Some(true);
-                }
-                if ui.button(t!("trash.cancel")).clicked() {
-                    decision = Some(false);
-                }
+                let button = settings_kit::bar_button_width(ui, &choose);
+                let width = (ui.available_width() - button - ui.spacing().item_spacing.x).max(80.0);
+                settings_kit::text_field(ui, input, "", width).request_focus();
+                browse = settings_kit::bar_button(ui, &choose).clicked();
             });
         });
+        if browse && self.plugin_dialog.open.is_none() {
+            let mut folders = self.plugin_dialog.base.clone().set_title(t!("plugins.choose_folder_title"));
+            // From the folder that is named already, or the one above a new one.
+            let typed = PathBuf::from(input.trim());
+            let start = typed.ancestors().find(|dir| dir.is_dir()).map(Path::to_path_buf).or_else(dirs::home_dir);
+            if let Some(dir) = start {
+                folders = folders.set_directory(dir);
+            }
+            self.plugin_dialog
+                .ask(DialogFor::Library, move || Box::pin(async move { paths(folders.pick_folder().await) }));
+        }
         match decision {
             Some(true) => {
                 let prompt = self.plugin_prompt.take().expect("asked above");

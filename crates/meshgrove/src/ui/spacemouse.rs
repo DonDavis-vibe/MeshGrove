@@ -531,13 +531,21 @@ impl MouseSettings {
         let step = calibrator.step();
         let progress = calibrator.progress();
         let note = *note;
-        let mut cancel = false;
         let knob = &mut self.knob_calibration;
-        egui::Modal::new(egui::Id::unique("mouse-calibration")).show(ctx, |ui| {
-            ui.set_max_width(420.0);
-            ui.heading(t!("mouse.calibrate"));
-            ui.add_space(4.0);
-            ui.label(t!("mouse.calibrate_step", n = step + 1, total = CALIBRATION_STEPS));
+        use super::dialogs::{self, Dialog, Tone};
+        // Nothing to confirm: the steps go on by themselves, the card can only be left.
+        let dialog = Dialog {
+            id: "mouse-calibration",
+            icon: "prefs_mouse3d",
+            title: &t!("mouse.calibrate"),
+            tone: Tone::Info,
+            yes: "",
+            no: &t!("trash.cancel"),
+            enter_declines: false,
+            cards: 2.0,
+        };
+        let left = dialog.show(ctx, true, |ui| {
+            dialogs::say(ui, &t!("mouse.calibrate_step", n = step + 1, total = CALIBRATION_STEPS));
             if let Some(axis) = target {
                 ui.label(RichText::new(prompt(axis)).strong().size(16.0));
             }
@@ -545,19 +553,13 @@ impl MouseSettings {
             let motion = config.spacemouse.physical(mouse.raw);
             draw_mouse(knob, ui, vec2(ui.available_width().min(380.0), 210.0), render, motion, target);
             ui.add_space(6.0);
-            ui.add(egui::ProgressBar::new(progress).desired_width(f32::INFINITY));
-            ui.weak(note_text(note));
+            ui.add(egui::ProgressBar::new(progress).desired_width(ui.available_width()));
+            dialogs::quiet(ui, &note_text(note));
             if !matches!(mouse.status, Status::Connected(_)) {
                 ui.colored_label(ui.visuals().warn_fg_color, t!("mouse.no_device"));
             }
-            ui.add_space(6.0);
-            if sc::button(ui, t!("trash.cancel"), sc::Button::Normal).clicked()
-                || ui.input(|i| i.key_pressed(egui::Key::Escape))
-            {
-                cancel = true;
-            }
         });
-        if cancel {
+        if left == Some(false) {
             self.calibrator = None;
         }
         ctx.request_repaint();

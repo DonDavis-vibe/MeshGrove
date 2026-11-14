@@ -426,7 +426,9 @@ impl App {
             menu_for: Vec::new(),
             cut: Vec::new(),
             selection_tags: Vec::new(),
-            all_tags: Vec::new(),
+            // As they were when Meshgrove last ran, until the library's index is open: on a
+            // large library that takes a while, and the sidebar stood without tags till then.
+            all_tags: load_saved_tags(),
             tags_dirty: true,
             lists: Vec::new(),
             selection_lists: Vec::new(),
@@ -976,6 +978,11 @@ impl App {
                             log::warn!("printer search filters: {e}");
                         }
                         self.menu_for.clear(); // re-evaluate what the selection allows (tags need the index)
+                        // A tag clicked before the index was open (the sidebar shows last
+                        // run's tags from the start) found nothing: search again now.
+                        if matches!(self.view, View::Search(_)) {
+                            self.run_search();
+                        }
                         self.duplicates_due = Some(Instant::now());
                         self.marks_dirty = true;
                         if self.config.import.at_start != ImportAtStart::Off {
@@ -1160,7 +1167,11 @@ impl App {
         if std::mem::take(&mut self.tags_dirty)
             && let Some(index) = &self.index
         {
-            self.all_tags = index.all_tags().unwrap_or_default();
+            let tags = index.all_tags().unwrap_or_default();
+            if tags != self.all_tags {
+                save_tags(&tags);
+            }
+            self.all_tags = tags;
             self.selection_tags = index.tags_of(&self.menu_for).unwrap_or_default();
             self.selection_lists = index.lists_of(&self.menu_for).unwrap_or_default();
             self.selection_print = index.print_status(&self.menu_for).unwrap_or_default();
@@ -1991,6 +2002,7 @@ impl App {
                     self.config.ai.auto_accept_since = on.then_some(now.as_secs());
                 }
                 SettingsChange::AiCrossLibraryMoves(on) => self.config.ai.cross_library_moves = on,
+                SettingsChange::AiCloudAsk(on) => self.config.ai.cloud_ask = on,
                 SettingsChange::AiConnectNow => self.ai_connect.connect_now(),
                 SettingsChange::AiLibrary(library) => {
                     match self.config.ai.libraries.iter_mut().find(|l| l.root == library.root) {
@@ -2155,30 +2167,26 @@ impl App {
     /// Confirmation dialog for moving files to the trash; the move runs on a thread.
     fn trash_dialog(&mut self, ctx: &egui::Context) {
         let Some(paths) = &self.trash_confirm else { return };
-        let mut decision = None;
-        egui::Modal::new(egui::Id::unique("trash-confirm")).show(ctx, |ui| {
-            ui.set_max_width(460.0);
-            ui.heading(t!("trash.title", count = paths.len()));
-            ui.add_space(4.0);
+        use crate::ui::dialogs::{self, Dialog, Tone};
+        let dialog = Dialog {
+            id: "trash-confirm",
+            icon: "delete",
+            title: &t!("trash.title", count = paths.len()),
+            tone: Tone::Danger,
+            yes: &t!("trash.confirm"),
+            no: &t!("trash.cancel"),
+            enter_declines: false,
+            cards: 1.5,
+        };
+        let decision = dialog.show(ctx, true, |ui| {
             for p in paths.iter().take(8) {
-                ui.label(format!("• {}", listing::file_name(p)));
+                dialogs::entry(ui, &listing::file_name(p));
             }
             if paths.len() > 8 {
-                ui.weak(t!("trash.more", count = paths.len() - 8));
+                dialogs::quiet(ui, &t!("trash.more", count = paths.len() - 8));
             }
             ui.add_space(4.0);
-            ui.weak(t!("trash.explain"));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button(RichText::new(t!("trash.confirm")).strong()).clicked()
-                    || ui.input(|i| i.key_pressed(Key::Enter))
-                {
-                    decision = Some(true);
-                }
-                if ui.button(t!("trash.cancel")).clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
-                    decision = Some(false);
-                }
-            });
+            dialogs::quiet(ui, &t!("trash.explain"));
         });
         match decision {
             Some(true) => {
@@ -2277,26 +2285,22 @@ impl App {
     /// The question before inches: why metric is easier, and Yes / No.
     fn units_dialog(&mut self, ctx: &egui::Context) {
         let Some(pending) = self.units_confirm else { return };
-        let mut decision = None;
-        egui::Modal::new(egui::Id::unique("units-confirm")).show(ctx, |ui| {
-            ui.set_max_width(520.0);
-            ui.heading(t!("units.title"));
+        use crate::ui::dialogs::{self, Dialog, Tone};
+        // Enter and Escape answer No: metric is the safe side.
+        let dialog = Dialog {
+            id: "units-confirm",
+            icon: "dimension",
+            title: &t!("units.title"),
+            tone: Tone::Warning,
+            yes: &t!("units.yes"),
+            no: &t!("units.no"),
+            enter_declines: true,
+            cards: 2.0,
+        };
+        let decision = dialog.show(ctx, true, |ui| {
+            dialogs::say(ui, &t!("units.quote"));
             ui.add_space(6.0);
-            ui.label(t!("units.quote"));
-            ui.add_space(10.0);
-            ui.label(RichText::new(t!("units.question")).strong());
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button(t!("units.yes")).clicked() {
-                    decision = Some(true);
-                }
-                // Enter and Escape answer No: metric is the safe side.
-                if ui.button(RichText::new(t!("units.no")).strong()).clicked()
-                    || ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Escape))
-                {
-                    decision = Some(false);
-                }
-            });
+            dialogs::stress(ui, &t!("units.question"));
         });
         match decision {
             Some(true) => {
@@ -2326,7 +2330,18 @@ impl App {
         let gone: Vec<PathBuf> = paths.iter().filter(|p| !p.exists()).cloned().collect();
         self.library.changed(paths);
         self.duplicates_due = Some(Instant::now() + Duration::from_secs(2));
+        // A search's results, a list and "include subfolders" hold their files themselves:
+        // what is gone leaves them here, or it stayed until the view was opened again (and a
+        // second try to trash it failed, the file being gone).
+        let held = match &mut self.view {
+            View::Search(entries) | View::List { entries, .. } | View::Flatten { entries: Some(entries), .. } => {
+                entries.retain(|e| !gone.contains(&e.path));
+                true
+            }
+            _ => false,
+        };
         match self.view {
+            _ if held => self.refresh_gallery(false),
             View::Duplicates { .. } => self.show_duplicates_without(&gone),
             View::Inbox { .. } => self.show_inbox(),
             View::Import { .. } => self.start_import_scan(),
@@ -3263,7 +3278,7 @@ impl App {
 /// Three dots centred in the pane's header bar; dragging them moves the pane like its tab does.
 /// Returns whether a drag started on them.
 fn grip_handle(ui: &Ui) -> bool {
-    const BAR: f32 = 24.0;
+    const BAR: f32 = PANE_BAR;
     let pane = ui.max_rect();
     if pane.width() < 200.0 {
         return false;
@@ -3273,18 +3288,61 @@ fn grip_handle(ui: &Ui) -> bool {
     let ctx = ui.ctx();
     let (hovered, pressed) =
         ctx.input(|i| (i.pointer.hover_pos().is_some_and(|p| bar.contains(p)), i.pointer.primary_pressed()));
-    let color = if hovered { ui.visuals().widgets.hovered.fg_stroke.color } else { ui.visuals().weak_text_color() };
+    // The theme's inks: quiet at rest, the text's under the pointer; the line is its border.
+    let t = crate::ui::appearance::tokens();
+    let color = if hovered { t.text } else { t.text_dim };
     if hovered {
         ctx.set_cursor_icon(egui::CursorIcon::Grab);
     }
     let painter = egui::Painter::new(ctx.clone(), ui.layer_id(), ctx.content_rect());
-    let line = egui::Stroke::new(1.0, ui.visuals().widgets.inactive.bg_fill);
+    let line = egui::Stroke::new(1.0, t.border);
     painter.hline(pane.x_range(), pane.top() - 0.5, line);
     for i in -1..=1 {
         painter.circle_filled(bar.center() + egui::vec2(i as f32 * 6.0, 0.0), 1.5, color);
     }
     hovered && pressed
 }
+
+/// Where a tab finds the number of tabs in its header.
+fn tab_count_id(tile: egui_tiles::TileId) -> egui::Id {
+    egui::Id::unique(("pane-tab-count", tile))
+}
+
+/// Where the tag list is kept between runs (a small file in the cache folder).
+fn saved_tags_path() -> Option<PathBuf> {
+    Some(crate::ui::settings::cache_dir()?.join("tags.json"))
+}
+
+/// The tags and their counts as Meshgrove last saw them; none on a first run or when the file
+/// cannot be read.
+fn load_saved_tags() -> Vec<(String, usize)> {
+    saved_tags_path()
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+/// Keeps the tag list for the next start. Written beside itself first and then renamed, so a
+/// crash in between leaves the old list. A test run leaves the user's file alone.
+fn save_tags(tags: &[(String, usize)]) {
+    if crate::screenshot::leaves_settings_alone() {
+        return;
+    }
+    let Some(path) = saved_tags_path() else { return };
+    let Ok(bytes) = serde_json::to_vec(tags) else { return };
+    let beside = path.with_extension("json.new");
+    let written = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&beside, bytes))
+        .and_then(|()| std::fs::rename(&beside, &path));
+    if let Err(e) = written {
+        log::warn!("the tag list for the next start was not saved: {e}");
+    }
+}
+
+/// The height of a pane's header: the kit's controls fit in it.
+const PANE_BAR: f32 = 28.0;
 
 /// Draws the panes of the dockable layout with the app's state.
 struct PaneHost<'a> {
@@ -3393,12 +3451,87 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
         egui::Frame::popup(ui.style()).stroke(egui::Stroke::new(1.0, accent)).show(ui, |ui| ui.label(title));
     }
 
-    fn tab_bar_hline_stroke(&self, visuals: &egui::Visuals) -> egui::Stroke {
-        egui::Stroke::new(1.0, visuals.widgets.inactive.bg_fill)
+    /// A pane's tab in the theme's colours: its name, heavier on the tab in front; a quiet fill
+    /// under the pointer; the accent's line under the one in front where several share a
+    /// header; and the kit's ✕ on a tab that closes.
+    fn tab_ui(
+        &mut self,
+        tiles: &mut egui_tiles::Tiles<Pane>,
+        ui: &mut Ui,
+        id: egui::Id,
+        tile_id: egui_tiles::TileId,
+        state: &egui_tiles::TabState,
+    ) -> egui::Response {
+        use solidcraft_ui_kit as sc;
+        let t = crate::ui::appearance::tokens();
+        let title = self.tab_title_for_tile(tiles, tile_id);
+        let font = if state.active {
+            sc::type_face::semibold(t.font_label)
+        } else {
+            egui::FontId::proportional(t.font_label)
+        };
+        let galley = title.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font);
+        let (margin, cross) = (t.space_8, t.space_16);
+        let width = galley.size().x + 2.0 * margin + if state.closable { t.space_4 + cross } else { 0.0 };
+        let (_, rect) = ui.allocate_space(egui::vec2(width, ui.available_height()));
+        let draggable = self.is_tile_draggable(tiles, tile_id);
+        let sense = if draggable { egui::Sense::click_and_drag() } else { egui::Sense::click() };
+        let mut response = ui.interact(rect, id, sense);
+        if draggable {
+            response = response.on_hover_cursor(egui::CursorIcon::Grab);
+        }
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), state.active, galley.text())
+        });
+        // A gap stands where a dragged tab was.
+        if ui.is_rect_visible(rect) && !state.is_being_dragged {
+            // How many tabs share this header, as the header's right end noted it last frame:
+            // the header itself is out of `tiles` while its tabs are drawn.
+            let several = ui.data(|d| d.get_temp::<usize>(tab_count_id(tile_id))).is_some_and(|n| n > 1);
+            let hot = response.hovered();
+            if hot && !state.active {
+                ui.painter().rect_filled(rect.shrink2(egui::vec2(1.0, 3.0)), t.radius_sm, t.hover);
+            }
+            let ink = if state.active || hot { t.text } else { t.text_dim };
+            let at = egui::Align2::LEFT_CENTER.align_size_within_rect(galley.size(), rect.shrink(margin)).min;
+            ui.painter().galley(at, galley, ink);
+            if state.active && several {
+                let line = egui::Stroke::new(2.0, t.accent);
+                ui.painter().hline((rect.left() + margin)..=(rect.right() - margin), rect.bottom() - 3.0, line);
+            }
+            if state.closable {
+                let place = egui::Align2::RIGHT_CENTER
+                    .align_size_within_rect(egui::vec2(cross, cross), rect.shrink2(egui::vec2(t.space_6, 0.0)));
+                let button = ui
+                    .interact(place, ui.auto_id_with("tab_close_btn"), egui::Sense::click_and_drag())
+                    .on_hover_cursor(egui::CursorIcon::Default);
+                button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Close"));
+                if button.hovered() {
+                    ui.painter().rect_filled(place, t.radius_sm, t.hover);
+                }
+                let ink = if button.hovered() { t.text } else { t.text_dim };
+                sc::icons::paint_ink(ui.painter(), place.shrink(3.0), "close", ink);
+                if (button.clicked() || response.clicked_by(egui::PointerButton::Middle))
+                    && self.on_tab_close(tiles, tile_id)
+                {
+                    tiles.remove(tile_id);
+                }
+            }
+        }
+        self.on_tab_button(tiles, tile_id, response)
     }
 
-    fn tab_bar_color(&self, visuals: &egui::Visuals) -> egui::Color32 {
-        visuals.panel_fill
+    fn tab_bar_height(&self, _style: &egui::Style) -> f32 {
+        PANE_BAR
+    }
+
+    /// The headers stand on the theme's header colour, with its border under them.
+    fn tab_bar_hline_stroke(&self, _visuals: &egui::Visuals) -> egui::Stroke {
+        egui::Stroke::new(1.0, crate::ui::appearance::tokens().border)
+    }
+
+    fn tab_bar_color(&self, _visuals: &egui::Visuals) -> egui::Color32 {
+        crate::ui::appearance::tokens().panel_header
     }
 
     fn tab_title_for_pane(&mut self, pane: &Pane) -> egui::WidgetText {
@@ -3448,6 +3581,12 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
         tabs: &egui_tiles::Tabs,
         _scroll_offset: &mut f32,
     ) {
+        // For the tabs, next frame: how many of them share this header.
+        ui.data_mut(|d| {
+            for &child in &tabs.children {
+                d.insert_temp(tab_count_id(child), tabs.children.len());
+            }
+        });
         let holds_files =
             tabs.children.iter().any(|&c| matches!(tiles.get(c), Some(egui_tiles::Tile::Pane(Pane::Files))));
         if !holds_files {
@@ -3456,10 +3595,11 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
         // Right to left: folding comes first, next to the details it folds.
         let (fold, hint) =
             if self.details_folded { ("«", t!("pane.details_show")) } else { ("»", t!("pane.details_hide")) };
-        if ui.small_button(fold).on_hover_text(hint).clicked() {
+        // The kit's small buttons, as in the toolbar.
+        if crate::ui::settings_kit::small(ui, fold, &hint).clicked() {
             self.toggle_details = true;
         }
-        if ui.small_button("↺").on_hover_text(t!("pane.reset")).clicked() {
+        if crate::ui::settings_kit::small(ui, "↺", &t!("pane.reset")).clicked() {
             self.reset = true;
         }
     }
