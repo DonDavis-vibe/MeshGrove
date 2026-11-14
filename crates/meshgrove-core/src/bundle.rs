@@ -71,7 +71,8 @@ pub struct ResolvedBundle {
     pub from: PathBuf,
     /// The free place below `root` it is copied to; of loose files, the folder the first lands in.
     pub to: PathBuf,
-    /// New content does not wait in the inbox.
+    /// New content does not wait in the inbox. Only a bundle that lands in the import folder
+    /// ([`resolve`] without a folder) is not seen: its files wait there to be put away.
     pub seen: bool,
     /// It waits for the user in the review, whatever they let be accepted by itself: files a
     /// tool's job made after the AI had its answer.
@@ -157,21 +158,28 @@ pub fn resolve_with(
         return Err(BundleError::Invalid("the import folder is not in the library".into()));
     }
     let checked = check(bundle, out, limits)?;
-    let place = match &bundle.folder {
-        Some(folder) => relative(folder)
-            .ok_or_else(|| BundleError::BadPath(folder.clone()))?
-            .split('/')
-            .fold(root.to_path_buf(), |p, part| p.join(part)),
+    let (place, seen) = match &bundle.folder {
+        Some(folder) => {
+            let place = relative(folder)
+                .ok_or_else(|| BundleError::BadPath(folder.clone()))?
+                .split('/')
+                .fold(root.to_path_buf(), |p, part| p.join(part));
+            (place, true)
+        }
         None => {
             let name = folder_name(&checked.title);
             if crate::fsops::check_name(&name).is_err() {
                 let title = &checked.title;
                 return Err(BundleError::Invalid(format!("no folder name can be made of the title {title:?}")));
             }
-            landing.join(name)
+            // In the import folder the files wait in the inbox like anything imported, to be
+            // put away later.
+            (landing.join(name), false)
         }
     };
-    Ok(checked.placed(bundle, out, root, free_folder(&place)))
+    let mut resolved = checked.placed(bundle, out, root, free_folder(&place));
+    resolved.seen = seen;
+    Ok(resolved)
 }
 
 /// Checks `bundle` against `out` like [`resolve`], for a bundle whose files land loose beside
@@ -719,10 +727,18 @@ mod tests {
 
     #[test]
     fn a_bundle_without_folder_lands_in_the_import_folder() {
-        let (f, _lib) = fixture();
+        let (f, mut lib) = fixture();
         let b = Bundle { title: "Box: 20/30".into(), folder: None, ..bundle() };
         let resolved = resolve(&b, &f.out, &f.root, &f.landing).unwrap();
         assert_eq!(resolved.to, f.landing.join("Box 20 30"));
+        // There its files wait in the inbox to be put away, like anything imported; the undo
+        // takes them out again.
+        assert!(!resolved.seen);
+        let report = lib.apply_change("plugin:bingrove", &resolved.title, &resolved.ops()).unwrap();
+        assert_eq!(report.skipped, 0, "{report:?}");
+        assert_eq!(lib.inbox_count().unwrap(), 2, "the two models; the project file is no import");
+        lib.undo_change(report.id).unwrap();
+        assert_eq!(lib.inbox_count().unwrap(), 0);
     }
 
     /// The library of [`fixture`] with a second folder, and a staging folder of two textured
