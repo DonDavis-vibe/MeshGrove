@@ -331,8 +331,9 @@ Write the files below `/out`, then describe them:
   import folder under the title. A taken name gets " (2)". Nothing is ever replaced.
   Or beside a library file, or in a folder the user chose; see below.
 - **Limits:** at most 2000 files and 2 GiB; 8 tags per file; 8 lists; quantities 1–999.
-- **One change:** the copy, its indexing (the files count as seen, not new in the inbox), tags,
-  notes and lists form a single change in Meshgrove's history. Undo removes the files (but keeps
+- **One change:** the copy, its indexing, tags, notes and lists form a single change in
+  Meshgrove's history. Files that land in the import folder (no `folder`) wait in the inbox to
+  be put away, like anything imported (from 0.11.0); all others count as seen. Undo removes the files (but keeps
   the ones the user edited since) and the lists. Redo copies again from the staging folder,
   which Meshgrove keeps while anything refers to it.
 
