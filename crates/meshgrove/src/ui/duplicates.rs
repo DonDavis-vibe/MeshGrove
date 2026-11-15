@@ -2,6 +2,8 @@
 //! suggestion which copy to keep (or the user's choice) and a way to move the others to the
 //! trash: group by group, or every group ticked as fine at once.
 
+use solidcraft_ui_kit as sc;
+
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -10,6 +12,7 @@ use egui::{Color32, Id, Rect, RichText, Sense, Shape, Ui, vec2};
 use meshgrove_core::listing::{self, Entry};
 
 use super::gallery::{Gallery, Thumb};
+use super::settings_kit;
 use crate::i18n;
 
 pub struct GroupInfo {
@@ -92,7 +95,7 @@ fn card(ui: &mut Ui, id: Id, flight: Option<(usize, usize)>, body: impl FnOnce(&
     let dim = ctx.animate_value_with_time(id.with("dim"), if through { 1.0 } else { 0.0 }, DIM_TIME);
     // Painted once the card's place is known: behind it.
     let background = ui.painter().add(Shape::Noop);
-    let rounding = ui.style().visuals.widgets.noninteractive.corner_radius;
+    let rounding = egui::CornerRadius::same(solidcraft_theme::Tokens::get().radius_lg);
     let shown = ui.scope(|ui| {
         if flight.is_some() {
             ui.disable();
@@ -100,7 +103,7 @@ fn card(ui: &mut Ui, id: Id, flight: Option<(usize, usize)>, body: impl FnOnce(&
         if dim > 0.0 {
             ui.multiply_opacity(1.0 - 0.6 * dim);
         }
-        egui::Frame::group(ui.style()).show(ui, |ui| {
+        settings_kit::card_frame().show(ui, |ui| {
             ui.set_width(ui.available_width());
             body(ui);
         })
@@ -108,7 +111,7 @@ fn card(ui: &mut Ui, id: Id, flight: Option<(usize, usize)>, body: impl FnOnce(&
     if flight.is_some() && sweep > 0.0 {
         let rect = shown.inner.response.rect;
         let tint = Rect::from_min_size(rect.min, vec2(rect.width() * sweep, rect.height()));
-        let color = super::settings_kit::GOOD.gamma_multiply(TINT * (1.0 - 0.6 * dim));
+        let color = settings_kit::good().gamma_multiply(TINT * (1.0 - 0.6 * dim));
         ui.painter().set(background, Shape::rect_filled(tint, rounding, color));
     }
 }
@@ -313,6 +316,17 @@ pub fn show(
     view: &Shown,
     gallery: &Gallery,
 ) -> Option<DupAction> {
+    // One of the kit's forms: its controls, its fields, its label font.
+    settings_kit::pane(ui, |ui| duplicates(ui, entries, groups, view, gallery))
+}
+
+fn duplicates(
+    ui: &mut Ui,
+    entries: &[Entry],
+    groups: &[GroupInfo],
+    view: &Shown,
+    gallery: &Gallery,
+) -> Option<DupAction> {
     let Shown { ignored, show_ignored, archives, twins, prefer_packed, show_archive_groups, cleanup } = *view;
     // An archive's groups are settled with its row; among the groups they would be one locked
     // card per model.
@@ -326,11 +340,11 @@ pub fn show(
     let watched: Vec<&GroupInfo> = groups.iter().filter(|g| !g.ignored).collect();
     let wasted: u64 = watched.iter().map(|g| g.wasted).sum();
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(t!("dupes.summary", groups = watched.len(), size = i18n::file_size(wasted))).strong());
+        ui.label(settings_kit::strong(t!("dupes.summary", groups = watched.len(), size = i18n::file_size(wasted))));
         if ignored > 0 {
             ui.weak(t!("dupes.ignored_count", count = ignored));
             let label = if show_ignored { t!("dupes.hide_ignored") } else { t!("dupes.show_ignored") };
-            if ui.small_button(label).clicked() {
+            if settings_kit::action(ui, label, true).clicked() {
                 action = Some(DupAction::ShowIgnored(!show_ignored));
             }
         }
@@ -340,10 +354,8 @@ pub fn show(
     if let Some(c) = cleanup {
         // How far the cleanup is, above everything that scrolls.
         let (done, total) = (c.done.min(c.order.len()), c.order.len());
-        let bar = egui::ProgressBar::new(done as f32 / total.max(1) as f32)
-            .text(t!("dupes.cleaning", done = done, total = total))
-            .fill(super::settings_kit::GOOD.gamma_multiply(0.6));
-        ui.add(bar);
+        ui.weak(t!("dupes.cleaning", done = done, total = total));
+        settings_kit::progress(ui, Some(done as f32 / total.max(1) as f32));
         ui.add_space(4.0);
     }
     let open: Vec<&GroupInfo> = groups.iter().filter(|g| g.blocked.is_none() && !g.ignored && !folded(g)).collect();
@@ -351,8 +363,10 @@ pub fn show(
     ui.horizontal(|ui| {
         let mut all = !open.is_empty() && picked.len() == open.len();
         let some = !picked.is_empty() && !all;
-        let check = egui::Checkbox::new(&mut all, t!("dupes.pick_all")).indeterminate(some);
-        if ui.add_enabled(!open.is_empty(), check).changed() {
+        let label = t!("dupes.pick_all");
+        let check =
+            ui.add_enabled_ui(!open.is_empty(), |ui| sc::checkbox_indeterminate(ui, &label, &mut all, some)).inner;
+        if check.changed() {
             action = Some(DupAction::PickAll(all));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -361,8 +375,7 @@ pub fn show(
                 0 => t!("dupes.trash_picked_none"),
                 n => t!("dupes.trash_picked", groups = n, size = size),
             };
-            let button = ui
-                .add_enabled(!picked.is_empty(), egui::Button::new(RichText::new(label).strong()))
+            let button = settings_kit::primary(ui, label, !picked.is_empty())
                 .on_disabled_hover_text(t!("dupes.trash_picked_hint"));
             if button.clicked() {
                 action = Some(DupAction::TrashPicked);
@@ -372,7 +385,7 @@ pub fn show(
     ui.add_space(6.0);
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         if !archives.is_empty() {
-            ui.label(RichText::new(t!("dupes.archives_title")).strong());
+            ui.label(settings_kit::strong(t!("dupes.archives_title")));
             ui.weak(t!("dupes.archives_explain"));
             if let Some(act) = all_archives(ui, archives, prefer_packed) {
                 action = Some(act);
@@ -387,7 +400,7 @@ pub fn show(
             ui.add_space(6.0);
         }
         if !twins.is_empty() {
-            ui.label(RichText::new(t!("dupes.twins_title")).strong());
+            ui.label(settings_kit::strong(t!("dupes.twins_title")));
             ui.weak(t!("dupes.twins_explain"));
             for (ti, twin) in twins.iter().enumerate() {
                 let flight = cleanup.and_then(|c| c.of(twin.pair.iter().map(|s| s.archive.as_path())));
@@ -403,7 +416,7 @@ pub fn show(
                 ui.weak(t!("dupes.archive_groups", count = theirs));
                 let label =
                     if show_archive_groups { t!("dupes.hide_archive_groups") } else { t!("dupes.show_archive_groups") };
-                if ui.small_button(label).clicked() {
+                if settings_kit::action(ui, label, true).clicked() {
                     action = Some(DupAction::ShowArchiveGroups(!show_archive_groups));
                 }
             });
@@ -416,16 +429,15 @@ pub fn show(
             card(ui, Id::unique(("dupes_group", &group.key)), flight, |ui| {
                 ui.horizontal_top(|ui| {
                     let mut on = group.picked;
-                    let check = egui::Checkbox::without_text(&mut on);
-                    let response = ui
-                        .add_enabled(group.blocked.is_none() && !group.ignored, check)
-                        .on_hover_text(t!("dupes.pick_group"))
-                        .on_disabled_hover_text(group.blocked.clone().unwrap_or_default());
+                    let response =
+                        settings_kit::check_mark(ui, &mut on, false, group.blocked.is_none() && !group.ignored)
+                            .on_hover_text(t!("dupes.pick_group"))
+                            .on_disabled_hover_text(group.blocked.clone().unwrap_or_default());
                     if response.changed() {
                         action = Some(DupAction::Pick(gi, on));
                     }
                     let title = if group.exact { t!("dupes.exact") } else { t!("dupes.geometry") };
-                    ui.label(RichText::new(title).strong());
+                    ui.label(settings_kit::strong(title));
                     ui.weak(t!("dupes.group_info", count = group.range.len(), size = i18n::file_size(group.wasted)));
                     if group.ignored {
                         ui.label(RichText::new(t!("dupes.ignored")).weak().italics());
@@ -434,23 +446,32 @@ pub fn show(
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                         ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                             if group.ignored {
-                                if ui.button(t!("dupes.unignore")).on_hover_text(t!("dupes.unignore_hint")).clicked() {
+                                if settings_kit::action(ui, t!("dupes.unignore"), true)
+                                    .on_hover_text(t!("dupes.unignore_hint"))
+                                    .clicked()
+                                {
                                     action = Some(DupAction::Ignore(gi, false));
                                 }
                                 return;
                             }
-                            ui.horizontal(|ui| {
-                                if let Some(reason) = &group.blocked {
-                                    ui.label("🔒").on_hover_text(reason);
-                                }
-                                let button = ui
-                                    .add_enabled(group.blocked.is_none(), egui::Button::new(t!("dupes.trash_others")))
-                                    .on_disabled_hover_text(group.blocked.clone().unwrap_or_default());
+                            // From the right: the button ends where "Ignore" under it does, and
+                            // the lock of a group that cannot go stands at its left.
+                            let row = vec2(ui.available_width(), solidcraft_theme::Tokens::get().control_height);
+                            ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let button =
+                                    settings_kit::action(ui, t!("dupes.trash_others"), group.blocked.is_none())
+                                        .on_disabled_hover_text(group.blocked.clone().unwrap_or_default());
                                 if button.clicked() {
                                     action = Some(DupAction::TrashOthers(gi));
                                 }
+                                if let Some(reason) = &group.blocked {
+                                    ui.label("🔒").on_hover_text(reason);
+                                }
                             });
-                            if ui.button(t!("dupes.ignore")).on_hover_text(t!("dupes.ignore_hint")).clicked() {
+                            if settings_kit::action(ui, t!("dupes.ignore"), true)
+                                .on_hover_text(t!("dupes.ignore_hint"))
+                                .clicked()
+                            {
                                 action = Some(DupAction::Ignore(gi, true));
                             }
                         });
@@ -459,7 +480,10 @@ pub fn show(
                 ui.horizontal_wrapped(|ui| {
                     for i in group.range.clone() {
                         let keep = format!("★ {}", t!("dupes.keep"));
-                        let badge = (i == group.keep).then_some((keep.as_str(), KEEP_GREEN));
+                        // The copy that stays, in the theme's accent.
+                        let t = solidcraft_theme::Tokens::get();
+                        let badge =
+                            (i == group.keep).then_some((keep.as_str(), t.form_primary, settings_kit::ink_on_accent()));
                         let (response, click) = tile(
                             ui,
                             &entries[i],
@@ -506,7 +530,7 @@ fn twin_row(ui: &mut Ui, twin: &TwinInfo, ti: usize, flight: Option<(usize, usiz
     card(ui, Id::unique(("dupes_twin", &a.archive, &b.archive)), flight, |ui| {
         for side in [a, b] {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("📦 {}", listing::file_name(&side.archive))).strong());
+                ui.label(settings_kit::strong(format!("📦 {}", listing::file_name(&side.archive))));
                 ui.weak(t!("dupes.twin_models", count = side.members));
                 let folder = side.archive.parent().map(|p| p.display().to_string()).unwrap_or_default();
                 ui.add(egui::Label::new(RichText::new(folder).weak()).truncate());
@@ -527,7 +551,7 @@ fn twin_row(ui: &mut Ui, twin: &TwinInfo, ti: usize, flight: Option<(usize, usiz
                     _ => t!("dupes.twin_blocked", missing = side.members.saturating_sub(twin.shared)).into_owned(),
                 };
                 let can_go = twin.contained(si) && side.blocked.is_none();
-                let button = ui.add_enabled(can_go, egui::Button::new(label)).on_disabled_hover_text(why);
+                let button = settings_kit::action(ui, label, can_go).on_disabled_hover_text(why);
                 if button
                     .on_hover_text(t!("dupes.twin_trash_hint", other = listing::file_name(&other.archive)))
                     .clicked()
@@ -552,9 +576,9 @@ fn all_archives(ui: &mut Ui, archives: &[ArchiveInfo], prefer_packed: bool) -> O
     let whole: Vec<&ArchiveInfo> = archives.iter().filter(|a| a.complete() && a.blocked.is_none()).collect();
     let whole_size: u64 = whole.iter().map(|a| a.size).sum();
     ui.horizontal_wrapped(|ui| {
-        let strong = |text: std::borrow::Cow<str>, main: bool| {
-            let text = RichText::new(text);
-            egui::Button::new(if main { text.strong() } else { text })
+        // The way the setting prefers is the one in the accent colour.
+        let way = |ui: &mut Ui, text: std::borrow::Cow<str>, main: bool, enabled: bool| {
+            if main { settings_kit::primary(ui, text, enabled) } else { settings_kit::action(ui, text, enabled) }
         };
         let keep_archives = t!(
             "dupes.keep_all_archives",
@@ -562,12 +586,11 @@ fn all_archives(ui: &mut Ui, archives: &[ArchiveInfo], prefer_packed: bool) -> O
             count = copies.len(),
             size = i18n::file_size(copies_size)
         );
-        if ui.add(strong(keep_archives, prefer_packed)).on_hover_text(t!("dupes.keep_archive_hint")).clicked() {
+        if way(ui, keep_archives, prefer_packed, true).on_hover_text(t!("dupes.keep_archive_hint")).clicked() {
             action = Some(DupAction::TrashAllArchiveCopies);
         }
         let keep_copies = t!("dupes.keep_all_copies", count = whole.len(), size = i18n::file_size(whole_size));
-        let button = ui
-            .add_enabled(!whole.is_empty(), strong(keep_copies, !prefer_packed))
+        let button = way(ui, keep_copies, !prefer_packed, !whole.is_empty())
             .on_disabled_hover_text(t!("dupes.keep_all_copies_none"));
         if button.on_hover_text(t!("dupes.keep_all_copies_hint")).clicked() {
             action = Some(DupAction::TrashAllArchives);
@@ -589,7 +612,7 @@ fn archive_row(
     let mut action = None;
     card(ui, Id::unique(("dupes_archive", &a.archive)), flight, |ui| {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("📦 {}", listing::file_name(&a.archive))).strong());
+            ui.label(settings_kit::strong(format!("📦 {}", listing::file_name(&a.archive))));
             ui.add(
                 egui::Label::new(
                     RichText::new(a.archive.parent().map(|p| p.display().to_string()).unwrap_or_default()).weak(),
@@ -606,11 +629,10 @@ fn archive_row(
         ui.horizontal_wrapped(|ui| {
             let keep_archive = t!("dupes.keep_archive", count = a.copies.len(), size = i18n::file_size(a.copies_size));
             let keep_copies = t!("dupes.keep_copies", size = i18n::file_size(a.size));
-            let main = |text: std::borrow::Cow<str>, main: bool| {
-                let text = RichText::new(text);
-                egui::Button::new(if main { text.strong() } else { text })
+            let way = |ui: &mut Ui, text: std::borrow::Cow<str>, main: bool, enabled: bool| {
+                if main { settings_kit::primary(ui, text, enabled) } else { settings_kit::action(ui, text, enabled) }
             };
-            if ui.add(main(keep_archive, prefer_packed)).on_hover_text(t!("dupes.keep_archive_hint")).clicked() {
+            if way(ui, keep_archive, prefer_packed, true).on_hover_text(t!("dupes.keep_archive_hint")).clicked() {
                 action = Some(DupAction::TrashArchiveCopies(ai));
             }
             let can_go = a.complete() && a.blocked.is_none();
@@ -618,7 +640,7 @@ fn archive_row(
                 Some(reason) if !reason.is_empty() => reason.clone(),
                 _ => t!("dupes.keep_copies_blocked", missing = a.members.saturating_sub(a.covered)).into_owned(),
             };
-            let button = ui.add_enabled(can_go, main(keep_copies, !prefer_packed)).on_disabled_hover_text(why);
+            let button = way(ui, keep_copies, !prefer_packed, can_go).on_disabled_hover_text(why);
             if button.on_hover_text(t!("dupes.keep_copies_hint")).clicked() {
                 action = Some(DupAction::TrashArchive(ai));
             }
@@ -627,8 +649,6 @@ fn archive_row(
     ui.add_space(6.0);
     action
 }
-
-const KEEP_GREEN: Color32 = Color32::from_rgb(90, 170, 90);
 
 pub(super) enum TileClick {
     Select,
@@ -650,7 +670,7 @@ pub(super) fn tile(
     ui: &mut Ui,
     entry: &Entry,
     thumb: Option<&Thumb>,
-    (badge, warn): (Option<(&str, Color32)>, bool),
+    (badge, warn): (Option<(&str, Color32, Color32)>, bool),
     selected: bool,
     width: f32,
     full_path: bool,
@@ -672,9 +692,18 @@ pub(super) fn tile(
         let scale = (img.width() / size.x).min(img.height() / size.y);
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
         painter.image(texture.id(), egui::Rect::from_center_size(img.center(), size * scale), uv, Color32::WHITE);
+    } else if let Some(icon) = match entry.kind {
+        // Nothing to render a picture of: the kit's sign for what it is.
+        meshgrove_core::formats::Kind::Folder => Some("folder"),
+        meshgrove_core::formats::Kind::Archive => Some("box"),
+        _ => None,
+    } {
+        let side = img.width().min(img.height()) * 0.42;
+        let at = egui::Rect::from_center_size(img.center(), vec2(side, side));
+        sc::icons::paint_ink(&painter, at, icon, solidcraft_theme::Tokens::get().form_dim);
     }
-    if let Some((label, color)) = badge {
-        super::icons::corner_badge(&painter, img, label, color, Color32::BLACK);
+    if let Some((label, fill, ink)) = badge {
+        super::icons::corner_badge(&painter, img, label, fill, ink);
     }
     if warn {
         super::icons::bottom_right_badge(

@@ -1,8 +1,11 @@
 //! The grid editor of plugin panels ([`GridEditor`]): cells, zones around or on the grid, items
 //! on it. Meshgrove handles the mouse and keys itself — select (Shift/Ctrl adds), drag to move,
 //! drag an edge or corner to resize, drag on free cells to draw a new item, arrows to nudge,
-//! Delete, a context menu — snapping to `1/snap_div` of a cell, with a red ghost where the item
-//! would leave the allowed area (the grid and the zones that accept items) or lie on another.
+//! Delete, a context menu — snapping to `1/snap_div` of a cell, with a ghost where the item
+//! would go. The ghost is red only for what will not happen: an item leaving the allowed area
+//! (the grid and the zones that accept items), or a new item drawn across another. An item moved
+//! or resized onto others keeps its normal ghost and outlines those others: the plugin gets the
+//! change and makes room, or puts things back.
 //! Every change goes to the plugin as a [`GridChange`]; its next view is what counts (it may
 //! put the item somewhere else, or back).
 //!
@@ -112,10 +115,38 @@ pub fn covered(rect: Cells, areas: &[Cells]) -> bool {
     })
 }
 
-/// Whether item `id` (or a new one: `None`) fits at `rect`: in the allowed area, on no other item.
-pub fn fits(editor: &GridEditor, id: Option<&str>, rect: Cells) -> bool {
-    covered(rect, &areas(editor))
-        && !editor.items.iter().any(|i| Some(i.id.as_str()) != id && Cells::of_item(i).overlaps(&rect))
+/// What a drag's ghost says about where it is now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fit {
+    /// Free cells in the allowed area.
+    Free,
+    /// In the allowed area, on other items: fine for an item that exists (the plugin decides
+    /// what happens to the others), not for a new one.
+    OnOthers,
+    /// Not wholly in the allowed area.
+    Outside,
+}
+
+/// Where item `id` (or a new one: `None`) would lie at `rect`.
+fn fit_at(editor: &GridEditor, id: Option<&str>, rect: Cells) -> Fit {
+    if !covered(rect, &areas(editor)) {
+        Fit::Outside
+    } else if others_under(editor, id, rect).next().is_some() {
+        Fit::OnOthers
+    } else {
+        Fit::Free
+    }
+}
+
+/// Whether item `id` (or a new one: `None`) lies free at `rect`: in the allowed area, on no other item.
+#[cfg(test)]
+fn fits(editor: &GridEditor, id: Option<&str>, rect: Cells) -> bool {
+    fit_at(editor, id, rect) == Fit::Free
+}
+
+/// The items `rect` lies on, apart from `id` itself.
+fn others_under<'a>(editor: &'a GridEditor, id: Option<&'a str>, rect: Cells) -> impl Iterator<Item = &'a GridItem> {
+    editor.items.iter().filter(move |i| Some(i.id.as_str()) != id && Cells::of_item(i).overlaps(&rect))
 }
 
 /// The item at a point: the last one drawn, which lies on top.
@@ -319,30 +350,38 @@ pub fn show(ui: &mut Ui, editor: &GridEditor, selection: &mut Option<Vec<String>
         };
         response.request_focus();
     }
-    // Where the drag would put things now: (rect, fits).
+    // Where the drag would put things now, and what lies there.
     let ghost = match (&memory.drag, pointer) {
         (Some(drag), Some(p)) => {
             let (cx, cy) = frame.cells(p);
             Some(match drag {
                 Drag::Move { item, start, grab } => {
                     let to = clamp_into(start.moved_to(snap(cx - grab.0, div), snap(cy - grab.1, div)), allowed, div);
-                    (to, fits(editor, Some(item), to))
+                    (to, fit_at(editor, Some(item), to))
                 }
                 Drag::Resize { item, start, handle, from } => {
                     let to = resized(*start, *handle, cx - from.0, cy - from.1, div);
-                    (to, fits(editor, Some(item), to))
+                    (to, fit_at(editor, Some(item), to))
                 }
                 Drag::Band { from } => {
                     let to = band(*from, (cx, cy), div);
-                    (to, fits(editor, None, to))
+                    (to, fit_at(editor, None, to))
                 }
             })
         }
         _ => None,
     };
+    // What the ghost shows: a new item must be free, one that exists may land on others.
+    let creating = matches!(memory.drag, Some(Drag::Band { .. }));
+    let moving_only = matches!(memory.drag, Some(Drag::Move { .. }));
+    let dragged: Option<String> = match &memory.drag {
+        Some(Drag::Move { item, .. } | Drag::Resize { item, .. }) => Some(item.clone()),
+        _ => None,
+    };
     if response.drag_stopped()
-        && let (Some(drag), Some((to, ok))) = (memory.drag.take(), ghost)
+        && let (Some(drag), Some((to, at))) = (memory.drag.take(), ghost)
     {
+        let ok = at == Fit::Free;
         match drag {
             // Sent even onto another item: the plugin decides (it may move that one).
             Drag::Move { item, start, .. } if to != start => changes.push(GridChange::Moved { item, x: to.x, y: to.y }),
@@ -408,36 +447,34 @@ pub fn show(ui: &mut Ui, editor: &GridEditor, selection: &mut Option<Vec<String>
     }
 
     // ---- The menu ----
-    response.context_menu(|ui| {
+    super::menus::context(&response, |ui| {
+        use super::menus;
         let Some(item) = memory.menu.as_deref().and_then(item_by_id) else {
             ui.close();
             return;
         };
+        // What the plugin offers for this cell.
         for a in &item.actions {
-            if ui.button(a.label.as_str()).clicked() {
+            if menus::item(ui, "settings_plug", a.label.as_str()) {
                 changes.push(GridChange::Action { item: item.id.clone(), action: a.id.clone() });
-                ui.close();
             }
         }
         if !item.actions.is_empty() {
-            ui.separator();
+            menus::separator(ui);
         }
         let several: Vec<&GridItem> = selected.iter().filter_map(|s| item_by_id(s)).collect();
         if several.len() > 1 {
             let size = merged(several.iter().map(|i| Cells::of_item(i))).map(|m| format!(" ({} × {})", m.w, m.h));
-            if ui.button(format!("{}{}", t!("grid.merge"), size.unwrap_or_default())).clicked() {
+            if menus::item(ui, "combine", &format!("{}{}", t!("grid.merge"), size.unwrap_or_default())) {
                 changes.push(GridChange::Merge { items: several.iter().map(|i| i.id.clone()).collect() });
-                ui.close();
             }
         }
-        if (item.w > 1.0 || item.h > 1.0) && ui.button(t!("grid.split")).clicked() {
+        if (item.w > 1.0 || item.h > 1.0) && menus::item(ui, "split_body", &t!("grid.split")) {
             changes.push(GridChange::Split { item: item.id.clone() });
-            ui.close();
         }
         let gone: Vec<String> = if several.len() > 1 { selected.clone() } else { vec![item.id.clone()] };
-        if !item.locked && ui.button(t!("grid.delete")).clicked() {
+        if !item.locked && menus::item_if(ui, "delete", &t!("grid.delete"), true, "", true) {
             changes.push(GridChange::Deleted { items: gone });
-            ui.close();
         }
     });
 
@@ -512,12 +549,25 @@ pub fn show(ui: &mut Ui, editor: &GridEditor, selection: &mut Option<Vec<String>
             clipped.galley(area.center() - galley.size() / 2.0, galley, text);
         }
     }
-    if let Some((to, ok)) = ghost {
-        let color = if ok { visuals.selection.stroke.color } else { visuals.error_fg_color };
+    if let Some((to, at)) = ghost {
+        // Red is for what will not happen. An item dropped on others is sent to the plugin like
+        // any move: those others are outlined instead, as the ones that will have to give way.
+        let refused = at == Fit::Outside || (creating && at == Fit::OnOthers);
+        let color = if refused { visuals.error_fg_color } else { visuals.selection.stroke.color };
+        if !refused && at == Fit::OnOthers {
+            for other in others_under(editor, dragged.as_deref(), to) {
+                let r = frame.rect(Cells::of_item(other)).shrink(1.5);
+                painter.rect_filled(r, CornerRadius::same(3), Color32::from_black_alpha(70));
+                painter.rect_stroke(r, CornerRadius::same(3), Stroke::new(1.5, color), StrokeKind::Inside);
+            }
+        }
         let r = frame.rect(to).shrink(1.0);
         painter.rect_filled(r, CornerRadius::same(3), color.gamma_multiply(0.25));
         painter.rect_stroke(r, CornerRadius::same(3), Stroke::new(2.0, color), StrokeKind::Inside);
-        painter.text(r.center(), Align2::CENTER_CENTER, format!("{} × {}", to.w, to.h), small.clone(), color);
+        // The size only where the drag changes it: a moved item keeps its own.
+        if !moving_only {
+            painter.text(r.center(), Align2::CENTER_CENTER, format!("{} × {}", to.w, to.h), small.clone(), color);
+        }
     }
     if response.has_focus() {
         painter.rect_stroke(
@@ -648,6 +698,8 @@ mod tests {
         let e = editor();
         assert!(fits(&e, Some("2"), Cells::new(3.0, 3.0, 1.0, 1.0)), "free cells");
         assert!(!fits(&e, Some("2"), Cells::new(2.0, 2.0, 1.0, 1.0)), "on item 1");
+        assert_eq!(fit_at(&e, Some("2"), Cells::new(2.0, 2.0, 1.0, 1.0)), Fit::OnOthers, "which a move may do");
+        assert_eq!(fit_at(&e, Some("2"), Cells::new(4.5, 3.0, 1.0, 1.0)), Fit::Outside, "and this it may not");
         assert!(fits(&e, Some("1"), Cells::new(2.0, 0.5, 1.0, 3.0)), "its own old place does not count");
         assert!(fits(&e, None, Cells::new(-0.5, 4.0, 1.5, 1.0)), "reaching into the left zone");
         assert!(!fits(&e, None, Cells::new(4.0, 6.5, 1.0, 1.0)), "the front zone takes no items");

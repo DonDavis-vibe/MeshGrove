@@ -442,10 +442,9 @@ impl Gallery {
         if menu.can_paste {
             let background =
                 ui.interact(ui.available_rect_before_wrap(), ui.scope_id().with("gallery_bg"), Sense::click());
-            super::context_menu_with_field(&background, |ui| {
-                if ui.button(t!("menu.paste_files")).clicked() {
+            super::menus::context(&background, |ui| {
+                if super::menus::item(ui, "paste", &t!("menu.paste_files")) {
                     action = Some(Action::PasteFiles(None));
-                    ui.close();
                 }
             });
         }
@@ -649,6 +648,9 @@ impl Gallery {
         let selected = self.is_marked(index);
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 6.0, tile_background(visuals, selected, response.hovered()));
+        if selected && let Some(frame) = selection_frame(visuals) {
+            painter.rect_stroke(rect, 6.0, frame, egui::StrokeKind::Inside);
+        }
 
         let img = image_rect(rect);
         let ink = visuals.text_color();
@@ -666,7 +668,7 @@ impl Gallery {
                     })
                     .collect();
                 let previews = self.cycled(ui.ctx(), index, &ready);
-                let color = if entry.is_dir() { icons::FOLDER_BLUE } else { icons::ARCHIVE_AMBER };
+                let color = if entry.is_dir() { icons::folder_color() } else { icons::ARCHIVE_AMBER };
                 if previews.is_empty() && entry.is_dir() {
                     icons::folder(&painter, img);
                 } else if previews.is_empty() {
@@ -681,9 +683,10 @@ impl Gallery {
             }
             (_, Some(Thumb::Pending)) => {
                 icons::file(&painter, img, "", paper.linear_multiply(0.5), ink.linear_multiply(0.3));
-                egui::Spinner::new()
-                    .size((w * 0.16).clamp(12.0, 28.0))
-                    .paint_at(ui, Rect::from_center_size(img.center(), vec2(32.0, 32.0)));
+                // One name for all tiles: a folder being read shows one animation, not a mix.
+                let side = (w * 0.22).clamp(16.0, 36.0);
+                let mark = Rect::from_center_size(img.center(), vec2(side, side));
+                super::loading::paint_at(ui, mark, egui::Id::unique("tile-loading"));
             }
             (_, Some(Thumb::Failed(_))) => {
                 icons::file(&painter, img, "⚠", paper, visuals.warn_fg_color);
@@ -836,22 +839,30 @@ struct MenuRows<'a> {
 }
 
 impl MenuRows<'_> {
-    fn item(&mut self, ui: &mut Ui, text: std::borrow::Cow<str>, act: Action) {
-        if ui.button(text).clicked() {
+    /// A row with its icon (a name from the kit's icon set).
+    fn item(&mut self, ui: &mut Ui, icon: &str, text: std::borrow::Cow<str>, act: Action) {
+        if super::menus::item(ui, icon, &text) {
             *self.action = Some(act);
-            ui.close();
         }
         self.rows_since_separator = true;
     }
 
-    fn submenu(&mut self, ui: &mut Ui, text: std::borrow::Cow<str>, add: impl FnOnce(&mut Ui, &mut Self)) {
-        ui.menu_button(text, |ui| add(ui, self));
+    /// A row that opens something with the program `program`: its own icon, or `icon`.
+    fn program(&mut self, ui: &mut Ui, program: &str, icon: &str, text: std::borrow::Cow<str>, act: Action) {
+        if super::menus::item_program(ui, program, icon, &text) {
+            *self.action = Some(act);
+        }
+        self.rows_since_separator = true;
+    }
+
+    fn submenu(&mut self, ui: &mut Ui, icon: &str, text: std::borrow::Cow<str>, add: impl FnOnce(&mut Ui, &mut Self)) {
+        super::menus::submenu(ui, icon, &text, |ui| add(ui, self));
         self.rows_since_separator = true;
     }
 
     fn section(&mut self, ui: &mut Ui) {
         if self.rows_since_separator {
-            ui.separator();
+            super::menus::separator(ui);
             self.rows_since_separator = false;
         }
     }
@@ -873,21 +884,21 @@ pub(super) fn entry_menu(
     let printable = e.kind.is_printable();
     let viewable = crate::meshes::viewable(e.kind);
     // Stays open on clicks inside: "Add to list" has a name field.
-    super::context_menu_with_field(response, |ui| {
+    super::menus::context(response, |ui| {
         let mut rows = MenuRows { action, rows_since_separator: false };
         // In the inbox, ticking off comes first.
         if menu.inbox {
-            rows.item(ui, t!("inbox.done_one"), Action::InboxDone);
+            rows.item(ui, "activate", t!("inbox.done_one"), Action::InboxDone);
             rows.section(ui);
         }
         // Opening: the usual ways on top, the rest under "Open with".
-        rows.item(ui, t!("menu.open"), Action::Open(entry));
+        rows.item(ui, "open", t!("menu.open"), Action::Open(entry));
         if viewable {
-            rows.item(ui, t!("menu.preview"), Action::Preview);
+            rows.item(ui, "inspect", t!("menu.preview"), Action::Preview);
         }
         let slicer = if sliceable { menu.slicers.get(menu.default_slicer) } else { None };
         if let Some(slicer) = slicer {
-            rows.item(ui, t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);
+            rows.program(ui, slicer, "explode", t!("menu.open_in_slicer", name = slicer), Action::OpenInSlicer);
         }
         let other_slicers: Vec<(usize, &String)> = if slicer.is_some() {
             menu.slicers.iter().enumerate().filter(|(i, _)| *i != menu.default_slicer).collect()
@@ -896,99 +907,104 @@ pub(super) fn entry_menu(
         };
         let editors: &[(usize, String)] = if model { &menu.editors } else { &[] };
         if viewable || !editors.is_empty() || !other_slicers.is_empty() || !menu.plugin_openers.is_empty() {
-            rows.submenu(ui, t!("menu.open_with"), |ui, rows| {
+            rows.submenu(ui, "play", t!("menu.open_with"), |ui, rows| {
                 if viewable {
-                    rows.item(ui, t!("menu.default_app"), Action::OpenWithDefaultApp(entry));
+                    rows.item(ui, "open", t!("menu.default_app"), Action::OpenWithDefaultApp(entry));
                 }
                 for (index, editor) in editors {
-                    rows.item(ui, editor.into(), Action::OpenInEditor(*index));
+                    rows.program(ui, editor, "edit", editor.into(), Action::OpenInEditor(*index));
                 }
                 for (i, other) in &other_slicers {
-                    rows.item(ui, (*other).into(), Action::OpenInSlicerWith(*i));
+                    rows.program(ui, other, "explode", (*other).into(), Action::OpenInSlicerWith(*i));
                 }
                 for (id, label) in &menu.plugin_openers {
-                    rows.item(ui, label.into(), Action::OpenWithPlugin(id.clone()));
+                    rows.item(ui, "settings_plug", label.into(), Action::OpenWithPlugin(id.clone()));
                 }
             });
         }
         // Tags, favourites, the print log and lists.
         rows.section(ui);
         if menu.can_tag {
-            rows.item(ui, t!("menu.edit_tags"), Action::EditTags);
+            rows.item(ui, "checkpoint", t!("menu.edit_tags"), Action::EditTags);
             if menu.can_place {
-                rows.item(ui, t!("menu.place_by_tag"), Action::PlaceByTag);
+                rows.item(ui, "move", t!("menu.place_by_tag"), Action::PlaceByTag);
             }
             let star = if menu.favorite { t!("menu.unfavorite") } else { t!("menu.favorite") };
-            rows.item(ui, star, Action::ToggleFavorite);
+            rows.item(ui, "star", star, Action::ToggleFavorite);
             if printable {
-                rows.item(ui, t!("menu.printed"), Action::Print(PrintResult::Printed));
-                rows.item(ui, t!("menu.failed"), Action::Print(PrintResult::Failed));
+                rows.item(ui, "activate", t!("menu.printed"), Action::Print(PrintResult::Printed));
+                rows.item(ui, "status_error", t!("menu.failed"), Action::Print(PrintResult::Failed));
             }
-            rows.submenu(ui, t!("menu.add_to_list"), |ui, rows| {
+            rows.submenu(ui, "list", t!("menu.add_to_list"), |ui, rows| {
                 for (id, kind, name) in &menu.lists {
-                    let icon = if *kind == ListKind::Print { "🖶" } else { "📁" };
-                    rows.item(ui, format!("{icon}  {name}").into(), Action::AddToList(*id));
+                    let icon = if *kind == ListKind::Print { "list" } else { "feature_group" };
+                    rows.item(ui, icon, name.into(), Action::AddToList(*id));
                 }
                 if !menu.lists.is_empty() {
-                    ui.separator();
+                    super::menus::separator(ui);
                 }
                 let mut name = ui.data_mut(|d| d.get_temp::<String>(new_list_id())).unwrap_or_default();
-                ui.add(egui::TextEdit::singleline(&mut name).hint_text(t!("lists.name_hint")));
+                super::menus::inset(ui, |ui| {
+                    super::settings_kit::text_field(ui, &mut name, &t!("lists.name_hint"), 220.0);
+                });
                 let typed = name.trim().to_owned();
                 ui.data_mut(|d| d.insert_temp(new_list_id(), name));
                 if !typed.is_empty() {
-                    rows.item(ui, t!("lists.new_print_with"), Action::NewList(ListKind::Print, typed.clone()));
-                    rows.item(ui, t!("lists.new_collection_with"), Action::NewList(ListKind::Collection, typed));
+                    rows.item(ui, "new", t!("lists.new_print_with"), Action::NewList(ListKind::Print, typed.clone()));
+                    rows.item(ui, "new", t!("lists.new_collection_with"), Action::NewList(ListKind::Collection, typed));
                 }
             });
             if let Some((id, name)) = &menu.current_list {
-                rows.item(ui, t!("menu.remove_from_list", list = name), Action::RemoveFromList(*id));
+                rows.item(ui, "close", t!("menu.remove_from_list", list = name), Action::RemoveFromList(*id));
             }
         }
         // Files: the clipboard, the path, the folder on disk.
         rows.section(ui);
-        rows.item(ui, t!("menu.copy_files"), Action::CopyFiles);
+        rows.item(ui, "copy", t!("menu.copy_files"), Action::CopyFiles);
         if menu.can_cut {
-            rows.item(ui, t!("menu.cut_files"), Action::CutFiles);
+            rows.item(ui, "cut", t!("menu.cut_files"), Action::CutFiles);
         }
         if menu.can_paste {
             // Into the folder under the pointer, otherwise into the one shown.
             let into = (e.kind == Kind::Folder).then_some(entry);
-            rows.item(ui, t!("menu.paste_files"), Action::PasteFiles(into));
+            rows.item(ui, "paste", t!("menu.paste_files"), Action::PasteFiles(into));
         }
-        rows.item(ui, t!("menu.copy_path"), Action::CopyPaths);
+        rows.item(ui, "text", t!("menu.copy_path"), Action::CopyPaths);
         rows.item(
             ui,
+            "folder",
             t!("menu.show_in_file_manager", manager = crate::i18n::file_manager()),
             Action::ShowInFileManager,
         );
         if show_folders {
-            rows.item(ui, t!("menu.show_in_folder"), Action::ShowInFolder(entry));
+            rows.item(ui, "capture", t!("menu.show_in_folder"), Action::ShowInFolder(entry));
         }
         if menu.rescan {
-            rows.item(ui, t!("menu.rescan"), Action::Rescan);
+            rows.item(ui, "compute", t!("menu.rescan"), Action::Rescan);
         }
         // Archives: unpacked beside themselves, the selection packed into a new ZIP or added
         // to one nearby. Only ZIP is written.
         rows.section(ui);
         if menu.can_unpack {
-            rows.item(ui, t!("menu.unpack"), Action::Unpack);
+            rows.item(ui, "export", t!("menu.unpack"), Action::Unpack);
         }
         if menu.can_pack {
-            rows.submenu(ui, t!("menu.pack"), |ui, rows| {
+            rows.submenu(ui, "import", t!("menu.pack"), |ui, rows| {
                 let mut name =
                     ui.data_mut(|d| d.get_temp::<String>(pack_name_id())).unwrap_or_else(|| menu.pack_name.clone());
-                ui.add(egui::TextEdit::singleline(&mut name).hint_text(t!("menu.pack_name_hint")));
+                super::menus::inset(ui, |ui| {
+                    super::settings_kit::text_field(ui, &mut name, &t!("menu.pack_name_hint"), 220.0);
+                });
                 let typed = name.trim().to_owned();
                 ui.data_mut(|d| d.insert_temp(pack_name_id(), name));
                 if !typed.is_empty() {
-                    rows.item(ui, t!("menu.pack_as", name = typed.clone()), Action::Pack(typed));
+                    rows.item(ui, "import", t!("menu.pack_as", name = typed.clone()), Action::Pack(typed));
                 }
             });
             if !menu.archives_nearby.is_empty() {
-                rows.submenu(ui, t!("menu.add_to_archive"), |ui, rows| {
+                rows.submenu(ui, "box", t!("menu.add_to_archive"), |ui, rows| {
                     for (path, name) in &menu.archives_nearby {
-                        rows.item(ui, format!("📦  {name}").into(), Action::AddToArchive(path.clone()));
+                        rows.item(ui, "box", name.into(), Action::AddToArchive(path.clone()));
                     }
                 });
             }
@@ -996,19 +1012,17 @@ pub(super) fn entry_menu(
         // AI
         rows.section(ui);
         if menu.ai_chat {
-            rows.item(ui, t!("actions.menu_tags"), Action::SuggestTags);
-            rows.item(ui, t!("actions.menu_mention"), Action::MentionInChat);
+            rows.item(ui, "assistant", t!("actions.menu_tags"), Action::SuggestTags);
+            rows.item(ui, "agent_chat", t!("actions.menu_mention"), Action::MentionInChat);
         }
         if menu.ai_refs {
-            rows.item(ui, t!("actions.menu_reference"), Action::CopyReference);
+            rows.item(ui, "agent_link", t!("actions.menu_reference"), Action::CopyReference);
         }
         rows.section(ui);
-        let trash = ui
-            .add_enabled(menu.trash_blocked.is_none(), egui::Button::new(t!("menu.trash")))
-            .on_disabled_hover_text(menu.trash_blocked.clone().unwrap_or_default());
-        if trash.clicked() {
+        let blocked = menu.trash_blocked.as_deref();
+        if super::menus::item_if(ui, "delete", &t!("menu.trash"), blocked.is_none(), blocked.unwrap_or_default(), true)
+        {
             *rows.action = Some(Action::Trash);
-            ui.close();
         }
     });
     if matches!(action, Some(Action::NewList(..))) {
@@ -1021,6 +1035,16 @@ pub(super) fn entry_menu(
 
 fn pack_name_id() -> egui::Id {
     egui::Id::unique("gallery-pack-name")
+}
+
+/// A frame around what is chosen, in themes whose highlight can hardly be told from the pane
+/// behind it (the 1-bit themes, SolidCraft 95): none where the highlight shows by itself.
+pub(super) fn selection_frame(visuals: &egui::Visuals) -> Option<egui::Stroke> {
+    let tint = over(tile_background(visuals, true, false), visuals.panel_fill);
+    let apart = |a: u8, b: u8| a.abs_diff(b);
+    let (t, p) = (tint, visuals.panel_fill);
+    let most = apart(t.r(), p.r()).max(apart(t.g(), p.g())).max(apart(t.b(), p.b()));
+    (most < 16).then(|| egui::Stroke::new(2.0, solidcraft_ui_kit::primary_mark()))
 }
 
 fn tile_background(visuals: &egui::Visuals, selected: bool, hovered: bool) -> Color32 {

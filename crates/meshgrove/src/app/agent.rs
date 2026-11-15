@@ -421,7 +421,7 @@ impl App {
         } else {
             0
         };
-        if !entry.local && !self.chat.cloud_ok && !confirmed {
+        if !entry.local && self.asks_before_cloud() && !confirmed {
             let text = t!("chat.confirm_text", host = entry.name.clone(), refs = pills.len(), pictures = pictures)
                 .into_owned();
             self.chat.confirm = Some((text, Pending::Message));

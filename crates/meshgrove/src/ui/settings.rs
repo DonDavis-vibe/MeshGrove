@@ -16,14 +16,35 @@ use meshgrove_core::programs::{Detected, ProgramKind, detect_editors, detect_sli
 use meshgrove_core::spacemouse::SpaceMouseConfig;
 use meshgrove_core::userdata;
 
-use super::settings_kit::{self as kit, check, hint, row, segmented};
+use super::settings_kit::{check, hint, row, segmented};
 use super::spacemouse::MouseSettings;
 use super::tags::{self, Group, PALETTE, TagStyle};
 use crate::i18n;
 use crate::spacemouse::Snapshot;
+use solidcraft_ui_kit as sc;
+use solidcraft_ui_kit::prefs_window::{self, HostPage, Labels, Options, Page};
+
+/// A folder field of the settings that has a folder button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderFor {
+    /// A new library folder.
+    Library,
+    /// A new folder to import from.
+    Import,
+}
 
 pub enum SettingsChange {
     Language(Option<String>),
+    /// The interface theme; `None`: Meshgrove's own look.
+    UiTheme(Option<String>),
+    /// The interface font: "system", a family, or `None` for the theme's own.
+    UiFont(Option<String>),
+    /// Who draws the main window's title bar.
+    TitleBar(config::TitleBar),
+    ProgramIcons(bool),
+    /// Open the system's folder dialog for one of the settings' folder fields; the folder goes
+    /// into that field ([`SettingsDialog::folder_picked`]).
+    PickFolder(FolderFor),
     AddRoot(PathBuf),
     RemoveRoot(PathBuf),
     /// The slicer list and the name of the default one.
@@ -81,6 +102,8 @@ pub enum SettingsChange {
     AiAutoAccept(bool),
     /// The AI may suggest moves into another library.
     AiCrossLibraryMoves(bool),
+    AiCloudAsk(bool),
+    AiReviewButton(bool),
     /// Connect the AI apps found now.
     AiConnectNow,
     /// What a library shows to which AI.
@@ -145,30 +168,10 @@ pub enum SettingsChange {
     /// The suggested tags of a group (themes, properties, states); `None`: the built-in set.
     Suggestions(Group, Option<Vec<SuggestedTag>>),
     ResetLayout,
-    /// A settings section folded away or opened again.
-    FoldSection {
-        key: String,
-        folded: bool,
-    },
     Export(PathBuf),
     Import(PathBuf),
     OpenBackups,
     ClearCache,
-}
-
-/// Whether the panes of the main window can be moved.
-fn panes(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
-    let mut locked = config.lock_panes;
-    if check(ui, &mut locked, t!("settings.panes_lock"), t!("settings.panes_hint")) {
-        changes.push(SettingsChange::LockPanes(locked));
-    }
-    let mut fold = config.fold_for_plugins;
-    if check(ui, &mut fold, t!("settings.panes_fold"), t!("settings.panes_fold_hint")) {
-        changes.push(SettingsChange::FoldForPlugins(fold));
-    }
-    if ui.button(t!("pane.reset")).clicked() {
-        changes.push(SettingsChange::ResetLayout);
-    }
 }
 
 fn inbox(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
@@ -213,10 +216,13 @@ fn tags(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
 fn recent_prints(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
     row(ui, &t!("settings.recent_prints"), |ui| {
         let mut keep = config.recent_prints;
-        let off = t!("settings.recent_prints_off").into_owned();
-        let slider = egui::Slider::new(&mut keep, 0..=50)
-            .custom_formatter(move |v, _| if v == 0.0 { off.clone() } else { format!("{v:.0}") });
-        if ui.add(slider).changed() {
+        ui.horizontal(|ui| {
+            super::settings_kit::slider(ui, &mut keep, 0..=50, 220.0, None);
+            // How many, in words where it is none.
+            let shown = if keep == 0 { t!("settings.recent_prints_off").into_owned() } else { keep.to_string() };
+            ui.label(shown);
+        });
+        if keep != config.recent_prints {
             changes.push(SettingsChange::RecentPrints(keep));
         }
         hint(ui, t!("settings.recent_prints_hint"));
@@ -229,40 +235,13 @@ fn folder_previews(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChang
     check(ui, &mut fp.enabled, t!("settings.folder_previews_enabled"), t!("settings.folder_previews_hint"));
     ui.add_enabled_ui(fp.enabled, |ui| {
         row(ui, &t!("settings.folder_previews_depth"), |ui| {
-            ui.add(egui::Slider::new(&mut fp.depth, FOLDER_PREVIEW_DEPTH));
+            super::settings_kit::slider(ui, &mut fp.depth, FOLDER_PREVIEW_DEPTH, 260.0, Some(|v| format!("{v:.0}")));
         });
-        ui.checkbox(&mut fp.cycle, t!("settings.folder_previews_cycle"));
+        sc::checkbox(ui, &t!("settings.folder_previews_cycle"), &mut fp.cycle);
     });
     if fp != config.folder_previews {
         changes.push(SettingsChange::FolderPreviews(fp));
     }
-}
-
-/// What a double-click (or Enter) on a model does.
-fn double_click(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
-    let actions = [
-        (DoubleClick::Window, t!("settings.double_click_window")),
-        (DoubleClick::Preview, t!("settings.double_click_preview")),
-        (DoubleClick::Slicer, t!("settings.double_click_slicer")),
-        (DoubleClick::Editor, t!("settings.double_click_editor")),
-        (DoubleClick::DefaultApp, t!("settings.double_click_default_app")),
-    ];
-    row(ui, &t!("settings.double_click_row"), |ui| {
-        let current = actions.iter().find(|(a, _)| *a == config.double_click).map(|(_, l)| l.clone());
-        egui::ComboBox::from_id_salt("double_click").selected_text(current.unwrap_or_default()).width(260.0).show_ui(
-            ui,
-            |ui| {
-                for (action, label) in &actions {
-                    if ui.selectable_label(config.double_click == *action, label.as_ref()).clicked()
-                        && config.double_click != *action
-                    {
-                        changes.push(SettingsChange::DoubleClick(*action));
-                    }
-                }
-            },
-        );
-        hint(ui, t!("settings.double_click_hint"));
-    });
 }
 
 /// Picture quality of the large preview and the model windows.
@@ -348,7 +327,6 @@ pub struct AppInfo<'a> {
 
 #[derive(Default)]
 pub struct SettingsDialog {
-    pub open: bool,
     root_input: String,
     root_error: Option<String>,
     /// An import folder being added, and the landing folder's name as typed.
@@ -382,6 +360,17 @@ pub struct SettingsDialog {
     ai: super::settings_ai::AiSettings,
     /// The "Plugins" page.
     plugins: super::settings_plugins::PluginSettings,
+    /// The kit's preferences window: whether it is open, its page, its search, and the settings
+    /// as they were when it opened (what Cancel puts back).
+    window: prefs_window::State<Box<Config>>,
+    /// The theme picker's cards.
+    themes: super::appearance::Picker,
+    /// The font list: what is typed into its search, the search its rows were made for, the
+    /// rows whose fonts are loaded, and their families.
+    font_filter: String,
+    font_query: String,
+    font_window: super::fonts::PreviewWindow,
+    font_previews: std::collections::BTreeSet<String>,
     /// The sample tile of the "Kacheln" page.
     tiles: super::settings_tiles::TileSettings,
     /// A new theme as typed.
@@ -393,11 +382,7 @@ pub struct SettingsDialog {
     mouse: MouseSettings,
     /// The category shown on the right.
     category: Category,
-    /// "Restore defaults" was clicked once.
-    confirm_defaults: bool,
 }
-
-const CATEGORY_WIDTH: f32 = 190.0;
 
 /// One row of the placement rules: a tag, the folder typed for it, and the theme's own name when
 /// the tag is a theme (its folder unless changed).
@@ -424,44 +409,11 @@ fn drag_handle(ui: &mut Ui, held: bool) -> egui::Response {
 /// The slicers, mesh editors and printers, each with the index of the default one.
 type Lists<'a> = ((&'a [Slicer], usize), (&'a [Program], usize), (&'a [Printer], usize));
 
-/// One entry of the category list: the symbol centred in a column of its own, so every name
-/// starts at the same place whatever the symbol's width.
-fn category_item(ui: &mut Ui, category: Category, selected: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(CATEGORY_WIDTH, 28.0), egui::Sense::click());
-    let visuals = ui.style().interact_selectable(&response, selected);
-    if selected || response.hovered() || response.has_focus() {
-        ui.painter().rect(
-            rect,
-            visuals.corner_radius,
-            visuals.weak_bg_fill,
-            visuals.bg_stroke,
-            egui::StrokeKind::Inside,
-        );
-    }
-    let font = egui::TextStyle::Button.resolve(ui.style());
-    let painter = ui.painter();
-    let middle = rect.center().y;
-    painter.text(
-        egui::pos2(rect.left() + 16.0, middle),
-        egui::Align2::CENTER_CENTER,
-        category.icon(),
-        font.clone(),
-        visuals.text_color(),
-    );
-    painter.text(
-        egui::pos2(rect.left() + 34.0, middle),
-        egui::Align2::LEFT_CENTER,
-        category.title(),
-        font,
-        visuals.text_color(),
-    );
-    response
-}
-
 /// The parts of a category, each a folding section with its own title.
 #[derive(Debug, Clone, Copy)]
 enum Section {
     Language,
+    Appearance,
     DoubleClick,
     Panes,
     Library,
@@ -499,6 +451,7 @@ impl Section {
     fn title(self) -> String {
         match self {
             Section::Language => t!("settings.language"),
+            Section::Appearance => t!("settings.appearance"),
             Section::DoubleClick => t!("settings.double_click"),
             Section::Panes => t!("settings.panes"),
             Section::Library => t!("settings.library"),
@@ -606,20 +559,6 @@ impl Category {
         .into_owned()
     }
 
-    /// Whether the page has preferences to put back; the lists (library folders, programs,
-    /// printers) and what AI may see are the user's data, not preferences.
-    fn has_defaults(self) -> bool {
-        matches!(
-            self,
-            Category::General
-                | Category::Library
-                | Category::Tags
-                | Category::Tiles
-                | Category::View
-                | Category::ModelsUnits
-        )
-    }
-
     /// The changes that put this page's preferences back to how Meshgrove comes (none when they
     /// are). The 3D mouse keeps its calibration: it belongs to the device.
     fn defaults(self, config: &Config) -> Vec<SettingsChange> {
@@ -633,6 +572,9 @@ impl Category {
         match self {
             Category::General => {
                 put(config.language.is_some(), SettingsChange::Language(None));
+                put(config.ui_theme.is_some(), SettingsChange::UiTheme(None));
+                put(config.ui_font.is_some(), SettingsChange::UiFont(None));
+                put(config.title_bar != d.title_bar, SettingsChange::TitleBar(d.title_bar));
                 put(config.double_click != d.double_click, SettingsChange::DoubleClick(d.double_click));
                 put(config.lock_panes != d.lock_panes, SettingsChange::LockPanes(d.lock_panes));
                 put(config.fold_for_plugins != d.fold_for_plugins, SettingsChange::FoldForPlugins(d.fold_for_plugins));
@@ -759,9 +701,258 @@ fn dir_size(dir: &Path) -> u64 {
     total
 }
 
+/// What the kit's preferences window works on while it is drawn: the dialog's own state, the
+/// settings as they are, and the changes the pages ask for (the app applies them after the frame).
+pub struct Host<'a> {
+    dialog: &'a mut SettingsDialog,
+    config: &'a Config,
+    lists: Lists<'a>,
+    info: &'a AppInfo<'a>,
+    changes: &'a mut Vec<SettingsChange>,
+}
+
+impl prefs_window::Host for Host<'_> {
+    /// The settings as they were when the window opened, or at the last Apply.
+    type Snapshot = Box<Config>;
+
+    fn window(&mut self) -> &mut prefs_window::State<Box<Config>> {
+        &mut self.dialog.window
+    }
+
+    fn window_ref(&self) -> &prefs_window::State<Box<Config>> {
+        &self.dialog.window
+    }
+
+    fn take_snapshot(&self) -> Box<Config> {
+        Box::new(self.config.clone())
+    }
+
+    fn matches(&self, snapshot: &Box<Config>) -> bool {
+        changes_towards(self.config, snapshot).is_empty()
+    }
+
+    /// Cancel: the same changes the pages make, back towards the snapshot. What acted at once is
+    /// not a setting and stays done (a plugin installed or removed, the cache cleared, an export
+    /// or import, an assistant connected, the endpoint's key).
+    fn restore(&mut self, snapshot: &Box<Config>) -> Result<(), String> {
+        self.changes.extend(changes_towards(self.config, snapshot));
+        Ok(())
+    }
+
+    fn closed(&mut self) {
+        self.dialog.font_filter.clear();
+        self.dialog.font_window.reset();
+        self.dialog.font_previews.clear();
+    }
+}
+
+/// Draws page `N` of [`Category::ALL`]; a function of its own per page, as the window takes
+/// plain functions.
+fn draw_page<const N: usize>(ui: &mut Ui, host: &mut Host<'_>) {
+    host.dialog.category = Category::ALL[N];
+    host.dialog.page(ui, host.config, host.lists, host.info, host.changes);
+}
+
+/// Restore defaults for page `N`.
+fn page_defaults<const N: usize>(host: &mut Host<'_>) {
+    let changes = Category::ALL[N].defaults(host.config);
+    host.changes.extend(changes);
+}
+
+/// The page that is open, for [`page_icon`]: the kit's page list hands a sign only its place.
+static CHOSEN_PAGE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(usize::MAX);
+
+/// The sign of page `N` in the page list.
+fn page_icon<const N: usize>(painter: &egui::Painter, rect: egui::Rect, opacity: f32) {
+    let ink = super::appearance::tokens().icon;
+    // On the chosen page's row the sign has to show on the selection's fill.
+    let chosen = CHOSEN_PAGE.load(std::sync::atomic::Ordering::Relaxed) == N;
+    let ink = if chosen { sc::ink_on_selection(ink) } else { ink }.gamma_multiply(opacity);
+    let font = egui::FontId::proportional(rect.height() * 0.9);
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, Category::ALL[N].icon(), font, ink);
+}
+
+/// A text kept for the rest of the run, for the window's page list: it wants texts that live as
+/// long as the program and reads an unknown id as the text itself. Each text is kept once.
+fn kept(text: &str) -> &'static str {
+    static TEXTS: std::sync::Mutex<std::collections::BTreeSet<&'static str>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let mut texts = TEXTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(known) = texts.get(text) {
+        return known;
+    }
+    let text: &'static str = Box::leak(text.to_owned().into_boxed_str());
+    texts.insert(text);
+    text
+}
+
+/// The window's pages: the categories in their order and groups.
+fn pages<'a>() -> Vec<Page<Host<'a>>> {
+    /// The names the pages are published under (for tests and automation).
+    const HANDLES: [&str; 12] = [
+        "mg:prefs:page:general",
+        "mg:prefs:page:library",
+        "mg:prefs:page:tags",
+        "mg:prefs:page:tiles",
+        "mg:prefs:page:view",
+        "mg:prefs:page:models",
+        "mg:prefs:page:programs",
+        "mg:prefs:page:printer",
+        "mg:prefs:page:ai",
+        "mg:prefs:page:plugins",
+        "mg:prefs:page:data",
+        "mg:prefs:page:about",
+    ];
+    type Draw = for<'h> fn(&mut Ui, &mut Host<'h>);
+    type Defaults = for<'h> fn(&mut Host<'h>);
+    type Sign = &'static dyn Fn(&egui::Painter, egui::Rect, f32);
+    macro_rules! each_page {
+        ($($n:literal)*) => {
+            [$((draw_page::<$n> as Draw, page_defaults::<$n> as Defaults, &page_icon::<$n> as Sign)),*]
+        };
+    }
+    let functions: [(Draw, Defaults, Sign); 12] = each_page!(0 1 2 3 4 5 6 7 8 9 10 11);
+    let mut group = None;
+    Category::ALL
+        .into_iter()
+        .zip(functions)
+        .zip(HANDLES)
+        .map(|((category, (draw, defaults, sign)), handle)| {
+            // A group's caption goes to the first page under it.
+            let starts = category.group().filter(|caption| group.as_ref() != Some(caption));
+            group = category.group();
+            Page::Host(HostPage {
+                icon: sc::Icon::Paint(sign),
+                label: kept(&category.title()),
+                group: starts.as_deref().map(kept),
+                handle,
+                scroll: true,
+                draw,
+                defaults,
+            })
+        })
+        .collect()
+}
+
+/// The changes that take the settings from `config` to `target`: what Cancel asks for, and
+/// whether anything is left to apply. Only what the pages set and the app keeps in its settings;
+/// plugins are left out (switching one acts at once), and a library taken out of the AI's sight
+/// stays out.
+fn changes_towards(config: &Config, target: &Config) -> Vec<SettingsChange> {
+    let (c, t) = (config, target);
+    let mut out = Vec::new();
+    let mut put = |differs: bool, change: &dyn Fn() -> SettingsChange| {
+        if differs {
+            out.push(change());
+        }
+    };
+    // General
+    put(c.language != t.language, &|| SettingsChange::Language(t.language.clone()));
+    put(c.ui_theme != t.ui_theme, &|| SettingsChange::UiTheme(t.ui_theme.clone()));
+    put(c.ui_font != t.ui_font, &|| SettingsChange::UiFont(t.ui_font.clone()));
+    put(c.title_bar != t.title_bar, &|| SettingsChange::TitleBar(t.title_bar));
+    put(c.program_icons != t.program_icons, &|| SettingsChange::ProgramIcons(t.program_icons));
+    put(c.double_click != t.double_click, &|| SettingsChange::DoubleClick(t.double_click));
+    put(c.lock_panes != t.lock_panes, &|| SettingsChange::LockPanes(t.lock_panes));
+    put(c.fold_for_plugins != t.fold_for_plugins, &|| SettingsChange::FoldForPlugins(t.fold_for_plugins));
+    // Library
+    for root in c.library_roots.iter().filter(|root| !t.library_roots.contains(root)) {
+        put(true, &|| SettingsChange::RemoveRoot(root.clone()));
+    }
+    for root in t.library_roots.iter().filter(|root| !c.library_roots.contains(root)) {
+        put(true, &|| SettingsChange::AddRoot(root.clone()));
+    }
+    put(c.inbox != t.inbox, &|| SettingsChange::Inbox(t.inbox));
+    put(c.duplicates_keep != t.duplicates_keep, &|| SettingsChange::DuplicatesKeep(t.duplicates_keep));
+    put(c.import.folders != t.import.folders, &|| SettingsChange::ImportFolders(t.import.folders.clone()));
+    put((&c.import.library, &c.import.landing) != (&t.import.library, &t.import.landing), &|| {
+        SettingsChange::ImportTarget { library: t.import.library.clone(), landing: t.import.landing.clone() }
+    });
+    put(c.import.at_start != t.import.at_start, &|| SettingsChange::ImportAtStart(t.import.at_start));
+    put(c.import.archives != t.import.archives, &|| SettingsChange::ImportArchives(t.import.archives));
+    // Tags
+    put(c.colored_tags != t.colored_tags, &|| SettingsChange::ColoredTags(t.colored_tags));
+    put(c.flat_tag_list != t.flat_tag_list, &|| SettingsChange::FlatTagList(t.flat_tag_list));
+    put(c.tag_chips_idle != t.tag_chips_idle, &|| SettingsChange::IdleTagChips(t.tag_chips_idle));
+    put(c.themes != t.themes, &|| SettingsChange::Suggestions(Group::Themes, t.themes.clone()));
+    put(c.properties != t.properties, &|| SettingsChange::Suggestions(Group::Properties, t.properties.clone()));
+    put(c.states != t.states, &|| SettingsChange::Suggestions(Group::State, t.states.clone()));
+    put(c.placement.enabled != t.placement.enabled, &|| SettingsChange::Placement(t.placement.enabled));
+    put(c.placement.rules != t.placement.rules, &|| SettingsChange::FolderRules(t.placement.rules.clone()));
+    put(c.placement.order != t.placement.order, &|| SettingsChange::PlacementOrder(t.placement.order.clone()));
+    // Tiles
+    put(c.tile_layout != t.tile_layout, &|| SettingsChange::TileLayout(t.tile_layout.clone()));
+    put((c.tile_tag_count, c.tile_tags) != (t.tile_tag_count, t.tile_tags), &|| SettingsChange::TileTagLook {
+        count: t.tile_tag_count,
+        style: t.tile_tags,
+    });
+    put(c.folder_previews != t.folder_previews, &|| SettingsChange::FolderPreviews(t.folder_previews));
+    put(c.tile_size != t.tile_size, &|| SettingsChange::TileSize(t.tile_size));
+    // 3D view
+    put(c.preview_quality != t.preview_quality, &|| SettingsChange::PreviewQuality(t.preview_quality));
+    put(c.free_orbit != t.free_orbit, &|| SettingsChange::FreeOrbit(t.free_orbit));
+    put(c.spacemouse != t.spacemouse, &|| SettingsChange::SpaceMouse(t.spacemouse.clone()));
+    // Models & Units
+    put(c.gltf_unit != t.gltf_unit, &|| SettingsChange::GltfUnit(t.gltf_unit));
+    put(c.display_units != t.display_units, &|| SettingsChange::DisplayUnits(t.display_units));
+    put(c.model_units != t.model_units, &|| SettingsChange::ModelUnits(t.model_units));
+    // Programs and printers
+    put((&c.slicers, &c.default_slicer) != (&t.slicers, &t.default_slicer), &|| SettingsChange::Slicers {
+        list: t.slicers.clone().unwrap_or_default(),
+        default: t.default_slicer.clone(),
+    });
+    put((&c.editors, &c.default_editor) != (&t.editors, &t.default_editor), &|| SettingsChange::Editors {
+        list: t.editors.clone().unwrap_or_default(),
+        default: t.default_editor.clone(),
+    });
+    put(c.recent_prints != t.recent_prints, &|| SettingsChange::RecentPrints(t.recent_prints));
+    put((&c.printers, &c.default_printer) != (&t.printers, &t.default_printer), &|| SettingsChange::Printers {
+        list: t.printers.clone().unwrap_or_default(),
+        default: t.default_printer.clone(),
+    });
+    // AI & MCP
+    put(c.ai.enabled != t.ai.enabled, &|| SettingsChange::AiEnabled(t.ai.enabled));
+    put(c.ai.connect_apps != t.ai.connect_apps, &|| SettingsChange::AiConnectApps(t.ai.connect_apps));
+    put(c.ai.auto_accept_since.is_some() != t.ai.auto_accept_since.is_some(), &|| {
+        SettingsChange::AiAutoAccept(t.ai.auto_accept_since.is_some())
+    });
+    put(c.ai.cloud_ask != t.ai.cloud_ask, &|| SettingsChange::AiCloudAsk(t.ai.cloud_ask));
+    put(c.ai.review_button_always != t.ai.review_button_always, &|| {
+        SettingsChange::AiReviewButton(t.ai.review_button_always)
+    });
+    put(c.ai.cross_library_moves != t.ai.cross_library_moves, &|| {
+        SettingsChange::AiCrossLibraryMoves(t.ai.cross_library_moves)
+    });
+    for library in &t.ai.libraries {
+        let now = c.ai.libraries.iter().find(|l| l.root == library.root);
+        put(now != Some(library), &|| SettingsChange::AiLibrary(library.clone()));
+    }
+    put(c.ai.endpoint != t.ai.endpoint, &|| SettingsChange::Endpoint(t.ai.endpoint.clone()));
+    for agent in c.ai.agents.iter().filter(|agent| !t.ai.agents.iter().any(|a| a.id == agent.id)) {
+        put(true, &|| SettingsChange::RemoveAgent(agent.id.clone()));
+    }
+    for agent in t.ai.agents.iter().filter(|agent| !c.ai.agents.iter().any(|a| a.id == agent.id)) {
+        put(true, &|| SettingsChange::AddAgent(agent.clone()));
+    }
+    put(c.ai.assistant != t.ai.assistant, &|| SettingsChange::Assistant(t.ai.assistant.clone()));
+    put(c.ai.auto_connect != t.ai.auto_connect, &|| SettingsChange::AutoConnect(t.ai.auto_connect.clone()));
+    out
+}
+
 impl SettingsDialog {
+    /// The families the open font list shows in themselves; empty while it is closed. The app
+    /// loads them as preview fonts.
+    pub fn font_previews(&self) -> &std::collections::BTreeSet<String> {
+        &self.font_previews
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.window.open
+    }
+
     pub fn open(&mut self) {
-        self.open = true;
+        let page = Category::ALL.iter().position(|category| *category == self.category).unwrap_or(0);
+        self.window.open_at(page, Category::ALL.len());
         self.printer_form = printer_form(None);
         self.printer_form_units = config::display_units();
         self.printer_error = false;
@@ -790,11 +981,10 @@ impl SettingsDialog {
 
     /// Opens the window on the category named as in [`Category::from_name`] (unknown names keep the current one).
     pub fn open_at(&mut self, category: &str) {
-        self.open();
         if let Some(category) = Category::from_name(category) {
             self.category = category;
-            self.confirm_defaults = false;
         }
+        self.open();
     }
 
     /// Looks for installed slicers in the background.
@@ -821,87 +1011,88 @@ impl SettingsDialog {
         &mut self,
         ctx: &egui::Context,
         config: &Config,
-        (slicers, default_slicer): (&[Slicer], usize),
-        (editors, default_editor): (&[Program], usize),
-        (printers, default_printer): (&[Printer], usize),
+        slicers: (&[Slicer], usize),
+        editors: (&[Program], usize),
+        printers: (&[Printer], usize),
         info: AppInfo,
     ) -> Vec<SettingsChange> {
         let mut changes = Vec::new();
-        if !self.open {
-            return changes;
+        if self.window.open {
+            if let Some(rx) = &self.cache_rx
+                && let Ok(size) = rx.try_recv()
+            {
+                self.cache_size = Some(size);
+                self.cache_rx = None;
+            }
+            if let Some(rx) = &self.detect_rx
+                && let Ok(found) = rx.try_recv()
+            {
+                self.detected = found;
+                self.detect_rx = None;
+            }
         }
-        if let Some(rx) = &self.cache_rx
-            && let Ok(size) = rx.try_recv()
-        {
-            self.cache_size = Some(size);
-            self.cache_rx = None;
-        }
-        if let Some(rx) = &self.detect_rx
-            && let Ok(found) = rx.try_recv()
-        {
-            self.detected = found;
-            self.detect_rx = None;
-        }
-        let slicers_editors_printers =
-            ((slicers, default_slicer), (editors, default_editor), (printers, default_printer));
-        let mut open = self.open;
-        let center = ctx.content_rect().center();
-        egui::Window::new(t!("settings.title"))
-            .open(&mut open)
-            .default_width(820.0)
-            .default_height(600.0)
-            .min_width(640.0)
-            .min_height(400.0)
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(center)
-            .resizable(true)
-            .collapsible(false)
-            .show(ctx, |ui| {
-                // Categories on the left in their groups, the chosen one's settings on the right.
-                ui.horizontal_top(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width(CATEGORY_WIDTH);
-                        let mut group = None;
-                        for category in Category::ALL {
-                            if category.group() != group {
-                                group = category.group();
-                                if let Some(caption) = &group {
-                                    ui.add_space(10.0);
-                                    ui.horizontal(|ui| {
-                                        ui.add_space(8.0);
-                                        ui.label(RichText::new(caption.to_uppercase()).small().strong().weak());
-                                    });
-                                }
-                            }
-                            if category_item(ui, category, self.category == category).clicked() {
-                                self.category = category;
-                                self.confirm_defaults = false;
-                            }
-                        }
-                    });
-                    ui.separator();
-                    ui.vertical(|ui| {
-                        ui.add_space(2.0);
-                        ui.heading(self.category.title());
-                        hint(ui, self.category.intro());
-                        let footer = if self.category.has_defaults() { 34.0 } else { 0.0 };
-                        egui::ScrollArea::vertical()
-                            .auto_shrink(false)
-                            .max_height((ui.available_height() - footer).max(80.0))
-                            .show(ui, |ui| self.page(ui, config, slicers_editors_printers, &info, &mut changes));
-                        if self.category.has_defaults() {
-                            self.restore_defaults(ui, config, &mut changes);
-                        }
-                    });
-                });
-            });
+        // The kit's preferences window: the pages in a list on the left with a search over all of
+        // them, Restore defaults for the page shown, and OK, Cancel and Apply.
+        let texts = [
+            t!("settings.title"),
+            t!("settings.ok"),
+            t!("settings.cancel"),
+            t!("settings.apply"),
+            t!("settings.search"),
+            t!("settings.no_results"),
+            t!("settings.defaults"),
+            t!("settings.defaults_hint"),
+        ];
+        let [title, ok, cancel, apply, search, no_results, restore_defaults, restore_defaults_hint] = &texts;
+        let labels = Labels {
+            title,
+            icon: "settings",
+            ok,
+            cancel,
+            apply,
+            search,
+            no_results,
+            restore_defaults,
+            restore_defaults_hint,
+        };
+        let options = Options {
+            id: egui::Id::unique("settings_window"),
+            prefix: "mg:prefs",
+            labels,
+            sidebar_footer: None,
+            above_page: None,
+        };
+        let pages = pages();
+        let mut host =
+            Host { dialog: self, config, lists: (slicers, editors, printers), info: &info, changes: &mut changes };
+        prefs_window::show(ctx, &mut host, &pages, &options, |_| {});
+        // The page the window shows now is the one opened again next time.
+        self.category = Category::ALL.get(self.window.section).copied().unwrap_or_default();
+        CHOSEN_PAGE.store(self.window.section, std::sync::atomic::Ordering::Relaxed);
         self.mouse.calibration_modal(ctx, config, info.mouse, info.render, &mut changes);
-        self.open = open;
         changes
     }
 
     /// The chosen category's sections.
-    fn page(
+    fn page(&mut self, ui: &mut Ui, config: &Config, lists: Lists, info: &AppInfo, changes: &mut Vec<SettingsChange>) {
+        if self.category == Category::General {
+            return self.general_page(ui, config, changes);
+        }
+        let category = self.category;
+        sc::settings_page(ui, |ui| {
+            // Lines of text and small buttons are as tall as the kit's small buttons, so those
+            // sit on the line and not below it.
+            ui.spacing_mut().interact_size.y = solidcraft_theme::Tokens::get().form_close_size;
+            // Plain labels wrap where they must and are otherwise written out: the kit's window
+            // cuts them short, which empties the columns of a table.
+            ui.style_mut().wrap_mode = None;
+            sc::settings_heading(ui, &category.title(), &category.intro());
+            self.sections(ui, config, lists, info, changes);
+        });
+    }
+
+    /// The sections of the page shown, each under its heading that folds it away.
+    fn sections(
         &mut self,
         ui: &mut Ui,
         config: &Config,
@@ -910,7 +1101,7 @@ impl SettingsDialog {
         changes: &mut Vec<SettingsChange>,
     ) {
         let sections: &[Section] = match self.category {
-            Category::General => &[Section::Language, Section::DoubleClick, Section::Panes],
+            Category::General => &[Section::Language, Section::Appearance, Section::DoubleClick, Section::Panes],
             Category::Library => &[Section::Library, Section::Inbox, Section::Duplicates, Section::Import],
             Category::Tags => {
                 &[Section::Tags, Section::Placement, Section::Themes, Section::Properties, Section::States]
@@ -938,71 +1129,47 @@ impl SettingsDialog {
             }
         };
         for &section in sections {
-            let toggled =
-                kit::section(ui, &section.key(), &section.title(), &config.settings_folded, |ui| match section {
-                    Section::Language => self.language(ui, config, changes),
-                    Section::DoubleClick => double_click(ui, config, changes),
-                    Section::Panes => panes(ui, config, changes),
-                    Section::Library => self.library(ui, config, changes),
-                    Section::Inbox => inbox(ui, config, changes),
-                    Section::Duplicates => duplicates(ui, config, changes),
-                    Section::Import => self.import(ui, config, changes),
-                    Section::FolderPreviews => folder_previews(ui, config, changes),
-                    Section::TilePreview => self.tiles.preview(ui, config, info.tag_style, changes),
-                    Section::TileLook => self.tiles.look(ui, config, changes),
-                    Section::Tags => tags(ui, config, changes),
-                    Section::Placement => self.placement(ui, config, info.tags, changes),
-                    Section::Themes => self.suggestions(ui, config, Group::Themes, changes),
-                    Section::Properties => self.suggestions(ui, config, Group::Properties, changes),
-                    Section::States => self.suggestions(ui, config, Group::State, changes),
-                    Section::Preview => preview(ui, config, changes),
-                    Section::SpaceMouse => self.mouse.section(ui, config, info.mouse, info.render, changes),
-                    Section::Models => models(ui, config, changes),
-                    Section::Units => units(ui, config, changes),
-                    Section::Slicer => self.program_list(ui, false, slicers, default_slicer, changes),
-                    Section::RecentPrints => recent_prints(ui, config, changes),
-                    Section::Editor => self.program_list(ui, true, editors, default_editor, changes),
-                    Section::Printer => self.printers(ui, printers, default_printer, changes),
-                    Section::Ai => self.ai.main(ui, config, changes),
-                    Section::AiLibraries => self.ai.libraries(ui, config, changes),
-                    Section::Mcp => self.ai.mcp(ui, config, info.ai_connect, changes),
-                    Section::Assistant => self.ai.assistant(ui, config, info.agents, changes),
-                    Section::Endpoint => self.ai.endpoint(ui, config, changes),
-                    Section::AiLog => self.ai.log(ui, changes),
-                    Section::Plugins => self.plugins.page(ui, config, info.plugins, changes),
-                    Section::UserData => self.user_data(ui, changes),
-                    Section::Storage => self.storage(ui, changes),
-                });
-            if let Some(folded) = toggled {
-                changes.push(SettingsChange::FoldSection { key: section.key(), folded });
-            }
-        }
-        ui.add_space(8.0);
-    }
-
-    /// The footer: puts the page's preferences back, after a second click to be sure.
-    fn restore_defaults(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
-        ui.separator();
-        let resets = self.category.defaults(config);
-        if resets.is_empty() {
-            self.confirm_defaults = false;
-        }
-        ui.horizontal(|ui| {
-            let label = if self.confirm_defaults { t!("settings.defaults_confirm") } else { t!("settings.defaults") };
-            let button = ui
-                .add_enabled(!resets.is_empty(), egui::Button::new(label))
-                .on_hover_text(t!("settings.defaults_hint"))
-                .on_disabled_hover_text(t!("settings.defaults_none"));
-            if button.clicked() {
-                if self.confirm_defaults {
-                    changes.extend(resets);
+            sc::settings_section(ui, &section.key(), &section.title(), |ui| match section {
+                // The General page is drawn by `general_page`.
+                Section::Appearance | Section::Language | Section::DoubleClick | Section::Panes => {}
+                Section::Library => self.library(ui, config, changes),
+                Section::Inbox => inbox(ui, config, changes),
+                Section::Duplicates => duplicates(ui, config, changes),
+                Section::Import => self.import(ui, config, changes),
+                Section::FolderPreviews => folder_previews(ui, config, changes),
+                Section::TilePreview => self.tiles.preview(ui, config, info.tag_style, changes),
+                Section::TileLook => self.tiles.look(ui, config, changes),
+                Section::Tags => tags(ui, config, changes),
+                Section::Placement => self.placement(ui, config, info.tags, changes),
+                Section::Themes => self.suggestions(ui, config, Group::Themes, changes),
+                Section::Properties => self.suggestions(ui, config, Group::Properties, changes),
+                Section::States => self.suggestions(ui, config, Group::State, changes),
+                Section::Preview => preview(ui, config, changes),
+                Section::SpaceMouse => self.mouse.section(ui, config, info.mouse, info.render, changes),
+                Section::Models => models(ui, config, changes),
+                Section::Units => units(ui, config, changes),
+                Section::Slicer => {
+                    let mut icons = config.program_icons;
+                    let (label, hint) = (t!("settings.program_icons"), t!("settings.program_icons_hint"));
+                    if super::settings_kit::check(ui, &mut icons, label, hint) {
+                        changes.push(SettingsChange::ProgramIcons(icons));
+                    }
+                    self.program_list(ui, false, slicers, default_slicer, changes);
                 }
-                self.confirm_defaults = !self.confirm_defaults;
-            }
-            if self.confirm_defaults && ui.button(t!("settings.cancel")).clicked() {
-                self.confirm_defaults = false;
-            }
-        });
+                Section::RecentPrints => recent_prints(ui, config, changes),
+                Section::Editor => self.program_list(ui, true, editors, default_editor, changes),
+                Section::Printer => self.printers(ui, printers, default_printer, changes),
+                Section::Ai => self.ai.main(ui, config, changes),
+                Section::AiLibraries => self.ai.libraries(ui, config, changes),
+                Section::Mcp => self.ai.mcp(ui, config, info.ai_connect, changes),
+                Section::Assistant => self.ai.assistant(ui, config, info.agents, changes),
+                Section::Endpoint => self.ai.endpoint(ui, config, changes),
+                Section::AiLog => self.ai.log(ui, changes),
+                Section::Plugins => self.plugins.page(ui, config, info.plugins, changes),
+                Section::UserData => self.user_data(ui, changes),
+                Section::Storage => self.storage(ui, changes),
+            });
+        }
     }
 
     /// The suggested tags of one group (themes, print properties, states) offered in the tag menu:
@@ -1034,71 +1201,94 @@ impl SettingsDialog {
         let german = rust_i18n::locale().starts_with("de");
         let mut themes = original.clone();
         let mut remove = None;
-        egui::ScrollArea::vertical().id_salt("list").max_height(260.0).show(ui, |ui| {
-            for (i, theme) in themes.iter_mut().enumerate() {
-                ui.horizontal(|ui| {
-                    let (bg, _) = PALETTE[usize::from(tags::theme_slot(theme))];
-                    let swatch = egui::Button::new("")
-                        .fill(egui::Color32::from_rgb(bg[0], bg[1], bg[2]))
-                        .min_size(egui::vec2(20.0, 20.0))
-                        .corner_radius(10.0);
-                    egui::containers::menu::MenuButton::from_button(swatch).ui(ui, |ui| {
-                        ui.set_max_width(6.0 * 26.0);
-                        ui.horizontal_wrapped(|ui| {
-                            for (slot, (bg, _)) in PALETTE.iter().enumerate() {
-                                let fill = egui::Color32::from_rgb(bg[0], bg[1], bg[2]);
-                                let pick = egui::Button::new("")
-                                    .fill(fill)
+        // All of them on the page, two to a row: the page scrolls and the section folds, a list
+        // that scrolls in itself was too low to work in.
+        const GAP: f32 = 16.0;
+        // Never wider than the page: a row that asks for more makes the window grow.
+        let column = ((ui.available_width() - GAP) / 2.0).floor().max(120.0);
+        let rows = themes.len().div_ceil(2);
+        for row in 0..rows {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                for (side, i) in [row, row + rows].into_iter().enumerate() {
+                    if side == 1 {
+                        ui.add_space(GAP);
+                    }
+                    let Some(theme) = themes.get_mut(i) else { continue };
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(column, ui.spacing().interact_size.y),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.set_width(column);
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.push_id(i, |ui| {
+                                let (bg, _) = PALETTE[usize::from(tags::theme_slot(theme))];
+                                // A round dot, though the line is taller than it.
+                                ui.spacing_mut().interact_size.y = 20.0;
+                                let swatch = egui::Button::new("")
+                                    .fill(egui::Color32::from_rgb(bg[0], bg[1], bg[2]))
                                     .min_size(egui::vec2(20.0, 20.0))
                                     .corner_radius(10.0);
-                                if ui.add(pick).clicked() {
-                                    theme.color = Some(slot as u8);
-                                    ui.close();
+                                egui::containers::menu::MenuButton::from_button(swatch).ui(ui, |ui| {
+                                    ui.set_max_width(6.0 * 26.0);
+                                    ui.horizontal_wrapped(|ui| {
+                                        for (slot, (bg, _)) in PALETTE.iter().enumerate() {
+                                            let fill = egui::Color32::from_rgb(bg[0], bg[1], bg[2]);
+                                            let pick = egui::Button::new("")
+                                                .fill(fill)
+                                                .min_size(egui::vec2(20.0, 20.0))
+                                                .corner_radius(10.0);
+                                            if ui.add(pick).clicked() {
+                                                theme.color = Some(slot as u8);
+                                                ui.close();
+                                            }
+                                        }
+                                    });
+                                });
+                                let linked = theme.de == theme.en;
+                                let name = if german { &mut theme.de } else { &mut theme.en };
+                                // The field takes what the dot and the cross leave (its own
+                                // margins and the cross with its gap come off).
+                                let field = (ui.available_width() - 44.0).max(40.0);
+                                super::settings_kit::text_field(ui, name, "", field);
+                                if linked {
+                                    let name = if german { theme.de.clone() } else { theme.en.clone() };
+                                    theme.de = name.clone();
+                                    theme.en = name;
                                 }
-                            }
-                        });
-                    });
-                    let linked = theme.de == theme.en;
-                    let name = if german { &mut theme.de } else { &mut theme.en };
-                    ui.add(egui::TextEdit::singleline(name).desired_width(220.0));
-                    if linked {
-                        let name = if german { theme.de.clone() } else { theme.en.clone() };
-                        theme.de = name.clone();
-                        theme.en = name;
-                    }
-                    if ui.small_button("✖").on_hover_text(t!("settings.suggest_remove")).clicked() {
-                        remove = Some(i);
-                    }
-                });
-            }
-        });
+                                if super::settings_kit::small(ui, "✖", &t!("settings.suggest_remove")).clicked() {
+                                    remove = Some(i);
+                                }
+                            });
+                        },
+                    );
+                }
+            });
+        }
         if let Some(i) = remove {
             themes.remove(i);
         }
         ui.horizontal(|ui| {
-            let field = ui.add(
-                egui::TextEdit::singleline(&mut self.suggest_input[slot])
-                    .hint_text(t!("settings.suggest_new"))
-                    .desired_width(220.0),
-            );
+            let field =
+                super::settings_kit::text_field(ui, &mut self.suggest_input[slot], &t!("settings.suggest_new"), 220.0);
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let name = self.suggest_input[slot].trim().to_owned();
             let can_add = !name.is_empty() && !themes.iter().any(|t| t.matches(&name));
-            if (ui.add_enabled(can_add, egui::Button::new("+")).clicked() || enter) && can_add {
+            if (super::settings_kit::button_if(ui, can_add, "+").clicked() || enter) && can_add {
                 themes.push(SuggestedTag::named(&name));
                 self.suggest_input[slot].clear();
                 field.request_focus();
             }
         });
         ui.horizontal(|ui| {
-            if ui.button(t!("settings.suggest_missing")).clicked() {
+            if sc::button(ui, t!("settings.suggest_missing"), sc::Button::Normal).clicked() {
                 for theme in defaults() {
                     if !themes.iter().any(|t| t.matches(&theme.de) || t.matches(&theme.en)) {
                         themes.push(theme);
                     }
                 }
             }
-            if ui.button(t!("settings.suggest_reset")).clicked() {
+            if sc::button(ui, t!("settings.suggest_reset"), sc::Button::Normal).clicked() {
                 themes = defaults();
                 if themes == original {
                     return;
@@ -1112,37 +1302,211 @@ impl SettingsDialog {
         }
     }
 
-    fn language(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
-        row(ui, &t!("settings.language_ui"), |ui| {
-            let mut language = config.language.as_deref();
-            let options = [
-                (None, t!("settings.language_auto").into_owned()),
-                (Some("de"), "Deutsch".to_owned()),
-                (Some("en"), "English".to_owned()),
-            ];
-            if segmented(ui, &mut language, &options) {
-                changes.push(SettingsChange::Language(language.map(str::to_owned)));
-            }
+    /// The General page on the kit's settings controls: sections that fold, rows with their label
+    /// in a column, joined buttons, lists that open, switches with their note under them.
+    fn general_page(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
+        /// The label column of the page's rows.
+        const LABELS: f32 = 190.0;
+        /// A note under what it explains.
+        fn note(ui: &mut Ui, text: &str) {
+            // Closer to its control than the page's rhythm puts the next row.
+            ui.add_space(-solidcraft_theme::Tokens::get().space_6);
+            sc::text(ui, text, sc::Text::Note(text));
+        }
+        sc::settings_page(ui, |ui| {
+            sc::settings_heading(ui, &Category::General.title(), &Category::General.intro());
+            sc::settings_section(ui, "language", &t!("settings.language"), |ui| {
+                sc::settings_form(ui, LABELS, |ui| {
+                    sc::row(ui, &t!("settings.language_ui"), |ui| {
+                        let automatic = t!("settings.language_auto");
+                        let (options, codes) = ([&*automatic, "Deutsch", "English"], [None, Some("de"), Some("en")]);
+                        let mut index = codes.iter().position(|code| *code == config.language.as_deref()).unwrap_or(0);
+                        if sc::settings_segments(ui, &t!("settings.language_ui"), &mut index, &options) {
+                            changes.push(SettingsChange::Language(codes[index].map(str::to_owned)));
+                        }
+                    });
+                });
+            });
+            sc::settings_section(ui, "appearance", &t!("settings.appearance"), |ui| {
+                note(ui, &t!("settings.appearance_hint"));
+                // Not among search results: the cards are pictures, and their room would stay
+                // empty above the rows the search found.
+                if !sc::settings_search::querying(ui) {
+                    let labels = [&*t!("settings.appearance_dark"), &*t!("settings.appearance_light")];
+                    if let Some(theme) = self.themes.show(ui, labels) {
+                        changes.push(SettingsChange::UiTheme(Some(theme)));
+                    }
+                }
+                sc::settings_block(ui, &t!("settings.font"), LABELS, |ui| {
+                    if let Some(font) = self.font_picker(ui, config.ui_font.as_deref()) {
+                        changes.push(SettingsChange::UiFont(font));
+                    }
+                    note(ui, &t!("settings.font_hint"));
+                });
+                // On macOS the system's title bar stays: its window buttons belong to it.
+                if cfg!(not(target_os = "macos")) {
+                    sc::settings_block(ui, &t!("settings.title_bar"), LABELS, |ui| {
+                        let (app, system) = (t!("settings.title_bar_app"), t!("settings.title_bar_system"));
+                        let mut index = usize::from(config.title_bar == config::TitleBar::System);
+                        if sc::settings_segments(ui, &t!("settings.title_bar"), &mut index, &[&*app, &*system]) {
+                            let title_bar = if index == 1 { config::TitleBar::System } else { config::TitleBar::App };
+                            changes.push(SettingsChange::TitleBar(title_bar));
+                        }
+                        note(ui, &t!("settings.title_bar_hint"));
+                    });
+                }
+            });
+            sc::settings_section(ui, "double_click", &t!("settings.double_click"), |ui| {
+                sc::settings_block(ui, &t!("settings.double_click_row"), LABELS, |ui| {
+                    let actions = [
+                        (DoubleClick::Window, t!("settings.double_click_window")),
+                        (DoubleClick::Preview, t!("settings.double_click_preview")),
+                        (DoubleClick::Slicer, t!("settings.double_click_slicer")),
+                        (DoubleClick::Editor, t!("settings.double_click_editor")),
+                        (DoubleClick::DefaultApp, t!("settings.double_click_default_app")),
+                    ];
+                    let current = actions.iter().find(|(action, _)| *action == config.double_click);
+                    let current = current.map(|(_, label)| label.to_string()).unwrap_or_default();
+                    sc::settings_control_width(ui, 260.0, |ui| {
+                        sc::dropdown_menu(ui, "settings_double_click", &current, |ui| {
+                            for (action, label) in &actions {
+                                let chosen = config.double_click == *action;
+                                if sc::list_picker(ui, &format!("{action:?}"), label, chosen).clicked() && !chosen {
+                                    changes.push(SettingsChange::DoubleClick(*action));
+                                }
+                            }
+                        });
+                    });
+                    note(ui, &t!("settings.double_click_hint"));
+                });
+            });
+            sc::settings_section(ui, "panes", &t!("settings.panes"), |ui| {
+                let mut locked = config.lock_panes;
+                sc::checkbox(ui, &t!("settings.panes_lock"), &mut locked);
+                if locked != config.lock_panes {
+                    changes.push(SettingsChange::LockPanes(locked));
+                }
+                note(ui, &t!("settings.panes_hint"));
+                let mut fold = config.fold_for_plugins;
+                sc::checkbox(ui, &t!("settings.panes_fold"), &mut fold);
+                if fold != config.fold_for_plugins {
+                    changes.push(SettingsChange::FoldForPlugins(fold));
+                }
+                note(ui, &t!("settings.panes_fold_hint"));
+                if sc::button(ui, t!("pane.reset"), sc::Button::Normal).clicked() {
+                    changes.push(SettingsChange::ResetLayout);
+                }
+            });
         });
+    }
+
+    /// The interface font as a list that opens: the theme's font and the desktop's on top, then
+    /// every installed family, with a search. Gives the choice as the setting takes it.
+    fn font_picker(&mut self, ui: &mut Ui, setting: Option<&str>) -> Option<Option<String>> {
+        use super::fonts::{self, Choice};
+        let (theme, system) = (t!("settings.font_theme"), t!("settings.font_system"));
+        let current = match Choice::of(setting) {
+            Choice::Theme => theme.to_string(),
+            Choice::System => system.to_string(),
+            Choice::Family(family) => family.to_owned(),
+        };
+        let families = fonts::families(ui.ctx());
+        let mut open = false;
+        let mut chosen = None;
+        ui.allocate_ui(egui::vec2(260.0_f32.min(ui.available_width()), 0.0), |ui| {
+            let close = egui::PopupCloseBehavior::CloseOnClickOutside;
+            sc::dropdown_menu_with_close_behavior(ui, "settings_ui_font", &current, close, |ui| {
+                open = true;
+                sc::hint_field(ui, &mut self.font_filter, &t!("settings.font_search"));
+                let query = self.font_filter.trim().to_lowercase();
+                if query != self.font_query {
+                    self.font_query = query.clone();
+                    self.font_window.reset();
+                }
+                let matches = |name: &str| query.is_empty() || name.to_lowercase().contains(&query);
+                // The two fixed choices, then the families: what a click sets, the label, and
+                // the family the row is written in.
+                let fixed =
+                    [(None, &*theme, fonts::theme_family()), (Some(fonts::SYSTEM), &*system, fonts::system_family())];
+                let rows: Vec<(Option<&str>, &str, egui::FontFamily)> = fixed
+                    .into_iter()
+                    .filter(|(_, label, _)| matches(label))
+                    .chain(
+                        families
+                            .into_iter()
+                            .flatten()
+                            .filter(|family| matches(family))
+                            .map(|family| (Some(family.as_str()), family.as_str(), fonts::preview_family(family))),
+                    )
+                    .collect();
+                let tokens = solidcraft_theme::Tokens::get();
+                let row_height = sc::row_height();
+                egui::ScrollArea::vertical()
+                    .id_salt("settings_ui_font_list")
+                    .max_height(tokens.space_24 * 10.0)
+                    .min_scrolled_height(tokens.space_24 * 10.0)
+                    .auto_shrink([false, false])
+                    .show_rows(ui, row_height, rows.len(), |ui, visible| {
+                        if self.font_window.follow(visible.clone(), rows.len()) {
+                            self.font_previews = rows[self.font_window.rows()]
+                                .iter()
+                                .filter_map(|(value, _, _)| value.filter(|v| *v != fonts::SYSTEM))
+                                .map(str::to_owned)
+                                .collect();
+                        }
+                        for (value, label, family) in &rows[visible] {
+                            let mut text = RichText::new(*label);
+                            if fonts::is_loaded(ui.ctx(), family) {
+                                text = text.family(family.clone()).size(tokens.font_body + 1.0);
+                            }
+                            let size = egui::vec2(ui.available_width(), row_height);
+                            if ui.add_sized(size, egui::Button::selectable(current == *label, text)).clicked() {
+                                chosen = Some(value.map(str::to_owned));
+                                ui.close();
+                            }
+                        }
+                    });
+                if families.is_none() {
+                    ui.label(RichText::new(t!("settings.font_listing")).weak());
+                }
+            });
+        });
+        if !open {
+            self.font_window.reset();
+            self.font_previews.clear();
+        }
+        if chosen.is_some() {
+            self.font_filter.clear();
+        }
+        chosen
+    }
+
+    /// The folder chosen in the system's dialog goes into its field, where it can still be
+    /// changed before "Add".
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    pub fn folder_picked(&mut self, what: FolderFor, folder: &std::path::Path) {
+        let field = match what {
+            FolderFor::Library => &mut self.root_input,
+            FolderFor::Import => &mut self.import_folder_input,
+        };
+        *field = folder.display().to_string();
     }
 
     fn library(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
         hint(ui, t!("settings.library_hint"));
         for root in &config.library_roots {
             ui.horizontal(|ui| {
-                if ui.small_button("✖").on_hover_text(t!("sidebar.remove_root")).clicked() {
+                if super::settings_kit::small(ui, "✖", &t!("sidebar.remove_root")).clicked() {
                     changes.push(SettingsChange::RemoveRoot(root.clone()));
                 }
                 ui.label(root.display().to_string());
             });
         }
         ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.root_input)
-                    .hint_text(t!("settings.folder_hint"))
-                    .desired_width(320.0),
-            );
-            if ui.button(t!("settings.add")).clicked() {
+            if folder_field(ui, "settings-root", &mut self.root_input) {
+                changes.push(SettingsChange::PickFolder(FolderFor::Library));
+            }
+            if super::settings_kit::action(ui, t!("settings.add"), true).clicked() {
                 let path = PathBuf::from(self.root_input.trim());
                 if path.is_dir() {
                     changes.push(SettingsChange::AddRoot(path));
@@ -1220,30 +1584,29 @@ impl SettingsDialog {
                         ui.label("");
                     }
                     ui.label(row.tag.as_str());
-                    let edit = egui::TextEdit::singleline(&mut row.folder).hint_text(t!("settings.placement_none"));
-                    let field = ui.add_sized([220.0, ui.spacing().interact_size.y], edit);
+                    let field =
+                        super::settings_kit::text_field(ui, &mut row.folder, &t!("settings.placement_none"), 220.0);
                     let ok = valid(&row.folder);
                     bad |= !ok;
                     edited |= field.lost_focus() && ok;
                     ui.horizontal(|ui| {
                         if i < ordered_rows {
-                            if ui
-                                .add_enabled(i > 0, egui::Button::new("▲").small())
-                                .on_hover_text(t!("settings.placement_up"))
-                                .clicked()
-                            {
+                            if super::settings_kit::small_if(ui, i > 0, "▲", &t!("settings.placement_up")).clicked() {
                                 moved = Some((i, i - 1));
                             }
-                            if ui
-                                .add_enabled(i + 1 < ordered_rows, egui::Button::new("▼").small())
-                                .on_hover_text(t!("settings.placement_down"))
-                                .clicked()
+                            if super::settings_kit::small_if(
+                                ui,
+                                i + 1 < ordered_rows,
+                                "▼",
+                                &t!("settings.placement_down"),
+                            )
+                            .clicked()
                             {
                                 moved = Some((i, i + 1));
                             }
                         }
                         if !row.folder.trim().is_empty()
-                            && ui.small_button("✖").on_hover_text(t!("settings.placement_clear")).clicked()
+                            && super::settings_kit::small(ui, "✖", &t!("settings.placement_clear")).clicked()
                         {
                             row.folder.clear();
                             edited = true;
@@ -1328,7 +1691,7 @@ impl SettingsDialog {
         let folders = &config.import.folders;
         for folder in folders {
             ui.horizontal(|ui| {
-                if ui.small_button("✖").on_hover_text(t!("settings.import_remove")).clicked() {
+                if super::settings_kit::small(ui, "✖", &t!("settings.import_remove")).clicked() {
                     let kept: Vec<PathBuf> = folders.iter().filter(|f| *f != folder).cloned().collect();
                     changes.push(SettingsChange::ImportFolders(kept));
                 }
@@ -1336,12 +1699,10 @@ impl SettingsDialog {
             });
         }
         ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.import_folder_input)
-                    .hint_text(t!("settings.folder_hint"))
-                    .desired_width(320.0),
-            );
-            if ui.button(t!("settings.add")).clicked() {
+            if folder_field(ui, "settings-import", &mut self.import_folder_input) {
+                changes.push(SettingsChange::PickFolder(FolderFor::Import));
+            }
+            if super::settings_kit::action(ui, t!("settings.add"), true).clicked() {
                 let path = PathBuf::from(self.import_folder_input.trim());
                 if path.is_dir() {
                     let mut all = folders.clone();
@@ -1356,8 +1717,7 @@ impl SettingsDialog {
                 }
             }
             if let Some(downloads) = dirs::download_dir().filter(|d| !folders.contains(d) && d.is_dir())
-                && ui
-                    .button(t!("settings.import_add_downloads"))
+                && super::settings_kit::action(ui, t!("settings.import_add_downloads"), true)
                     .on_hover_text(downloads.display().to_string())
                     .clicked()
             {
@@ -1377,9 +1737,9 @@ impl SettingsDialog {
         row(ui, &t!("settings.import_library"), |ui| {
             let current = config.import_root().map(|r| r.to_path_buf());
             let shown = current.as_deref().map(listing_name).unwrap_or_default();
-            egui::ComboBox::from_id_salt("import_library").selected_text(shown).show_ui(ui, |ui| {
+            super::settings_kit::dropdown(ui, "import_library", &shown, 220.0, |ui| {
                 for root in &config.library_roots {
-                    if ui.selectable_label(current.as_deref() == Some(root), listing_name(root)).clicked() {
+                    if super::settings_kit::choice_row(ui, current.as_deref() == Some(root), &listing_name(root)) {
                         changes.push(SettingsChange::ImportTarget {
                             library: Some(root.clone()),
                             landing: config.import.landing.clone(),
@@ -1392,7 +1752,7 @@ impl SettingsDialog {
             if self.landing_input.is_empty() {
                 self.landing_input = config.import.landing.clone();
             }
-            let field = ui.add(egui::TextEdit::singleline(&mut self.landing_input).desired_width(200.0));
+            let field = super::settings_kit::text_field(ui, &mut self.landing_input, "", 200.0);
             let name = self.landing_input.trim();
             let valid = !name.is_empty() && meshgrove_core::fsops::check_name(name).is_ok();
             if field.lost_focus() && valid && name != config.import.landing {
@@ -1460,12 +1820,27 @@ impl SettingsDialog {
         }
         for (i, program) in programs.iter().enumerate() {
             ui.horizontal(|ui| {
-                if ui.radio(i == default, "").on_hover_text(t!("settings.slicers_default")).clicked() && i != default {
+                let path = program.program.display().to_string();
+                let tip = t!("settings.slicers_default");
+                // With the programs' icons on, each row has its picture inside the tile,
+                // between the round mark and the name; one without its own gets our sign,
+                // so the names stay in line.
+                let picked = if super::program_icons::enabled() {
+                    let texts = (program.name.as_str(), path.as_str(), tip.as_ref());
+                    super::settings_kit::choice_tile_with(ui, i == default, texts, 34.0, |ui, slot| {
+                        if !super::program_icons::paint(ui, slot, &program.name) {
+                            let sign = if editors { "edit" } else { "explode" };
+                            let ink = solidcraft_theme::Tokens::get().form_dim;
+                            sc::icons::paint_ink(ui.painter(), slot.shrink(4.0), sign, ink);
+                        }
+                    })
+                } else {
+                    super::settings_kit::choice_tile(ui, i == default, &program.name, &path, &tip, 34.0)
+                };
+                if picked && i != default {
                     send(programs.to_vec(), Some(program.name.clone()), changes);
                 }
-                ui.label(RichText::new(&program.name).strong());
-                ui.weak(program.program.display().to_string());
-                if ui.small_button("✖").on_hover_text(t!("settings.slicers_remove")).clicked() {
+                if super::settings_kit::small(ui, "✖", &t!("settings.slicers_remove")).clicked() {
                     let list: Vec<Program> = programs.iter().filter(|s| s.name != program.name).cloned().collect();
                     send(list, default_name.clone().filter(|n| *n != program.name), changes);
                 }
@@ -1481,7 +1856,7 @@ impl SettingsDialog {
             .collect();
         for d in &addable {
             ui.horizontal(|ui| {
-                if ui.button("+").on_hover_text(t!("settings.slicers_add")).clicked() {
+                if sc::button(ui, "+", sc::Button::Normal).on_hover_text(t!("settings.slicers_add")).clicked() {
                     let mut list = programs.to_vec();
                     list.push(d.program.clone());
                     send(list, default_name.clone().or_else(|| Some(d.program.name.clone())), changes);
@@ -1498,31 +1873,31 @@ impl SettingsDialog {
             ui.weak(t!("settings.slicers_nothing_more"));
         }
         ui.horizontal(|ui| {
-            if ui.add_enabled(self.detect_rx.is_none(), egui::Button::new(t!("settings.slicers_rescan"))).clicked() {
+            if super::settings_kit::button_if(ui, self.detect_rx.is_none(), t!("settings.slicers_rescan")).clicked() {
                 self.rescan_slicers();
             }
             if self.detect_rx.is_some() {
-                ui.spinner();
+                crate::ui::loading::mark(ui);
             }
         });
         let by_hand = if editors { "settings.editors_by_hand" } else { "settings.slicers_by_hand" };
-        ui.collapsing(t!(by_hand), |ui| {
+        super::settings_kit::fold(ui, by_hand, &t!(by_hand), false, None, |ui| {
             let form = if editors { &mut self.editor_form } else { &mut self.slicer_form };
             let (name, program, workdir) = form;
             egui::Grid::new(("program_form", editors)).num_columns(2).show(ui, |ui| {
                 ui.label(t!("settings.slicer_name"));
-                ui.add(egui::TextEdit::singleline(name).desired_width(320.0));
+                super::settings_kit::text_field(ui, name, "", 320.0);
                 ui.end_row();
                 ui.label(t!("settings.slicer_program"));
-                ui.add(egui::TextEdit::singleline(program).desired_width(320.0));
+                super::settings_kit::text_field(ui, program, "", 320.0);
                 ui.end_row();
                 if !editors {
                     ui.label(t!("settings.slicer_workdir"));
-                    ui.add(egui::TextEdit::singleline(workdir).desired_width(320.0));
+                    super::settings_kit::text_field(ui, workdir, "", 320.0);
                     ui.end_row();
                 }
             });
-            if ui.button(t!("settings.slicers_add")).clicked() && !program.trim().is_empty() {
+            if sc::button(ui, t!("settings.slicers_add"), sc::Button::Normal).clicked() && !program.trim().is_empty() {
                 // Keep the environment of a detected program with the same path (e.g. Anycubic's libraries).
                 let env = self
                     .detected
@@ -1562,18 +1937,19 @@ impl SettingsDialog {
         let units = config::display_units();
         for (i, p) in printers.iter().enumerate() {
             ui.horizontal(|ui| {
-                if ui.radio(i == default, "").on_hover_text(t!("settings.printers_default")).clicked() && i != default {
+                let tip = t!("settings.printers_default");
+                if super::settings_kit::choice_tile(ui, i == default, &p.name, &printer_summary(p), &tip, 68.0)
+                    && i != default
+                {
                     send(printers.to_vec(), Some(p.name.clone()), changes);
                 }
-                ui.label(RichText::new(&p.name).strong());
-                ui.weak(printer_summary(p));
-                if ui.small_button("✏").on_hover_text(t!("settings.printers_edit")).clicked() {
+                if super::settings_kit::small(ui, "✏", &t!("settings.printers_edit")).clicked() {
                     self.printer_form = printer_form(Some(p));
                     self.printer_form_units = units;
                     self.printer_editing = Some(p.name.clone());
                     self.printer_error = false;
                 }
-                if ui.small_button("✖").on_hover_text(t!("settings.printers_remove")).clicked() {
+                if super::settings_kit::small(ui, "✖", &t!("settings.printers_remove")).clicked() {
                     let list: Vec<Printer> = printers.iter().filter(|q| q.name != p.name).cloned().collect();
                     send(list, default_name.clone().filter(|n| *n != p.name), changes);
                 }
@@ -1589,7 +1965,7 @@ impl SettingsDialog {
             .collect();
         for d in &addable {
             ui.horizontal(|ui| {
-                if ui.button("+").on_hover_text(t!("settings.printers_add")).clicked() {
+                if sc::button(ui, "+", sc::Button::Normal).on_hover_text(t!("settings.printers_add")).clicked() {
                     let mut list = printers.to_vec();
                     list.push(d.printer.clone());
                     send(list, default_name.clone().or_else(|| Some(d.printer.name.clone())), changes);
@@ -1602,13 +1978,16 @@ impl SettingsDialog {
             ui.weak(t!("settings.printers_nothing_more"));
         }
         ui.horizontal(|ui| {
-            if addable.len() > 1 && ui.button(t!("settings.printers_add_all")).clicked() {
+            if addable.len() > 1 && sc::button(ui, t!("settings.printers_add_all"), sc::Button::Normal).clicked() {
                 let mut list = printers.to_vec();
                 list.extend(addable.iter().map(|d| d.printer.clone()));
                 let first = addable.iter().find(|d| d.selected).unwrap_or(&addable[0]).printer.name.clone();
                 send(list, default_name.clone().or(Some(first)), changes);
             }
-            if ui.button(t!("settings.slicers_rescan")).on_hover_text(t!("settings.printer_auto_hint")).clicked() {
+            if sc::button(ui, t!("settings.slicers_rescan"), sc::Button::Normal)
+                .on_hover_text(t!("settings.printer_auto_hint"))
+                .clicked()
+            {
                 self.found_printers = printer::detect_all();
             }
         });
@@ -1630,33 +2009,37 @@ impl SettingsDialog {
             None => t!("settings.printers_by_hand"),
         };
         let editing = self.printer_editing.is_some();
-        egui::CollapsingHeader::new(heading).id_salt("printer_form").open(editing.then_some(true)).show(ui, |ui| {
+        super::settings_kit::fold(ui, "printer_form", &heading, false, editing.then_some(true), |ui| {
             egui::Grid::new("printer_form").num_columns(2).show(ui, |ui| {
                 ui.label(t!("settings.printer_name"));
-                ui.add(egui::TextEdit::singleline(&mut form[0]).desired_width(320.0));
+                super::settings_kit::text_field(ui, &mut form[0], "", 320.0);
                 ui.end_row();
                 ui.label(t!("settings.printer_volume"));
+                // The first field starts where the name's does; each says its axis while it is
+                // empty and in its tooltip, and the three are as wide together as the name.
                 ui.horizontal(|ui| {
                     for (i, axis) in ["X", "Y", "Z"].iter().enumerate() {
-                        ui.label(*axis);
-                        ui.add(egui::TextEdit::singleline(&mut form[i + 1]).desired_width(56.0));
+                        if i > 0 {
+                            ui.label("×");
+                        }
+                        super::settings_kit::text_field(ui, &mut form[i + 1], axis, 92.0).on_hover_text(*axis);
                     }
                     ui.label(units.label());
                 });
                 ui.end_row();
                 ui.label(t!("settings.printer_nozzle"));
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut form[4]).desired_width(56.0));
+                    super::settings_kit::text_field(ui, &mut form[4], "", 92.0);
                     ui.label("mm");
                 });
                 ui.end_row();
                 ui.label(t!("settings.printer_materials"));
-                ui.add(egui::TextEdit::singleline(&mut form[5]).hint_text("PLA, PETG").desired_width(320.0));
+                super::settings_kit::text_field(ui, &mut form[5], "PLA, PETG", 320.0);
                 ui.end_row();
             });
             ui.horizontal(|ui| {
                 let label = if editing { t!("settings.apply") } else { t!("settings.printers_add") };
-                if ui.button(label).clicked() {
+                if super::settings_kit::action(ui, label, true).clicked() {
                     let length = |s: &str| {
                         s.trim().replace(',', ".").parse::<f32>().ok().filter(|v| *v > 0.0).map(|v| units.to_mm(v))
                     };
@@ -1700,7 +2083,7 @@ impl SettingsDialog {
                         _ => self.printer_error = true,
                     }
                 }
-                if editing && ui.button(t!("settings.cancel")).clicked() {
+                if editing && sc::button(ui, t!("settings.cancel"), sc::Button::Normal).clicked() {
                     self.printer_editing = None;
                     *form = printer_form(None);
                     self.printer_error = false;
@@ -1726,19 +2109,25 @@ impl SettingsDialog {
                 None => t!("settings.backups_none"),
             };
             ui.add(egui::Label::new(text).wrap());
-            if ui.button(t!("settings.open_folder")).clicked() {
+            if sc::button(ui, t!("settings.open_folder"), sc::Button::Normal).clicked() {
                 changes.push(SettingsChange::OpenBackups);
             }
         });
         row(ui, &t!("settings.export_row"), |ui| {
-            if ui.button(t!("settings.export")).on_hover_text(export_path().display().to_string()).clicked() {
+            if sc::button(ui, t!("settings.export"), sc::Button::Normal)
+                .on_hover_text(export_path().display().to_string())
+                .clicked()
+            {
                 changes.push(SettingsChange::Export(export_path()));
             }
         });
         row(ui, &t!("settings.import_row"), |ui| {
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.import_input).desired_width(280.0));
-                if ui.button(t!("settings.import")).on_hover_text(t!("settings.import_hint")).clicked() {
+                super::settings_kit::text_field(ui, &mut self.import_input, "", 280.0);
+                if sc::button(ui, t!("settings.import"), sc::Button::Normal)
+                    .on_hover_text(t!("settings.import_hint"))
+                    .clicked()
+                {
                     changes.push(SettingsChange::Import(PathBuf::from(self.import_input.trim())));
                 }
             });
@@ -1750,9 +2139,12 @@ impl SettingsDialog {
             ui.horizontal(|ui| {
                 match self.cache_size {
                     Some(size) => ui.label(t!("settings.cache_size", size = i18n::file_size(size))),
-                    None => ui.spinner(),
+                    None => crate::ui::loading::mark(ui),
                 };
-                if ui.button(t!("settings.clear_cache")).on_hover_text(t!("settings.clear_cache_hint")).clicked() {
+                if sc::button(ui, t!("settings.clear_cache"), sc::Button::Normal)
+                    .on_hover_text(t!("settings.clear_cache_hint"))
+                    .clicked()
+                {
                     changes.push(SettingsChange::ClearCache);
                     self.refresh_cache_size();
                 }
@@ -1812,10 +2204,27 @@ pub fn export_path() -> PathBuf {
     dir.join(format!("{}-{today}.json", t!("settings.export_file")))
 }
 
+/// A field for a folder's path: typed or pasted, or chosen with the folder button inside it
+/// (in builds that have the system's file dialog). True when that button was clicked.
+fn folder_field(ui: &mut Ui, id: &str, value: &mut String) -> bool {
+    use super::settings_kit as kit;
+    let picks = cfg!(feature = "plugins");
+    let room = if picks { kit::field_button_room() } else { 0.0 };
+    let field = kit::text_field_named_reserving(ui, id, value, &t!("settings.folder_hint"), 320.0, room);
+    picks && kit::field_button(ui, &field, "folder", &t!("review.pick_folder")).clicked()
+}
+
 fn about(ui: &mut Ui, info: &AppInfo) {
     ui.add_space(10.0);
+    // A value starts on the line of its name (which stands in the middle of a control's
+    // height), also where it wraps onto more lines.
     let fact = |ui: &mut Ui, k: std::borrow::Cow<str>, v: String| {
-        row(ui, &k, |ui| ui.add(egui::Label::new(v).wrap()));
+        row(ui, &k, |ui| {
+            // (A point and a half less than the middle: where the kit's row puts its name.)
+            let line = ui.text_style_height(&egui::TextStyle::Body);
+            ui.add_space(((solidcraft_theme::Tokens::get().control_height - line) / 2.0 - 1.5).max(0.0));
+            ui.add(egui::Label::new(v).wrap())
+        });
     };
     row(ui, &t!("settings.developer"), |ui| {
         ui.horizontal(|ui| {
@@ -1823,7 +2232,9 @@ fn about(ui: &mut Ui, info: &AppInfo) {
             ui.hyperlink_to("German Redneck Engineering", env!("CARGO_PKG_HOMEPAGE"));
         });
     });
-    row(ui, &t!("settings.source"), |ui| ui.hyperlink_to(env!("CARGO_PKG_REPOSITORY"), env!("CARGO_PKG_REPOSITORY")));
+    row(ui, &t!("settings.source"), |ui| {
+        ui.horizontal(|ui| ui.hyperlink_to(env!("CARGO_PKG_REPOSITORY"), env!("CARGO_PKG_REPOSITORY")));
+    });
     fact(ui, t!("settings.license"), env!("CARGO_PKG_LICENSE").to_owned());
     fact(ui, t!("settings.version"), env!("CARGO_PKG_VERSION").to_owned());
     fact(ui, t!("settings.gpu"), info.gpu.to_owned());
@@ -1832,4 +2243,37 @@ fn about(ui: &mut Ui, info: &AppInfo) {
     fact(ui, t!("settings.cache_dir"), cache_dir().map(|p| p.display().to_string()).unwrap_or_default());
     let log = crate::logging::log_file().map(|p| p.display().to_string()).unwrap_or_default();
     fact(ui, t!("settings.log_file"), log);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancel_asks_for_exactly_what_differs() {
+        let config = Config::default();
+        assert!(changes_towards(&config, &config).is_empty());
+        let mut changed = config.clone();
+        changed.language = Some("de".into());
+        changed.ui_theme = Some("nord".into());
+        changed.lock_panes = !config.lock_panes;
+        changed.library_roots.push("/models".into());
+        changed.recent_prints = config.recent_prints + 1;
+        // Back from the changed settings to the ones the window opened with.
+        let back = changes_towards(&changed, &config);
+        assert_eq!(back.len(), 5);
+        assert!(back.iter().any(|c| matches!(c, SettingsChange::Language(None))));
+        assert!(back.iter().any(|c| matches!(c, SettingsChange::UiTheme(None))));
+        assert!(back.iter().any(|c| matches!(c, SettingsChange::RemoveRoot(root) if root == Path::new("/models"))));
+        // What only the view changes is no setting of the window: Cancel leaves it.
+        let mut browsed = config.clone();
+        browsed.last_folder = Some("/somewhere".into());
+        browsed.sort_descending = !config.sort_descending;
+        assert!(changes_towards(&browsed, &config).is_empty());
+    }
+
+    #[test]
+    fn the_window_has_a_page_for_every_category() {
+        assert_eq!(pages().len(), Category::ALL.len());
+    }
 }

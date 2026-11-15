@@ -95,7 +95,7 @@ impl App {
     pub(super) fn ask_tag_candidates(&mut self, confirmed: bool) {
         let Some(endpoint) = self.config.ai.endpoint.clone() else { return };
         let paths = self.menu_for.clone();
-        if !endpoint.local && !self.chat.cloud_ok && !confirmed {
+        if !endpoint.local && self.asks_before_cloud() && !confirmed {
             let pictures = if endpoint.vision { paths.len() } else { 0 };
             let host = super::chat::host_of(&endpoint.base_url);
             let text = t!("actions.confirm_text", host = host, files = paths.len(), pictures = pictures);

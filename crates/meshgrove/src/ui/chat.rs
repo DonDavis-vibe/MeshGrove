@@ -11,8 +11,12 @@ use meshgrove_core::config::ChatMode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use solidcraft_theme::Tokens;
+use solidcraft_ui_kit as sc;
+
 use super::chat_input::{self, ChatInput, Pill};
 use super::picker::{self, Choice, Picked, Picker};
+use super::settings_kit;
 use super::suggest::Candidate;
 use crate::app::ModelList;
 
@@ -205,6 +209,9 @@ pub enum ChatAction {
     Review,
     /// Show this file (an id) in the gallery.
     Reveal(String),
+    /// Go to what a reference in a message stands for: the file in its folder, the folder,
+    /// the list, the tag's or the search's results, the printer's settings.
+    Follow(chat_input::Reference),
     /// Another assistant answers from now on (its id).
     Assistant(String),
     /// Start the picked agent.
@@ -238,142 +245,206 @@ pub fn show(
     md: &mut CommonMarkCache,
     candidates: &mut dyn FnMut(&str) -> Vec<Candidate<Pill>>,
 ) -> Option<ChatAction> {
-    let mut action = None;
-    // Header: conversations, a new one, the mode.
-    ui.horizontal(|ui| {
-        let title = view
-            .current
-            .and_then(|c| view.chats.iter().find(|i| i.id == c))
-            .map_or_else(|| t!("chat.new_title").into_owned(), |c| short(&c.title, 26));
-        egui::ComboBox::from_id_salt("chats").selected_text(title).width(160.0).truncate().show_ui(ui, |ui| {
-            for c in view.chats {
-                if ui.selectable_label(view.current == Some(c.id), &c.title).clicked() {
-                    action = Some(ChatAction::Open(c.id));
-                }
-            }
-        });
-        if ui.button("+").on_hover_text(t!("chat.new")).clicked() {
-            action = Some(ChatAction::NewChat);
-        }
-        if let Some(c) = view.current
-            && ui.button("🗑").on_hover_text(t!("chat.delete")).clicked()
-        {
-            action = Some(ChatAction::Delete(c));
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let mut mode = view.mode;
-            ui.selectable_value(&mut mode, ChatMode::Auto, t!("chat.mode_auto"))
-                .on_hover_text(t!("chat.mode_auto_hint"));
-            ui.selectable_value(&mut mode, ChatMode::Review, t!("chat.mode_review"))
-                .on_hover_text(t!("chat.mode_review_hint"));
-            if mode != view.mode {
-                action = Some(ChatAction::Mode(mode));
-            }
-        });
-    });
-    ui.separator();
-
-    // The field at the bottom, the conversation above it.
-    let busy = view.streaming.is_some();
-    egui::Panel::bottom("chat_input").resizable(false).show(ui, |ui| {
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Max), |ui| {
-                if busy {
-                    if ui.button("⏹").on_hover_text(t!("chat.stop")).clicked() {
-                        action = Some(ChatAction::Stop);
-                    }
-                } else if ui
-                    .add_enabled(!input.is_empty(), egui::Button::new("➤"))
-                    .on_hover_text(t!("chat.send"))
-                    .clicked()
-                {
-                    action = Some(ChatAction::Send);
-                }
-                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                    let out = chat_input::show(ui, input, egui::Id::unique("chat_field"), &t!("chat.hint"), candidates);
-                    if out.send && !busy {
-                        action = Some(ChatAction::Send);
-                    }
-                });
-            });
-        });
-        if let Some(a) = assistant_row(ui, &view) {
-            action = Some(a);
-        }
-    });
-    egui::CentralPanel::default().show(ui, |ui| {
-        egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
-            if view.messages.is_empty() && view.streaming.is_none() {
-                ui.weak(t!("chat.empty"));
-            }
-            for m in view.messages.iter().chain(view.streaming) {
-                if let Some(a) = message(ui, m, &view, md) {
-                    action = Some(a);
-                }
-                ui.add_space(6.0);
-            }
-            for q in view.questions {
-                if let Some(a) = question(ui, q) {
-                    action = Some(a);
-                }
-            }
-            for card in asks.iter_mut().filter(|c| c.from.is_none()) {
-                if let Some(a) = ask_card(ui, card) {
-                    action = Some(a);
-                }
-            }
-            if !view.auth.is_empty()
-                && let Some(a) = sign_in(ui, view.auth)
-            {
+    // The pane is one of the kit's forms (its controls' height, fills and fonts), built from its
+    // parts for an assistant's chat: the header band, the bubble of a message, the tools' list,
+    // the cards, and the composer with its round button.
+    sc::scope(ui, |ui| {
+        // The kit's forms cut their texts short; a conversation wraps.
+        ui.style_mut().wrap_mode = None;
+        let mut action = header(ui, &view);
+        let t = Tokens::get();
+        let busy = view.streaming.is_some();
+        // The field at the bottom, the conversation above it.
+        egui::Panel::bottom("chat_input").resizable(false).frame(egui::Frame::NONE).show(ui, |ui| {
+            if let Some(a) = composer(ui, &view, input, busy, candidates) {
                 action = Some(a);
             }
-            if busy && view.questions.is_empty() && asks.is_empty() {
-                ui.spinner();
+        });
+        let frame = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(t.space_10 as i8, t.space_8 as i8));
+        egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+            egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = t.space_10;
+                if view.messages.is_empty() && view.streaming.is_none() {
+                    ui.add_space(t.space_24);
+                    sc::assistant_empty(ui, &t!("pane.chat"), &t!("chat.empty"), |_| {});
+                }
+                for m in view.messages.iter().chain(view.streaming) {
+                    if let Some(a) = message(ui, m, &view, md) {
+                        action = Some(a);
+                    }
+                }
+                for q in view.questions {
+                    if let Some(a) = question(ui, q) {
+                        action = Some(a);
+                    }
+                }
+                for card in asks.iter_mut().filter(|c| c.from.is_none()) {
+                    if let Some(a) = ask_card(ui, card) {
+                        action = Some(a);
+                    }
+                }
+                if !view.auth.is_empty()
+                    && let Some(a) = sign_in(ui, view.auth)
+                {
+                    action = Some(a);
+                }
+                if busy && view.questions.is_empty() && asks.is_empty() {
+                    crate::ui::loading::mark(ui);
+                }
+            });
+        });
+        action
+    })
+}
+
+/// The band over the conversation: the conversations, a new one, deleting this one, and at
+/// its right end whether the assistant's changes wait in the review.
+fn header(ui: &mut Ui, view: &ChatView) -> Option<ChatAction> {
+    let mut action = None;
+    let t = Tokens::get();
+    sc::assistant_header(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = t.space_4;
+            let modes = [
+                (ChatMode::Review, t!("chat.mode_review").into_owned()),
+                (ChatMode::Auto, t!("chat.mode_auto").into_owned()),
+            ];
+            // The list takes what the buttons and the mode leave of the band.
+            let widest = modes.iter().map(|(_, label)| sc::ContentWidth::name(ui, label)).fold(0.0, f32::max);
+            let button = t.control_height + t.space_10 + t.space_4;
+            let beside = (widest + t.space_16) * 2.0 + 2.0 * button + 2.0 * t.space_8;
+            let width = (ui.available_width() - beside).clamp(70.0, 240.0);
+            let title = view
+                .current
+                .and_then(|c| view.chats.iter().find(|i| i.id == c))
+                .map_or_else(|| t!("chat.new_title").into_owned(), |c| c.title.clone());
+            settings_kit::dropdown(ui, "chats", &title, width, |ui| {
+                for c in view.chats {
+                    if settings_kit::choice_row(ui, view.current == Some(c.id), &short(&c.title, 60)) {
+                        action = Some(ChatAction::Open(c.id));
+                    }
+                }
+            });
+            if sc::icon_action(ui, &t!("chat.new"), "plus", true, false).clicked() {
+                action = Some(ChatAction::NewChat);
             }
+            if let Some(c) = view.current
+                && sc::icon_action(ui, &t!("chat.delete"), "delete", true, false).clicked()
+            {
+                action = Some(ChatAction::Delete(c));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mut mode = view.mode;
+                let picked = ui.scope(|ui| settings_kit::segmented(ui, &mut mode, &modes));
+                let hints = format!(
+                    "{}: {}\n\n{}: {}",
+                    modes[0].1,
+                    t!("chat.mode_review_hint"),
+                    modes[1].1,
+                    t!("chat.mode_auto_hint")
+                );
+                picked.response.on_hover_text(hints);
+                if picked.inner {
+                    action = Some(ChatAction::Mode(mode));
+                }
+            });
         });
     });
     action
+}
+
+/// The field with what stands under it: who answers, the model, and the round button that
+/// sends (or stops the answer). One box, with the accent's border while it is typed into.
+fn composer(
+    ui: &mut Ui,
+    view: &ChatView,
+    input: &mut ChatInput,
+    busy: bool,
+    candidates: &mut dyn FnMut(&str) -> Vec<Candidate<Pill>>,
+) -> Option<ChatAction> {
+    let mut action = None;
+    let t = Tokens::get();
+    let field = egui::Id::unique("chat_field");
+    let focused = ui.memory(|m| m.has_focus(field));
+    // The kit's composer is made for a window of its own and rounds only its lower corners;
+    // in a pane it is a box with a rule over it.
+    let rule = ui.max_rect();
+    t.secondary_hline(ui.painter(), rule.x_range(), rule.top(), t.dialog_rule);
+    egui::Frame::NONE.inner_margin(t.space_8).show(ui, |ui| {
+        let border =
+            if focused { egui::Stroke::new(1.0, t.form_primary) } else { t.control_border_stroke(t.control_border) };
+        egui::Frame::NONE
+            .fill(t.control_fill)
+            .stroke(border)
+            .corner_radius(t.radius_lg)
+            .inner_margin(egui::Margin::symmetric(t.space_10 as i8, t.space_8 as i8))
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width().max(0.0));
+                ui.spacing_mut().item_spacing.y = t.space_6;
+                let out = chat_input::show(ui, input, field, &t!("chat.hint"), candidates);
+                if out.send && !busy {
+                    action = Some(ChatAction::Send);
+                }
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Max), |ui| {
+                        let label = if busy { t!("chat.stop") } else { t!("chat.send") };
+                        if sc::assistant_send(ui, busy || !input.is_empty(), busy, &label).clicked() {
+                            action = Some(if busy { ChatAction::Stop } else { ChatAction::Send });
+                        }
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                            if let Some(a) = assistant_row(ui, view) {
+                                action = Some(a);
+                            }
+                        });
+                    });
+                });
+            });
+    });
+    action
+}
+
+/// A quiet line of what is going on.
+fn quiet(ui: &mut Ui, text: &str) {
+    let t = Tokens::get();
+    ui.label(RichText::new(text).size(t.font_small).color(t.form_dim));
 }
 
 /// Under the field: who answers (a choice when there are several), the model picker, and what
 /// an agent is up to.
 fn assistant_row(ui: &mut Ui, view: &ChatView) -> Option<ChatAction> {
     let mut action = None;
+    let t = Tokens::get();
     ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = t.space_6;
         let picked = view.assistants.iter().find(|(id, _)| id == view.assistant);
         let pick = t!("chat.pick_assistant");
         let name = picked.map_or(pick.as_ref(), |(_, name)| name.as_str());
         if view.assistants.len() > 1 || picked.is_none() {
-            egui::ComboBox::from_id_salt("chat_assistant").selected_text(name).width(150.0).truncate().show_ui(
-                ui,
-                |ui| {
-                    for (id, name) in view.assistants {
-                        if ui.selectable_label(id == view.assistant, name).clicked() {
-                            action = Some(ChatAction::Assistant(id.clone()));
-                        }
+            settings_kit::dropdown(ui, "chat_assistant", name, 150.0, |ui| {
+                for (id, name) in view.assistants {
+                    if settings_kit::choice_row(ui, id == view.assistant, name) {
+                        action = Some(ChatAction::Assistant(id.clone()));
                     }
-                },
-            );
+                }
+            });
         } else {
-            ui.weak(name);
+            quiet(ui, name);
         }
         if view.looking {
-            ui.spinner();
-            ui.weak(t!("assistant.looking"));
+            crate::ui::loading::mark(ui);
+            quiet(ui, &t!("assistant.looking"));
         }
         let Some((_, picked_name)) = picked else { return };
         if !view.connected {
             // Nothing runs until the user says so; the models can be picked once it does.
-            if ui
-                .button(t!("chat.connect"))
+            if settings_kit::bar_button(ui, &t!("chat.connect"))
                 .on_hover_text(t!("chat.connect_hint", name = picked_name.clone()))
                 .clicked()
             {
                 action = Some(ChatAction::Connect);
             }
             if let Some(status) = view.status {
-                ui.weak(status);
+                quiet(ui, status);
             }
             return;
         }
@@ -409,73 +480,109 @@ fn assistant_row(ui: &mut Ui, view: &ChatView) -> Option<ChatAction> {
                 .filter(|t| !t.is_empty())
                 .collect::<Vec<_>>()
                 .join("\n");
-            egui::ComboBox::from_id_salt(("chat_option", &o.id))
-                .selected_text(picker::compact(selected, 24))
-                .width(110.0)
-                .truncate()
-                .show_ui(ui, |ui| {
-                    ui.label(RichText::new(&o.name).small().weak());
+            let shown = picker::compact(selected, 24);
+            settings_kit::fixed_width(ui, 120.0, |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                sc::dropdown_menu(ui, ("chat_option", &o.id), &shown, |ui| {
+                    quiet(ui, &o.name);
                     for (value, name, description) in &o.choices {
-                        let r = ui.selectable_label(*value == o.current, name);
+                        let r = sc::list_picker(ui, value, name, *value == o.current);
                         let r = if description.is_empty() { r } else { r.on_hover_text(description) };
                         if r.clicked() && *value != o.current {
                             action = Some(ChatAction::Option { id: o.id.clone(), value: value.clone() });
                         }
                     }
                 })
-                .response
                 .on_hover_text(tip);
+            });
         }
         if let Some(status) = view.status {
-            ui.weak(status);
+            quiet(ui, status);
         }
     });
     action
 }
 
-/// The assistant's questions: radio buttons where one answer is wanted, checkboxes where
+/// An answer's text: unboxed, in the kit's label font and ink, as its `assistant_prose`. What
+/// the answer stresses (a file's name) stands in the form's primary colour: the kit's forms give
+/// every text one ink, and egui's "strong" is only another ink.
+fn prose<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let t = Tokens::get();
+    ui.scope(|ui| {
+        ui.style_mut().text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(t.font_label));
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+        let visuals = ui.visuals_mut();
+        visuals.widgets.noninteractive.fg_stroke.color = t.form_ink;
+        visuals.widgets.active.fg_stroke.color = t.form_primary;
+        add(ui)
+    })
+    .inner
+}
+
+/// A card in the conversation: the theme's fine border around what belongs together.
+fn card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let t = Tokens::get();
+    egui::Frame::NONE
+        .fill(t.dialog_body)
+        .stroke(t.tertiary_border(t.dialog_rule))
+        .corner_radius(t.radius_lg)
+        .inner_margin(t.space_10)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = t.space_6;
+            add(ui)
+        })
+        .inner
+}
+
+/// A card's title: heavier, and whole.
+fn card_title(ui: &mut Ui, text: &str) {
+    let t = Tokens::get();
+    let text = RichText::new(text).font(sc::type_face::semibold(t.font_label)).color(t.form_ink);
+    ui.add(egui::Label::new(text).wrap());
+}
+
+/// The assistant's questions: round marks where one answer is wanted, checkboxes where
 /// several may be picked, a field for an answer in the user's own words where allowed.
 pub fn ask_card(ui: &mut Ui, card: &mut AskCard) -> Option<ChatAction> {
     let mut action = None;
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.label(RichText::new(t!("chat.question_title")).strong());
+    let t = Tokens::get();
+    self::card(ui, |ui| {
+        card_title(ui, &t!("chat.question_title"));
         for i in 0..card.questions.len() {
             let q = card.questions[i].clone();
-            ui.add_space(4.0);
-            ui.label(&q.question);
+            ui.add_space(t.space_2);
+            ui.add(egui::Label::new(RichText::new(&q.question).color(t.form_ink)).wrap());
             for (j, option) in q.options.iter().enumerate() {
                 if q.multi {
-                    ui.checkbox(&mut card.chosen[i][j], option);
-                } else if ui.radio(card.chosen[i][j], option).clicked() {
+                    settings_kit::checkbox(ui, option, &mut card.chosen[i][j]);
+                } else if settings_kit::radio(ui, option, card.chosen[i][j]).clicked() {
                     card.chosen[i].fill(false);
                     card.chosen[i][j] = true;
                 }
             }
             if q.allow_other {
-                ui.horizontal(|ui| {
-                    if !q.options.is_empty() {
-                        ui.weak(t!("chat.question_other"));
-                    }
-                    let field =
-                        ui.add(egui::TextEdit::singleline(&mut card.other[i]).desired_width(f32::INFINITY).id_salt((
-                            "ask_other",
-                            &card.uid,
-                            i,
-                        )));
-                    // Typing an own answer to a one-answer question drops the option picked.
-                    if field.changed() && !q.multi && !card.other[i].trim().is_empty() {
-                        card.chosen[i].fill(false);
-                    }
-                });
+                if !q.options.is_empty() {
+                    quiet(ui, &t!("chat.question_other"));
+                }
+                let changed = ui
+                    .push_id(("ask_other", &card.uid, i), |ui| {
+                        sc::text_field_reserving(ui, &mut card.other[i], "", 0.0).1.changed()
+                    })
+                    .inner;
+                // Typing an own answer to a one-answer question drops the option picked.
+                if changed && !q.multi && !card.other[i].trim().is_empty() {
+                    card.chosen[i].fill(false);
+                }
             }
         }
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if ui.add_enabled(card.complete(), egui::Button::new(t!("chat.answer"))).clicked() {
+        ui.add_space(t.space_2);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = t.space_6;
+            if settings_kit::primary(ui, &t!("chat.answer"), card.complete()).clicked() {
                 action = Some(ChatAction::Answer { uid: card.uid.clone(), cancel: false });
             }
-            if ui.button(t!("chat.answer_cancel")).clicked() {
+            if settings_kit::action(ui, &t!("chat.answer_cancel"), true).clicked() {
                 action = Some(ChatAction::Answer { uid: card.uid.clone(), cancel: true });
             }
         });
@@ -486,16 +593,16 @@ pub fn ask_card(ui: &mut Ui, card: &mut AskCard) -> Option<ChatAction> {
 /// An agent's permission question: what it wants to run, and the answers it offers.
 fn question(ui: &mut Ui, q: &Question) -> Option<ChatAction> {
     let mut action = None;
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.label(RichText::new(t!("assistant.asks", tool = q.title.clone())).strong());
+    let t = Tokens::get();
+    sc::assistant_approval(ui, &t!("assistant.asks", tool = q.title.clone()), |ui| {
         ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(t.space_6, t.space_6);
             for (id, name) in &q.options {
-                if ui.button(name).clicked() {
+                if settings_kit::action(ui, name, true).clicked() {
                     action = Some(ChatAction::Permission { key: q.key, option: Some(id.clone()) });
                 }
             }
-            if ui.button(t!("trash.cancel")).clicked() {
+            if settings_kit::action(ui, &t!("trash.cancel"), true).clicked() {
                 action = Some(ChatAction::Permission { key: q.key, option: None });
             }
         });
@@ -507,85 +614,135 @@ fn question(ui: &mut Ui, q: &Question) -> Option<ChatAction> {
 /// to run where the user has to.
 fn sign_in(ui: &mut Ui, methods: &[AuthRow]) -> Option<ChatAction> {
     let mut action = None;
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.label(RichText::new(t!("assistant.sign_in_title")).strong());
+    let t = Tokens::get();
+    card(ui, |ui| {
+        card_title(ui, &t!("assistant.sign_in_title"));
         for m in methods {
-            ui.horizontal_wrapped(|ui| {
-                if m.by_agent {
-                    if ui.button(&m.name).on_hover_text(&m.description).clicked() {
-                        action = Some(ChatAction::Authenticate(m.id.clone()));
-                    }
-                } else {
-                    ui.label(&m.name);
+            if m.by_agent {
+                if settings_kit::action(ui, &m.name, true).on_hover_text(&m.description).clicked() {
+                    action = Some(ChatAction::Authenticate(m.id.clone()));
                 }
-            });
+            } else {
+                ui.add(egui::Label::new(RichText::new(&m.name).color(t.form_ink)).wrap());
+            }
             if let Some(command) = &m.command {
+                // The button first, from the right: the command takes what is left of the line.
                 ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut command.as_str()).desired_width(f32::INFINITY).code_editor(),
-                    );
-                    if ui.button(t!("settings.mcp_copy")).clicked() {
-                        ui.ctx().copy_text(command.clone());
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if settings_kit::bar_button(ui, &t!("settings.mcp_copy")).clicked() {
+                            ui.ctx().copy_text(command.clone());
+                        }
+                        let mut shown = command.as_str();
+                        let field = egui::TextEdit::singleline(&mut shown)
+                            .desired_width(f32::INFINITY)
+                            .background_color(t.input_fill())
+                            .code_editor();
+                        ui.add(field);
+                    });
                 });
             }
         }
-        ui.weak(t!("assistant.sign_in_hint"));
+        quiet(ui, &t!("assistant.sign_in_hint"));
     });
     action
 }
 
-fn message(ui: &mut Ui, m: &ChatMsg, view: &ChatView, md: &mut CommonMarkCache) -> Option<ChatAction> {
-    let mut action = None;
-    if m.user {
-        let fill = ui.visuals().faint_bg_color;
-        egui::Frame::new().fill(fill).corner_radius(6.0).inner_margin(6.0).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal_top(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                    if let Some(&(active, undone)) = view.changes.get(&m.id) {
-                        if active > 0 {
-                            if ui.small_button("↶").on_hover_text(t!("chat.undo", count = active)).clicked() {
-                                action = Some(ChatAction::Undo(m.id));
-                            }
-                        } else if undone > 0
-                            && ui.small_button("↷").on_hover_text(t!("chat.redo", count = undone)).clicked()
-                        {
-                            action = Some(ChatAction::Redo(m.id));
-                        }
-                    }
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| user_text(ui, m));
+/// The tools an answer used: a line that folds, and under it the kit's list of them.
+fn tools(ui: &mut Ui, m: &ChatMsg) {
+    let t = Tokens::get();
+    let id = egui::Id::unique(("chat-tools", m.id, m.tools.len()));
+    let mut open = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    let text = t!("chat.tools", count = m.tools.len());
+    let galley = ui.painter().layout_no_wrap(text.into_owned(), egui::FontId::proportional(t.font_small), t.form_dim);
+    let size = egui::vec2(t.space_16 + galley.size().x + t.space_6, t.control_height - t.space_6);
+    let (rect, line) = ui.allocate_exact_size(size, egui::Sense::click());
+    if line.hovered() {
+        ui.painter().rect_filled(rect, t.radius_sm, t.hover);
+    }
+    sc::disclosure(ui.painter(), egui::pos2(rect.left() + t.space_8, rect.center().y), open, t.form_dim);
+    ui.painter().galley(
+        egui::pos2(rect.left() + t.space_16, rect.center().y - galley.size().y / 2.0),
+        galley,
+        t.form_dim,
+    );
+    if line.clicked() {
+        open = !open;
+        ui.data_mut(|d| d.insert_temp(id, open));
+    }
+    if !open {
+        return;
+    }
+    sc::assistant_tool_frame(ui, false, |ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        for (name, summary) in &m.tools {
+            sc::assistant_tool_row(ui, false, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = t.space_6;
+                    ui.add_space(t.space_4);
+                    sc::assistant_tool_status(ui, sc::AssistantToolState::Done);
+                    ui.label(RichText::new(name).monospace().size(t.font_small).color(t.form_ink));
+                    let summary = RichText::new(summary).size(t.font_small).color(t.form_dim);
+                    ui.add(egui::Label::new(summary).truncate());
                 });
             });
-        });
+        }
+    });
+}
+
+/// What became of a card's suggestions, as the kit's small coloured label.
+fn card_state(ui: &mut Ui, state: &str, items: usize) {
+    use sc::AssistantTone as Tone;
+    let (text, tone) = match state {
+        "pending" if items == 1 => (t!("chat.card_proposed_one"), Tone::Working),
+        "pending" => (t!("chat.card_proposed", count = items), Tone::Working),
+        "partly" => (t!("chat.card_partly"), Tone::Warning),
+        "accepted" => (t!("chat.card_accepted"), Tone::Success),
+        "rejected" => (t!("chat.card_rejected"), Tone::Neutral),
+        "undone" => (t!("chat.card_undone"), Tone::Neutral),
+        _ => (t!("chat.card_expired"), Tone::Neutral),
+    };
+    sc::assistant_badge(ui, &text, tone);
+}
+
+fn message(ui: &mut Ui, m: &ChatMsg, view: &ChatView, md: &mut CommonMarkCache) -> Option<ChatAction> {
+    let mut action = None;
+    let t = Tokens::get();
+    if m.user {
+        // The kit's bubble at the right; what the message changed can be taken back under it.
+        action = sc::assistant_bubble(ui, |ui| user_text(ui, m)).inner;
+        if let Some(&(active, undone)) = view.changes.get(&m.id) {
+            let row = egui::vec2(ui.available_width(), t.control_height - t.space_4);
+            ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if active > 0 {
+                    if sc::icon_action(ui, &t!("chat.undo", count = active), "undo", true, false).clicked() {
+                        action = Some(ChatAction::Undo(m.id));
+                    }
+                } else if undone > 0
+                    && sc::icon_action(ui, &t!("chat.redo", count = undone), "redo", true, false).clicked()
+                {
+                    action = Some(ChatAction::Redo(m.id));
+                }
+            });
+        }
         return action;
     }
     let mut mentioned = Vec::new();
     let text = with_references(&m.text, view.names, &mut mentioned);
     if !text.trim().is_empty() {
-        CommonMarkViewer::new().show(ui, md, &text);
+        prose(ui, |ui| CommonMarkViewer::new().show(ui, md, &text));
     }
     if !mentioned.is_empty() {
         ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(t.space_4, t.space_4);
             for id in mentioned {
-                if ui.small_button(format!("📄 {}", (view.names)(&id))).on_hover_text(&id).clicked() {
+                if sc::button(ui, (view.names)(&id), sc::Button::Small).on_hover_text(&id).clicked() {
                     action = Some(ChatAction::Reveal(id));
                 }
             }
         });
     }
     if !m.tools.is_empty() {
-        egui::CollapsingHeader::new(RichText::new(t!("chat.tools", count = m.tools.len())).weak().small())
-            .id_salt(("tools", m.id, m.tools.len()))
-            .show(ui, |ui| {
-                for (name, summary) in &m.tools {
-                    ui.horizontal(|ui| {
-                        ui.monospace(name);
-                        ui.weak(summary);
-                    });
-                }
-            });
+        tools(ui, m);
     }
     if !m.pictures.is_empty() {
         ui.horizontal_wrapped(|ui| {
@@ -597,53 +754,43 @@ fn message(ui: &mut Ui, m: &ChatMsg, view: &ChatView, md: &mut CommonMarkCache) 
             }
         });
     }
-    for card in &m.cards {
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            match card {
-                Card::Proposed { batch, title, items } => {
-                    // The title on a line of its own, cut short in a narrow pane; the state and
-                    // the button wrap below it, so the button never gets cut off.
-                    ui.add(egui::Label::new(RichText::new(format!("✨ {title}")).strong()).truncate());
-                    ui.horizontal_wrapped(|ui| {
-                        let state = view.card_states.get(batch).map_or("pending", String::as_str);
-                        let open = matches!(state, "pending" | "partly");
-                        ui.weak(match state {
-                            "pending" if *items == 1 => t!("chat.card_proposed_one"),
-                            "pending" => t!("chat.card_proposed", count = items),
-                            "partly" => t!("chat.card_partly"),
-                            "accepted" => t!("chat.card_accepted"),
-                            "rejected" => t!("chat.card_rejected"),
-                            "undone" => t!("chat.card_undone"),
-                            _ => t!("chat.card_expired"),
-                        });
-                        if open && ui.button(t!("chat.card_review")).clicked() {
-                            action = Some(ChatAction::Review);
-                        }
-                    });
-                }
-                Card::Applied { title, applied, .. } => {
-                    ui.add(
-                        egui::Label::new(format!("✔ {}", t!("chat.card_applied", title = title, count = applied)))
-                            .wrap(),
-                    );
-                }
-                Card::Answered { question, answer } => {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(t!("chat.card_answered", question = question, answer = answer)).weak(),
-                        )
-                        .wrap(),
-                    );
-                }
+    for shown in &m.cards {
+        card(ui, |ui| match shown {
+            Card::Proposed { batch, title, items } => {
+                // The title on a line of its own, cut short in a narrow pane; the state and
+                // the button wrap below it, so the button never gets cut off.
+                let face = sc::type_face::semibold(t.font_label);
+                ui.add(egui::Label::new(RichText::new(title).font(face).color(t.form_ink)).truncate());
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = t.space_8;
+                    let state = view.card_states.get(batch).map_or("pending", String::as_str);
+                    card_state(ui, state, *items);
+                    if matches!(state, "pending" | "partly")
+                        && settings_kit::primary(ui, &t!("chat.card_review"), true).clicked()
+                    {
+                        action = Some(ChatAction::Review);
+                    }
+                });
+            }
+            Card::Applied { title, applied, .. } => {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = t.space_6;
+                    sc::assistant_tool_status(ui, sc::AssistantToolState::Done);
+                    let text = t!("chat.card_applied", title = title, count = applied);
+                    ui.add(egui::Label::new(RichText::new(text).color(t.form_ink)).wrap());
+                });
+            }
+            Card::Answered { question, answer } => {
+                let text = t!("chat.card_answered", question = question, answer = answer);
+                ui.add(egui::Label::new(RichText::new(text).color(t.form_dim)).wrap());
             }
         });
     }
     for notice in &m.notices {
-        ui.colored_label(ui.visuals().warn_fg_color, notice);
+        sc::status_line(ui, notice, sc::StatusTone::Warning);
     }
     if m.failed {
-        ui.colored_label(ui.visuals().error_fg_color, t!("chat.failed"));
+        sc::status_line(ui, &t!("chat.failed"), sc::StatusTone::Error);
     }
     action
 }
@@ -658,10 +805,13 @@ fn short(text: &str, max: usize) -> String {
     out
 }
 
-/// The user's words with their references as small chips.
-fn user_text(ui: &mut Ui, m: &ChatMsg) {
+/// The user's words with their references as small chips; a click on one goes to what it
+/// stands for.
+fn user_text(ui: &mut Ui, m: &ChatMsg) -> Option<ChatAction> {
+    let t = Tokens::get();
+    let mut action = None;
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 3.0;
+        ui.spacing_mut().item_spacing.x = t.space_3;
         let mut rest = m.text.as_str();
         while let Some(start) = rest.find("[[ref:") {
             let Some(end) = rest[start..].find("]]") else { break };
@@ -670,15 +820,14 @@ fn user_text(ui: &mut Ui, m: &ChatMsg) {
             }
             let n: usize = rest[start + 6..start + end].parse().unwrap_or(usize::MAX);
             if let Some(p) = m.pills.get(n) {
-                let fill = ui.visuals().selection.bg_fill.linear_multiply(0.6);
-                let text = RichText::new(format!("@{}", p.label)).small().color(ui.visuals().strong_text_color());
-                ui.add(
-                    egui::Button::new(text)
-                        .fill(fill)
-                        .stroke(egui::Stroke::NONE)
-                        .corner_radius(8.0)
-                        .sense(egui::Sense::hover()),
-                );
+                // On the bubble's soft accent: the fill of a field, so the chip stands out.
+                let text = RichText::new(format!("@{}", p.label)).size(t.font_small).color(t.form_ink);
+                let chip =
+                    egui::Button::new(text).fill(t.control_fill).stroke(egui::Stroke::NONE).corner_radius(t.radius_lg);
+                let chip = ui.add(chip).on_hover_cursor(egui::CursorIcon::PointingHand);
+                if chip.on_hover_text(t!("chat.follow_pill")).clicked() {
+                    action = Some(ChatAction::Follow(p.reference.clone()));
+                }
             }
             rest = &rest[start + end + 2..];
         }
@@ -686,6 +835,7 @@ fn user_text(ui: &mut Ui, m: &ChatMsg) {
             ui.label(rest);
         }
     });
+    action
 }
 
 /// The answer with `[[id]]` as the file's name in bold; the ids in order, each once.
@@ -713,6 +863,169 @@ pub fn with_references(text: &str, names: &dyn Fn(&str) -> String, ids: &mut Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The texts a frame drew, each with its place.
+    fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Rect)> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(t) => out.push((t.galley.text().to_owned(), t.visual_bounding_rect())),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        shapes.iter().for_each(|s| walk(&s.shape, &mut out));
+        out
+    }
+
+    /// A conversation with every part the pane can show, in a headless egui 420 points wide
+    /// and high enough for all of it. Two frames to settle, then a click on the text `on` (when
+    /// given, the lowest of them). The action of the last frame, the texts it drew, and the
+    /// question card.
+    fn drive(on: Option<&str>) -> (Option<ChatAction>, Vec<String>, AskCard) {
+        let chats = [ChatInfo { id: 1, title: "Garden".into(), updated_ns: 0 }];
+        let pill = Pill { label: "Garden".into(), reference: chat_input::Reference::Tag { name: "garden".into() } };
+        let messages = [
+            ChatMsg {
+                id: 1,
+                user: true,
+                text: "Which of [[ref:0]] fit?".into(),
+                pills: vec![pill],
+                ..Default::default()
+            },
+            ChatMsg {
+                id: 2,
+                text: "Take [[Garden/rose.stl]].".into(),
+                tools: vec![("search_models".into(), "12 files".into())],
+                cards: vec![
+                    Card::Proposed { batch: "b".into(), title: "Tag the garden parts".into(), items: 3 },
+                    Card::Applied { change: 1, title: "Notes".into(), applied: 2 },
+                    Card::Answered { question: "Which printer?".into(), answer: "A1 mini".into() },
+                ],
+                notices: vec!["One file could not be read.".into()],
+                failed: true,
+                ..Default::default()
+            },
+        ];
+        let changes = HashMap::from([(1, (2, 0))]);
+        let states = HashMap::new();
+        let names = |id: &str| id.rsplit('/').next().unwrap_or(id).to_owned();
+        let assistants = [("claude".to_owned(), "Claude Code".to_owned()), ("endpoint".to_owned(), "Own".to_owned())];
+        let models = ModelList { current: "large".into(), ..Default::default() };
+        let options = [OptionRow {
+            id: "effort".into(),
+            name: "Reasoning".into(),
+            description: String::new(),
+            current: "high".into(),
+            choices: vec![("high".into(), "high".into(), String::new())],
+        }];
+        let questions =
+            [Question { key: 7, title: "rm -rf".into(), options: vec![("allow".into(), "Allow once".into())] }];
+        let auth = [AuthRow {
+            id: "login".into(),
+            name: "Sign in with the browser".into(),
+            description: String::new(),
+            command: Some("claude /login".into()),
+            by_agent: false,
+        }];
+        let ask = AskQuestion {
+            question: "Which filament?".into(),
+            options: vec!["PLA".into(), "PETG".into()],
+            multi: false,
+            allow_other: true,
+        };
+        let pick =
+            AskQuestion { question: "Which extras?".into(), options: vec!["Brim".into()], multi: true, ..ask.clone() };
+        let mut asks = [AskCard::new("q1".into(), vec![ask, pick])];
+        let mut input = ChatInput::default();
+        let mut md = CommonMarkCache::default();
+        let ctx = egui::Context::default();
+        let (mut action, mut time) = (None, 0.0);
+        let mut frame = |events: Vec<egui::Event>, action: &mut Option<ChatAction>| {
+            time += 0.05;
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(420.0, 2400.0))),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(raw, |ui| {
+                let view = ChatView {
+                    chats: &chats,
+                    current: Some(1),
+                    messages: &messages,
+                    streaming: None,
+                    mode: ChatMode::Review,
+                    changes: &changes,
+                    card_states: &states,
+                    names: &names,
+                    assistants: &assistants,
+                    assistant: "claude",
+                    connected: true,
+                    looking: false,
+                    models: &models,
+                    options: &options,
+                    status: Some("ready"),
+                    questions: &questions,
+                    auth: &auth,
+                };
+                *action = show(ui, view, &mut input, &mut asks, &mut md, &mut |_| Vec::new());
+            });
+            output.textures_delta.clear();
+            output.shapes
+        };
+        frame(Vec::new(), &mut action);
+        let mut shapes = frame(Vec::new(), &mut action);
+        if let Some(on) = on {
+            let drawn = texts(&shapes);
+            // The lowest one: the header's mode switch says "Review" too.
+            let found = drawn.iter().filter(|(t, _)| t == on).max_by(|a, b| a.1.top().total_cmp(&b.1.top()));
+            let at = found.unwrap_or_else(|| panic!("{on}: {drawn:?}")).1.center();
+            let button = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            frame(vec![egui::Event::PointerMoved(at), button(true)], &mut action);
+            shapes = frame(vec![button(false)], &mut action);
+        }
+        let drawn = texts(&shapes).into_iter().map(|(t, _)| t).collect();
+        (action, drawn, asks[0].clone())
+    }
+
+    /// Every part of the pane draws, and nothing happens by itself.
+    #[test]
+    fn every_part_of_a_conversation_draws() {
+        let (action, drawn, _) = drive(None);
+        assert!(action.is_none());
+        for part in [
+            "Tag the garden parts",
+            "Which filament?",
+            "PLA",
+            "Brim",
+            "Sign in with the browser",
+            "Allow once",
+            "One file could not be read.",
+        ] {
+            assert!(drawn.iter().any(|t| t.contains(part)), "{part} is drawn: {drawn:?}");
+        }
+    }
+
+    /// The buttons of the cards do what they say: the review, an agent's permission, an answer.
+    #[test]
+    fn the_cards_buttons_act() {
+        assert!(matches!(drive(Some(&t!("chat.card_review"))).0, Some(ChatAction::Review)));
+        let allowed = drive(Some("Allow once")).0;
+        assert!(matches!(&allowed, Some(ChatAction::Permission { key: 7, option: Some(o) }) if o == "allow"));
+        let (_, _, card) = drive(Some("PETG"));
+        assert_eq!(card.chosen[0], [false, true], "the round mark picks one");
+        let (_, _, card) = drive(Some("Brim"));
+        assert_eq!(card.chosen[1], [true], "the checkbox is ticked");
+        let followed = drive(Some("@Garden")).0;
+        let tag = chat_input::Reference::Tag { name: "garden".into() };
+        assert!(matches!(&followed, Some(ChatAction::Follow(r)) if *r == tag), "a chip leads to what it names");
+    }
 
     #[test]
     fn references_in_answers_become_names() {

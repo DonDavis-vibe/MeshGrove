@@ -157,7 +157,7 @@ pub fn preview(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         match cx.model {
             ModelStatus::Loading => {
-                child.centered_and_justified(|ui| ui.spinner());
+                child.centered_and_justified(|ui| crate::ui::loading::mark_sized(ui, 44.0));
             }
             ModelStatus::Failed(e) => {
                 child.centered_and_justified(|ui| ui.colored_label(ui.visuals().error_fg_color, e));
@@ -183,7 +183,7 @@ fn text_view(ui: &mut Ui, preview: &mut TextPreview, folder: Option<&mut Details
     let text = match &preview.state {
         TextState::Ready(text) => text,
         TextState::Loading => {
-            ui.centered_and_justified(|ui| ui.spinner());
+            ui.centered_and_justified(|ui| crate::ui::loading::mark_sized(ui, 44.0));
             return;
         }
         TextState::Failed(e) => {
@@ -195,7 +195,7 @@ fn text_view(ui: &mut Ui, preview: &mut TextPreview, folder: Option<&mut Details
     if let Some(out) = folder {
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("📄 {}", meshgrove_core::listing::file_name(&text.path))).weak());
-            if ui.small_button(t!("text.open")).clicked() {
+            if super::settings_kit::bar_button(ui, &t!("text.open")).clicked() {
                 out.open_file = Some(text.path.clone());
             }
         });
@@ -241,12 +241,16 @@ pub fn info(ui: &mut Ui, cx: DetailsContext<'_>) -> DetailsOutput {
             };
             out.clicked_plate = plates(ui, cx.plates, active);
         }
-        lists_row(ui, &cx.lists, cx.tags.enabled, count, &mut out);
-        if entry.kind.is_printable() {
-            print_row(ui, &cx.print, &mut out);
-        }
-        tag_editor(ui, cx.tags, cx.tag_style, count, &mut out);
-        note_editor(ui, cx.note, &mut out);
+        // What can be changed is one of the kit's forms (its fields and their frames); the
+        // facts above keep their tight rows.
+        super::settings_kit::pane(ui, |ui| {
+            lists_row(ui, &cx.lists, cx.tags.enabled, count, &mut out);
+            if entry.kind.is_printable() {
+                print_row(ui, &cx.print, &mut out);
+            }
+            tag_editor(ui, cx.tags, cx.tag_style, count, &mut out);
+            note_editor(ui, cx.note, &mut out);
+        });
         ui.add_space(6.0);
         ui.add(egui::Label::new(RichText::new(entry.path.display().to_string()).small().weak()).wrap());
     });
@@ -271,48 +275,86 @@ pub fn open_buttons(
         return clicked;
     }
     ui.add_space(8.0);
-    ui.horizontal_wrapped(|ui| {
-        let button = |text: std::borrow::Cow<str>| egui::Button::new(text).min_size(egui::vec2(0.0, 28.0));
-        if let Some(name) = slicers.names.get(slicers.default) {
-            if ui.add(button(t!("menu.open_in_slicer", name = name))).clicked() {
+    // The kit's buttons, as high as the ▾ beside them. Each program has its row, with the ▾ for
+    // the alternatives right behind it; a name too long for the pane is cut short.
+    let more = solidcraft_theme::Tokens::get().control_height + 2.0;
+    let button = |ui: &mut Ui, text: std::borrow::Cow<str>, beside: f32| {
+        let room = (ui.available_width() - beside).max(60.0);
+        super::settings_kit::bar_button_within(ui, &text, room).on_hover_text(text)
+    };
+    // With the programs' icons on, every button has a picture in front: the program's own
+    // icon, or our sign for a program without one and for a plugin (plugins bring no icon of
+    // their own yet). So all the buttons start in one line.
+    let icons = super::program_icons::enabled();
+    let icon = |ui: &mut Ui, program: Option<&str>, sign: &str| {
+        if !icons {
+            return;
+        }
+        let t = solidcraft_theme::Tokens::get();
+        let (slot, _) = ui.allocate_exact_size(egui::vec2(22.0, t.control_height), egui::Sense::hover());
+        let at = egui::Rect::from_center_size(slot.center(), egui::vec2(20.0, 20.0));
+        if !program.is_some_and(|name| super::program_icons::paint(ui, at, name)) {
+            solidcraft_ui_kit::icons::paint_ink(ui.painter(), at.shrink(2.0), sign, t.form_dim);
+        }
+        ui.add_space(3.0);
+    };
+    let row = |ui: &mut Ui, add: &mut dyn FnMut(&mut Ui)| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            add(ui);
+        });
+    };
+    if let Some(name) = slicers.names.get(slicers.default) {
+        let others = slicers.names.len() > 1;
+        row(ui, &mut |ui| {
+            icon(ui, Some(name), "explode");
+            if button(ui, t!("menu.open_in_slicer", name = name), if others { more } else { 0.0 }).clicked() {
                 clicked.0 = Some(slicers.default);
             }
-            if slicers.names.len() > 1 {
-                ui.menu_button("▾", |ui| {
+            if others {
+                super::menus::button(ui, "▾", |ui| {
                     for (i, other) in slicers.names.iter().enumerate().filter(|(i, _)| *i != slicers.default) {
-                        if ui.button(t!("menu.open_in_slicer", name = other)).clicked() {
+                        let label = t!("menu.open_in_slicer", name = other);
+                        if super::menus::item_program(ui, other, "explode", &label) {
                             clicked.0 = Some(i);
-                            ui.close();
                         }
                     }
                 })
                 .response
                 .on_hover_text(t!("menu.open_in_other_slicer"));
             }
-        }
-        if let Some((index, name)) = usable.first() {
-            if ui.add(button(t!("menu.open_in_editor", name = name))).clicked() {
+        });
+    }
+    if let Some((index, name)) = usable.first() {
+        let others = usable.len() > 1;
+        row(ui, &mut |ui| {
+            icon(ui, Some(name), "edit");
+            if button(ui, t!("menu.open_in_editor", name = name), if others { more } else { 0.0 }).clicked() {
                 clicked.1 = Some(*index);
             }
-            if usable.len() > 1 {
-                ui.menu_button("▾", |ui| {
+            if others {
+                super::menus::button(ui, "▾", |ui| {
                     for (index, other) in &usable[1..] {
-                        if ui.button(t!("menu.open_in_editor", name = other)).clicked() {
+                        let label = t!("menu.open_in_editor", name = other);
+                        if super::menus::item_program(ui, other, "edit", &label) {
                             clicked.1 = Some(*index);
-                            ui.close();
                         }
                     }
                 })
                 .response
                 .on_hover_text(t!("menu.open_in_other_editor"));
             }
-        }
-        for (id, label) in plugins {
-            if ui.add(button(label.into())).clicked() {
+        });
+    }
+    // A row per plugin, like the programs: its sign in front, then its button.
+    for (id, label) in plugins {
+        row(ui, &mut |ui| {
+            icon(ui, None, "settings_plug");
+            if button(ui, label.into(), 0.0).clicked() {
                 clicked.2 = Some(id.clone());
             }
-        }
-    });
+        });
+    }
     clicked
 }
 
@@ -324,15 +366,14 @@ fn lists_row(ui: &mut Ui, lists: &ListsOfSelection, enabled: bool, count: usize,
     ui.add_space(10.0);
     ui.label(RichText::new(t!("lists.title")).weak());
     ui.horizontal_wrapped(|ui| {
+        use super::settings_kit::bar_button_if;
+        // The star is drawn as switched on while the selection is a favourite.
         let (star, hint) = if lists.favorite {
-            (
-                RichText::new(format!("★ {}", t!("lists.favorite"))).color(egui::Color32::from_rgb(245, 197, 66)),
-                t!("lists.unfavorite_hint"),
-            )
+            (format!("★ {}", t!("lists.favorite")), t!("lists.unfavorite_hint"))
         } else {
-            (RichText::new(format!("☆ {}", t!("lists.favorite"))), t!("lists.favorite_hint"))
+            (format!("☆ {}", t!("lists.favorite")), t!("lists.favorite_hint"))
         };
-        if ui.add(egui::Button::new(star.small()).corner_radius(9.0)).on_hover_text(hint).clicked() {
+        if bar_button_if(ui, &star, true, lists.favorite).on_hover_text(hint).clicked() {
             out.toggle_favorite = true;
         }
         for (list, n) in lists.lists.iter().filter(|(l, _)| !matches!(l.kind, ListKind::Favorites | ListKind::Recent)) {
@@ -342,11 +383,7 @@ fn lists_row(ui: &mut Ui, lists: &ListsOfSelection, enabled: bool, count: usize,
             } else {
                 format!("{icon} {}", list.name)
             };
-            if ui
-                .add(egui::Button::new(RichText::new(label).small()).corner_radius(9.0))
-                .on_hover_text(t!("lists.open_hint"))
-                .clicked()
-            {
+            if bar_button_if(ui, &label, true, false).on_hover_text(t!("lists.open_hint")).clicked() {
                 out.open_list = Some(list.id);
             }
         }
@@ -370,24 +407,25 @@ fn print_row(ui: &mut Ui, print: &PrintInfo, out: &mut DetailsOutput) {
     };
     ui.label(summary);
     ui.horizontal_wrapped(|ui| {
-        if ui.button(t!("print.mark_printed")).clicked() {
+        use super::settings_kit::bar_button;
+        if bar_button(ui, &t!("print.mark_printed")).clicked() {
             out.print = Some(PrintResult::Printed);
         }
-        if ui.button(t!("print.mark_failed")).clicked() {
+        if bar_button(ui, &t!("print.mark_failed")).clicked() {
             out.print = Some(PrintResult::Failed);
         }
-        if status.last.is_some() && ui.button(t!("print.undo")).on_hover_text(t!("print.undo_hint")).clicked() {
+        if status.last.is_some() && bar_button(ui, &t!("print.undo")).on_hover_text(t!("print.undo_hint")).clicked() {
             out.undo_print = true;
         }
     });
     if let Some((list, wanted, done)) = print.on_list {
         ui.horizontal(|ui| {
             ui.label(t!("print.on_list", list = list));
-            if ui.add_enabled(wanted > 1, egui::Button::new("−").small()).clicked() {
+            if super::settings_kit::small_if(ui, wanted > 1, "−", &t!("print.fewer")).clicked() {
                 out.quantity = Some(wanted - 1);
             }
-            ui.label(RichText::new(wanted.to_string()).strong());
-            if ui.small_button("+").clicked() {
+            ui.label(super::settings_kit::strong(wanted.to_string()));
+            if super::settings_kit::small(ui, "+", &t!("print.more")).clicked() {
                 out.quantity = Some(wanted + 1);
             }
             ui.weak(t!("print.copies_done", done = done));
@@ -400,7 +438,7 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
     ui.label(RichText::new(t!("tags.title")).weak());
     if !ed.enabled {
         ui.label(t!("tags.only_library"));
-        if ed.can_add_folder && ui.button(t!("sidebar.add_root")).clicked() {
+        if ed.can_add_folder && super::settings_kit::action(ui, t!("sidebar.add_root"), true).clicked() {
             out.add_folder = true;
         }
         return;
@@ -418,7 +456,9 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
     let mut field = None;
     ui.horizontal(|ui| {
         // Suggested tags by group, the most used own tags first.
-        ui.menu_button("▾", |ui| {
+        // Every tag with a dot in its colour, as in the sidebar.
+        super::menus::button(ui, "▾", |ui| {
+            use super::menus;
             super::scroll_menu(ui, "tag-menu", |ui| {
                 let own: Vec<&String> = ed
                     .all
@@ -428,26 +468,20 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
                     .map(|(t, _)| t)
                     .collect();
                 if !own.is_empty() {
-                    ui.label(RichText::new(Group::Own.title()).weak());
+                    menus::heading(ui, &Group::Own.title());
                     for tag in own {
-                        if ui.button(tag).clicked() {
+                        if menus::swatch(ui, style.colors(tag).0, tag) {
                             out.add_tag = Some(tag.clone());
-                            ui.close();
                         }
                     }
-                    ui.separator();
+                    menus::separator(ui);
                 }
                 for group in Group::SUGGESTED {
-                    ui.menu_button(group.title(), |ui| {
+                    menus::submenu(ui, "checkpoint", &group.title(), |ui| {
                         super::scroll_menu(ui, "tag-group", |ui| {
                             for tag in tags::suggested(group, style).into_iter().filter(|t| !on_all(t)) {
-                                let response = ui.horizontal(|ui| {
-                                    tags::dot(ui, style, &tag);
-                                    ui.button(&tag)
-                                });
-                                if response.inner.clicked() {
+                                if menus::swatch(ui, style.colors(&tag).0, &tag) {
                                     out.add_tag = Some(tag);
-                                    ui.close();
                                 }
                             }
                         });
@@ -459,14 +493,18 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
         .on_hover_text(t!("tags.suggestions_hint"));
         match ed.ai {
             Some((_, true)) => {
-                ui.spinner().on_hover_text(t!("actions.tags_asking"));
+                crate::ui::loading::mark(ui).on_hover_text(t!("actions.tags_asking"));
             }
-            Some((_, false)) if ui.button("✨").on_hover_text(t!("actions.tags_hint")).clicked() => out.ai_tags = true,
+            Some((_, false))
+                if super::settings_kit::bar_button(ui, "✨").on_hover_text(t!("actions.tags_hint")).clicked() =>
+            {
+                out.ai_tags = true;
+            }
             _ => {}
         }
-        field = Some(
-            ui.add(egui::TextEdit::singleline(ed.input).hint_text(t!("tags.add_hint")).desired_width(f32::INFINITY)),
-        );
+        // The kit's field, as high as the two buttons before it.
+        let hint = t!("tags.add_hint");
+        field = Some(super::settings_kit::text_field_named(ui, "info-tag-field", ed.input, &hint, f32::INFINITY));
     });
     let Some(field) = field else { return };
     if ed.focus {
@@ -504,18 +542,51 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
     }
     let candidates: Vec<(String, bool, bool)> =
         suggest::rank(&needle, all, 8 + from_ai).into_iter().map(|c| (c.label, c.existing, c.value)).collect();
+    // While something is typed the matches float under the field, as in the review: nothing
+    // below moves when they come and go. A click on the list is a click outside the field to
+    // egui; the list is kept for that frame and the field gets the keyboard back.
+    let typing = !needle.is_empty();
+    let held_id = field.id.with("list-held");
+    let held = ui.data(|d| d.get_temp::<bool>(held_id)).unwrap_or(false);
+    let floating = typing && (field.has_focus() || field.lost_focus() || held);
     let picked = suggest::highlight(ui, field.id.with("pick"), &needle, candidates.len(), field.has_focus());
+    let mut take = None;
     if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
         if let Some((tag, ..)) = picked.and_then(|i| candidates.get(i)) {
-            out.add_tag = Some(tag.clone());
-            ed.input.clear();
-            field.request_focus();
+            take = Some(tag.clone());
         } else if !ed.input.trim().is_empty() {
-            out.add_tag = Some(std::mem::take(ed.input).trim().to_owned());
-            field.request_focus();
+            take = Some(ed.input.trim().to_owned());
         }
     }
-    if !candidates.is_empty() {
+    let mut down = false;
+    if floating && !candidates.is_empty() {
+        let rows: Vec<suggest::Offer> = candidates
+            .iter()
+            .map(|(tag, existing, ai)| suggest::Offer {
+                name: tag.clone(),
+                about: match (*ai, *existing) {
+                    (true, _) => t!("actions.tag_from_ai").into_owned(),
+                    (false, true) => match ed.all.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)) {
+                        Some((_, files)) => t!("review.tag_files", count = *files).into_owned(),
+                        None => String::new(),
+                    },
+                    (false, false) => t!("review.tag_suggested").into_owned(),
+                },
+                dot: Some(style.colors(tag).0),
+            })
+            .collect();
+        let place = (field.rect.left_bottom() + egui::vec2(0.0, 2.0), egui::Align2::LEFT_TOP);
+        let width = field.rect.width().clamp(200.0, 320.0);
+        let (clicked, on_list) = suggest::floating_list(ui, field.id.with("tags"), place, width, &rows, picked);
+        down = on_list;
+        if let Some(i) = clicked {
+            take = Some(candidates[i].0.clone());
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(held_id, down));
+    // With nothing typed, the AI's tags and (when the settings say so) the library's own stay
+    // as chips under the field, to take with one click.
+    if !typing && !candidates.is_empty() {
         ui.horizontal_wrapped(|ui| {
             for (i, (tag, existing, ai)) in candidates.iter().enumerate() {
                 let label = match (*ai, *existing) {
@@ -538,11 +609,15 @@ fn tag_editor(ui: &mut Ui, ed: TagEditor<'_>, style: &TagStyle, count: usize, ou
                     );
                 }
                 if response.clicked() {
-                    out.add_tag = Some(tag.clone());
-                    ed.input.clear();
+                    take = Some(tag.clone());
                 }
             }
         });
+    }
+    if let Some(tag) = take {
+        out.add_tag = Some(tag);
+        ed.input.clear();
+        field.request_focus();
     }
 }
 
@@ -553,7 +628,12 @@ fn note_editor(ui: &mut Ui, ed: NoteEditor<'_>, out: &mut DetailsOutput) {
     ui.add_space(10.0);
     ui.label(RichText::new(t!("notes.title")).weak());
     let hint = if ed.mixed { t!("notes.mixed_hint") } else { t!("notes.hint") };
-    let field = egui::TextEdit::multiline(ed.text).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY);
+    // The kit has one line fields; several lines are egui's in the same fill and frame.
+    let field = egui::TextEdit::multiline(ed.text)
+        .hint_text(hint)
+        .desired_rows(3)
+        .desired_width(f32::INFINITY)
+        .background_color(solidcraft_theme::Tokens::get().input_fill());
     out.note_changed = ui.add(field).changed();
 }
 

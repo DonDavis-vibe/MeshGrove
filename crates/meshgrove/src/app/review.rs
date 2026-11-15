@@ -256,6 +256,21 @@ impl App {
         match action {
             Some(ReviewAction::Select(i)) => self.gallery.select(Some(i)),
             Some(ReviewAction::Open(i)) => self.open_entry(i),
+            Some(ReviewAction::PickFolder(proposal)) => {
+                // From the folder the move goes to now, or the nearest one above it that is there.
+                let item = batches.iter().flat_map(|b| &b.items).find(|i| i.proposal.id == proposal);
+                let start = item.and_then(|i| {
+                    let to = i.picked.to.clone().or_else(|| {
+                        let payload = i.proposal.payload.clone();
+                        serde_json::from_value::<MovePayload>(payload).ok().map(|m| m.to)
+                    })?;
+                    to.ancestors().skip(1).find(|dir| dir.is_dir()).map(std::path::Path::to_path_buf)
+                });
+                #[cfg(feature = "plugins")]
+                self.pick_move_folder(proposal, start);
+                #[cfg(not(feature = "plugins"))]
+                let _ = start;
+            }
             Some(ReviewAction::Accept { batch, all }) => {
                 // The card stays, green with the progress, until the library has recorded it.
                 let b = &mut batches[batch];

@@ -10,6 +10,7 @@ use meshgrove_core::listing::Entry;
 
 use super::duplicates::{TILE_WIDTH, TileClick, tile};
 use super::gallery::{Action, Gallery, MenuContext, entry_menu};
+use super::settings_kit;
 use crate::i18n;
 
 pub struct InboxGroupInfo {
@@ -53,6 +54,19 @@ pub fn show(
     ai: bool,
     placement: bool,
 ) -> Option<InboxAction> {
+    // One of the kit's forms: its controls, its fields, its label font.
+    settings_kit::pane(ui, |ui| inbox(ui, entries, groups, gallery, menu, ai, placement))
+}
+
+fn inbox(
+    ui: &mut Ui,
+    entries: &[Entry],
+    groups: &[InboxGroupInfo],
+    gallery: &Gallery,
+    menu: &MenuContext,
+    ai: bool,
+    placement: bool,
+) -> Option<InboxAction> {
     let mut action = None;
     if groups.is_empty() {
         ui.centered_and_justified(|ui| ui.weak(t!("inbox.empty")));
@@ -69,15 +83,22 @@ pub fn show(
                 (files, 1) => t!("inbox.summary_one_group", files = i18n::count(files)),
                 (files, groups) => t!("inbox.summary", files = i18n::count(files), groups = i18n::count(groups)),
             };
-            ui.label(RichText::new(summary).strong());
+            ui.label(settings_kit::strong(summary));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(t!("inbox.all_done")).clicked() {
+                if settings_kit::action(ui, t!("inbox.all_done"), true).clicked() {
                     action = Some(InboxAction::AllDone);
                 }
-                if ai && ui.button(t!("actions.classify_all")).on_hover_text(t!("actions.classify_hint")).clicked() {
+                if ai
+                    && settings_kit::action(ui, t!("actions.classify_all"), true)
+                        .on_hover_text(t!("actions.classify_hint"))
+                        .clicked()
+                {
                     action = Some(InboxAction::Classify(None));
                 }
-                if placement && ui.button(t!("placement.inbox_all")).on_hover_text(t!("placement.inbox_hint")).clicked()
+                if placement
+                    && settings_kit::action(ui, t!("placement.inbox_all"), true)
+                        .on_hover_text(t!("placement.inbox_hint"))
+                        .clicked()
                 {
                     action = Some(InboxAction::Place(None));
                 }
@@ -88,21 +109,26 @@ pub fn show(
         for (n, group) in groups.iter().enumerate() {
             let warned: Vec<bool> = group.range.clone().map(|i| check_flag(gallery, &entries[i], i)).collect();
             let problems = warned.iter().filter(|w| **w).count();
-            egui::Frame::group(ui.style()).show(ui, |ui| {
+            settings_kit::card_frame().show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 // The button first, so a long folder name is shortened instead of hiding it.
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(t!("inbox.done")).on_hover_text(t!("inbox.done_hint")).clicked() {
+                        if settings_kit::action(ui, t!("inbox.done"), true)
+                            .on_hover_text(t!("inbox.done_hint"))
+                            .clicked()
+                        {
                             action = Some(InboxAction::Done(group.range.clone().collect()));
                         }
-                        if ai && ui.button(t!("actions.classify")).on_hover_text(t!("actions.classify_hint")).clicked()
+                        if ai
+                            && settings_kit::action(ui, t!("actions.classify"), true)
+                                .on_hover_text(t!("actions.classify_hint"))
+                                .clicked()
                         {
                             action = Some(InboxAction::Classify(Some(n)));
                         }
                         if placement
-                            && ui
-                                .button(t!("placement.inbox_button"))
+                            && settings_kit::action(ui, t!("placement.inbox_button"), true)
                                 .on_hover_text(t!("placement.inbox_hint"))
                                 .clicked()
                         {
@@ -110,7 +136,7 @@ pub fn show(
                         }
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             let icon = if group.archive { "📦" } else { "📁" };
-                            let title = RichText::new(format!("{icon} {}", group.title)).strong();
+                            let title = settings_kit::strong(format!("{icon} {}", group.title));
                             ui.add(egui::Label::new(title).truncate()).on_hover_text(&group.title);
                             let mut facts = vec![t!("inbox.new", count = group.range.len()).into_owned()];
                             if group.known > 0 {

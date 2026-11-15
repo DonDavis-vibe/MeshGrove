@@ -16,6 +16,11 @@ meshgrove-render.workspace = true
 eframe.workspace = true
 egui.workspace = true
 egui_tiles.workspace = true
+# The interface themes and the controls drawn from them (vendor/README.md).
+solidcraft-theme.workspace = true
+solidcraft-ui-kit.workspace = true
+solidcraft-ui-text.workspace = true
+fontdb.workspace = true
 krilla.workspace = true
 epaint_default_fonts.workspace = true
 egui_commonmark.workspace = true
@@ -33,6 +38,8 @@ sys-locale.workspace = true
 chrono.workspace = true
 crossbeam-channel.workspace = true
 image.workspace = true
+# Programs' own icons that only come as SVG (Blender); no text, no pictures inside pictures.
+resvg = { version = "0.48", default-features = false }
 dirs.workspace = true
 notify.workspace = true
 trash.workspace = true
@@ -58,6 +65,9 @@ tempfile = "3"
 
 [build-dependencies]
 winresource = "0.1"
+# Reads the theme files and the icon palette it embeds.
+serde_json.workspace = true
+toml.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wl-clipboard-rs.workspace = true

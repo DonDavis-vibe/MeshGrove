@@ -1,0 +1,55 @@
+# The vendored SolidCraft UI kit as its own workspace, the way SolidCraft keeps `solidcore`.
+#
+# The `[workspace.*]` tables mirror the keys the vendored manifests inherit
+# (`version.workspace = true`, `egui = { workspace = true }`, the lints), so those manifests stay
+# byte-identical to upstream except for the patches listed in PATCHES.md. LightGrove's own
+# workspace (../Cargo.toml) excludes this directory and depends on the crates by path, so our lints
+# never apply to upstream code. Run the vendored tests with
+# `cargo test --manifest-path vendor/Cargo.toml`.
+[workspace]
+resolver = "3"
+members = ["solidcraft-*"]
+
+[workspace.package]
+# SolidCraft's version at the vendored commit (UPSTREAM_COMMIT).
+version = "0.40.0-rc.3"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+authors = ["SolidCraft contributors"]
+repository = "https://github.com/bherbruck/solidcraft"
+
+[workspace.dependencies]
+solidcraft-color = { path = "solidcraft-color", version = "=0.40.0-rc.3" }
+solidcraft-theme = { path = "solidcraft-theme", version = "=0.40.0-rc.3" }
+solidcraft-ui-text = { path = "solidcraft-ui-text", version = "=0.40.0-rc.3" }
+solidcraft-ui-registry = { path = "solidcraft-ui-registry", version = "=0.40.0-rc.3" }
+solidcraft-ui-kit = { path = "solidcraft-ui-kit", version = "=0.40.0-rc.3" }
+
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+log = "0.4"
+web-time = "1"
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+syn = { version = "2", features = ["full"] }
+
+egui = { version = "0.37", features = ["default_fonts"] }
+egui-wgpu = "0.37"
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "vulkan", "gles"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+neg_cmp_op_on_partial_ord = "allow"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1

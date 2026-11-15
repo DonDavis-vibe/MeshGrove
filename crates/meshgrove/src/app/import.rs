@@ -101,6 +101,7 @@ impl App {
                     busy: c.busy,
                     name_taken: c.name_taken,
                     archive: c.archive,
+                    folder: c.folder,
                 });
             }
             groups.push(ImportGroupInfo {

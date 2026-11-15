@@ -202,6 +202,17 @@ pub enum PreviewQuality {
     Studio,
 }
 
+/// Who draws the main window's title bar.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleBar {
+    /// Meshgrove, in the theme's colours, with its own buttons for the window.
+    #[default]
+    App,
+    /// The desktop's decorations.
+    System,
+}
+
 /// What a double-click (or Enter) on a model does. Models the chosen program does not open
 /// go to a model window instead.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -539,6 +550,13 @@ pub struct AiConfig {
     /// While AI is on, Meshgrove adds itself to the AI assistants installed on this computer
     /// (and takes itself out again when this or AI is turned off).
     pub connect_apps: bool,
+    /// Before something goes to an assistant outside this computer or network (the first message
+    /// of a run, and every one-click action), Meshgrove says what goes out and asks. The
+    /// question's "don't ask again" turns this off; the settings turn it on again.
+    pub cloud_ask: bool,
+    /// The toolbar's review button is always there (with AI or placement on), not only while
+    /// suggestions wait: the way to the review and its history when nothing is pending.
+    pub review_button_always: bool,
     /// Since when (Unix seconds) suggestions are accepted without the review: those of the AI
     /// apps and of the one-click actions, never moves; the chat has its own switch. `None`: all
     /// wait for the user.
@@ -562,6 +580,8 @@ impl Default for AiConfig {
             chat_mode: ChatMode::Review,
             cross_library_moves: false,
             connect_apps: true,
+            cloud_ask: true,
+            review_button_always: false,
             auto_accept_since: None,
         }
     }
@@ -719,6 +739,19 @@ pub struct Config {
     pub supported_first: bool,
     /// "de" / "en"; `None` follows the system language.
     pub language: Option<String>,
+    /// The interface theme (the id of a theme file, or "dark" / "light" for SolidCraft's own);
+    /// `None`: Meshgrove's own look, following the system's dark or light.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_theme: Option<String>,
+    /// The interface font: "system" for the desktop's, or an installed family's name;
+    /// `None`: the theme's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_font: Option<String>,
+    /// The main window's title bar: Meshgrove's own, or the desktop's.
+    pub title_bar: TitleBar,
+    /// Slicers and editors show the icon they bring themselves (the settings' Programs page,
+    /// the info pane's buttons, the open-with menus) instead of Meshgrove's own sign.
+    pub program_icons: bool,
     /// The slicers models can be sent to; `None`: take the ones found on this computer at startup.
     pub slicers: Option<Vec<Slicer>>,
     /// Name of the default slicer (double-click, the first "open in" entry); `None`: the first.
@@ -870,7 +903,8 @@ pub enum LibraryRead {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ImportConfig {
-    /// The folders looked at (their top level only); none: no import.
+    /// The folders looked at: the files at their top level, and the folders there that hold
+    /// models (each as a whole). None: no import.
     pub folders: Vec<PathBuf>,
     /// The library the files go to; `None`: the first one.
     pub library: Option<PathBuf>,
@@ -1194,6 +1228,10 @@ impl Default for Config {
             sort_descending: false,
             supported_first: true,
             language: None,
+            ui_theme: None,
+            ui_font: None,
+            title_bar: TitleBar::default(),
+            program_icons: true,
             slicers: None,
             default_slicer: None,
             slicer: None,

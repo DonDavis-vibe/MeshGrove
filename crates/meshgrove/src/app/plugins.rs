@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
-use egui::{RichText, Ui};
+use egui::Ui;
 use meshgrove_core::ai::proposals::{self, Origin, ProposalStore};
 use meshgrove_core::config::{AccessClass, PluginConfig};
 use meshgrove_plugin_api::ui::{BundleOutcome, Effect, Event, Level, PickInto};
@@ -53,6 +53,12 @@ enum DialogFor {
     Pick { plugin: String, panel: String, id: String, extensions: Vec<String>, into: PickInto },
     /// Where to save a file a plugin wrote (`Effect::SaveFile`).
     Save { from: PathBuf },
+    /// The folder for the question where a plugin's files should go ([`PathPrompt::Library`]).
+    Library,
+    /// The folder a suggested move (the proposal of this id) should go to, in the review.
+    MoveTarget(i64),
+    /// A folder for one of the settings' folder fields.
+    Settings(crate::ui::settings::FolderFor),
 }
 
 /// What the user picked in a dialog; nothing when they closed it.
@@ -190,7 +196,37 @@ impl App {
                 Ok(_) => self.toast(t!("plugins.saved", path = first.display().to_string()).into_owned()),
                 Err(e) => self.toast(format!("{}: {e}", first.display())),
             },
+            // Into the question's field, where it can still be changed; the question may be gone.
+            DialogFor::Library => {
+                if let Some(PathPrompt::Library { input, .. }) = &mut self.plugin_prompt {
+                    *input = first.display().to_string();
+                }
+            }
+            DialogFor::Settings(what) => self.settings.folder_picked(what, &first),
+            // The review may have moved on meanwhile: then nothing is there to place.
+            DialogFor::MoveTarget(proposal) => {
+                if let super::View::Review { batches, .. } = &mut self.view
+                    && let Some(item) =
+                        batches.iter_mut().flat_map(|b| &mut b.items).find(|i| i.proposal.id == proposal)
+                {
+                    crate::ui::review::move_into(item, &first);
+                }
+            }
         }
+    }
+
+    /// Opens the system's folder dialog for a suggested move's new place (the review's folder
+    /// button); its answer goes into that move's field.
+    pub(super) fn pick_move_folder(&mut self, proposal: i64, start: Option<PathBuf>) {
+        if self.plugin_dialog.open.is_some() {
+            return;
+        }
+        let mut folders = self.plugin_dialog.base.clone().set_title(t!("review.pick_folder_title"));
+        if let Some(dir) = start {
+            folders = folders.set_directory(dir);
+        }
+        self.plugin_dialog
+            .ask(DialogFor::MoveTarget(proposal), move || Box::pin(async move { paths(folders.pick_folder().await) }));
     }
 
     fn plugin_name(&self, id: &str) -> String {
@@ -317,7 +353,7 @@ impl App {
 
     /// Meshgrove's folder chooser for a panel: in the libraries, starting where the panel's
     /// files went last, else at the root of the library imports go to.
-    fn ask_folder(&mut self, plugin: &str, panel: &str, id: String, title: Option<String>) {
+    pub(super) fn ask_folder(&mut self, plugin: &str, panel: &str, id: String, title: Option<String>) {
         // A double click on the panel's button asks twice before the chooser shows: one is enough.
         if self.folder_asks.iter().any(|a| a.plugin == plugin && a.panel == panel && a.id == id) {
             return;
@@ -446,10 +482,14 @@ impl App {
                 true => job.plugin_name.clone(),
                 false => format!("{}: {}", job.plugin_name, job.message),
             };
-            ui.add(egui::ProgressBar::new(job.fraction.clamp(0.0, 1.0)).desired_width(90.0).desired_height(10.0))
-                .on_hover_text(t!("plugins.job_hint", tool = job.tool.as_str()));
+            let bar = egui::vec2(90.0, ui.spacing().interact_size.y);
+            ui.allocate_ui_with_layout(bar, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                crate::ui::plugin_view::progress_bar(ui, Some(job.fraction));
+            })
+            .response
+            .on_hover_text(t!("plugins.job_hint", tool = job.tool.as_str()));
             ui.label(text);
-            if ui.small_button("✖").on_hover_text(t!("plugins.cancel_job")).clicked() {
+            if crate::ui::settings_kit::small(ui, "✖", &t!("plugins.cancel_job")).clicked() {
                 self.plugins.deferred().cancel(&job.id);
             }
         }
@@ -466,7 +506,7 @@ impl App {
         open.upload_meshes(&rs.device, &rs.queue);
         if let Some(e) = open.error.clone() {
             ui.colored_label(ui.visuals().error_fg_color, format!("✖ {e}"));
-            if ui.button(t!("plugins.reopen")).clicked() {
+            if crate::ui::settings_kit::bar_button(ui, &t!("plugins.reopen")).clicked() {
                 let (plugin, panel) = (open.plugin.clone(), open.panel.clone());
                 self.plugins.close(&plugin, &panel);
                 if let Err(e) = self.plugins.open(&plugin, &panel, None) {
@@ -475,30 +515,54 @@ impl App {
             }
             return;
         }
-        if !open.jobs.is_empty() {
-            let mut cancel = None;
-            for job in &open.jobs {
-                ui.horizontal(|ui| {
-                    if ui.small_button("✖").on_hover_text(t!("plugins.cancel_job")).clicked() {
-                        cancel = Some(job.id.clone());
+        // The work the panel has running, in one line that is always there: a bar that came and
+        // went with every job pushed the whole panel down and up again, and so did a second
+        // line whenever two jobs ran at once (a quick series of moves in a grid). The line shows
+        // the job that started first and how many wait behind it; ✖ stops the one shown.
+        let mut cancel = None;
+        ui.horizontal(|ui| {
+            use crate::ui::settings_kit;
+            let t = solidcraft_theme::Tokens::get();
+            let job = open.jobs.first();
+            let stop = settings_kit::small_if(ui, job.is_some(), "✖", &t!("plugins.cancel_job"));
+            if let Some(job) = job
+                && stop.clicked()
+            {
+                cancel = Some(job.id.clone());
+            }
+            let text = match job {
+                Some(job) => {
+                    let mut text = job.label.clone();
+                    if !job.message.is_empty() {
+                        text = format!("{text}: {}", job.message);
                     }
-                    let text = if job.message.is_empty() {
-                        job.label.clone()
-                    } else {
-                        format!("{}: {}", job.label, job.message)
-                    };
-                    ui.add(egui::ProgressBar::new(job.fraction.clamp(0.0, 1.0)).text(text));
-                });
+                    if open.jobs.len() > 1 {
+                        text = format!("{text}  (+{})", open.jobs.len() - 1);
+                    }
+                    text
+                }
+                None => t!("plugins.idle").into_owned(),
+            };
+            // What is being done, then the kit's thin bar over what is left of the line.
+            let text = egui::RichText::new(text).size(t.font_small).color(t.form_dim);
+            let said = ui.add(egui::Label::new(text).truncate().selectable(false));
+            if open.jobs.len() > 1 {
+                let all: Vec<&str> = open.jobs.iter().map(|j| j.label.as_str()).collect();
+                said.on_hover_text(all.join("\n"));
             }
-            if let Some(job) = cancel {
-                self.plugins.cancel_job(plugin, panel, &job);
-            }
-            ui.separator();
+            let bar = egui::vec2(ui.available_width().max(0.0), t.control_height);
+            ui.allocate_ui_with_layout(bar, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                crate::ui::plugin_view::progress_bar(ui, Some(job.map_or(0.0, |job| job.fraction)));
+            });
+        });
+        if let Some(job) = cancel {
+            self.plugins.cancel_job(plugin, panel, &job);
         }
+        ui.separator();
         let Some(open) = self.plugins.find(plugin, panel) else { return };
         let Some(view) = open.view.clone() else {
             ui.horizontal(|ui| {
-                ui.spinner();
+                crate::ui::loading::mark(ui);
                 ui.weak(t!("plugins.loading"));
             });
             return;
@@ -511,7 +575,7 @@ impl App {
             let size = egui::vec2(ui.available_width(), args.height);
             let Some(m) = meshes.get_mut(args.key) else {
                 ui.allocate_ui(size, |ui| {
-                    ui.centered_and_justified(|ui| ui.spinner());
+                    ui.centered_and_justified(|ui| crate::ui::loading::mark_sized(ui, 44.0));
                 });
                 return;
             };
@@ -543,12 +607,13 @@ impl App {
         }
         let defs = self.plugins.panel_defs();
         let several = defs.iter().map(|d| &d.0).collect::<std::collections::HashSet<_>>().len() > 1;
-        ui.menu_button(format!("{} ▾", t!("plugins.menu")), |ui| {
+        use crate::ui::menus;
+        menus::button(ui, &format!("{} ▾", t!("plugins.menu")), |ui| {
             if defs.is_empty() {
-                ui.label(RichText::new(t!("plugins.no_panels")).weak());
+                menus::heading(ui, &t!("plugins.no_panels"));
             }
             for (plugin, panel, title, name) in &defs {
-                if ui.button(menu_label(name, title, several)).clicked() {
+                if menus::item(ui, "settings_plug", &menu_label(name, title, several)) {
                     match self.plugins.open(plugin, panel, None) {
                         Ok(()) => self.layout.focus_plugin(plugin, panel),
                         Err(e) => self.toast(e),
@@ -556,8 +621,8 @@ impl App {
                     ui.close();
                 }
             }
-            ui.separator();
-            if ui.button(t!("plugins.settings")).clicked() {
+            menus::separator(ui);
+            if menus::item(ui, "settings", &t!("plugins.settings")) {
                 self.settings.open_at("plugins");
                 ui.close();
             }
@@ -567,28 +632,47 @@ impl App {
     /// The question for a path, while one is asked.
     pub(super) fn plugin_prompt_modal(&mut self, ctx: &egui::Context) {
         let Some(prompt) = &mut self.plugin_prompt else { return };
-        let mut decision = None;
         let PathPrompt::Library { title, input, .. } = prompt;
         if let Some(path) = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf())) {
             *input = path.display().to_string();
         }
-        egui::Modal::new(egui::Id::unique("plugin_prompt")).show(ctx, |ui| {
-            ui.set_max_width(520.0);
-            ui.heading(title.as_str());
-            ui.weak(t!("plugins.pick_library_hint"));
-            let r = ui.add(egui::TextEdit::singleline(input).desired_width(500.0));
-            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                decision = Some(true);
-            }
+        use crate::ui::dialogs::{self, Dialog, Tone};
+        // Enter takes the path, as it did in the field.
+        let named = !input.trim().is_empty();
+        let dialog = Dialog {
+            id: "plugin_prompt",
+            icon: "folder",
+            title: title.as_str(),
+            tone: Tone::Info,
+            yes: &t!("plugins.ok"),
+            no: &t!("trash.cancel"),
+            enter_declines: false,
+            cards: 2.0,
+        };
+        // Typed or pasted, dropped on the window, or chosen in the system's folder dialog.
+        let choose = t!("plugins.choose_folder");
+        let mut browse = false;
+        let decision = dialog.show(ctx, named, |ui| {
+            use crate::ui::settings_kit;
+            dialogs::quiet(ui, &t!("plugins.pick_library_hint"));
             ui.horizontal(|ui| {
-                if ui.button(t!("plugins.ok")).clicked() {
-                    decision = Some(true);
-                }
-                if ui.button(t!("trash.cancel")).clicked() {
-                    decision = Some(false);
-                }
+                let button = settings_kit::bar_button_width(ui, &choose);
+                let width = (ui.available_width() - button - ui.spacing().item_spacing.x).max(80.0);
+                settings_kit::text_field(ui, input, "", width).request_focus();
+                browse = settings_kit::bar_button(ui, &choose).clicked();
             });
         });
+        if browse && self.plugin_dialog.open.is_none() {
+            let mut folders = self.plugin_dialog.base.clone().set_title(t!("plugins.choose_folder_title"));
+            // From the folder that is named already, or the one above a new one.
+            let typed = PathBuf::from(input.trim());
+            let start = typed.ancestors().find(|dir| dir.is_dir()).map(Path::to_path_buf).or_else(dirs::home_dir);
+            if let Some(dir) = start {
+                folders = folders.set_directory(dir);
+            }
+            self.plugin_dialog
+                .ask(DialogFor::Library, move || Box::pin(async move { paths(folders.pick_folder().await) }));
+        }
         match decision {
             Some(true) => {
                 let prompt = self.plugin_prompt.take().expect("asked above");
@@ -702,6 +786,18 @@ impl App {
                         return false;
                     }
                 }
+            }
+            SettingsChange::PickFolder(what) => {
+                if self.plugin_dialog.open.is_none() {
+                    let mut folders = self.plugin_dialog.base.clone().set_title(t!("plugins.choose_folder_title"));
+                    if let Some(dir) = dirs::home_dir() {
+                        folders = folders.set_directory(dir);
+                    }
+                    self.plugin_dialog.ask(DialogFor::Settings(what), move || {
+                        Box::pin(async move { paths(folders.pick_folder().await) })
+                    });
+                }
+                return false;
             }
             SettingsChange::PickPlugin => {
                 if self.plugin_dialog.open.is_none() {

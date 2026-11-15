@@ -2,6 +2,11 @@
 //! comes back as [`Event`]s for the plugin, which answers with a new tree. What is being typed
 //! or dragged stays on screen until the plugin rendered anew; then the plugin's values count.
 //!
+//! The widgets are SolidCraft's UI kit's: the panel is one of its forms ([`sc::scope`]: the
+//! height of its controls, its fields' fills, its label font), and buttons, checkboxes, lists,
+//! sliders, fields, sections and notices are the kit's own. A number stays egui's `DragValue`
+//! in the form's look: it can be dragged, and what is typed counts when the user is done.
+//!
 //! The grid editor and the canvas are host widgets of their own ([`super::grid_editor`],
 //! [`super::canvas`]).
 
@@ -15,6 +20,10 @@ use meshgrove_plugin_api::ui::{
     Choice, Event, FormRow, Level, Node, Tab, TableColumn, TableRow, TextStyle, Unit, View,
 };
 use serde_json::{Value, json};
+use solidcraft_theme::Tokens;
+use solidcraft_ui_kit as sc;
+
+use super::settings_kit;
 
 /// What a panel keeps between frames.
 #[derive(Default)]
@@ -61,7 +70,11 @@ pub fn show(
     meshes: &mut dyn FnMut(&mut Ui, MeshViewArgs),
 ) -> Vec<Event> {
     let mut draw = Draw { state, meshes, events: Vec::new(), units: display_units() };
-    draw.node(ui, &view.root);
+    sc::scope(ui, |ui| {
+        // The kit's forms cut their texts short; a panel's texts wrap, as they did.
+        ui.style_mut().wrap_mode = None;
+        draw.node(ui, &view.root);
+    });
     draw.events
 }
 
@@ -84,6 +97,7 @@ fn is_container(node: &Node) -> bool {
             | Node::Scroll { .. }
             | Node::Form { .. }
             | Node::Table { .. }
+            | Node::Radio { .. }
             | Node::GridEditor(_)
             | Node::Canvas(_)
             | Node::MeshView { .. }
@@ -110,13 +124,102 @@ fn hex(c: Color32) -> String {
     if a == 255 { format!("#{r:02x}{g:02x}{b:02x}") } else { format!("#{r:02x}{g:02x}{b:02x}{a:02x}") }
 }
 
-fn level_color(ui: &Ui, level: Level) -> Color32 {
+/// The ink of a notice's sign and the kit's band it stands in.
+fn level_look(level: Level) -> (Color32, sc::AssistantTone, &'static str) {
+    let t = Tokens::get();
     match level {
-        Level::Info => ui.visuals().hyperlink_color,
-        Level::Success => Color32::from_rgb(60, 160, 80),
-        Level::Warn => ui.visuals().warn_fg_color,
-        Level::Error => ui.visuals().error_fg_color,
+        Level::Info => (t.form_primary, sc::AssistantTone::Neutral, "ℹ"),
+        Level::Success => (t.form_success, sc::AssistantTone::Success, "✔"),
+        Level::Warn => (t.warning, sc::AssistantTone::Warning, "⚠"),
+        Level::Error => (t.error, sc::AssistantTone::Error, "✖"),
     }
+}
+
+/// A slider's value as text: as many decimals as its step has, or as its range asks for.
+fn slider_format(min: f64, max: f64, step: Option<f64>) -> fn(f64) -> String {
+    let finest = step.filter(|s| *s > 0.0).unwrap_or((max - min).abs() / 100.0);
+    if finest >= 1.0 {
+        |v| format!("{v:.0}")
+    } else if finest >= 0.1 {
+        |v| format!("{v:.1}")
+    } else if finest >= 0.01 {
+        |v| format!("{v:.2}")
+    } else {
+        |v| format!("{v:.3}")
+    }
+}
+
+/// A button of a panel, as high as the kit's fields; `primary` is the one the panel is about.
+/// `key` names it among the buttons of its row (two may carry the same label).
+fn action_button(ui: &mut Ui, key: &str, label: &str, enabled: bool, primary: bool) -> egui::Response {
+    let t = Tokens::get();
+    // Whole on the next line when the rest of this one is too short, cut short only when a
+    // whole line is.
+    let line = ui.max_rect().width();
+    let room = if line.is_finite() && line > 0.0 { line } else { f32::INFINITY };
+    let size = vec2(settings_kit::bar_button_width(ui, label).min(room), t.control_height);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let look = if primary { sc::Button::Primary } else { sc::Button::Normal };
+    ui.add_enabled_ui(enabled, |ui| sc::button_at(ui, key, rect, label, look)).inner
+}
+
+/// The kit's checkbox with a label that is never cut short ([`settings_kit::checkbox`]). In a
+/// row that wraps, a checkbox that does not fit what is left of the line goes to the next one
+/// first. What is left of the line is measured in `ui` itself (a wrapping layout's
+/// `available_width` is the whole line): a greyed-out checkbox is drawn in a child of it, which
+/// starts where the cursor is and so always seems to stand at the start of its line.
+fn checkbox(ui: &mut Ui, label: &str, on: &mut bool, enabled: bool) -> egui::Response {
+    if ui.layout().main_wrap {
+        let t = Tokens::get();
+        let font = egui::FontId::proportional(t.font_label);
+        let text = ui.painter().layout_no_wrap(label.to_owned(), font, t.form_ink).size().x;
+        let needed = t.space_14 + t.space_6 + text;
+        if needed > ui.available_size_before_wrap().x && ui.cursor().left() > ui.max_rect().left() + 1.0 {
+            ui.end_row();
+        }
+    }
+    if enabled {
+        settings_kit::checkbox(ui, label, on)
+    } else {
+        ui.add_enabled_ui(false, |ui| settings_kit::checkbox(ui, label, on)).inner
+    }
+}
+
+/// One of a few as the kit's joined buttons; as single buttons that wrap where they are too
+/// wide for one line. The one the user picked, when it is another one.
+fn one_of(ui: &mut Ui, labels: &[&str], current: usize) -> Option<usize> {
+    let t = Tokens::get();
+    let widest = labels.iter().map(|label| sc::ContentWidth::name(ui, label)).fold(0.0, f32::max);
+    let width = (widest + t.space_16) * labels.len() as f32;
+    if width <= ui.available_width() {
+        let mut index = current.min(labels.len().saturating_sub(1));
+        let config = sc::Segments { compact: true, ..Default::default() };
+        let size = vec2(width, t.control_height);
+        let picked = ui
+            .allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
+                sc::segmented(ui, &mut index, labels, config)
+            })
+            .inner;
+        return (picked && index != current).then_some(index);
+    }
+    let mut picked = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = t.space_4;
+        for (i, label) in labels.iter().enumerate() {
+            let size = vec2(settings_kit::bar_button_width(ui, label), t.control_height);
+            let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+            let look = if i == current { sc::Button::SmallSelected } else { sc::Button::Normal };
+            if sc::button_at(ui, &format!("one-of-{i}"), rect, *label, look).clicked() && i != current {
+                picked = Some(i);
+            }
+        }
+    });
+    picked
+}
+
+/// The kit's thin bar of something under way ([`settings_kit::progress`]).
+pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>) {
+    settings_kit::progress(ui, fraction);
 }
 
 impl Draw<'_> {
@@ -137,6 +240,7 @@ impl Draw<'_> {
                     // what lies in the row itself wraps: plain widgets go in without a scope of
                     // their own (containers keep theirs, for their ids).
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    ui.spacing_mut().item_spacing.x = Tokens::get().space_6;
                     for (i, child) in children.iter().enumerate() {
                         if is_container(child) {
                             ui.push_id(i, |ui| self.node(ui, child));
@@ -148,19 +252,23 @@ impl Draw<'_> {
             }
             Node::Group { title, collapsible, children } => match title {
                 Some(title) if *collapsible => {
-                    egui::CollapsingHeader::new(RichText::new(title).strong())
-                        .id_salt("group")
-                        .default_open(true)
-                        .show(ui, |ui| self.children(ui, children));
+                    sc::section(ui, "group", title, true, |ui| self.children(ui, children));
                 }
                 _ => {
-                    egui::Frame::group(ui.style()).show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        if let Some(title) = title {
-                            ui.label(RichText::new(title).strong());
-                        }
-                        self.children(ui, children);
-                    });
+                    let t = Tokens::get();
+                    egui::Frame::new()
+                        .stroke(t.tertiary_border(t.dialog_rule))
+                        .corner_radius(t.radius_md)
+                        .inner_margin(t.space_8)
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            if let Some(title) = title {
+                                // Whole and wrapping: a title here may be a sentence.
+                                let face = sc::type_face::semibold(t.font_label);
+                                ui.label(RichText::new(title).font(face).color(t.form_ink));
+                            }
+                            self.children(ui, children);
+                        });
                 }
             },
             Node::Tabs { id, selected, tabs } => self.tabs(ui, id, *selected, tabs),
@@ -174,13 +282,14 @@ impl Draw<'_> {
                 area.show(ui, |ui| self.children(ui, children));
             }
             Node::Label { text, style } => {
-                let text = RichText::new(text);
+                let t = Tokens::get();
+                let text = RichText::new(text).color(t.form_ink);
                 ui.label(match style {
                     TextStyle::Body => text,
-                    TextStyle::Heading => text.heading(),
-                    TextStyle::Strong => text.strong(),
-                    TextStyle::Small => text.small(),
-                    TextStyle::Weak => text.weak(),
+                    TextStyle::Heading => text.font(sc::type_face::semibold(t.font_body + t.space_2)),
+                    TextStyle::Strong => text.font(sc::type_face::semibold(t.font_label)),
+                    TextStyle::Small => text.size(t.font_small).color(t.form_dim),
+                    TextStyle::Weak => text.color(t.form_dim),
                     TextStyle::Mono => text.monospace(),
                 });
             }
@@ -194,43 +303,29 @@ impl Draw<'_> {
                 self.image(ui, data, *width, alt.as_deref(), id.as_deref(), *selected);
             }
             Node::Notice { level, text } => {
-                let color = level_color(ui, *level);
-                egui::Frame::new()
-                    .stroke(egui::Stroke::new(1.0, color))
-                    .corner_radius(4.0)
-                    .inner_margin(egui::Margin::symmetric(8, 4))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        let icon = match level {
-                            Level::Info => "ℹ",
-                            Level::Success => "✔",
-                            Level::Warn => "⚠",
-                            Level::Error => "✖",
-                        };
-                        ui.horizontal_wrapped(|ui| {
-                            ui.colored_label(color, icon);
-                            ui.label(text);
-                        });
+                let (ink, tone, sign) = level_look(*level);
+                sc::banner(ui, tone, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                        ui.colored_label(ink, sign);
+                        ui.label(RichText::new(text).color(Tokens::get().form_ink));
                     });
+                });
             }
             Node::Progress { fraction, text } => {
-                let bar = egui::ProgressBar::new(fraction.unwrap_or(0.0).clamp(0.0, 1.0)).animate(fraction.is_none());
-                let bar = match text {
-                    Some(t) => bar.text(t.as_str()),
-                    None if fraction.is_some() => bar.show_percentage(),
-                    None => bar,
-                };
-                ui.add(bar);
-                if fraction.is_none() {
-                    ui.ctx().request_repaint();
-                }
+                // What is being done over the bar; how far, where only that is known.
+                let t = Tokens::get();
+                let percent = fraction.map(|f| format!("{:.0} %", f.clamp(0.0, 1.0) * 100.0));
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = t.space_3;
+                    if let Some(text) = text.clone().or(percent) {
+                        ui.label(RichText::new(text).size(t.font_small).color(t.form_dim));
+                    }
+                    progress_bar(ui, *fraction);
+                });
             }
             Node::Button { id, label, primary, enabled } => {
-                let mut button = egui::Button::new(label.as_str());
-                if *primary {
-                    button = button.fill(ui.visuals().selection.bg_fill);
-                }
-                if ui.add_enabled(*enabled, button).clicked() {
+                if action_button(ui, id, label, *enabled, *primary).clicked() {
                     self.events.push(Event::Click { id: id.clone() });
                 }
             }
@@ -242,16 +337,21 @@ impl Draw<'_> {
             }
             Node::Slider { id, value, min, max, step, enabled } => {
                 let mut v = self.pending_f64(id).unwrap_or(*value);
-                let mut slider = egui::Slider::new(&mut v, *min..=*max);
-                if let Some(step) = step {
-                    slider = slider.step_by(*step);
-                }
-                let r = ui.add_enabled(*enabled, slider);
+                let look = sc::Slider {
+                    step: *step,
+                    show_value: true,
+                    format: slider_format(*min, *max, *step),
+                    ..Default::default()
+                };
+                let width = ui.available_width().clamp(120.0, 260.0);
+                let r = settings_kit::fixed_width(ui, width, |ui| {
+                    ui.add_enabled_ui(*enabled, |ui| sc::slider(ui, &mut v, *min..=*max, look)).inner
+                });
                 self.after_drag(id, v, &r);
             }
             Node::Checkbox { id, label, checked, enabled } => {
                 let mut on = self.state.pending.get(id).and_then(Value::as_bool).unwrap_or(*checked);
-                if ui.add_enabled(*enabled, egui::Checkbox::new(&mut on, label.as_str())).changed() {
+                if checkbox(ui, label, &mut on, *enabled).changed() {
                     self.state.pending.insert(id.clone(), json!(on));
                     self.events.push(changed(id, json!(on)));
                 }
@@ -259,23 +359,22 @@ impl Draw<'_> {
             Node::Select { id, options, selected, enabled } => self.select(ui, id, options, selected, *enabled),
             Node::Radio { id, options, selected } => {
                 let current = self.pending_str(id).unwrap_or_else(|| selected.clone());
-                ui.horizontal_wrapped(|ui| {
-                    for o in options {
-                        if ui.radio(current == o.value, o.label.as_str()).clicked() && current != o.value {
-                            self.state.pending.insert(id.clone(), json!(o.value));
-                            self.events.push(changed(id, json!(o.value)));
-                        }
-                    }
-                });
+                let labels: Vec<&str> = options.iter().map(|o| o.label.as_str()).collect();
+                let at = options.iter().position(|o| o.value == current).unwrap_or(usize::MAX);
+                if let Some(o) = one_of(ui, &labels, at).and_then(|i| options.get(i)) {
+                    self.state.pending.insert(id.clone(), json!(o.value));
+                    self.events.push(changed(id, json!(o.value)));
+                }
             }
             Node::Color { id, value } => {
                 let current = self.pending_str(id).unwrap_or_else(|| value.clone());
-                let mut color = parse_color(&current).unwrap_or(Color32::GRAY);
-                let r =
-                    egui::color_picker::color_edit_button_srgba(ui, &mut color, egui::color_picker::Alpha::OnlyBlend);
-                if r.changed() {
-                    self.state.pending.insert(id.clone(), json!(hex(color)));
-                    self.events.push(changed(id, json!(hex(color))));
+                let [r, g, b, a] = parse_color(&current).unwrap_or(Color32::GRAY).to_srgba_unmultiplied();
+                let (mut rgb, mut opacity) = ([r, g, b], f64::from(a) / 255.0);
+                if sc::color_field_with_opacity(ui, &mut rgb, &mut opacity).changed() {
+                    let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+                    let color = hex(Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], alpha));
+                    self.state.pending.insert(id.clone(), json!(color));
+                    self.events.push(changed(id, json!(color)));
                 }
             }
             Node::Form { id, rows, submit } => self.form(ui, id, rows, submit.as_deref()),
@@ -301,7 +400,7 @@ impl Draw<'_> {
                 (self.meshes)(ui, MeshViewArgs { id, key, height, bed: *bed, frame: *frame, paint: paint.as_ref() });
             }
             Node::Unknown => {
-                ui.label(RichText::new(t!("plugins.unknown_widget")).weak().italics());
+                ui.label(RichText::new(t!("plugins.unknown_widget")).color(Tokens::get().form_dim).italics());
             }
         }
     }
@@ -328,14 +427,11 @@ impl Draw<'_> {
 
     fn tabs(&mut self, ui: &mut Ui, id: &str, selected: usize, tabs: &[Tab]) {
         let current = self.state.pending.get(id).and_then(Value::as_u64).map_or(selected, |v| v as usize);
-        ui.horizontal(|ui| {
-            for (i, tab) in tabs.iter().enumerate() {
-                if ui.selectable_label(i == current, tab.label.as_str()).clicked() && i != current {
-                    self.state.pending.insert(id.to_owned(), json!(i));
-                    self.events.push(changed(id, json!(i)));
-                }
-            }
-        });
+        let labels: Vec<&str> = tabs.iter().map(|tab| tab.label.as_str()).collect();
+        if let Some(i) = one_of(ui, &labels, current) {
+            self.state.pending.insert(id.to_owned(), json!(i));
+            self.events.push(changed(id, json!(i)));
+        }
         ui.separator();
         if let Some(tab) = tabs.get(current) {
             ui.push_id(("tab", current), |ui| self.children(ui, &tab.children));
@@ -473,9 +569,17 @@ impl Draw<'_> {
 
     fn text_input(&mut self, ui: &mut Ui, id: &str, value: &str, hint: Option<&str>, multiline: bool, enabled: bool) {
         let mut text = self.pending_str(id).unwrap_or_else(|| value.to_owned());
-        let edit = if multiline { egui::TextEdit::multiline(&mut text) } else { egui::TextEdit::singleline(&mut text) };
-        let edit = edit.hint_text(hint.unwrap_or_default()).desired_width(f32::INFINITY);
-        let r = ui.add_enabled(enabled, edit);
+        let hint = hint.unwrap_or_default();
+        let mut field = |ui: &mut Ui| {
+            if multiline {
+                // The kit has one line fields; several lines are egui's in the same fill.
+                let edit = egui::TextEdit::multiline(&mut text).hint_text(hint).desired_width(f32::INFINITY);
+                ui.add(edit.background_color(Tokens::get().input_fill()))
+            } else {
+                sc::text_field_reserving(ui, &mut text, hint, 0.0).1
+            }
+        };
+        let r = if enabled { field(ui) } else { ui.add_enabled_ui(false, field).inner };
         if r.has_focus() {
             self.state.typing = Some(id.to_owned());
         } else if self.state.typing.as_deref() == Some(id) {
@@ -541,16 +645,20 @@ impl Draw<'_> {
     fn select(&mut self, ui: &mut Ui, id: &str, options: &[Choice], selected: &str, enabled: bool) {
         let current = self.pending_str(id).unwrap_or_else(|| selected.to_owned());
         let label = options.iter().find(|o| o.value == current).map_or(current.as_str(), |o| o.label.as_str());
-        ui.add_enabled_ui(enabled, |ui| {
-            // No wider than the row: long choices are cut short (the list shows them whole).
-            let width = ui.available_width().clamp(80.0, 240.0);
-            egui::ComboBox::from_id_salt(id).selected_text(label).width(width).truncate().show_ui(ui, |ui| {
-                for o in options {
-                    if ui.selectable_label(o.value == current, o.label.as_str()).clicked() && o.value != current {
-                        self.state.pending.insert(id.to_owned(), json!(o.value));
-                        self.events.push(changed(id, json!(o.value)));
+        // No wider than the row: long choices are cut short (the list shows them whole).
+        let width = ui.available_width().clamp(80.0, 240.0);
+        settings_kit::fixed_width(ui, width, |ui| {
+            // One line, as in the kit's forms: a long choice is cut short, not wrapped.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+            ui.add_enabled_ui(enabled, |ui| {
+                sc::dropdown_menu(ui, id, label, |ui| {
+                    for o in options {
+                        if settings_kit::choice_row(ui, o.value == current, &o.label) && o.value != current {
+                            self.state.pending.insert(id.to_owned(), json!(o.value));
+                            self.events.push(changed(id, json!(o.value)));
+                        }
                     }
-                }
+                });
             });
         });
     }
@@ -569,7 +677,8 @@ impl Draw<'_> {
         if values < 100.0 {
             // Too narrow beside each other: each label above its input.
             for (i, row) in rows.iter().enumerate() {
-                ui.label(RichText::new(row.label.as_str()).small().weak());
+                let t = Tokens::get();
+                ui.label(RichText::new(row.label.as_str()).size(t.font_small).color(t.form_dim));
                 ui.push_id(i, |ui| self.node(ui, &row.node));
                 ui.add_space(4.0);
             }
@@ -577,7 +686,7 @@ impl Draw<'_> {
             self.form_grid(ui, id, rows, values);
         }
         if let Some(label) = submit
-            && ui.button(label).clicked()
+            && action_button(ui, "submit", label, true, false).clicked()
         {
             let values = rows.iter().filter_map(|row| self.value_of(&row.node)).collect();
             self.events.push(Event::Submit { id: id.to_owned(), values });
@@ -586,9 +695,10 @@ impl Draw<'_> {
 
     fn form_grid(&mut self, ui: &mut Ui, id: &str, rows: &[FormRow], values: f32) {
         const GAP: f32 = 12.0;
-        egui::Grid::new(("form", id)).num_columns(2).spacing([GAP, 6.0]).show(ui, |ui| {
+        let t = Tokens::get();
+        egui::Grid::new(("form", id)).num_columns(2).spacing([GAP, t.form_gap_y]).show(ui, |ui| {
             for (i, row) in rows.iter().enumerate() {
-                ui.label(row.label.as_str());
+                ui.label(RichText::new(row.label.as_str()).color(t.form_ink));
                 ui.push_id(i, |ui| {
                     ui.set_max_width(values);
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
@@ -645,7 +755,9 @@ impl Draw<'_> {
             .header(20.0, |mut header| {
                 for c in columns {
                     header.col(|ui| {
-                        ui.strong(c.title.as_str());
+                        let t = Tokens::get();
+                        let title = RichText::new(c.title.as_str()).font(sc::type_face::semibold(t.font_small));
+                        ui.add(egui::Label::new(title.color(t.form_dim)).truncate().selectable(false));
                     });
                 }
             })
@@ -879,6 +991,16 @@ mod tests {
         drive(view, 400.0, |_| vec![vec![egui::Event::PointerMoved(p), button(p, true)], vec![button(p, false)]]).0
     }
 
+    /// Clicks on the text `on`, wherever the view drew it.
+    fn click_on(view: &View, on: &str) -> Vec<Event> {
+        let click = |shapes: &Shapes| {
+            let (_, rect, _) = texts(shapes).into_iter().find(|(t, ..)| t == on).expect("the text is drawn");
+            let p = rect.center();
+            vec![vec![egui::Event::PointerMoved(p), button(p, true)], vec![button(p, false)]]
+        };
+        drive(view, 400.0, click).0
+    }
+
     /// The texts a frame drew: each with its place and whether it was cut short.
     fn texts(shapes: &Shapes) -> Vec<(String, Rect, bool)> {
         fn walk(shape: &egui::Shape, out: &mut Vec<(String, Rect, bool)>) {
@@ -975,8 +1097,8 @@ mod tests {
             "rows": [{"id": "0", "cells": ["a", "1"]}, {"id": "1", "cells": ["b", "2"]}, {"id": "2", "cells": ["c", "3"]}],
             "max_height": 260.0}});
         let view: View = serde_json::from_value(json).unwrap();
-        // Header 20 points, rows 20 points: the middle of the second row.
-        let events = click_at(&view, egui::pos2(40.0, 8.0 + 20.0 + 20.0 + 10.0));
+        // The first cell of the second row.
+        let events = click_on(&view, "b");
         assert_eq!(events, [Event::TableSelect { id: "parts".into(), row: Some("1".into()) }]);
     }
 
@@ -991,9 +1113,85 @@ mod tests {
                 {"type": "button", "id": "k", "label": "Kalibrierteile"}]},
             "second": {"type": "label", "text": "x"}}});
         let view: View = serde_json::from_value(json).unwrap();
-        // The part is 0.4 × (400 − 8) ≈ 157 points wide: one button per line, about 22 apart.
-        let events = click_at(&view, egui::pos2(30.0, 2.0 * 22.0 + 10.0));
+        // The part is 0.4 × (400 − 8) ≈ 157 points wide: one button per line.
+        let (_, shapes) = drive(&view, 400.0, |_| Vec::new());
+        let tops: Vec<f32> = ["Automatisch belegen", "Generieren + Druckliste", "Kalibrierteile"]
+            .iter()
+            .map(|label| texts(&shapes).into_iter().find(|(t, ..)| t == label).expect("the button").1.top())
+            .collect();
+        assert!(tops[0] < tops[1] && tops[1] < tops[2], "one below the other: {tops:?}");
+        let events = click_on(&view, "Kalibrierteile");
         assert_eq!(events, [Event::Click { id: "k".into() }]);
+    }
+
+    /// Checkboxes in a row of a form, as Bingrove's "Mounting": a label is never cut short. One
+    /// longer than its line wraps, and the next checkbox stands below it. (The kit's checkbox
+    /// is as wide as what is left of its line, and cuts its label there.)
+    #[test]
+    fn checkboxes_in_a_row_keep_their_labels_whole() {
+        let medium = "Screw holes (middle of the corner cells)";
+        let long = "Hooks for IKEA Skadis (top edge, slide in from above, one per plate piece)";
+        let json = serde_json::json!({"v": 1, "root": {"type": "form", "id": "f", "rows": [
+            {"label": "Plate", "node": {"type": "select", "id": "s", "selected": "a",
+                "options": [{"value": "a", "label": "with floor"}]}},
+            {"label": "Mounting", "node": {"type": "row", "children": [
+                {"type": "checkbox", "id": "a", "label": medium, "checked": false},
+                {"type": "checkbox", "id": "b", "label": long, "checked": false},
+                {"type": "checkbox", "id": "c", "label": "Dovetails", "checked": false}]}}]}});
+        let view: View = serde_json::from_value(json).unwrap();
+        let (_, shapes) = drive(&view, 420.0, |_| Vec::new());
+        let drawn = texts(&shapes);
+        let label = |text: &str| {
+            let (_, rect, cut) = drawn.iter().find(|(t, ..)| t == text).unwrap_or_else(|| panic!("{text}: {drawn:?}"));
+            assert!(!cut && rect.right() <= 420.0, "{text} is whole and inside the panel: {rect:?}");
+            *rect
+        };
+        let (first, second, third) = (label(medium), label(long), label("Dovetails"));
+        assert!(second.top() >= first.bottom() && third.top() >= second.bottom(), "one below the other");
+        assert_eq!(click_on(&view, "Dovetails"), [changed("c", serde_json::json!(true))]);
+    }
+
+    /// Bingrove's "Floor": a select and a checkbox in a form's row, too narrow for both on one
+    /// line. The checkbox goes to the next line whole, greyed out as well as enabled, and its
+    /// label stays on one line.
+    #[test]
+    fn a_checkbox_in_a_row_goes_to_the_next_line_whole() {
+        let label = "Magnets from below";
+        let option = "skeleton (pads under every cell)";
+        for enabled in [false, true] {
+            let json = serde_json::json!({"v": 1, "root": {"type": "form", "id": "f", "rows": [
+                {"label": "Floor", "node": {"type": "row", "children": [
+                    {"type": "select", "id": "s", "selected": "a", "options": [{"value": "a", "label": option}]},
+                    {"type": "checkbox", "id": "m", "label": label, "checked": false, "enabled": enabled}]}}]}});
+            let view: View = serde_json::from_value(json).unwrap();
+            let (_, shapes) = drive(&view, 420.0, |_| Vec::new());
+            let drawn = texts(&shapes);
+            let rect = |text: &str| {
+                drawn.iter().find(|(t, ..)| t == text).unwrap_or_else(|| panic!("{text}: {drawn:?}")).clone()
+            };
+            let ((_, select, _), (_, magnets, cut)) = (rect(option), rect(label));
+            assert!(!cut && magnets.height() < 20.0, "enabled {enabled}: whole, on one line: {magnets:?}");
+            assert!(magnets.top() >= select.bottom(), "enabled {enabled}: below the select: {magnets:?}, {select:?}");
+        }
+    }
+
+    /// A checkbox whose label wraps, alone in a form's row: the next row follows it closely.
+    #[test]
+    fn a_wrapped_checkbox_in_a_form_leaves_no_blank_line() {
+        let long = "Hooks in the cells (parts hang on them; without: magnets only, any bin fits)";
+        let json = serde_json::json!({"v": 1, "root": {"type": "form", "id": "f", "rows": [
+            {"label": "Plate", "node": {"type": "select", "id": "s", "selected": "a",
+                "options": [{"value": "a", "label": "with floor"}]}},
+            {"label": "Hold", "node": {"type": "checkbox", "id": "h", "label": long, "checked": true}},
+            {"label": "Mounting", "node": {"type": "label", "text": "next"}}]}});
+        let view: View = serde_json::from_value(json).unwrap();
+        let (_, shapes) = drive(&view, 420.0, |_| Vec::new());
+        let drawn = texts(&shapes);
+        let rect = |text: &str| drawn.iter().find(|(t, ..)| t == text).unwrap_or_else(|| panic!("{text}: {drawn:?}")).1;
+        let (hold, next) = (rect(long), rect("next"));
+        assert!(hold.height() > 20.0, "the label wraps: {hold:?}");
+        let gap = next.top() - hold.bottom();
+        assert!(gap < 24.0, "no blank line between the rows: {gap} ({hold:?}, {next:?})");
     }
 
     /// The parts table of a panel like Bingrove's: below a 3D view in the second part of a split.
@@ -1008,7 +1206,7 @@ mod tests {
                  "max_height": 260.0}]}}});
         let view: View = serde_json::from_value(json).unwrap();
         // On the text of the second row's first cell.
-        let events = click_at(&view, egui::pos2(215.0, 8.0 + 100.0 + 4.0 + 20.0 + 20.0 + 10.0));
+        let events = click_on(&view, "bin_2x1_6u.stl");
         assert_eq!(events, [Event::TableSelect { id: "parts".into(), row: Some("1".into()) }]);
     }
 }

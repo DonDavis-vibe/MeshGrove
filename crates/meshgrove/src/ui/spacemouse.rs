@@ -1,6 +1,7 @@
 //! The 3D mouse in the settings: a small 3D picture of a SpaceMouse that moves with the real
 //! knob, the sliders per movement, the mapping of movements to the camera and the calibration.
 
+use solidcraft_ui_kit as sc;
 use std::sync::Arc;
 
 use egui::{Color32, Painter, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
@@ -88,6 +89,29 @@ fn mouse_faces(motion: [f32; 6], active: [bool; 6]) -> Vec<Face> {
         &[grey(70), grey(90), grey(100), grey(110), grey(120), grey(128), grey(134), cap, cap, cap],
         &mut knob,
     );
+    // A pointer on the cap, from its middle towards the user: the knob is round, so without it
+    // a twist shows nothing in the picture. Dark on the cap, whichever colour that has.
+    let mark = Color32::from_rgb(28, 28, 32);
+    // The cap's height at a radius (its two top pieces), a hair above it.
+    let height = |r: f32| 0.012 + if r <= 0.6 { 0.95 - r / 0.6 * 0.02 } else { 0.93 - (r - 0.6) / 0.2 * 0.05 };
+    // (radius, half width): a shaft, then a head that comes to a point; a stop where the cap bends.
+    let outline = [(0.14, 0.045), (0.5, 0.045), (0.5, 0.11), (0.6, 0.071), (0.78, 0.0)];
+    for pair in outline.windows(2) {
+        let ((r0, w0), (r1, w1)) = (pair[0], pair[1]);
+        if r0 == r1 {
+            continue;
+        }
+        knob.push(Face {
+            corners: [
+                Vec3::new(-w0, -r0, height(r0)),
+                Vec3::new(w0, -r0, height(r0)),
+                Vec3::new(w1, -r1, height(r1)),
+                Vec3::new(-w1, -r1, height(r1)),
+            ],
+            normal: Vec3::Z,
+            color: mark,
+        });
+    }
     let m = |a: Axis| motion[a.index()];
     let pivot = Mat4::from_translation(Vec3::new(m(Axis::PushLr), m(Axis::PushFb), m(Axis::Lift)) * TRAVEL)
         * Mat4::from_rotation_z(-m(Axis::Twist) * TWIST_DEGREES.to_radians())
@@ -358,7 +382,7 @@ impl MouseSettings {
         changes: &mut Vec<SettingsChange>,
     ) {
         let mut c: SpaceMouseConfig = config.spacemouse.clone();
-        ui.checkbox(&mut c.enabled, t!("mouse.enabled"));
+        sc::checkbox(ui, &t!("mouse.enabled"), &mut c.enabled);
         match &mouse.status {
             Status::Connected(name) => ui.weak(t!("mouse.connected", name = name)),
             Status::NoDevice => ui.weak(t!("mouse.no_device")),
@@ -385,42 +409,58 @@ impl MouseSettings {
             });
         });
         ui.add_space(4.0);
-        egui::Grid::new("mouse_axes").num_columns(4).spacing([8.0, 4.0]).show(ui, |ui| {
-            for axis in Axis::ALL {
-                let i = axis.index();
-                ui.label(axis_name(axis));
-                ui.checkbox(&mut c.invert[i], t!("mouse.invert"));
-                ui.add(
-                    egui::Slider::new(&mut c.sensitivity[i], SPEED_RANGE).custom_formatter(|v, _| format!("{v:.2}×")),
-                );
-                let level = physical[i].abs().clamp(0.0, 1.0);
-                ui.add(egui::ProgressBar::new(level).desired_width(60.0).desired_height(8.0));
-                ui.end_row();
-            }
-        });
+        // One line per movement, its parts in columns of fixed widths: the kit's switch and
+        // slider take the room they are given, and a grid gives them too little.
+        for axis in Axis::ALL {
+            let i = axis.index();
+            ui.push_id(i, |ui| {
+                ui.horizontal(|ui| {
+                    let cell = |ui: &mut Ui, width: f32, add: &mut dyn FnMut(&mut Ui)| {
+                        let size = vec2(width, solidcraft_theme::Tokens::get().control_height);
+                        ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.set_width(width);
+                            add(ui);
+                        });
+                    };
+                    cell(ui, 150.0, &mut |ui| {
+                        ui.label(axis_name(axis));
+                    });
+                    cell(ui, 90.0, &mut |ui| {
+                        sc::checkbox(ui, &t!("mouse.invert"), &mut c.invert[i]);
+                    });
+                    let times = Some((|v| format!("{v:.2}×")) as fn(f64) -> String);
+                    super::settings_kit::slider(ui, &mut c.sensitivity[i], SPEED_RANGE, 230.0, times);
+                    let level = physical[i].abs().clamp(0.0, 1.0);
+                    super::settings_kit::bar(ui, 60.0, level);
+                });
+            });
+        }
         ui.add_space(6.0);
         row(ui, &t!("mouse.speed"), |ui| {
-            ui.add(egui::Slider::new(&mut c.speed, SPEED_RANGE).custom_formatter(|v, _| format!("{v:.2}×")));
+            super::settings_kit::slider(ui, &mut c.speed, SPEED_RANGE, 260.0, Some(|v| format!("{v:.2}×")));
         });
         row(ui, &t!("mouse.deadzone"), |ui| {
-            ui.add(
-                egui::Slider::new(&mut c.deadzone, DEADZONE_RANGE)
-                    .custom_formatter(|v, _| format!("{:.0} %", v * 100.0)),
+            super::settings_kit::slider(
+                ui,
+                &mut c.deadzone,
+                DEADZONE_RANGE,
+                260.0,
+                Some(|v| format!("{:.0} %", v * 100.0)),
             );
         });
-        ui.checkbox(&mut c.dominant, t!("mouse.dominant"));
+        sc::checkbox(ui, &t!("mouse.dominant"), &mut c.dominant);
         ui.add_space(4.0);
 
         let (twist, tilt) = (AxisMapping::twist_orbits(), AxisMapping::tilt_orbits());
         row(ui, &t!("mouse.mapping"), |ui| {
-            if ui.radio(c.mapping == twist, t!("mouse.preset_twist")).clicked() {
-                c.mapping = twist;
-            }
-            if ui.radio(c.mapping == tilt, t!("mouse.preset_tilt")).clicked() {
-                c.mapping = tilt;
+            // Neither is marked while the movements are chosen one by one below.
+            for (preset, name) in [(twist, t!("mouse.preset_twist")), (tilt, t!("mouse.preset_tilt"))] {
+                if super::settings_kit::choice_tile(ui, c.mapping == preset, &name, "", &name, 0.0) {
+                    c.mapping = preset;
+                }
             }
         });
-        ui.collapsing(t!("mouse.custom_mapping"), |ui| {
+        super::settings_kit::fold(ui, "mouse.custom_mapping", &t!("mouse.custom_mapping"), false, None, |ui| {
             egui::Grid::new("mouse_mapping").num_columns(2).show(ui, |ui| {
                 let m = &mut c.mapping;
                 for (label, slot) in [
@@ -433,10 +473,10 @@ impl MouseSettings {
                 ] {
                     ui.label(label.as_ref());
                     let shown = slot.map_or_else(|| t!("mouse.nothing").into_owned(), axis_name);
-                    egui::ComboBox::from_id_salt(&label).selected_text(shown).show_ui(ui, |ui| {
-                        ui.selectable_value(slot, None, t!("mouse.nothing"));
+                    super::settings_kit::dropdown(ui, label.as_ref(), &shown, 170.0, |ui| {
+                        super::settings_kit::choice(ui, slot, None, &t!("mouse.nothing"));
                         for axis in Axis::ALL {
-                            ui.selectable_value(slot, Some(axis), axis_name(axis));
+                            super::settings_kit::choice(ui, slot, Some(axis), &axis_name(axis));
                         }
                     });
                     ui.end_row();
@@ -447,12 +487,12 @@ impl MouseSettings {
         ui.add_space(6.0);
 
         ui.horizontal(|ui| {
-            if ui.button(t!("mouse.calibrate")).clicked() {
+            if sc::button(ui, t!("mouse.calibrate"), sc::Button::Normal).clicked() {
                 self.calibrator = Some((Calibrator::new(), CalibrationNote::Waiting));
             }
             if c.calibration.is_some() {
                 ui.label(t!("mouse.calibrated"));
-                if ui.small_button(t!("mouse.calibration_reset")).clicked() {
+                if sc::button(ui, t!("mouse.calibration_reset"), sc::Button::Normal).clicked() {
                     c.calibration = None;
                 }
             } else {
@@ -491,13 +531,21 @@ impl MouseSettings {
         let step = calibrator.step();
         let progress = calibrator.progress();
         let note = *note;
-        let mut cancel = false;
         let knob = &mut self.knob_calibration;
-        egui::Modal::new(egui::Id::unique("mouse-calibration")).show(ctx, |ui| {
-            ui.set_max_width(420.0);
-            ui.heading(t!("mouse.calibrate"));
-            ui.add_space(4.0);
-            ui.label(t!("mouse.calibrate_step", n = step + 1, total = CALIBRATION_STEPS));
+        use super::dialogs::{self, Dialog, Tone};
+        // Nothing to confirm: the steps go on by themselves, the card can only be left.
+        let dialog = Dialog {
+            id: "mouse-calibration",
+            icon: "prefs_mouse3d",
+            title: &t!("mouse.calibrate"),
+            tone: Tone::Info,
+            yes: "",
+            no: &t!("trash.cancel"),
+            enter_declines: false,
+            cards: 2.0,
+        };
+        let left = dialog.show(ctx, true, |ui| {
+            dialogs::say(ui, &t!("mouse.calibrate_step", n = step + 1, total = CALIBRATION_STEPS));
             if let Some(axis) = target {
                 ui.label(RichText::new(prompt(axis)).strong().size(16.0));
             }
@@ -505,17 +553,13 @@ impl MouseSettings {
             let motion = config.spacemouse.physical(mouse.raw);
             draw_mouse(knob, ui, vec2(ui.available_width().min(380.0), 210.0), render, motion, target);
             ui.add_space(6.0);
-            ui.add(egui::ProgressBar::new(progress).desired_width(f32::INFINITY));
-            ui.weak(note_text(note));
+            super::settings_kit::bar(ui, ui.available_width(), progress);
+            dialogs::quiet(ui, &note_text(note));
             if !matches!(mouse.status, Status::Connected(_)) {
                 ui.colored_label(ui.visuals().warn_fg_color, t!("mouse.no_device"));
             }
-            ui.add_space(6.0);
-            if ui.button(t!("trash.cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                cancel = true;
-            }
         });
-        if cancel {
+        if left == Some(false) {
             self.calibrator = None;
         }
         ctx.request_repaint();
@@ -537,6 +581,18 @@ mod tests {
         assert_eq!(still[0].corners, pushed[0].corners);
         let (a, b) = (still.last().unwrap().corners[0], pushed.last().unwrap().corners[0]);
         assert!(b.x > a.x + 0.3, "{a:?} -> {b:?}");
+    }
+
+    #[test]
+    fn a_twist_shows_in_the_picture() {
+        // The knob is round: only the pointer on its cap tells a twisted knob from a still one.
+        let still = mouse_faces([0.0; 6], [false; 6]);
+        let mut motion = [0.0; 6];
+        motion[Axis::Twist.index()] = 1.0;
+        let twisted = mouse_faces(motion, [false; 6]);
+        let tip = |faces: &[Face]| faces.last().unwrap().corners[2];
+        assert!(tip(&still).x.abs() < 1e-4 && tip(&still).y < -0.7, "towards the user: {:?}", tip(&still));
+        assert!(tip(&twisted).x.abs() > 0.2, "{:?} -> {:?}", tip(&still), tip(&twisted));
     }
 
     #[test]

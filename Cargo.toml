@@ -11,7 +11,8 @@ members = [
     "crates/meshgrove-plugins",
 ]
 # Plugins are built for wasm32-wasip2 on their own (scripts/build-plugins.sh).
-exclude = ["examples/plugins"]
+# vendor/ is its own workspace (the SolidCraft UI kit, see vendor/README.md).
+exclude = ["examples/plugins", "vendor"]
 
 [workspace.package]
 version = "0.11.0"
@@ -29,6 +30,14 @@ meshgrove-core = { path = "crates/meshgrove-core" }
 meshgrove-render = { path = "crates/meshgrove-render" }
 meshgrove-plugin-api = { path = "crates/meshgrove-plugin-api" }
 meshgrove-plugins = { path = "crates/meshgrove-plugins", default-features = false }
+
+# The vendored SolidCraft UI kit (experiment): themes as files and tokenised controls.
+solidcraft-theme = { path = "vendor/solidcraft-theme", version = "=0.40.0-rc.3" }
+solidcraft-ui-kit = { path = "vendor/solidcraft-ui-kit", version = "=0.40.0-rc.3" }
+solidcraft-ui-text = { path = "vendor/solidcraft-ui-text", version = "=0.40.0-rc.3" }
+
+# The installed font families, for the interface font (settings).
+fontdb = "0.24"
 
 anyhow = "1.0"
 thiserror = "2.0"

@@ -372,6 +372,23 @@ fn detect(catalogue: &[Def]) -> Vec<Detected> {
     found
 }
 
+/// Names the icon of the program called `name` in the settings may have, when its own desktop
+/// entry does not say: its Flatpak application ids and its program names. So an install the
+/// desktop knows nothing of (a start script of the user's, an AppImage) shows the icon another
+/// install of the same program brought along.
+pub fn icon_names(name: &str) -> Vec<&'static str> {
+    let plain = [Variant::Flatpak, Variant::Snap, Variant::AppImage]
+        .iter()
+        .find_map(|v| name.strip_suffix(v.suffix()))
+        .unwrap_or(name);
+    SLICERS
+        .iter()
+        .chain(EDITORS)
+        .find(|def| def.name == plain)
+        .map(|def| def.flatpak.iter().chain(def.bins).copied().collect())
+        .unwrap_or_default()
+}
+
 fn detected(def: &Def, variant: Variant, program: Program) -> Detected {
     let name = format!("{}{}", def.name, variant.suffix());
     Detected { program: Program { name: name.clone(), ..program }, name, kind: def.kind, variant }

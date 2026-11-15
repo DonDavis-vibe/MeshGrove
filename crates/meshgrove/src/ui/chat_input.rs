@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat};
-use egui::{Color32, FontId, Key, RichText, Ui};
+use egui::{Color32, FontId, Key, Ui};
 use serde::{Deserialize, Serialize};
 
 use super::suggest::{self, Candidate};
@@ -246,11 +246,12 @@ pub struct InputOutput {
     pub send: bool,
 }
 
-/// Most lines the field grows to before it scrolls.
-const MAX_LINES: usize = 10;
-
-/// The field, and above it the list of references matching what follows an `@`.
+/// The field, and over it the list of references matching what follows an `@`.
 /// `candidates` gives them for the typed query.
+///
+/// The list floats over what is above the field (it would push the conversation up and down
+/// with every letter otherwise) and is drawn after the field: a click on one of its rows is a
+/// click outside the field to egui, which takes the field's focus then; the row gives it back.
 pub fn show(
     ui: &mut Ui,
     input: &mut ChatInput,
@@ -260,6 +261,9 @@ pub fn show(
 ) -> InputOutput {
     let mut out = InputOutput::default();
     let focused = ui.memory(|m| m.has_focus(id));
+    // The pointer went down on the list last frame: it stays, whatever the focus did meanwhile.
+    let held_id = id.with("list-held");
+    let held = ui.data(|d| d.get_temp::<bool>(held_id)).unwrap_or(false);
     // Where the cursor was last frame decides whether the reference list is open now.
     let state = egui::text_edit::TextEditState::load(ui.ctx(), id);
     let cursor = state
@@ -268,64 +272,44 @@ pub fn show(
         .map(|r| byte_index(&input.text, r.primary.index.0))
         .unwrap_or(input.text.len());
     let dismissed: Option<usize> = ui.data(|d| d.get_temp(id.with("dismissed")));
-    let mention = input.mention(cursor).filter(|(r, _)| focused && dismissed != Some(r.start));
+    let mention = input.mention(cursor).filter(|(r, _)| (focused || held) && dismissed != Some(r.start));
     let mut list = mention.as_ref().map(|(_, q)| suggest::rank(q, candidates(q), 8)).unwrap_or_default();
     let highlighted =
         suggest::highlight(ui, id.with("pick"), mention.as_ref().map_or("", |m| &m.1), list.len(), focused);
-    let mut chosen: Option<usize> = None;
+    let mut open = mention.is_some() && !list.is_empty();
     if focused {
-        if mention.is_some() && !list.is_empty() {
-            if ui.input_mut(|i| {
+        if open {
+            let taken = ui.input_mut(|i| {
                 i.consume_key(egui::Modifiers::NONE, Key::Enter) || i.consume_key(egui::Modifiers::NONE, Key::Tab)
-            }) {
-                chosen = Some(highlighted.unwrap_or(0));
+            });
+            if taken && let Some((range, _)) = &mention {
+                let pill = list.swap_remove(highlighted.unwrap_or(0)).value;
+                let after = input.insert_pill(range.clone(), pill);
+                set_cursor(ui, id, char_index(&input.text, after));
+                open = false;
             }
             if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
                 && let Some((r, _)) = &mention
             {
                 ui.data_mut(|d| d.insert_temp(id.with("dismissed"), r.start));
+                open = false;
             }
         } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter)) && !input.is_empty() {
             out.send = true;
         }
     }
 
-    // The reference list, above the field.
-    if let Some((range, _)) = &mention
-        && !list.is_empty()
-    {
-        egui::Frame::popup(ui.style()).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            for (i, c) in list.iter().enumerate() {
-                let text = format!("@{}", c.label);
-                let row = ui.horizontal(|ui| {
-                    let r = ui.selectable_label(highlighted == Some(i), RichText::new(text).strong());
-                    ui.weak(&c.detail);
-                    r
-                });
-                if row.inner.clicked() {
-                    chosen = Some(i);
-                }
-            }
-        });
-        if let Some(i) = chosen {
-            let pill = list.swap_remove(i).value;
-            let after = input.insert_pill(range.clone(), pill);
-            set_cursor(ui, id, char_index(&input.text, after));
-        }
-    }
-
     // The field.
     let pills: Vec<Range<usize>> = input.pills().map(|(r, _)| r.clone()).collect();
-    let visuals = ui.visuals().clone();
+    let t = solidcraft_theme::Tokens::get();
     let mut layouter = |ui: &Ui, text: &dyn egui::TextBuffer, wrap_width: f32| -> Arc<egui::Galley> {
         let text = text.as_str();
-        let font = FontId::proportional(14.0);
-        let plain = TextFormat { font_id: font.clone(), color: visuals.text_color(), ..Default::default() };
+        // The kit's label font; a reference in the selection's colours.
+        let plain = TextFormat { font_id: FontId::proportional(t.font_label), color: t.form_ink, ..Default::default() };
         let pill = TextFormat {
-            font_id: FontId::proportional(13.0),
-            color: visuals.strong_text_color(),
-            background: visuals.selection.bg_fill.linear_multiply(0.6),
+            font_id: FontId::proportional(t.font_label - 1.0),
+            color: t.selected_ink,
+            background: t.selected_bg,
             ..Default::default()
         };
         let mut job = LayoutJob {
@@ -344,27 +328,54 @@ pub fn show(
         job.append(&text[last.min(text.len())..], 0.0, plain);
         ui.fonts_mut(|f| f.layout_job(job))
     };
-    let lines = input.text.lines().count().max(1) + usize::from(input.text.ends_with('\n'));
-    let output = egui::TextEdit::multiline(&mut input.text)
-        .id(id)
-        .hint_text(hint)
-        .desired_rows(lines.min(MAX_LINES))
-        .desired_width(f32::INFINITY)
-        .layouter(&mut layouter)
-        .show(ui);
+    // The kit's editor for a composer: no frame of its own (the box around it is the
+    // composer's), two rows to start with, growing with what is typed.
+    let output = solidcraft_ui_kit::assistant_input_laid_out(ui, id, &mut input.text, hint, &mut layouter);
     if output.response.changed()
         && let Some(at) = input.sync()
     {
         set_cursor(ui, id, char_index(&input.text, at));
     }
+    // While the list is open, Tab and Escape are its keys: egui would walk the focus on to the
+    // next widget with Tab otherwise (and a space typed after it would press that one). Set
+    // after the field, which sets its own filter every frame.
+    if open && focused {
+        let keys = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true };
+        ui.memory_mut(|m| m.set_focus_lock_filter(id, keys));
+    }
 
-    // ✖ at the end of each pill removes it.
+    // The reference list, floating with its lower edge on the composer's upper one.
+    let mut down = false;
+    if open && let Some((range, _)) = &mention {
+        let field = output.response.response.rect;
+        let at = egui::pos2(field.left() - t.space_10, field.top() - t.space_8 - t.space_4);
+        let width = field.width() + 2.0 * t.space_10;
+        let rows: Vec<suggest::Offer> = list
+            .iter()
+            .map(|c| suggest::Offer { name: format!("@{}", c.label), about: c.detail.clone(), dot: None })
+            .collect();
+        // Lit is the one Enter takes: the first, until an arrow key picks.
+        let place = (at, egui::Align2::LEFT_BOTTOM);
+        let (clicked, held) =
+            suggest::floating_list(ui, id.with("mentions"), place, width, &rows, Some(highlighted.unwrap_or(0)));
+        down = held;
+        if let Some(i) = clicked {
+            let pill = list.swap_remove(i).value;
+            let after = input.insert_pill(range.clone(), pill);
+            // Also gives the field its focus back, which the click took.
+            set_cursor(ui, id, char_index(&input.text, after));
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(held_id, down));
+
+    // ✖ at the end of each pill removes it. Only for the pointer: a place the keyboard's focus
+    // could rest on would be pressed by the next space.
     let mut remove = None;
     for (i, (r, _)) in input.pills().enumerate() {
         let end = char_index(&input.text, r.end);
         let cross = output.galley.pos_from_cursor(CCursor::new(end.saturating_sub(1)));
         let rect = cross.translate(output.galley_pos.to_vec2()).expand2(egui::vec2(4.0, 1.0));
-        let hit = ui.interact(rect, id.with(("pill", i)), egui::Sense::click()).on_hover_text(t!("chat.remove_pill"));
+        let hit = ui.interact(rect, id.with(("pill", i)), egui::Sense::CLICK).on_hover_text(t!("chat.remove_pill"));
         if hit.hovered() {
             ui.painter().rect_filled(rect, 3.0, Color32::from_black_alpha(60));
         }
@@ -392,6 +403,141 @@ mod tests {
 
     fn pill(name: &str) -> Pill {
         Pill { label: name.into(), reference: Reference::Tag { name: name.into() } }
+    }
+
+    /// The field in a headless egui, with a button after it as the pane has (somewhere for the
+    /// keyboard's focus to walk to). `run` draws a frame with its events; `find` gives where
+    /// the last frame drew a text.
+    struct Field {
+        ctx: egui::Context,
+        input: ChatInput,
+        time: f64,
+        shapes: Vec<egui::epaint::ClippedShape>,
+    }
+
+    impl Field {
+        fn new() -> Field {
+            let mut field =
+                Field { ctx: egui::Context::default(), input: ChatInput::default(), time: 0.0, shapes: Vec::new() };
+            field.run(Vec::new());
+            field.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("field")));
+            field.run(Vec::new());
+            field
+        }
+
+        fn run(&mut self, events: Vec<egui::Event>) {
+            self.time += 0.05;
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            };
+            let input = &mut self.input;
+            let mut output = self.ctx.run_ui(raw, |ui| {
+                // Room over the field for the list, as the conversation leaves it.
+                ui.add_space(200.0);
+                let mut candidates = |_: &str| {
+                    vec![Candidate {
+                        label: "garden".into(),
+                        detail: "tag".into(),
+                        existing: true,
+                        value: pill("garden"),
+                    }]
+                };
+                show(ui, input, egui::Id::unique("field"), "hint", &mut candidates);
+                let _ = ui.button("send");
+            });
+            output.textures_delta.clear();
+            self.shapes = output.shapes;
+        }
+
+        /// Types `text`, and lets the list settle: it opens a frame after the typing, and
+        /// egui measures a new floating area for a frame before it draws it.
+        fn text(&mut self, text: &str) {
+            self.run(vec![egui::Event::Text(text.into())]);
+            self.run(Vec::new());
+            self.run(Vec::new());
+        }
+
+        fn key(&mut self, key: Key) {
+            let event = |pressed| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            self.run(vec![event(true)]);
+            self.run(vec![event(false)]);
+        }
+
+        fn find(&self, text: &str) -> Option<egui::Rect> {
+            fn walk(shape: &egui::Shape, text: &str, out: &mut Option<egui::Rect>) {
+                match shape {
+                    // The line's box, not the ink's: an "@" stands higher than an "x".
+                    egui::Shape::Text(t) if t.galley.text() == text => {
+                        *out = Some(egui::Rect::from_min_size(t.pos, t.galley.size()));
+                    }
+                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, text, out)),
+                    _ => {}
+                }
+            }
+            let mut out = None;
+            self.shapes.iter().for_each(|s| walk(&s.shape, text, &mut out));
+            out
+        }
+
+        fn click(&mut self, at: egui::Pos2) {
+            let button = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            self.run(vec![egui::Event::PointerMoved(at), button(true)]);
+            self.run(vec![button(false)]);
+            self.run(Vec::new());
+        }
+    }
+
+    /// Tab takes the reference from the list, and what is typed after it goes into the field:
+    /// the focus stays there (it walked on to the pill's ✖ once, which the next space pressed).
+    #[test]
+    fn tab_takes_a_reference_and_typing_goes_on() {
+        let mut field = Field::new();
+        field.text("Check @ga");
+        assert!(field.find("@garden").is_some(), "the list is open");
+        field.key(Key::Tab);
+        assert_eq!(field.input.pills().count(), 1, "{:?}", field.input.text);
+        field.text(" now");
+        assert_eq!(field.input.pills().count(), 1, "the pill stays: {:?}", field.input.text);
+        assert_eq!(field.input.text, "Check @garden ×  now");
+    }
+
+    /// A click on a row of the list takes it, and the field keeps the focus.
+    #[test]
+    fn a_click_takes_a_reference_and_typing_goes_on() {
+        let mut field = Field::new();
+        field.text("@ga");
+        let row = field.find("@garden").expect("the list is open");
+        field.click(row.center());
+        assert_eq!(field.input.pills().count(), 1, "{:?}", field.input.text);
+        field.text("now");
+        assert_eq!(field.input.text, "@garden × now");
+    }
+
+    /// The list floats: the field stands where it stood without it.
+    #[test]
+    fn the_list_does_not_move_the_field() {
+        let mut field = Field::new();
+        field.text("x");
+        let before = field.find("x").expect("the typed text");
+        field.text(" @ga");
+        let row = field.find("@garden").expect("the list is open");
+        let after = field.find("x @ga").expect("the typed text");
+        assert_eq!(before.top(), after.top(), "the field stays");
+        assert!(row.bottom() <= after.top(), "the list is over the field: {row:?} over {after:?}");
     }
 
     /// The field after typing `text` at the end.

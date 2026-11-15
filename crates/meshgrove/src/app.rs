@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -144,6 +144,8 @@ pub struct App {
     /// Read connection to the index (search, folder mosaics); the service owns the writer.
     /// Opened after the first scan has created the index.
     index: Option<Library>,
+    /// The first scan is through and the index could still not be opened: it is not coming.
+    index_missing: bool,
     renderer: Renderer,
     viewer: ModelViewer,
     /// The selected readme or note, or the selected folder's readme.
@@ -275,6 +277,10 @@ pub struct App {
     /// Messages from actions that finish on a thread (e.g. copying files).
     messages: (Sender<String>, Receiver<String>),
     settings: SettingsDialog,
+    /// The preview fonts loaded for the settings' font list.
+    font_previews: BTreeSet<String>,
+    /// Meshgrove's icon, for its own title bar.
+    brand: egui::TextureHandle,
     /// The user's plugins: their panels, jobs and tools.
     #[cfg(feature = "plugins")]
     plugins: crate::plugins::PluginHost,
@@ -299,10 +305,14 @@ impl App {
         let rs = cc.wgpu_render_state.as_ref().context("eframe was not started with the wgpu renderer")?;
         // Ctrl +/- and Ctrl+wheel resize tiles instead of zooming the whole UI.
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-        use_system_ui_font(&cc.egui_ctx);
+        // The theme from the settings; `MESHGROVE_THEME` overrides it for one start (screenshots).
+        crate::ui::appearance::install();
+        let mut config = config;
+        let theme = std::env::var("MESHGROVE_THEME").ok().or_else(|| config.ui_theme.clone());
+        crate::ui::appearance::apply(&cc.egui_ctx, theme.as_deref().filter(|t| !t.is_empty()));
+        apply_fonts(&cc.egui_ctx, config.ui_font.as_deref(), &BTreeSet::new());
 
         // Slicers never chosen in the settings: take all that are installed.
-        let mut config = config;
         if config.slicers.is_none() {
             let found: Vec<Slicer> = programs::detect_slicers().into_iter().map(|d| d.program).collect();
             if !found.is_empty() {
@@ -374,6 +384,7 @@ impl App {
             library,
             db_path,
             index: None,
+            index_missing: false,
             renderer: Renderer::new(&rs.device, &rs.adapter),
             viewer: ModelViewer::new(),
             text: TextPreview::default(),
@@ -421,7 +432,9 @@ impl App {
             menu_for: Vec::new(),
             cut: Vec::new(),
             selection_tags: Vec::new(),
-            all_tags: Vec::new(),
+            // As they were when Meshgrove last ran, until the library's index is open: on a
+            // large library that takes a while, and the sidebar stood without tags till then.
+            all_tags: load_saved_tags(),
             tags_dirty: true,
             lists: Vec::new(),
             selection_lists: Vec::new(),
@@ -475,6 +488,14 @@ impl App {
             toast: None,
             messages: unbounded(),
             settings: SettingsDialog::default(),
+            font_previews: BTreeSet::new(),
+            brand: {
+                let png = include_bytes!("../../../packaging/icons/meshgrove-64.png");
+                let icon = image::load_from_memory(png).expect("bundled icon is a valid PNG").into_rgba8();
+                let size = [icon.width() as usize, icon.height() as usize];
+                let icon = egui::ColorImage::from_rgba_unmultiplied(size, icon.as_raw());
+                cc.egui_ctx.load_texture("brand", icon, egui::TextureOptions::LINEAR)
+            },
             #[cfg(feature = "plugins")]
             plugins: crate::plugins::PluginHost::new(cc.egui_ctx.clone()),
             #[cfg(feature = "plugins")]
@@ -508,7 +529,9 @@ impl App {
 
     fn save_config(&mut self) {
         self.config.last_folder = Some(self.nav.current().to_path_buf());
-        if let Err(e) = self.config.save() {
+        if crate::screenshot::leaves_settings_alone() {
+            // A run of the screenshot hook: the settings apply, but the file stays the user's.
+        } else if let Err(e) = self.config.save() {
             log::warn!("could not save settings: {e}");
         }
         self.library.configure(self.config.clone());
@@ -767,6 +790,8 @@ impl App {
             quality: self.config.preview_quality,
             can_log_prints: self.index.is_some(),
             icon: model_window::icon(crate::app_icon),
+            own_title_bar: crate::ui::appearance::own_title_bar(self.config.title_bar),
+            brand: self.brand.id(),
         };
         self.model_windows.retain_mut(|window| window.show(ctx, &mut cx, &mut actions));
         for action in actions {
@@ -904,6 +929,17 @@ impl App {
         }
     }
 
+    /// Searches the whole library for `query` (a tag of the sidebar, a reference of the chat);
+    /// leaving the search later goes back to where the search field looked before.
+    fn search_library(&mut self, query: String) {
+        if self.scope != Scope::Library {
+            self.scope_before_tags = Some(self.scope);
+        }
+        self.scope = Scope::Library;
+        self.search = query;
+        self.run_search();
+    }
+
     fn run_search(&mut self) {
         if self.search.trim().is_empty() {
             if matches!(self.view, View::Search(_)) {
@@ -955,12 +991,18 @@ impl App {
                     let first = self.index.is_none();
                     if first {
                         self.index = Library::open_reader(&self.db_path);
+                        self.index_missing = self.index.is_none();
                         if let Some(index) = &mut self.index
                             && let Err(e) = index.set_printers(&self.printers)
                         {
                             log::warn!("printer search filters: {e}");
                         }
                         self.menu_for.clear(); // re-evaluate what the selection allows (tags need the index)
+                        // A tag clicked before the index was open (the sidebar shows last
+                        // run's tags from the start) found nothing: search again now.
+                        if matches!(self.view, View::Search(_)) {
+                            self.run_search();
+                        }
                         self.duplicates_due = Some(Instant::now());
                         self.marks_dirty = true;
                         if self.config.import.at_start != ImportAtStart::Off {
@@ -1145,7 +1187,11 @@ impl App {
         if std::mem::take(&mut self.tags_dirty)
             && let Some(index) = &self.index
         {
-            self.all_tags = index.all_tags().unwrap_or_default();
+            let tags = index.all_tags().unwrap_or_default();
+            if tags != self.all_tags {
+                save_tags(&tags);
+            }
+            self.all_tags = tags;
             self.selection_tags = index.tags_of(&self.menu_for).unwrap_or_default();
             self.selection_lists = index.lists_of(&self.menu_for).unwrap_or_default();
             self.selection_print = index.print_status(&self.menu_for).unwrap_or_default();
@@ -1874,6 +1920,7 @@ impl App {
             match change {
                 change @ (SettingsChange::InstallPlugin(_)
                 | SettingsChange::PickPlugin
+                | SettingsChange::PickFolder(_)
                 | SettingsChange::OpenPluginFolder
                 | SettingsChange::PluginEnabled { .. }
                 | SettingsChange::PluginGrants { .. }
@@ -1888,6 +1935,21 @@ impl App {
                 SettingsChange::Language(lang) => {
                     i18n::init(lang.as_deref());
                     self.config.language = lang;
+                }
+                SettingsChange::UiTheme(theme) => {
+                    crate::ui::appearance::apply(&self.egui_ctx, theme.as_deref());
+                    self.config.ui_theme = theme;
+                    apply_fonts(&self.egui_ctx, self.config.ui_font.as_deref(), &self.font_previews);
+                }
+                SettingsChange::ProgramIcons(on) => self.config.program_icons = on,
+                SettingsChange::TitleBar(title_bar) => {
+                    self.config.title_bar = title_bar;
+                    let own = crate::ui::appearance::own_title_bar(title_bar);
+                    self.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!own));
+                }
+                SettingsChange::UiFont(font) => {
+                    self.config.ui_font = font;
+                    apply_fonts(&self.egui_ctx, self.config.ui_font.as_deref(), &self.font_previews);
                 }
                 SettingsChange::AddRoot(path) => {
                     if !self.config.library_roots.contains(&path) {
@@ -1962,6 +2024,8 @@ impl App {
                     self.config.ai.auto_accept_since = on.then_some(now.as_secs());
                 }
                 SettingsChange::AiCrossLibraryMoves(on) => self.config.ai.cross_library_moves = on,
+                SettingsChange::AiCloudAsk(on) => self.config.ai.cloud_ask = on,
+                SettingsChange::AiReviewButton(on) => self.config.ai.review_button_always = on,
                 SettingsChange::AiConnectNow => self.ai_connect.connect_now(),
                 SettingsChange::AiLibrary(library) => {
                     match self.config.ai.libraries.iter_mut().find(|l| l.root == library.root) {
@@ -2065,12 +2129,6 @@ impl App {
                     self.gallery.tag_style = self.tag_style.clone();
                 }
                 SettingsChange::ResetLayout => self.layout.reset(),
-                SettingsChange::FoldSection { key, folded } => {
-                    self.config.settings_folded.retain(|k| *k != key);
-                    if folded {
-                        self.config.settings_folded.push(key);
-                    }
-                }
                 SettingsChange::DoubleClick(action) => self.config.double_click = action,
                 SettingsChange::DuplicatesKeep(keep) => {
                     self.config.duplicates_keep = keep;
@@ -2132,30 +2190,26 @@ impl App {
     /// Confirmation dialog for moving files to the trash; the move runs on a thread.
     fn trash_dialog(&mut self, ctx: &egui::Context) {
         let Some(paths) = &self.trash_confirm else { return };
-        let mut decision = None;
-        egui::Modal::new(egui::Id::unique("trash-confirm")).show(ctx, |ui| {
-            ui.set_max_width(460.0);
-            ui.heading(t!("trash.title", count = paths.len()));
-            ui.add_space(4.0);
+        use crate::ui::dialogs::{self, Dialog, Tone};
+        let dialog = Dialog {
+            id: "trash-confirm",
+            icon: "delete",
+            title: &t!("trash.title", count = paths.len()),
+            tone: Tone::Danger,
+            yes: &t!("trash.confirm"),
+            no: &t!("trash.cancel"),
+            enter_declines: false,
+            cards: 1.5,
+        };
+        let decision = dialog.show(ctx, true, |ui| {
             for p in paths.iter().take(8) {
-                ui.label(format!("• {}", listing::file_name(p)));
+                dialogs::entry(ui, &listing::file_name(p));
             }
             if paths.len() > 8 {
-                ui.weak(t!("trash.more", count = paths.len() - 8));
+                dialogs::quiet(ui, &t!("trash.more", count = paths.len() - 8));
             }
             ui.add_space(4.0);
-            ui.weak(t!("trash.explain"));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button(RichText::new(t!("trash.confirm")).strong()).clicked()
-                    || ui.input(|i| i.key_pressed(Key::Enter))
-                {
-                    decision = Some(true);
-                }
-                if ui.button(t!("trash.cancel")).clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
-                    decision = Some(false);
-                }
-            });
+            dialogs::quiet(ui, &t!("trash.explain"));
         });
         match decision {
             Some(true) => {
@@ -2211,7 +2265,7 @@ impl App {
         let presses = self.spacemouse.take_presses();
         let config = &self.config.spacemouse;
         // The settings (calibration) read the knob without steering the views behind them.
-        if !config.enabled || self.settings.open {
+        if !config.enabled || self.settings.is_open() {
             return;
         }
         let motion = config.camera(config.process(self.mouse_state.raw));
@@ -2254,26 +2308,22 @@ impl App {
     /// The question before inches: why metric is easier, and Yes / No.
     fn units_dialog(&mut self, ctx: &egui::Context) {
         let Some(pending) = self.units_confirm else { return };
-        let mut decision = None;
-        egui::Modal::new(egui::Id::unique("units-confirm")).show(ctx, |ui| {
-            ui.set_max_width(520.0);
-            ui.heading(t!("units.title"));
+        use crate::ui::dialogs::{self, Dialog, Tone};
+        // Enter and Escape answer No: metric is the safe side.
+        let dialog = Dialog {
+            id: "units-confirm",
+            icon: "dimension",
+            title: &t!("units.title"),
+            tone: Tone::Warning,
+            yes: &t!("units.yes"),
+            no: &t!("units.no"),
+            enter_declines: true,
+            cards: 2.0,
+        };
+        let decision = dialog.show(ctx, true, |ui| {
+            dialogs::say(ui, &t!("units.quote"));
             ui.add_space(6.0);
-            ui.label(t!("units.quote"));
-            ui.add_space(10.0);
-            ui.label(RichText::new(t!("units.question")).strong());
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button(t!("units.yes")).clicked() {
-                    decision = Some(true);
-                }
-                // Enter and Escape answer No: metric is the safe side.
-                if ui.button(RichText::new(t!("units.no")).strong()).clicked()
-                    || ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Escape))
-                {
-                    decision = Some(false);
-                }
-            });
+            dialogs::stress(ui, &t!("units.question"));
         });
         match decision {
             Some(true) => {
@@ -2303,7 +2353,18 @@ impl App {
         let gone: Vec<PathBuf> = paths.iter().filter(|p| !p.exists()).cloned().collect();
         self.library.changed(paths);
         self.duplicates_due = Some(Instant::now() + Duration::from_secs(2));
+        // A search's results, a list and "include subfolders" hold their files themselves:
+        // what is gone leaves them here, or it stayed until the view was opened again (and a
+        // second try to trash it failed, the file being gone).
+        let held = match &mut self.view {
+            View::Search(entries) | View::List { entries, .. } | View::Flatten { entries: Some(entries), .. } => {
+                entries.retain(|e| !gone.contains(&e.path));
+                true
+            }
+            _ => false,
+        };
         match self.view {
+            _ if held => self.refresh_gallery(false),
             View::Duplicates { .. } => self.show_duplicates_without(&gone),
             View::Inbox { .. } => self.show_inbox(),
             View::Import { .. } => self.start_import_scan(),
@@ -2477,10 +2538,20 @@ impl App {
         }
     }
 
+    /// Meshgrove's own title bar, in the theme's colours: the icon, the name and where the window
+    /// is, and the window's buttons at the right. Empty space moves the window, a double click
+    /// makes it fill the screen and back.
+    fn title_bar(&mut self, ui: &mut Ui) {
+        let place = self.nav.current().file_name().map(|name| name.to_string_lossy().into_owned());
+        if let Some(action) = crate::ui::appearance::title_bar(ui, self.brand.id(), "Meshgrove", place.as_deref()) {
+            action.send(ui.ctx());
+        }
+    }
+
     fn toolbar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             let nav_button = |ui: &mut Ui, icon: &str, enabled: bool, tip: std::borrow::Cow<str>| {
-                ui.add_enabled(enabled, Button::new(RichText::new(icon).size(16.0))).on_hover_text(tip).clicked()
+                crate::ui::settings_kit::small_if(ui, enabled, icon, &tip).clicked()
             };
             if nav_button(ui, "⬅", self.nav.can_go_back(), t!("nav.back")) {
                 self.leave_search();
@@ -2501,16 +2572,17 @@ impl App {
             ui.separator();
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(RichText::new("⚙").size(16.0)).on_hover_text(t!("settings.open")).clicked() {
+                if crate::ui::settings_kit::small(ui, "⚙", &t!("settings.open")).clicked() {
                     self.settings.open();
                 }
-                // Only with AI on and something to review (or the review open).
+                // Only with AI on and something to review (or the review open), unless the
+                // settings keep it there always.
                 let pending = self.pending_proposals();
                 let reviewing = matches!(self.view, View::Review { .. } | View::History { .. });
-                if self.reviews() && (pending > 0 || reviewing) {
+                if self.reviews() && (pending > 0 || reviewing || self.config.ai.review_button_always) {
                     let label = if pending > 0 { format!("✨ {pending}") } else { "✨".to_owned() };
-                    let button = Button::new(RichText::new(label).size(15.0)).selected(reviewing);
-                    if ui.add(button).on_hover_text(t!("review.open_hint")).clicked() {
+                    let button = crate::ui::settings_kit::bar_button_if(ui, &label, true, reviewing);
+                    if button.on_hover_text(t!("review.open_hint")).clicked() {
                         self.show_review();
                     }
                 }
@@ -2530,23 +2602,27 @@ impl App {
     /// shows first. Its label says how the gallery is sorted now.
     fn sort_menu(&mut self, ui: &mut Ui) {
         let names = [
-            (SortKey::Name, t!("sort.name")),
-            (SortKey::Modified, t!("sort.modified")),
-            (SortKey::Size, t!("sort.size")),
-            (SortKey::Type, t!("sort.type")),
+            (SortKey::Name, "text", t!("sort.name")),
+            (SortKey::Modified, "restore", t!("sort.modified")),
+            (SortKey::Size, "scale", t!("sort.size")),
+            (SortKey::Type, "component", t!("sort.type")),
         ];
-        let current = names.iter().find(|(k, _)| *k == self.config.sort_by).map(|(_, n)| n.clone()).unwrap_or_default();
+        let current =
+            names.iter().find(|(k, _, _)| *k == self.config.sort_by).map(|(_, _, n)| n.clone()).unwrap_or_default();
         let arrow = if self.config.sort_descending { "↓" } else { "↑" };
         let mut changed = false;
-        ui.menu_button(format!("{arrow} {current} ▾"), |ui| {
-            ui.label(RichText::new(t!("gallery.sort")).weak());
-            for (key, name) in names {
-                changed |= ui.radio_value(&mut self.config.sort_by, key, name).changed();
+        use crate::ui::menus;
+        menus::button(ui, &format!("{arrow} {current} ▾"), |ui| {
+            menus::heading(ui, &t!("gallery.sort"));
+            for (key, icon, name) in names {
+                changed |= menus::choice(ui, &mut self.config.sort_by, key, icon, &name);
             }
-            changed |= ui.checkbox(&mut self.config.sort_descending, t!("gallery.descending")).changed();
-            ui.separator();
-            changed |= ui
-                .checkbox(&mut self.config.supported_first, t!("sort.supported_first"))
+            // The direction is not one more thing to sort by: a rule keeps it apart.
+            menus::separator(ui);
+            changed |=
+                menus::check(ui, "reorder", &t!("gallery.descending"), &mut self.config.sort_descending).changed();
+            menus::separator(ui);
+            changed |= menus::check(ui, "mesh_body", &t!("sort.supported_first"), &mut self.config.supported_first)
                 .on_hover_text(t!("sort.supported_first_hint"))
                 .changed();
         })
@@ -2562,32 +2638,60 @@ impl App {
         let mut changed = false;
         let models_only = self.config.only_models;
         let mut flatten = self.flatten;
-        ui.menu_button(format!("{} ▾", t!("view.menu")), |ui| {
-            ui.radio_value(&mut self.config.gallery_view, GalleryView::Grid, t!("view.grid"));
-            ui.radio_value(&mut self.config.gallery_view, GalleryView::List, t!("view.list"));
-            ui.separator();
-            changed |= ui.checkbox(&mut self.config.only_models, t!("gallery.only_models")).changed();
-            ui.checkbox(&mut flatten, t!("gallery.flatten")).on_hover_text(t!("gallery.flatten_hint"));
-            ui.separator();
-            ui.label(RichText::new(t!("print.filter")).weak());
-            for (filter, name) in [
-                (PrintFilter::All, t!("print.filter_all")),
-                (PrintFilter::Unprinted, t!("print.filter_unprinted")),
-                (PrintFilter::Printed, t!("print.filter_printed")),
-                (PrintFilter::Failed, t!("print.filter_failed")),
-            ] {
-                changed |= ui.radio_value(&mut self.config.print_filter, filter, name).changed();
+        // The review (true) or the history (false), picked in the menu.
+        let mut go = None;
+        use crate::ui::menus;
+        // The menu stays open on clicks inside, so the tile size can be dragged; its rows close
+        // it as in the other menus.
+        menus::button_staying(ui, &format!("{} ▾", t!("view.menu")), |ui| {
+            menus::choice(ui, &mut self.config.gallery_view, GalleryView::Grid, "pattern", &t!("view.grid"));
+            menus::choice(ui, &mut self.config.gallery_view, GalleryView::List, "list", &t!("view.list"));
+            menus::separator(ui);
+            if menus::check(ui, "box", &t!("gallery.only_models"), &mut self.config.only_models).changed() {
+                changed = true;
+                ui.close();
             }
-            ui.separator();
-            ui.label(RichText::new(t!("gallery.tile_size")).weak());
-            ui.add(egui::Slider::new(&mut self.config.tile_size, TILE_SIZE).show_value(false));
-            ui.separator();
+            let subfolders = menus::check(ui, "folder", &t!("gallery.flatten"), &mut flatten);
+            if subfolders.on_hover_text(t!("gallery.flatten_hint")).changed() {
+                ui.close();
+            }
+            menus::separator(ui);
+            menus::heading(ui, &t!("print.filter"));
+            for (filter, icon, name) in [
+                (PrintFilter::All, "dots", t!("print.filter_all")),
+                (PrintFilter::Unprinted, "revert", t!("print.filter_unprinted")),
+                (PrintFilter::Printed, "activate", t!("print.filter_printed")),
+                (PrintFilter::Failed, "status_error", t!("print.filter_failed")),
+            ] {
+                changed |= menus::choice(ui, &mut self.config.print_filter, filter, icon, &name);
+            }
+            menus::separator(ui);
+            menus::heading(ui, &t!("gallery.tile_size"));
+            menus::inset(ui, |ui| {
+                let width = ui.available_width();
+                crate::ui::settings_kit::slider(ui, &mut self.config.tile_size, TILE_SIZE, width, None);
+            });
+            menus::separator(ui);
             let mut details = !self.layout.details_folded();
-            if ui.checkbox(&mut details, t!("pane.details_menu")).changed() {
+            if menus::check(ui, "canvas", &t!("pane.details_menu"), &mut details).changed() {
                 self.layout.show_details(details);
                 self.layout.save();
+                ui.close();
+            }
+            // Always reachable from here: the toolbar's button comes and goes with what waits.
+            menus::separator(ui);
+            if self.reviews() && menus::item(ui, "inspect", &t!("review.menu")) {
+                go = Some(true);
+            }
+            if menus::item(ui, "restore", &t!("review.history")) {
+                go = Some(false);
             }
         });
+        match go {
+            Some(true) => self.show_review(),
+            Some(false) => self.show_history(),
+            None => {}
+        }
         if flatten != self.flatten {
             self.set_flatten(flatten);
         }
@@ -2615,7 +2719,10 @@ impl App {
             Scope::Folder => t!("search.folder_hint"),
             Scope::Library => t!("search.library_hint"),
         };
-        let field = ui.add(egui::TextEdit::singleline(&mut self.search).hint_text(hint).desired_width(220.0));
+        // The kit's search field, with its magnifier.
+        let field = crate::ui::settings_kit::fixed_width(ui, 240.0, |ui| {
+            solidcraft_ui_kit::search_field(ui, egui::Id::unique("gallery_search"), &mut self.search, &hint)
+        });
         if std::mem::take(&mut self.focus_search) {
             field.request_focus();
         }
@@ -2625,9 +2732,13 @@ impl App {
             field.surrender_focus();
             changed = true;
         }
+        // One toggle: the search looks in this folder, or in the whole library.
         let mut scope = self.scope;
-        ui.selectable_value(&mut scope, Scope::Library, "📚").on_hover_text(t!("search.scope_library"));
-        ui.selectable_value(&mut scope, Scope::Folder, "📁").on_hover_text(t!("search.scope_folder"));
+        let options = [
+            (Scope::Folder, "scope_folder", t!("search.scope_folder").into_owned()),
+            (Scope::Library, "scope_library", t!("search.scope_library").into_owned()),
+        ];
+        crate::ui::settings_kit::icon_toggle(ui, &mut scope, &options);
         if scope != self.scope {
             self.set_scope(scope);
         }
@@ -2644,19 +2755,22 @@ impl App {
             View::Search(results) => {
                 let text = t!("search.results", count = i18n::count(results.len()));
                 ui.label(RichText::new(format!("🔍 {text}")).strong());
-                if ui.button(t!("search.close")).clicked() {
+                if crate::ui::settings_kit::bar_button(ui, &t!("search.close")).clicked() {
                     self.leave_search();
                     self.on_listing_arrived();
                     return;
                 }
                 if self.index.is_some() {
-                    let save = egui::containers::menu::MenuButton::new(t!("lists.save_search").into_owned());
-                    save.config(crate::ui::typing_menu()).ui(ui, |ui| {
-                        ui.label(t!("lists.save_search_hint"));
-                        let field = ui
-                            .add(egui::TextEdit::singleline(&mut self.new_list_name).hint_text(t!("lists.name_hint")));
+                    use crate::ui::{menus, settings_kit};
+                    menus::button_staying(ui, &t!("lists.save_search"), |ui| {
+                        menus::note(ui, &t!("lists.save_search_hint"));
+                        let field = menus::inset(ui, |ui| {
+                            let width = ui.available_width();
+                            settings_kit::text_field(ui, &mut self.new_list_name, &t!("lists.name_hint"), width)
+                        });
                         let enter = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                        if (ui.button(t!("lists.create")).clicked() || enter) && !self.new_list_name.trim().is_empty() {
+                        let named = !self.new_list_name.trim().is_empty();
+                        if (menus::item_if(ui, "new", &t!("lists.create"), named, "", false) || enter) && named {
                             let name = std::mem::take(&mut self.new_list_name);
                             self.toast(t!("toast.list_created", list = name).into_owned());
                             self.library.list(ListOp::CreateSmart(name, self.search.clone()));
@@ -2672,7 +2786,7 @@ impl App {
                     ui.label(RichText::new(format!("{} {}", list_icon(list), list_title(list))).strong());
                 }
                 ui.weak(t!("lists.count", count = i18n::count(count)));
-                if ui.button(t!("lists.close")).clicked() {
+                if crate::ui::settings_kit::bar_button(ui, &t!("lists.close")).clicked() {
                     self.view = View::Folder;
                     self.on_listing_arrived();
                 }
@@ -2683,13 +2797,14 @@ impl App {
                     Some(e) => t!("gallery.flatten_count", count = i18n::count(e.len())),
                     None => t!("gallery.loading"),
                 };
-                if ui.button(format!("📂 {text}  ✖")).on_hover_text(t!("gallery.flatten_off")).clicked() {
+                let label = format!("📂 {text}  ✖");
+                if crate::ui::settings_kit::bar_button(ui, &label).on_hover_text(t!("gallery.flatten_off")).clicked() {
                     self.set_flatten(false);
                 }
             }
             View::Duplicates { groups, .. } => {
                 ui.label(RichText::new(format!("🗐 {}", t!("dupes.title", count = groups.len()))).strong());
-                if ui.button(t!("view.close")).clicked() {
+                if crate::ui::settings_kit::bar_button(ui, &t!("view.close")).clicked() {
                     self.view = View::Folder;
                     self.on_listing_arrived();
                 }
@@ -2697,7 +2812,7 @@ impl App {
             }
             View::Inbox { entries, .. } => {
                 ui.label(RichText::new(format!("📥 {}", t!("inbox.title", count = entries.len()))).strong());
-                if ui.button(t!("view.close")).clicked() {
+                if crate::ui::settings_kit::bar_button(ui, &t!("view.close")).clicked() {
                     self.view = View::Folder;
                     self.on_listing_arrived();
                 }
@@ -2706,7 +2821,7 @@ impl App {
             View::Import { .. } => {
                 let count = self.import.importable();
                 ui.label(RichText::new(format!("⬇ {}", t!("import.title", count = count))).strong());
-                if ui.button(t!("view.close")).clicked() {
+                if crate::ui::settings_kit::bar_button(ui, &t!("view.close")).clicked() {
                     self.view = View::Folder;
                     self.on_listing_arrived();
                 }
@@ -2716,7 +2831,7 @@ impl App {
                 let title =
                     if matches!(self.view, View::Review { .. }) { t!("review.title") } else { t!("history.title") };
                 ui.label(RichText::new(format!("✨ {title}")).strong());
-                if ui.button(t!("view.close")).clicked() {
+                if crate::ui::settings_kit::bar_button(ui, &t!("view.close")).clicked() {
                     self.view = View::Folder;
                     self.on_listing_arrived();
                 }
@@ -2760,7 +2875,7 @@ impl App {
             let rate = self.rate.sample(done);
             if total > 0 && done < total {
                 ui.separator();
-                ui.add(egui::ProgressBar::new(done as f32 / total as f32).desired_width(120.0).desired_height(10.0));
+                crate::ui::settings_kit::bar(ui, 120.0, done as f32 / total as f32);
                 ui.label(t!("status.thumbs", done = i18n::count(done), total = i18n::count(total)));
                 if rate > 0.0 {
                     ui.weak(t!("status.rate", rate = format!("{rate:.0}")));
@@ -2779,20 +2894,16 @@ impl App {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Preview size, as in a file manager's status bar (also Ctrl + mouse wheel over the files).
-                ui.spacing_mut().slider_width = 110.0;
-                ui.add(egui::Slider::new(&mut self.config.tile_size, TILE_SIZE).show_value(false))
+                crate::ui::settings_kit::slider(ui, &mut self.config.tile_size, TILE_SIZE, 120.0, None)
                     .on_hover_text(t!("gallery.tile_size"));
                 ui.weak("🔍");
                 ui.separator();
-                // Right to left: list, then grid.
-                for (view, icon, hint) in
-                    [(GalleryView::List, "☰", t!("view.list_hint")), (GalleryView::Grid, "⊞", t!("view.grid_hint"))]
-                {
-                    let on = self.config.gallery_view == view;
-                    if ui.add(Button::new(icon).selected(on).frame_when_inactive(false)).on_hover_text(hint).clicked() {
-                        self.config.gallery_view = view;
-                    }
-                }
+                // One toggle: the files as a grid of tiles, or as a list.
+                let options = [
+                    (GalleryView::Grid, "grid", t!("view.grid_hint").into_owned()),
+                    (GalleryView::List, "view_list", t!("view.list_hint").into_owned()),
+                ];
+                crate::ui::settings_kit::icon_toggle(ui, &mut self.config.gallery_view, &options);
                 ui.separator();
                 ui.weak(t!("status.gpu", name = self.gpu_name));
                 ui.separator();
@@ -2816,17 +2927,34 @@ impl App {
         }
         ui.weak(t!("library.files", files = i18n::count(c.files), models = i18n::count(c.models)));
         if status.scanning {
-            ui.spinner().on_hover_text(t!("library.scanning"));
+            crate::ui::loading::mark(ui).on_hover_text(t!("library.scanning"));
         }
     }
 
     fn central(&mut self, ui: &mut Ui, rs: &egui_wgpu::RenderState) {
         let message = match (&self.view, &self.nav.listing) {
             (View::Folder, Listing::Loading) | (View::Flatten { entries: None, .. }, _) => {
-                ui.centered_and_justified(|ui| ui.spinner().on_hover_text(t!("gallery.loading")));
+                ui.centered_and_justified(|ui| {
+                    crate::ui::loading::mark_sized(ui, 44.0).on_hover_text(t!("gallery.loading"))
+                });
                 return;
             }
             (View::Folder, Listing::Error(e)) => Some(t!("error.read_dir", error = e).into_owned()),
+            // At the start the index is opened once the library's folders were looked through,
+            // which takes a while on a large library: say that, not "not available".
+            (View::Search(results), _)
+                if results.is_empty()
+                    && self.index.is_none()
+                    && !self.index_missing
+                    && !self.config.library_roots.is_empty() =>
+            {
+                ui.vertical_centered(|ui| {
+                    ui.add_space((ui.available_height() * 0.4).max(0.0));
+                    crate::ui::settings_kit::busy(ui);
+                    ui.weak(t!("search.opening"));
+                });
+                return;
+            }
             (View::Search(results), _) if results.is_empty() => {
                 Some(if self.index.is_none() { t!("search.unavailable") } else { t!("search.none") }.into_owned())
             }
@@ -2877,7 +3005,8 @@ impl App {
         }
         if let View::Review { entries, batches } = &mut self.view {
             let applying = self.library.status().applying;
-            let action = review_view::show(ui, entries, batches, &self.gallery, &self.tag_style, applying);
+            let tags = (&self.tag_style, self.all_tags.as_slice());
+            let action = review_view::show(ui, entries, batches, &self.gallery, tags, applying);
             self.review_action(action);
             return;
         }
@@ -2978,16 +3107,11 @@ impl App {
                 self.library.set_roots(self.config.library_roots.clone());
             }
             Some(SidebarAction::SearchTags(tags)) => {
-                if self.scope != Scope::Library {
-                    self.scope_before_tags = Some(self.scope);
-                }
-                self.scope = Scope::Library;
                 let terms: Vec<String> = tags
                     .iter()
                     .map(|t| if t.contains(' ') { format!("tag:\"{t}\"") } else { format!("tag:{t}") })
                     .collect();
-                self.search = terms.join(" ");
-                self.run_search();
+                self.search_library(terms.join(" "));
             }
             Some(SidebarAction::ShowDuplicates) => self.show_duplicates(),
             Some(SidebarAction::ShowInbox) => self.show_inbox(),
@@ -3103,7 +3227,7 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.add(egui::Label::new(RichText::new(name).heading().strong()).truncate());
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.button("✖").on_hover_text(t!("preview.close")).clicked() {
+                                if crate::ui::settings_kit::small(ui, "✖", &t!("preview.close")).clicked() {
                                     close = true;
                                 }
                             });
@@ -3116,7 +3240,7 @@ impl App {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                     match &self.model {
                         ModelStatus::Loading => {
-                            child.centered_and_justified(|ui| ui.spinner());
+                            child.centered_and_justified(|ui| crate::ui::loading::mark_sized(ui, 44.0));
                         }
                         ModelStatus::Failed(e) => {
                             child.centered_and_justified(|ui| ui.colored_label(ui.visuals().error_fg_color, e));
@@ -3126,7 +3250,10 @@ impl App {
                     let corner =
                         egui::Rect::from_min_size(rect.right_top() + egui::vec2(-30.0, 2.0), egui::vec2(28.0, 24.0));
                     let tip = if controls { t!("preview.controls_hide") } else { t!("preview.controls_show") };
-                    toggle_controls = ui.put(corner, egui::Button::new("☰")).on_hover_text(tip).clicked();
+                    let look = solidcraft_ui_kit::Button::Normal;
+                    toggle_controls = solidcraft_ui_kit::button_at(ui, "preview-controls", corner, "☰", look)
+                        .on_hover_text(tip)
+                        .clicked();
                     if controls {
                         ui.add(egui::Label::new(RichText::new(t!("preview.hint")).weak()).truncate());
                     }
@@ -3208,7 +3335,7 @@ impl App {
 /// Three dots centred in the pane's header bar; dragging them moves the pane like its tab does.
 /// Returns whether a drag started on them.
 fn grip_handle(ui: &Ui) -> bool {
-    const BAR: f32 = 24.0;
+    const BAR: f32 = PANE_BAR;
     let pane = ui.max_rect();
     if pane.width() < 200.0 {
         return false;
@@ -3218,18 +3345,61 @@ fn grip_handle(ui: &Ui) -> bool {
     let ctx = ui.ctx();
     let (hovered, pressed) =
         ctx.input(|i| (i.pointer.hover_pos().is_some_and(|p| bar.contains(p)), i.pointer.primary_pressed()));
-    let color = if hovered { ui.visuals().widgets.hovered.fg_stroke.color } else { ui.visuals().weak_text_color() };
+    // The theme's inks: quiet at rest, the text's under the pointer; the line is its border.
+    let t = crate::ui::appearance::tokens();
+    let color = if hovered { t.text } else { t.text_dim };
     if hovered {
         ctx.set_cursor_icon(egui::CursorIcon::Grab);
     }
     let painter = egui::Painter::new(ctx.clone(), ui.layer_id(), ctx.content_rect());
-    let line = egui::Stroke::new(1.0, ui.visuals().widgets.inactive.bg_fill);
+    let line = egui::Stroke::new(1.0, t.border);
     painter.hline(pane.x_range(), pane.top() - 0.5, line);
     for i in -1..=1 {
         painter.circle_filled(bar.center() + egui::vec2(i as f32 * 6.0, 0.0), 1.5, color);
     }
     hovered && pressed
 }
+
+/// Where a tab finds the number of tabs in its header.
+fn tab_count_id(tile: egui_tiles::TileId) -> egui::Id {
+    egui::Id::unique(("pane-tab-count", tile))
+}
+
+/// Where the tag list is kept between runs (a small file in the cache folder).
+fn saved_tags_path() -> Option<PathBuf> {
+    Some(crate::ui::settings::cache_dir()?.join("tags.json"))
+}
+
+/// The tags and their counts as Meshgrove last saw them; none on a first run or when the file
+/// cannot be read.
+fn load_saved_tags() -> Vec<(String, usize)> {
+    saved_tags_path()
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+/// Keeps the tag list for the next start. Written beside itself first and then renamed, so a
+/// crash in between leaves the old list. A test run leaves the user's file alone.
+fn save_tags(tags: &[(String, usize)]) {
+    if crate::screenshot::leaves_settings_alone() {
+        return;
+    }
+    let Some(path) = saved_tags_path() else { return };
+    let Ok(bytes) = serde_json::to_vec(tags) else { return };
+    let beside = path.with_extension("json.new");
+    let written = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&beside, bytes))
+        .and_then(|()| std::fs::rename(&beside, &path));
+    if let Err(e) = written {
+        log::warn!("the tag list for the next start was not saved: {e}");
+    }
+}
+
+/// The height of a pane's header: the kit's controls fit in it.
+const PANE_BAR: f32 = 28.0;
 
 /// Draws the panes of the dockable layout with the app's state.
 struct PaneHost<'a> {
@@ -3243,13 +3413,9 @@ struct PaneHost<'a> {
     toggle_details: bool,
 }
 
-impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
-    fn pane_ui(&mut self, ui: &mut Ui, _tile_id: egui_tiles::TileId, pane: &mut Pane) -> egui_tiles::UiResponse {
-        let rs = self.rs;
-        let grip = !self.locked && grip_handle(ui);
-        ui.shrink_clip_rect(ui.max_rect());
-        // The margins the side and central panels had before the panes.
-        let margin = if *pane == Pane::Files { egui::Margin::same(8) } else { egui::Margin::symmetric(8, 2) };
+impl PaneHost<'_> {
+    /// What a pane shows.
+    fn pane_body(&mut self, ui: &mut Ui, pane: &mut Pane, margin: egui::Margin, rs: &egui_wgpu::RenderState) {
         egui::Frame::new().inner_margin(margin).show(ui, |ui| match pane {
             Pane::Places => self.app.pane_places(ui),
             Pane::Files => self.app.central(ui, rs),
@@ -3272,15 +3438,154 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
                 ui.weak(t!("plugins.not_in_build"));
             }
         });
+    }
+}
+
+impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
+    fn pane_ui(&mut self, ui: &mut Ui, _tile_id: egui_tiles::TileId, pane: &mut Pane) -> egui_tiles::UiResponse {
+        let rs = self.rs;
+        let grip = !self.locked && grip_handle(ui);
+        // The pane is drawn where it is on its way to its place after a change of the layout.
+        let place = ui.max_rect();
+        let shown = self.app.layout.slide.rect(pane, place, ui.input(|i| i.time));
+        let gliding = shown != place;
+        if gliding {
+            ui.ctx().request_repaint();
+        }
+        // The margins the side and central panels had before the panes.
+        let margin = if *pane == Pane::Files { egui::Margin::same(8) } else { egui::Margin::symmetric(8, 2) };
+        // Always in a Ui of its own, so what the pane remembers (scrolling) stays with it while it glides.
+        let body = egui::UiBuilder::new().id_salt("pane").max_rect(shown);
+        ui.scope_builder(body, |ui| {
+            ui.shrink_clip_rect(shown);
+            if gliding {
+                // Over the panes it passes.
+                ui.painter().rect_filled(shown, 0.0, ui.visuals().panel_fill);
+            }
+            self.pane_body(ui, pane, margin, rs);
+        });
         if grip { egui_tiles::UiResponse::DragStarted } else { egui_tiles::UiResponse::None }
     }
 
-    fn tab_bar_hline_stroke(&self, visuals: &egui::Visuals) -> egui::Stroke {
-        egui::Stroke::new(1.0, visuals.widgets.inactive.bg_fill)
+    /// When a pane is dragged: where it lands glows, as in LightGrove.
+    fn paint_drag_preview(
+        &self,
+        _visuals: &egui::Visuals,
+        painter: &egui::Painter,
+        parent_rect: Option<egui::Rect>,
+        preview_rect: egui::Rect,
+    ) {
+        let accent = crate::ui::appearance::tokens().accent;
+        if let Some(parent) = parent_rect {
+            // The group it joins.
+            let stroke = egui::Stroke::new(1.0, accent.gamma_multiply(0.35));
+            painter.rect_stroke(parent, 2.0, stroke, egui::StrokeKind::Inside);
+        }
+        crate::ui::appearance::glow(painter, preview_rect.shrink(2.0), accent);
     }
 
-    fn tab_bar_color(&self, visuals: &egui::Visuals) -> egui::Color32 {
-        visuals.panel_fill
+    /// The dragged pane's name beside the pointer (a pane's tile is its group of tabs, which
+    /// has no name of its own).
+    fn drag_ui(&mut self, tiles: &egui_tiles::Tiles<Pane>, ui: &mut Ui, tile_id: egui_tiles::TileId) {
+        let mut tile = tile_id;
+        let title = loop {
+            match tiles.get(tile) {
+                Some(egui_tiles::Tile::Pane(pane)) => break self.tab_title_for_pane(pane),
+                Some(egui_tiles::Tile::Container(container)) => {
+                    let front = match container {
+                        egui_tiles::Container::Tabs(tabs) => tabs.active,
+                        _ => None,
+                    };
+                    match front.or_else(|| container.children().next().copied()) {
+                        Some(child) => tile = child,
+                        None => return,
+                    }
+                }
+                None => return,
+            }
+        };
+        let accent = crate::ui::appearance::tokens().accent;
+        egui::Frame::popup(ui.style()).stroke(egui::Stroke::new(1.0, accent)).show(ui, |ui| ui.label(title));
+    }
+
+    /// A pane's tab in the theme's colours: its name, heavier on the tab in front; a quiet fill
+    /// under the pointer; the accent's line under the one in front where several share a
+    /// header; and the kit's ✕ on a tab that closes.
+    fn tab_ui(
+        &mut self,
+        tiles: &mut egui_tiles::Tiles<Pane>,
+        ui: &mut Ui,
+        id: egui::Id,
+        tile_id: egui_tiles::TileId,
+        state: &egui_tiles::TabState,
+    ) -> egui::Response {
+        use solidcraft_ui_kit as sc;
+        let t = crate::ui::appearance::tokens();
+        let title = self.tab_title_for_tile(tiles, tile_id);
+        let font =
+            if state.active { sc::type_face::semibold(t.font_label) } else { egui::FontId::proportional(t.font_label) };
+        let galley = title.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font);
+        let (margin, cross) = (t.space_8, t.space_16);
+        let width = galley.size().x + 2.0 * margin + if state.closable { t.space_4 + cross } else { 0.0 };
+        let (_, rect) = ui.allocate_space(egui::vec2(width, ui.available_height()));
+        let draggable = self.is_tile_draggable(tiles, tile_id);
+        let sense = if draggable { egui::Sense::click_and_drag() } else { egui::Sense::click() };
+        let mut response = ui.interact(rect, id, sense);
+        if draggable {
+            response = response.on_hover_cursor(egui::CursorIcon::Grab);
+        }
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), state.active, galley.text())
+        });
+        // A gap stands where a dragged tab was.
+        if ui.is_rect_visible(rect) && !state.is_being_dragged {
+            // How many tabs share this header, as the header's right end noted it last frame:
+            // the header itself is out of `tiles` while its tabs are drawn.
+            let several = ui.data(|d| d.get_temp::<usize>(tab_count_id(tile_id))).is_some_and(|n| n > 1);
+            let hot = response.hovered();
+            if hot && !state.active {
+                ui.painter().rect_filled(rect.shrink2(egui::vec2(1.0, 3.0)), t.radius_sm, t.hover);
+            }
+            let ink = if state.active || hot { t.text } else { t.text_dim };
+            let at = egui::Align2::LEFT_CENTER.align_size_within_rect(galley.size(), rect.shrink(margin)).min;
+            ui.painter().galley(at, galley, ink);
+            if state.active && several {
+                let line = egui::Stroke::new(2.0, t.accent);
+                ui.painter().hline((rect.left() + margin)..=(rect.right() - margin), rect.bottom() - 3.0, line);
+            }
+            if state.closable {
+                let place = egui::Align2::RIGHT_CENTER
+                    .align_size_within_rect(egui::vec2(cross, cross), rect.shrink2(egui::vec2(t.space_6, 0.0)));
+                let button = ui
+                    .interact(place, ui.auto_id_with("tab_close_btn"), egui::Sense::click_and_drag())
+                    .on_hover_cursor(egui::CursorIcon::Default);
+                button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Close"));
+                if button.hovered() {
+                    ui.painter().rect_filled(place, t.radius_sm, t.hover);
+                }
+                let ink = if button.hovered() { t.text } else { t.text_dim };
+                sc::icons::paint_ink(ui.painter(), place.shrink(3.0), "close", ink);
+                if (button.clicked() || response.clicked_by(egui::PointerButton::Middle))
+                    && self.on_tab_close(tiles, tile_id)
+                {
+                    tiles.remove(tile_id);
+                }
+            }
+        }
+        self.on_tab_button(tiles, tile_id, response)
+    }
+
+    fn tab_bar_height(&self, _style: &egui::Style) -> f32 {
+        PANE_BAR
+    }
+
+    /// The headers stand on the theme's header colour, with its border under them.
+    fn tab_bar_hline_stroke(&self, _visuals: &egui::Visuals) -> egui::Stroke {
+        egui::Stroke::new(1.0, crate::ui::appearance::tokens().border)
+    }
+
+    fn tab_bar_color(&self, _visuals: &egui::Visuals) -> egui::Color32 {
+        crate::ui::appearance::tokens().panel_header
     }
 
     fn tab_title_for_pane(&mut self, pane: &Pane) -> egui::WidgetText {
@@ -3330,6 +3635,12 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
         tabs: &egui_tiles::Tabs,
         _scroll_offset: &mut f32,
     ) {
+        // For the tabs, next frame: how many of them share this header.
+        ui.data_mut(|d| {
+            for &child in &tabs.children {
+                d.insert_temp(tab_count_id(child), tabs.children.len());
+            }
+        });
         let holds_files =
             tabs.children.iter().any(|&c| matches!(tiles.get(c), Some(egui_tiles::Tile::Pane(Pane::Files))));
         if !holds_files {
@@ -3338,10 +3649,11 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
         // Right to left: folding comes first, next to the details it folds.
         let (fold, hint) =
             if self.details_folded { ("«", t!("pane.details_show")) } else { ("»", t!("pane.details_hide")) };
-        if ui.small_button(fold).on_hover_text(hint).clicked() {
+        // The kit's small buttons, as in the toolbar.
+        if crate::ui::settings_kit::small(ui, fold, &hint).clicked() {
             self.toggle_details = true;
         }
-        if ui.small_button("↺").on_hover_text(t!("pane.reset")).clicked() {
+        if crate::ui::settings_kit::small(ui, "↺", &t!("pane.reset")).clicked() {
             self.reset = true;
         }
     }
@@ -3351,6 +3663,8 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let rs = frame.wgpu_render_state().expect("wgpu renderer").clone();
+        crate::ui::appearance::follow_system(&ctx);
+        let _language = crate::ui::appearance::language();
         if self.nav.poll() {
             self.on_listing_arrived();
         }
@@ -3398,6 +3712,8 @@ impl eframe::App for App {
         }
         let chat = self.chat_available();
         self.layout.show_chat(chat);
+        // Which programs there are, for the places that show their own icons beside their names.
+        crate::ui::program_icons::publish(self.slicers.iter().chain(&self.editors), self.config.program_icons);
         self.shortcuts(&ctx);
         if let Some(changed) = self.search_changed {
             if changed.elapsed() >= SEARCH_DEBOUNCE {
@@ -3461,6 +3777,12 @@ impl eframe::App for App {
                     hook.view = None;
                     self.show_history();
                 }
+                // The folder chooser a plugin's panel asks for, with no plugin behind it.
+                #[cfg(feature = "plugins")]
+                ("folder_pick", _) => {
+                    hook.view = None;
+                    self.ask_folder("demo", "demo", "demo".to_owned(), None);
+                }
                 _ => {}
             }
             let hook = self.screenshot.as_mut().expect("checked above");
@@ -3477,6 +3799,10 @@ impl eframe::App for App {
             hook.tick(&ctx);
         }
 
+        let own_title_bar = crate::ui::appearance::own_title_bar(self.config.title_bar);
+        if own_title_bar {
+            self.title_bar(ui);
+        }
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.add_space(3.0);
             self.toolbar(ui);
@@ -3490,6 +3816,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
             let details_folded = self.layout.details_folded();
             let mut tree = std::mem::replace(&mut self.layout.tree, Tree::empty(egui::Id::unique("layout")));
+            self.layout.slide.begin(crate::ui::layout::shape(&tree), ui.input(|i| i.time));
             let locked = self.config.lock_panes;
             let mut host = PaneHost { app: self, rs: &rs, locked, reset: false, details_folded, toggle_details: false };
             tree.ui(&mut host, ui);
@@ -3533,10 +3860,22 @@ impl eframe::App for App {
             info,
         );
         self.apply_settings(changes);
+        // The families the open font list shows in themselves, loaded as it scrolls.
+        if self.settings.font_previews() != &self.font_previews {
+            self.font_previews = self.settings.font_previews().clone();
+            apply_fonts(&ctx, self.config.ui_font.as_deref(), &self.font_previews);
+        }
         self.show_model_windows(&ctx, &rs);
+        if own_title_bar {
+            // Without the desktop's frame the window is resized at its edges by Meshgrove.
+            solidcraft_ui_kit::window_chrome::resize_zones(ui);
+        }
     }
 
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // The desktop took the press that started a move or resize of the window from Meshgrove's
+        // own title bar (X11 never sends its release).
+        solidcraft_ui_kit::window_chrome::release_press_taken_by_os(ctx, raw);
         if let Some(hook) = &mut self.screenshot {
             hook.inject(raw);
         }
@@ -3627,20 +3966,20 @@ fn list_title(list: &ListInfo) -> String {
     }
 }
 
-/// Use the desktop's UI font (Noto Sans on KDE) so the app does not look foreign;
-/// glyphs it lacks still fall back to egui's bundled fonts and the system fallback.
-fn use_system_ui_font(ctx: &egui::Context) {
-    let mut fonts = ui_fonts();
-    if let Some(path) = system_ui_font()
-        && let Ok(bytes) = std::fs::read(&path)
-    {
-        fonts.font_data.insert("system-ui".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
-        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-            family.insert(0, "system-ui".into());
-        }
+/// Set the interface fonts: the font chosen in the settings (`ui_font`) in front of the desktop's
+/// UI font (Noto Sans on KDE) and egui's bundled ones, which stay as fallbacks for the signs it
+/// lacks. `previews`: the families the settings' font list shows in themselves.
+fn apply_fonts(ctx: &egui::Context, ui_font: Option<&str>, previews: &BTreeSet<String>) {
+    use crate::ui::fonts;
+    static SYSTEM: std::sync::OnceLock<Option<std::sync::Arc<egui::FontData>>> = std::sync::OnceLock::new();
+    let system = SYSTEM.get_or_init(|| {
+        let path = system_ui_font()?;
+        let bytes = std::fs::read(&path).ok()?;
         log::info!("UI font: {}", path.display());
-    }
-    ctx.set_fonts(fonts);
+        Some(std::sync::Arc::new(egui::FontData::from_owned(bytes)))
+    });
+    let themed = crate::ui::appearance::themed();
+    ctx.set_fonts(fonts::definitions(ui_fonts(), system.clone(), fonts::Choice::of(ui_font), themed, previews));
 }
 
 /// egui's bundled fonts, with Hack last in line for the interface's text too: of them only it

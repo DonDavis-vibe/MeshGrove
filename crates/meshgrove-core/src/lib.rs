@@ -25,6 +25,7 @@ pub mod moves;
 pub mod placement;
 pub mod printer;
 pub mod process;
+pub mod program_icons;
 pub mod programs;
 pub mod query;
 pub mod scan;

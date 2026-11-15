@@ -2,6 +2,7 @@
 //! chat (an agent found on this computer, or the user's own endpoint), connecting the AI apps,
 //! and what they looked at.
 
+use solidcraft_ui_kit as sc;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
@@ -97,7 +98,7 @@ impl AiSettings {
         let current = agents::current(&config.ai, detection).map(|e| e.id).unwrap_or_default();
         if detection.is_none() {
             ui.horizontal(|ui| {
-                ui.spinner();
+                crate::ui::loading::mark(ui);
                 ui.weak(t!("assistant.looking"));
             });
         }
@@ -106,16 +107,18 @@ impl AiSettings {
         }
         for e in &entries {
             ui.horizontal(|ui| {
-                if ui.radio(e.id == current, &e.name).clicked() && e.id != current {
+                // The tile keeps room at its right for the state and the button to remove it.
+                if super::settings_kit::choice_tile(ui, e.id == current, &e.name, &e.detail, &e.detail, 190.0)
+                    && e.id != current
+                {
                     changes.push(SettingsChange::Assistant(e.id.clone()));
                 }
-                ui.weak(&e.detail);
                 if e.found
                     && let Some(f) = detection.and_then(|d| d.found.iter().find(|f| f.id == e.id))
                 {
                     let (text, color) = match f.login {
-                        Login::LooksLoggedIn => (t!("assistant.login_found"), kit::GOOD),
-                        Login::KeyInEnvironment => (t!("assistant.login_key"), kit::GOOD),
+                        Login::LooksLoggedIn => (t!("assistant.login_found"), kit::good()),
+                        Login::KeyInEnvironment => (t!("assistant.login_key"), kit::good()),
                         Login::NotLoggedIn => (t!("assistant.login_missing"), ui.visuals().warn_fg_color),
                         Login::Unknown => (t!("assistant.login_unknown"), ui.visuals().weak_text_color()),
                     };
@@ -124,7 +127,9 @@ impl AiSettings {
                 if e.is_endpoint() {
                     kit::pill(ui, t!("assistant.endpoint_pill"), ui.visuals().weak_text_color());
                 }
-                if !e.found && !e.is_endpoint() && ui.small_button("✖").on_hover_text(t!("assistant.remove")).clicked()
+                if !e.found
+                    && !e.is_endpoint()
+                    && super::settings_kit::small(ui, "✖", &t!("assistant.remove")).clicked()
                 {
                     changes.push(SettingsChange::RemoveAgent(e.id.clone()));
                 }
@@ -146,16 +151,13 @@ impl AiSettings {
                 }
             };
             row(ui, &t!("assistant.auto_connect"), |ui| {
-                egui::ComboBox::from_id_salt("auto_connect").selected_text(label(current)).width(220.0).show_ui(
-                    ui,
-                    |ui| {
-                        for value in ["", AUTO_CONNECT_LAST].into_iter().chain(agents.iter().map(|e| e.id.as_str())) {
-                            if ui.selectable_label(value == current, label(value)).clicked() && value != current {
-                                changes.push(SettingsChange::AutoConnect(value.to_owned()));
-                            }
+                super::settings_kit::dropdown(ui, "auto_connect", &label(current), 220.0, |ui| {
+                    for value in ["", AUTO_CONNECT_LAST].into_iter().chain(agents.iter().map(|e| e.id.as_str())) {
+                        if super::settings_kit::choice_row(ui, value == current, &label(value)) && value != current {
+                            changes.push(SettingsChange::AutoConnect(value.to_owned()));
                         }
-                    },
-                );
+                    }
+                });
             });
             hint(ui, t!("assistant.auto_connect_hint"));
         }
@@ -164,7 +166,8 @@ impl AiSettings {
             let missing: Vec<&agents::Known> =
                 agents::KNOWN.iter().filter(|k| !d.found.iter().any(|f| f.id == k.id)).collect();
             if !missing.is_empty() {
-                egui::CollapsingHeader::new(t!("assistant.missing", count = missing.len())).show(ui, |ui| {
+                let title = t!("assistant.missing", count = missing.len());
+                super::settings_kit::fold(ui, "assistant.missing", &title, false, None, |ui| {
                     for k in missing {
                         ui.horizontal_wrapped(|ui| {
                             ui.label(k.name);
@@ -179,20 +182,16 @@ impl AiSettings {
             hint(ui, t!("assistant.endpoint_hint"));
         }
         ui.add_space(4.0);
-        egui::CollapsingHeader::new(t!("assistant.add")).show(ui, |ui| {
+        super::settings_kit::fold(ui, "assistant.add", &t!("assistant.add"), false, None, |ui| {
             row(ui, &t!("assistant.add_name"), |ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.new_agent.name).desired_width(220.0));
+                super::settings_kit::text_field(ui, &mut self.new_agent.name, "", 220.0);
             });
             row(ui, &t!("assistant.add_command"), |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.new_agent.command)
-                        .hint_text("opencode acp")
-                        .desired_width(300.0),
-                );
+                super::settings_kit::text_field(ui, &mut self.new_agent.command, "opencode acp", 300.0);
             });
-            ui.checkbox(&mut self.new_agent.local, t!("endpoint.local")).on_hover_text(t!("endpoint.local_hint"));
+            sc::checkbox(ui, &t!("endpoint.local"), &mut self.new_agent.local).on_hover_text(t!("endpoint.local_hint"));
             let ready = !self.new_agent.command.trim().is_empty();
-            if ui.add_enabled(ready, egui::Button::new(t!("assistant.add_button"))).clicked() {
+            if super::settings_kit::button_if(ui, ready, t!("assistant.add_button")).clicked() {
                 let mut agent = std::mem::take(&mut self.new_agent);
                 agent.id = agents::new_id(&config.ai);
                 agent.command = agent.command.trim().to_owned();
@@ -230,11 +229,19 @@ impl AiSettings {
             if check(ui, &mut cross, t!("settings.ai_cross_moves"), t!("settings.ai_cross_moves_hint")) {
                 changes.push(SettingsChange::AiCrossLibraryMoves(cross));
             }
+            let mut ask = config.ai.cloud_ask;
+            if check(ui, &mut ask, t!("settings.ai_cloud_ask"), t!("settings.ai_cloud_ask_hint")) {
+                changes.push(SettingsChange::AiCloudAsk(ask));
+            }
+            let mut always = config.ai.review_button_always;
+            if check(ui, &mut always, t!("settings.ai_review_button"), t!("settings.ai_review_button_hint")) {
+                changes.push(SettingsChange::AiReviewButton(always));
+            }
             ui.horizontal(|ui| {
-                if ui.button(t!("settings.ai_review", count = self.pending)).clicked() {
+                if sc::button(ui, t!("settings.ai_review", count = self.pending), sc::Button::Normal).clicked() {
                     changes.push(SettingsChange::ShowAiReview);
                 }
-                if ui.button(t!("settings.ai_history")).clicked() {
+                if sc::button(ui, t!("settings.ai_history"), sc::Button::Normal).clicked() {
                     changes.push(SettingsChange::ShowAiHistory);
                 }
             });
@@ -256,18 +263,16 @@ impl AiSettings {
                 let mut library = config.ai.library(root);
                 let before = library.clone();
                 ui.label(listing::file_name(root)).on_hover_text(root.display().to_string());
-                egui::ComboBox::from_id_salt(("ai_access", root)).selected_text(access_name(library.access)).show_ui(
-                    ui,
-                    |ui| {
-                        for access in [AiAccess::None, AiAccess::LocalOnly, AiAccess::Cloud] {
-                            ui.selectable_value(&mut library.access, access, access_name(access));
-                        }
-                    },
-                );
-                ui.add_enabled(
-                    library.access != AiAccess::None,
-                    egui::Checkbox::new(&mut library.images, t!("settings.ai_images")),
-                )
+                let shown = access_name(library.access);
+                super::settings_kit::dropdown(ui, ("ai_access", root), &shown, 170.0, |ui| {
+                    for access in [AiAccess::None, AiAccess::LocalOnly, AiAccess::Cloud] {
+                        super::settings_kit::choice(ui, &mut library.access, access, &access_name(access));
+                    }
+                });
+                ui.add_enabled_ui(library.access != AiAccess::None, |ui| {
+                    sc::checkbox(ui, &t!("settings.ai_images"), &mut library.images)
+                })
+                .inner
                 .on_hover_text(t!("settings.ai_images_hint"));
                 ui.end_row();
                 if library != before {
@@ -313,13 +318,13 @@ impl AiSettings {
         ui.add_space(4.0);
         match &self.assistants {
             None => {
-                ui.spinner();
+                crate::ui::loading::mark(ui);
             }
             Some(found) if found.is_empty() => hint(ui, t!("settings.mcp_none_found")),
             Some(found) => {
                 for o in found {
                     let (text, color) = match &o.result {
-                        Ok(Some(Change::Unchanged)) => (t!("settings.mcp_state_connected"), kit::GOOD),
+                        Ok(Some(Change::Unchanged)) => (t!("settings.mcp_state_connected"), kit::good()),
                         Ok(Some(Change::Updated)) => (t!("settings.mcp_state_stale"), ui.visuals().text_color()),
                         Ok(Some(Change::Custom)) => (t!("settings.mcp_state_custom"), ui.visuals().text_color()),
                         Err(_) => (t!("settings.mcp_state_unreadable"), ui.visuals().warn_fg_color),
@@ -335,8 +340,7 @@ impl AiSettings {
                 }
                 let missing = found.iter().any(|o| matches!(o.result, Ok(Some(Change::Added | Change::Updated))));
                 ui.add_space(2.0);
-                if ui
-                    .add_enabled(armed && !busy && missing, egui::Button::new(t!("settings.mcp_connect_now")))
+                if super::settings_kit::button_if(ui, armed && !busy && missing, t!("settings.mcp_connect_now"))
                     .clicked()
                 {
                     changes.push(SettingsChange::AiConnectNow);
@@ -345,18 +349,20 @@ impl AiSettings {
             }
         }
         let none_found = self.assistants.as_ref().is_some_and(Vec::is_empty);
-        egui::CollapsingHeader::new(t!("settings.mcp_by_hand")).default_open(none_found).show(ui, |ui| {
+        super::settings_kit::fold(ui, "settings.mcp_by_hand", &t!("settings.mcp_by_hand"), none_found, None, |ui| {
             hint(ui, t!("settings.mcp_found", path = server.display().to_string()));
             row(ui, &t!("settings.mcp_client"), |ui| {
-                egui::ComboBox::from_id_salt("mcp_client").selected_text(self.client.name()).show_ui(ui, |ui| {
+                let shown = self.client.name().to_owned();
+                super::settings_kit::dropdown(ui, "mcp_client", &shown, 220.0, |ui| {
                     for client in Client::ALL {
-                        ui.selectable_value(&mut self.client, client, client.name());
+                        super::settings_kit::choice(ui, &mut self.client, client, client.name());
                     }
                 });
             });
             row(ui, &t!("settings.mcp_model_runs"), |ui| {
-                ui.radio_value(&mut self.local, false, t!("settings.mcp_cloud"));
-                ui.radio_value(&mut self.local, true, t!("settings.mcp_local"));
+                let options =
+                    [(false, t!("settings.mcp_cloud").into_owned()), (true, t!("settings.mcp_local").into_owned())];
+                super::settings_kit::segmented(ui, &mut self.local, &options);
             });
             let class = if self.local { AccessClass::Local } else { AccessClass::Cloud };
             let mut snippet = snippets::snippet(self.client, &exe, appimage.as_deref(), class);
@@ -367,7 +373,7 @@ impl AiSettings {
                     .desired_rows(if self.client.is_command() { 2 } else { 8 })
                     .desired_width(f32::INFINITY),
             );
-            if ui.button(t!("settings.mcp_copy")).clicked() {
+            if sc::button(ui, t!("settings.mcp_copy"), sc::Button::Normal).clicked() {
                 ui.ctx().copy_text(snippet.clone());
             }
             // Below the button, not beside it: text in a row would not wrap and widen the window.
@@ -406,7 +412,7 @@ impl AiSettings {
             match &config.ai.endpoint {
                 Some(e) => self.form = Some(e.clone()),
                 None => {
-                    if ui.button(t!("endpoint.set_up")).clicked() {
+                    if sc::button(ui, t!("endpoint.set_up"), sc::Button::Normal).clicked() {
                         self.form = Some(EndpointConfig::default());
                     }
                     return;
@@ -417,9 +423,9 @@ impl AiSettings {
         ui.add_space(2.0);
         row(ui, &t!("endpoint.preset"), |ui| {
             let name = PRESETS.iter().find(|p| p.0 == form.preset).map_or(form.preset.clone(), |p| preset_name(p.0));
-            egui::ComboBox::from_id_salt("endpoint_preset").selected_text(name).show_ui(ui, |ui| {
+            super::settings_kit::dropdown(ui, "endpoint_preset", &name, 220.0, |ui| {
                 for (id, url) in PRESETS {
-                    if ui.selectable_label(form.preset == *id, preset_name(id)).clicked() {
+                    if super::settings_kit::choice_row(ui, form.preset == *id, &preset_name(id)) {
                         form.preset = (*id).to_owned();
                         if !url.is_empty() {
                             form.base_url = (*url).to_owned();
@@ -474,13 +480,11 @@ impl AiSettings {
         });
         row(ui, &t!("endpoint.key"), |ui| {
             ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.key)
-                        .password(true)
-                        .hint_text(t!("endpoint.key_hint"))
-                        .desired_width(220.0),
-                );
-                if ui.add_enabled(!self.key.trim().is_empty(), egui::Button::new(t!("endpoint.key_save"))).clicked() {
+                sc::settings_control_width(ui, 220.0, |ui| {
+                    let id = egui::Id::unique("endpoint_key_field");
+                    sc::password_field(ui, id, &mut self.key, &t!("endpoint.key_hint"))
+                });
+                if super::settings_kit::button_if(ui, !self.key.trim().is_empty(), t!("endpoint.key_save")).clicked() {
                     changes.push(SettingsChange::EndpointKey {
                         url: form.base_url.clone(),
                         key: self.key.trim().to_owned(),
@@ -494,37 +498,33 @@ impl AiSettings {
             });
         });
         row(ui, &t!("endpoint.key_env"), |ui| {
-            ui.add(egui::TextEdit::singleline(&mut form.key_env).hint_text("OPENAI_API_KEY").desired_width(220.0));
+            super::settings_kit::text_field(ui, &mut form.key_env, "OPENAI_API_KEY", 220.0);
         });
         row(ui, &t!("endpoint.effort"), |ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut form.reasoning_effort)
-                    .hint_text(t!("endpoint.effort_field_hint"))
-                    .desired_width(220.0),
-            )
-            .on_hover_text(t!("endpoint.effort_hint"));
+            super::settings_kit::text_field(ui, &mut form.reasoning_effort, &t!("endpoint.effort_field_hint"), 220.0)
+                .on_hover_text(t!("endpoint.effort_hint"));
         });
-        ui.checkbox(&mut form.local, t!("endpoint.local")).on_hover_text(t!("endpoint.local_hint"));
-        ui.checkbox(&mut form.vision, t!("endpoint.vision")).on_hover_text(t!("endpoint.vision_hint"));
-        ui.checkbox(&mut form.tools, t!("endpoint.tools")).on_hover_text(t!("endpoint.tools_hint"));
+        sc::checkbox(ui, &t!("endpoint.local"), &mut form.local).on_hover_text(t!("endpoint.local_hint"));
+        sc::checkbox(ui, &t!("endpoint.vision"), &mut form.vision).on_hover_text(t!("endpoint.vision_hint"));
+        sc::checkbox(ui, &t!("endpoint.tools"), &mut form.tools).on_hover_text(t!("endpoint.tools_hint"));
         if !form.local {
             ui.colored_label(ui.visuals().warn_fg_color, t!("endpoint.cloud_note"));
         }
         let mut remove = false;
         ui.horizontal(|ui| {
-            if ui.add_enabled(self.test.is_none(), egui::Button::new(t!("endpoint.test"))).clicked() {
+            if super::settings_kit::button_if(ui, self.test.is_none(), t!("endpoint.test")).clicked() {
                 self.listed_for = Some(form.base_url.clone());
                 self.test = Some(list_models(ui.ctx(), form, &self.key));
                 self.tested = None;
             }
             if self.test.is_some() {
-                ui.spinner();
+                crate::ui::loading::mark(ui);
             }
             let ready = !form.base_url.trim().is_empty() && !form.model.trim().is_empty();
-            if ui.add_enabled(ready, egui::Button::new(t!("settings.apply"))).clicked() {
+            if super::settings_kit::button_if(ui, ready, t!("settings.apply")).clicked() {
                 changes.push(SettingsChange::Endpoint(Some(form.clone())));
             }
-            if config.ai.endpoint.is_some() && ui.button(t!("endpoint.remove")).clicked() {
+            if config.ai.endpoint.is_some() && sc::button(ui, t!("endpoint.remove"), sc::Button::Normal).clicked() {
                 changes.push(SettingsChange::Endpoint(None));
                 remove = true;
             }
@@ -569,11 +569,11 @@ impl AiSettings {
             });
         }
         ui.horizontal(|ui| {
-            if ui.button(t!("settings.ai_log_refresh")).clicked() {
+            if sc::button(ui, t!("settings.ai_log_refresh"), sc::Button::Normal).clicked() {
                 self.loaded = false;
             }
             let label = if self.confirm_clear { t!("settings.ai_clear_confirm") } else { t!("settings.ai_clear") };
-            if ui.button(label).on_hover_text(t!("settings.ai_clear_hint")).clicked() {
+            if sc::button(ui, label, sc::Button::Normal).on_hover_text(t!("settings.ai_clear_hint")).clicked() {
                 if self.confirm_clear {
                     changes.push(SettingsChange::ClearAiData);
                     self.confirm_clear = false;

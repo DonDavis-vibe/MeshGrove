@@ -4,10 +4,18 @@ use std::sync::Arc;
 
 use egui::{Align2, Color32, FontId, Galley, Painter, Pos2, Rect, Stroke, StrokeKind, Vec2, pos2, vec2};
 
-/// KDE Breeze folder blue.
-pub const FOLDER_BLUE: Color32 = Color32::from_rgb(61, 174, 233);
+/// The colour of folders: the theme's accent (Breeze blue in Meshgrove's own look).
+pub fn folder_color() -> Color32 {
+    super::appearance::tokens().accent
+}
 /// Archives get a warm tone so they stand apart from folders.
 pub const ARCHIVE_AMBER: Color32 = Color32::from_rgb(222, 164, 66);
+
+/// The colour of a folder's rear part and tab: its colour, dimmed towards the panel behind it.
+/// Opaque, so the tab and the body do not darken each other where they overlap.
+fn rear(p: &Painter, color: Color32) -> Color32 {
+    p.ctx().global_style().visuals.panel_fill.lerp_to_gamma(color, 0.7)
+}
 
 /// Folder in the middle of the square `r`.
 pub fn folder(p: &Painter, r: Rect) {
@@ -15,15 +23,16 @@ pub fn folder(p: &Painter, r: Rect) {
     let body =
         Rect::from_min_max(pos2(r.min.x + w * 0.08, r.min.y + w * 0.26), pos2(r.max.x - w * 0.08, r.max.y - w * 0.14));
     let tab = Rect::from_min_size(pos2(body.min.x, body.min.y - w * 0.08), vec2(w * 0.34, w * 0.14));
-    let back = FOLDER_BLUE.linear_multiply(0.7);
+    let color = folder_color();
+    let back = rear(p, color);
     p.rect_filled(tab, w * 0.03, back);
     p.rect_filled(body, w * 0.05, back);
     let front = Rect::from_min_max(pos2(body.min.x, body.min.y + w * 0.08), body.max);
-    p.rect_filled(front, w * 0.05, FOLDER_BLUE);
+    p.rect_filled(front, w * 0.05, color);
 }
 
-/// Folder whose contents peek out: up to four previews in the folder body, the front flap
-/// drawn translucently over their lower part.
+/// Folder whose contents show: up to four previews in the folder body, framed by the folder and
+/// its tab. Nothing lies over them (a front flap once covered the lower two).
 /// One picture in a folder mosaic, optionally fading into the next one (`.1` = how far, 0..1).
 pub type Preview = (egui::TextureId, egui::Vec2);
 pub type MosaicCell = (Preview, Option<(Preview, f32)>);
@@ -33,7 +42,7 @@ pub fn folder_mosaic(p: &Painter, r: Rect, previews: &[MosaicCell], paper: Color
     let body =
         Rect::from_min_max(pos2(r.min.x + w * 0.04, r.min.y + w * 0.12), pos2(r.max.x - w * 0.04, r.max.y - w * 0.04));
     let tab = Rect::from_min_size(pos2(body.min.x, body.min.y - w * 0.07), vec2(w * 0.32, w * 0.12));
-    let back = color.linear_multiply(0.7);
+    let back = rear(p, color);
     p.rect_filled(tab, w * 0.03, back);
     p.rect_filled(body, w * 0.05, back);
 
@@ -65,9 +74,6 @@ pub fn folder_mosaic(p: &Painter, r: Rect, previews: &[MosaicCell], paper: Color
             None => draw(*now, 1.0),
         }
     }
-
-    let flap = Rect::from_min_max(pos2(body.min.x, body.max.y - body.height() * 0.3), body.max);
-    p.rect_filled(flap, w * 0.05, color.gamma_multiply(0.85));
 }
 
 fn split_h(r: Rect) -> [Rect; 2] {
