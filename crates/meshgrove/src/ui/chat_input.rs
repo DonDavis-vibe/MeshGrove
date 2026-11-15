@@ -438,7 +438,12 @@ mod tests {
                 // Room over the field for the list, as the conversation leaves it.
                 ui.add_space(200.0);
                 let mut candidates = |_: &str| {
-                    vec![Candidate { label: "garden".into(), detail: "tag".into(), existing: true, value: pill("garden") }]
+                    vec![Candidate {
+                        label: "garden".into(),
+                        detail: "tag".into(),
+                        existing: true,
+                        value: pill("garden"),
+                    }]
                 };
                 show(ui, input, egui::Id::unique("field"), "hint", &mut candidates);
                 let _ = ui.button("send");

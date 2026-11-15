@@ -1837,8 +1837,7 @@ impl SettingsDialog {
                 } else {
                     super::settings_kit::choice_tile(ui, i == default, &program.name, &path, &tip, 34.0)
                 };
-                if picked && i != default
-                {
+                if picked && i != default {
                     send(programs.to_vec(), Some(program.name.clone()), changes);
                 }
                 if super::settings_kit::small(ui, "✖", &t!("settings.slicers_remove")).clicked() {

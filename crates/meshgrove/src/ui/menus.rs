@@ -187,7 +187,10 @@ fn ticked(ui: &mut Ui, icon: &str, label: &str, on: bool) -> Response {
     let (r, response) = ui.allocate_exact_size(egui::vec2(width, t.control_height + t.space_2), egui::Sense::click());
     row.paint(ui, r, &response, mark + t.space_4);
     if on {
-        let at = egui::Rect::from_center_size(egui::pos2(r.right() - t.space_8 - mark / 2.0, r.center().y), egui::vec2(mark, mark));
+        let at = egui::Rect::from_center_size(
+            egui::pos2(r.right() - t.space_8 - mark / 2.0, r.center().y),
+            egui::vec2(mark, mark),
+        );
         // The kit keeps its own tick to itself: the same three points.
         let (c, m) = (at.center(), mark);
         let points = vec![
@@ -210,10 +213,7 @@ pub fn submenu<R>(ui: &mut Ui, icon: &str, label: &str, rows: impl FnOnce(&mut U
 /// rows' texts are.
 pub fn inset<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let t = solidcraft_theme::Tokens::get();
-    egui::Frame::new()
-        .inner_margin(egui::Margin::symmetric(t.space_8 as i8, t.space_4 as i8))
-        .show(ui, add)
-        .inner
+    egui::Frame::new().inner_margin(egui::Margin::symmetric(t.space_8 as i8, t.space_4 as i8)).show(ui, add).inner
 }
 
 /// A sentence of explanation among the rows, wrapped at the menu's width.

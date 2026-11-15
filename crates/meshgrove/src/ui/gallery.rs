@@ -1020,7 +1020,8 @@ pub(super) fn entry_menu(
         }
         rows.section(ui);
         let blocked = menu.trash_blocked.as_deref();
-        if super::menus::item_if(ui, "delete", &t!("menu.trash"), blocked.is_none(), blocked.unwrap_or_default(), true) {
+        if super::menus::item_if(ui, "delete", &t!("menu.trash"), blocked.is_none(), blocked.unwrap_or_default(), true)
+        {
             *rows.action = Some(Action::Trash);
         }
     });

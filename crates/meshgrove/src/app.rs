@@ -2619,7 +2619,8 @@ impl App {
             }
             // The direction is not one more thing to sort by: a rule keeps it apart.
             menus::separator(ui);
-            changed |= menus::check(ui, "reorder", &t!("gallery.descending"), &mut self.config.sort_descending).changed();
+            changed |=
+                menus::check(ui, "reorder", &t!("gallery.descending"), &mut self.config.sort_descending).changed();
             menus::separator(ui);
             changed |= menus::check(ui, "mesh_body", &t!("sort.supported_first"), &mut self.config.supported_first)
                 .on_hover_text(t!("sort.supported_first_hint"))
@@ -2933,7 +2934,9 @@ impl App {
     fn central(&mut self, ui: &mut Ui, rs: &egui_wgpu::RenderState) {
         let message = match (&self.view, &self.nav.listing) {
             (View::Folder, Listing::Loading) | (View::Flatten { entries: None, .. }, _) => {
-                ui.centered_and_justified(|ui| crate::ui::loading::mark_sized(ui, 44.0).on_hover_text(t!("gallery.loading")));
+                ui.centered_and_justified(|ui| {
+                    crate::ui::loading::mark_sized(ui, 44.0).on_hover_text(t!("gallery.loading"))
+                });
                 return;
             }
             (View::Folder, Listing::Error(e)) => Some(t!("error.read_dir", error = e).into_owned()),
@@ -3519,11 +3522,8 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
         use solidcraft_ui_kit as sc;
         let t = crate::ui::appearance::tokens();
         let title = self.tab_title_for_tile(tiles, tile_id);
-        let font = if state.active {
-            sc::type_face::semibold(t.font_label)
-        } else {
-            egui::FontId::proportional(t.font_label)
-        };
+        let font =
+            if state.active { sc::type_face::semibold(t.font_label) } else { egui::FontId::proportional(t.font_label) };
         let galley = title.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, font);
         let (margin, cross) = (t.space_8, t.space_16);
         let width = galley.size().x + 2.0 * margin + if state.closable { t.space_4 + cross } else { 0.0 };

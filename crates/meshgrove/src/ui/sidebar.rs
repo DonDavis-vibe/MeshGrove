@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 
 use egui::collapsing_header::CollapsingState;
 use egui::{Color32, RichText, Ui};
-use solidcraft_theme::Tokens;
-use solidcraft_ui_kit as sc;
 use meshgrove_core::config::Config;
 use meshgrove_core::listing;
 use meshgrove_core::lists::{ListInfo, ListKind};
+use solidcraft_theme::Tokens;
+use solidcraft_ui_kit as sc;
 
 use super::menus;
 use super::tags::{Group, PALETTE, TagStyle};
@@ -240,7 +240,14 @@ impl Sidebar {
         let favorites = t!("lists.favorites");
         fixed(ui, ListKind::Favorites, "star", &favorites, &favorites, &t!("lists.favorites_empty"));
         if library.recent {
-            fixed(ui, ListKind::Recent, "restore", &t!("lists.recent"), &t!("lists.recent_hint"), &t!("lists.recent_empty"));
+            fixed(
+                ui,
+                ListKind::Recent,
+                "restore",
+                &t!("lists.recent"),
+                &t!("lists.recent_hint"),
+                &t!("lists.recent_empty"),
+            );
         }
         let own = |l: &&ListInfo| !matches!(l.kind, ListKind::Favorites | ListKind::Recent) && !l.archived;
         for list in library.lists.iter().filter(own) {
@@ -342,8 +349,14 @@ impl Sidebar {
                 for (print, icon, label) in
                     [(true, "list", t!("actions.list_print")), (false, "feature_group", t!("actions.list_collection"))]
                 {
-                    if menus::item_if(ui, icon, &label, !description.is_empty(), &t!("actions.list_describe_first"), false)
-                    {
+                    if menus::item_if(
+                        ui,
+                        icon,
+                        &label,
+                        !description.is_empty(),
+                        &t!("actions.list_describe_first"),
+                        false,
+                    ) {
                         *action = Some(SidebarAction::ListFromDescription(description.clone(), print));
                         self.list_description.clear();
                     }

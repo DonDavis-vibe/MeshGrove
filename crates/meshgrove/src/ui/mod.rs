@@ -5,12 +5,10 @@ pub mod chat;
 pub mod chat_input;
 pub mod details;
 pub mod dialogs;
-pub mod loading;
-pub mod program_icons;
 pub mod duplicates;
-pub mod fonts;
 #[cfg(feature = "plugins")]
 pub mod folder_pick;
+pub mod fonts;
 pub mod gallery;
 pub mod glyphs;
 #[cfg(feature = "plugins")]
@@ -19,6 +17,7 @@ pub mod icons;
 pub mod import;
 pub mod inbox;
 pub mod layout;
+pub mod loading;
 pub mod menus;
 pub mod model_window;
 pub mod offscreen;
@@ -26,6 +25,7 @@ pub mod paint;
 pub mod picker;
 #[cfg(feature = "plugins")]
 pub mod plugin_view;
+pub mod program_icons;
 pub mod review;
 pub mod settings;
 pub mod settings_ai;

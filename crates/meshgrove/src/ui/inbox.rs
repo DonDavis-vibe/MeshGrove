@@ -8,9 +8,9 @@ use std::time::SystemTime;
 use egui::{Key, Modifiers, RichText, Ui};
 use meshgrove_core::listing::Entry;
 
-use super::settings_kit;
 use super::duplicates::{TILE_WIDTH, TileClick, tile};
 use super::gallery::{Action, Gallery, MenuContext, entry_menu};
+use super::settings_kit;
 use crate::i18n;
 
 pub struct InboxGroupInfo {
@@ -88,10 +88,17 @@ fn inbox(
                 if settings_kit::action(ui, t!("inbox.all_done"), true).clicked() {
                     action = Some(InboxAction::AllDone);
                 }
-                if ai && settings_kit::action(ui, t!("actions.classify_all"), true).on_hover_text(t!("actions.classify_hint")).clicked() {
+                if ai
+                    && settings_kit::action(ui, t!("actions.classify_all"), true)
+                        .on_hover_text(t!("actions.classify_hint"))
+                        .clicked()
+                {
                     action = Some(InboxAction::Classify(None));
                 }
-                if placement && settings_kit::action(ui, t!("placement.inbox_all"), true).on_hover_text(t!("placement.inbox_hint")).clicked()
+                if placement
+                    && settings_kit::action(ui, t!("placement.inbox_all"), true)
+                        .on_hover_text(t!("placement.inbox_hint"))
+                        .clicked()
                 {
                     action = Some(InboxAction::Place(None));
                 }
@@ -107,10 +114,16 @@ fn inbox(
                 // The button first, so a long folder name is shortened instead of hiding it.
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if settings_kit::action(ui, t!("inbox.done"), true).on_hover_text(t!("inbox.done_hint")).clicked() {
+                        if settings_kit::action(ui, t!("inbox.done"), true)
+                            .on_hover_text(t!("inbox.done_hint"))
+                            .clicked()
+                        {
                             action = Some(InboxAction::Done(group.range.clone().collect()));
                         }
-                        if ai && settings_kit::action(ui, t!("actions.classify"), true).on_hover_text(t!("actions.classify_hint")).clicked()
+                        if ai
+                            && settings_kit::action(ui, t!("actions.classify"), true)
+                                .on_hover_text(t!("actions.classify_hint"))
+                                .clicked()
                         {
                             action = Some(InboxAction::Classify(Some(n)));
                         }

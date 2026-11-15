@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use egui::containers::collapsing_header::CollapsingState;
 use egui::Ui;
+use egui::containers::collapsing_header::CollapsingState;
 use meshgrove_core::listing;
 use solidcraft_ui_kit as sc;
 

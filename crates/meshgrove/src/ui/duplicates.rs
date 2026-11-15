@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use egui::{Color32, Id, Rect, RichText, Sense, Shape, Ui, vec2};
 use meshgrove_core::listing::{self, Entry};
 
-use super::settings_kit;
 use super::gallery::{Gallery, Thumb};
+use super::settings_kit;
 use crate::i18n;
 
 pub struct GroupInfo {
@@ -429,9 +429,10 @@ fn duplicates(
             card(ui, Id::unique(("dupes_group", &group.key)), flight, |ui| {
                 ui.horizontal_top(|ui| {
                     let mut on = group.picked;
-                    let response = settings_kit::check_mark(ui, &mut on, false, group.blocked.is_none() && !group.ignored)
-                        .on_hover_text(t!("dupes.pick_group"))
-                        .on_disabled_hover_text(group.blocked.clone().unwrap_or_default());
+                    let response =
+                        settings_kit::check_mark(ui, &mut on, false, group.blocked.is_none() && !group.ignored)
+                            .on_hover_text(t!("dupes.pick_group"))
+                            .on_disabled_hover_text(group.blocked.clone().unwrap_or_default());
                     if response.changed() {
                         action = Some(DupAction::Pick(gi, on));
                     }
@@ -445,7 +446,10 @@ fn duplicates(
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                         ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                             if group.ignored {
-                                if settings_kit::action(ui, t!("dupes.unignore"), true).on_hover_text(t!("dupes.unignore_hint")).clicked() {
+                                if settings_kit::action(ui, t!("dupes.unignore"), true)
+                                    .on_hover_text(t!("dupes.unignore_hint"))
+                                    .clicked()
+                                {
                                     action = Some(DupAction::Ignore(gi, false));
                                 }
                                 return;
@@ -454,8 +458,9 @@ fn duplicates(
                             // the lock of a group that cannot go stands at its left.
                             let row = vec2(ui.available_width(), solidcraft_theme::Tokens::get().control_height);
                             ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let button = settings_kit::action(ui, t!("dupes.trash_others"), group.blocked.is_none())
-                                    .on_disabled_hover_text(group.blocked.clone().unwrap_or_default());
+                                let button =
+                                    settings_kit::action(ui, t!("dupes.trash_others"), group.blocked.is_none())
+                                        .on_disabled_hover_text(group.blocked.clone().unwrap_or_default());
                                 if button.clicked() {
                                     action = Some(DupAction::TrashOthers(gi));
                                 }
@@ -463,7 +468,10 @@ fn duplicates(
                                     ui.label("🔒").on_hover_text(reason);
                                 }
                             });
-                            if settings_kit::action(ui, t!("dupes.ignore"), true).on_hover_text(t!("dupes.ignore_hint")).clicked() {
+                            if settings_kit::action(ui, t!("dupes.ignore"), true)
+                                .on_hover_text(t!("dupes.ignore_hint"))
+                                .clicked()
+                            {
                                 action = Some(DupAction::Ignore(gi, true));
                             }
                         });
@@ -474,7 +482,8 @@ fn duplicates(
                         let keep = format!("★ {}", t!("dupes.keep"));
                         // The copy that stays, in the theme's accent.
                         let t = solidcraft_theme::Tokens::get();
-                        let badge = (i == group.keep).then_some((keep.as_str(), t.form_primary, settings_kit::ink_on_accent()));
+                        let badge =
+                            (i == group.keep).then_some((keep.as_str(), t.form_primary, settings_kit::ink_on_accent()));
                         let (response, click) = tile(
                             ui,
                             &entries[i],

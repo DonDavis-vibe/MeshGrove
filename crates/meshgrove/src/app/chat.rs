@@ -339,11 +339,9 @@ impl App {
                 Some(id) => self.show_list(id, true),
                 None => self.toast(gone(name)),
             },
-            Reference::Tag { name } => self.search_library(if name.contains(' ') {
-                format!("tag:\"{name}\"")
-            } else {
-                format!("tag:{name}")
-            }),
+            Reference::Tag { name } => {
+                self.search_library(if name.contains(' ') { format!("tag:\"{name}\"") } else { format!("tag:{name}") })
+            }
             Reference::Search { query } => self.search_library(query),
             Reference::Printer { .. } => self.settings.open_at("printer"),
         }

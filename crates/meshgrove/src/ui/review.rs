@@ -21,8 +21,8 @@ use super::duplicates::{TileClick, tile};
 use super::gallery::Gallery;
 use solidcraft_ui_kit as sc;
 
-use super::suggest::{self, Candidate};
 use super::settings_kit::{self, good};
+use super::suggest::{self, Candidate};
 use super::tags::{self, TagStyle};
 use crate::i18n;
 
@@ -277,9 +277,7 @@ fn review(
                                         item.picked = if all { Picked::all(&item.proposal) } else { Picked::default() };
                                     }
                                 }
-                                ui.add(
-                                    egui::Label::new(settings_kit::strong(&batch.title)).truncate(),
-                                );
+                                ui.add(egui::Label::new(settings_kit::strong(&batch.title)).truncate());
                                 let mut facts = vec![
                                     batch.source.clone(),
                                     t!("review.items", count = batch.items.len()).into_owned(),
@@ -473,8 +471,12 @@ fn tags_row(ui: &mut Ui, item: &mut ReviewItem, style: &TagStyle, tags: &[(Strin
         let active = field.has_focus() || field.lost_focus() || held;
         let wanted = |tag: &str| !item.picked.add.iter().any(|t| t.eq_ignore_ascii_case(tag));
         let known: Vec<Candidate<usize>> = if active && !needle.is_empty() {
-            let candidate =
-                |tag: String, files: usize| Candidate { label: tag, detail: String::new(), existing: files > 0, value: files };
+            let candidate = |tag: String, files: usize| Candidate {
+                label: tag,
+                detail: String::new(),
+                existing: files > 0,
+                value: files,
+            };
             let mut all: Vec<Candidate<usize>> =
                 tags.iter().filter(|(tag, _)| wanted(tag)).map(|(tag, files)| candidate(tag.clone(), *files)).collect();
             // And the suggested tags of the settings that no file carries yet, as the info pane
@@ -507,7 +509,11 @@ fn tags_row(ui: &mut Ui, item: &mut ReviewItem, style: &TagStyle, tags: &[(Strin
             };
             let rows: Vec<suggest::Offer> = known
                 .iter()
-                .map(|c| suggest::Offer { name: c.label.clone(), about: about(c.value), dot: Some(style.colors(&c.label).0) })
+                .map(|c| suggest::Offer {
+                    name: c.label.clone(),
+                    about: about(c.value),
+                    dot: Some(style.colors(&c.label).0),
+                })
                 .collect();
             let place = (field.rect.left_bottom() + vec2(0.0, 2.0), egui::Align2::LEFT_TOP);
             let (clicked, on_list) = suggest::floating_list(ui, field.id.with("tags"), place, 240.0, &rows, lit);
@@ -911,10 +917,15 @@ fn history(ui: &mut Ui, changes: &[ChangeInfo]) -> Option<HistoryAction> {
                 ui.label(title);
                 ui.weak(t!("history.steps", count = c.steps));
                 if c.undone_ns.is_some() {
-                    if settings_kit::action(ui, t!("history.redo"), true).on_hover_text(t!("history.redo_hint")).clicked() {
+                    if settings_kit::action(ui, t!("history.redo"), true)
+                        .on_hover_text(t!("history.redo_hint"))
+                        .clicked()
+                    {
                         action = Some(HistoryAction::Redo(c.id));
                     }
-                } else if settings_kit::action(ui, t!("history.undo"), true).on_hover_text(t!("history.undo_hint")).clicked()
+                } else if settings_kit::action(ui, t!("history.undo"), true)
+                    .on_hover_text(t!("history.undo_hint"))
+                    .clicked()
                 {
                     action = Some(HistoryAction::Undo(c.id));
                 }
@@ -987,7 +998,9 @@ mod tag_tests {
         fn find(&self, text: &str) -> Option<Rect> {
             fn walk(shape: &Shape, text: &str, out: &mut Option<Rect>) {
                 match shape {
-                    Shape::Text(t) if t.galley.text() == text => *out = Some(Rect::from_min_size(t.pos, t.galley.size())),
+                    Shape::Text(t) if t.galley.text() == text => {
+                        *out = Some(Rect::from_min_size(t.pos, t.galley.size()))
+                    }
                     Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, text, out)),
                     _ => {}
                 }

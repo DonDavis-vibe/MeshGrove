@@ -660,7 +660,11 @@ fn tools(ui: &mut Ui, m: &ChatMsg) {
         ui.painter().rect_filled(rect, t.radius_sm, t.hover);
     }
     sc::disclosure(ui.painter(), egui::pos2(rect.left() + t.space_8, rect.center().y), open, t.form_dim);
-    ui.painter().galley(egui::pos2(rect.left() + t.space_16, rect.center().y - galley.size().y / 2.0), galley, t.form_dim);
+    ui.painter().galley(
+        egui::pos2(rect.left() + t.space_16, rect.center().y - galley.size().y / 2.0),
+        galley,
+        t.form_dim,
+    );
     if line.clicked() {
         open = !open;
         ui.data_mut(|d| d.insert_temp(id, open));
@@ -818,10 +822,8 @@ fn user_text(ui: &mut Ui, m: &ChatMsg) -> Option<ChatAction> {
             if let Some(p) = m.pills.get(n) {
                 // On the bubble's soft accent: the fill of a field, so the chip stands out.
                 let text = RichText::new(format!("@{}", p.label)).size(t.font_small).color(t.form_ink);
-                let chip = egui::Button::new(text)
-                    .fill(t.control_fill)
-                    .stroke(egui::Stroke::NONE)
-                    .corner_radius(t.radius_lg);
+                let chip =
+                    egui::Button::new(text).fill(t.control_fill).stroke(egui::Stroke::NONE).corner_radius(t.radius_lg);
                 let chip = ui.add(chip).on_hover_cursor(egui::CursorIcon::PointingHand);
                 if chip.on_hover_text(t!("chat.follow_pill")).clicked() {
                     action = Some(ChatAction::Follow(p.reference.clone()));
@@ -884,7 +886,13 @@ mod tests {
         let chats = [ChatInfo { id: 1, title: "Garden".into(), updated_ns: 0 }];
         let pill = Pill { label: "Garden".into(), reference: chat_input::Reference::Tag { name: "garden".into() } };
         let messages = [
-            ChatMsg { id: 1, user: true, text: "Which of [[ref:0]] fit?".into(), pills: vec![pill], ..Default::default() },
+            ChatMsg {
+                id: 1,
+                user: true,
+                text: "Which of [[ref:0]] fit?".into(),
+                pills: vec![pill],
+                ..Default::default()
+            },
             ChatMsg {
                 id: 2,
                 text: "Take [[Garden/rose.stl]].".into(),
@@ -926,7 +934,8 @@ mod tests {
             multi: false,
             allow_other: true,
         };
-        let pick = AskQuestion { question: "Which extras?".into(), options: vec!["Brim".into()], multi: true, ..ask.clone() };
+        let pick =
+            AskQuestion { question: "Which extras?".into(), options: vec!["Brim".into()], multi: true, ..ask.clone() };
         let mut asks = [AskCard::new("q1".into(), vec![ask, pick])];
         let mut input = ChatInput::default();
         let mut md = CommonMarkCache::default();

@@ -112,7 +112,9 @@ fn import(
                 if settings_kit::primary(ui, label, picked > 0).clicked() {
                     action = Some(ImportAction::ImportPicked);
                 }
-                if picked < importable && settings_kit::action(ui, t!("import.import_all", count = importable), true).clicked() {
+                if picked < importable
+                    && settings_kit::action(ui, t!("import.import_all", count = importable), true).clicked()
+                {
                     action = Some(ImportAction::ImportAll);
                 }
                 if any_archive {

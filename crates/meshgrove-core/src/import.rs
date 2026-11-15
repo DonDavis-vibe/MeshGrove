@@ -258,8 +258,15 @@ impl Library {
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlanItem {
     /// A file, or (`folder`) a folder with all that is in it.
-    Move { from: Target, to: PathBuf, folder: bool },
-    Extract { archive: Target, into: PathBuf },
+    Move {
+        from: Target,
+        to: PathBuf,
+        folder: bool,
+    },
+    Extract {
+        archive: Target,
+        into: PathBuf,
+    },
 }
 
 /// An import as it will be done.

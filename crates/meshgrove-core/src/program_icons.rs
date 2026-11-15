@@ -163,7 +163,8 @@ fn entries(places: &Places) -> Vec<Entry> {
 /// program's file name (the entry leaves the folder to `$PATH`).
 fn starts(command: &Path, program: &Path) -> bool {
     if command.is_absolute() {
-        return command == program || command.canonicalize().ok().zip(program.canonicalize().ok()).is_some_and(|(a, b)| a == b);
+        return command == program
+            || command.canonicalize().ok().zip(program.canonicalize().ok()).is_some_and(|(a, b)| a == b);
     }
     program.file_name().is_some_and(|name| name == command.as_os_str())
 }
@@ -187,8 +188,7 @@ fn icon_names(entries: &[Entry], program: &Program) -> Vec<String> {
 
 /// Sizes of the `hicolor` folders in the order they are wanted for a picture drawn at 16 to 32
 /// points: large enough to stay sharp on a dense screen, not larger than needed.
-const SIZES: [&str; 9] =
-    ["128x128", "256x256", "96x96", "192x192", "64x64", "512x512", "72x72", "48x48", "scalable"];
+const SIZES: [&str; 9] = ["128x128", "256x256", "96x96", "192x192", "64x64", "512x512", "72x72", "48x48", "scalable"];
 
 /// The picture file of the icon `name`: the path itself where the entry gives one, else the
 /// program's own picture in `hicolor` or `pixmaps`. PNG before SVG at the same place.
@@ -228,7 +228,11 @@ impl Finder {
     /// For the programs of this computer. Only Linux is looked at so far: elsewhere nothing
     /// is found.
     pub fn real() -> Finder {
-        if cfg!(target_os = "linux") { Finder::new(Places::real()) } else { Finder::new(Places { data_dirs: Vec::new() }) }
+        if cfg!(target_os = "linux") {
+            Finder::new(Places::real())
+        } else {
+            Finder::new(Places { data_dirs: Vec::new() })
+        }
     }
 
     /// The picture file (PNG or SVG) of the icon `program` brings itself, if it has one: by
@@ -413,7 +417,10 @@ mod tests {
     #[test]
     fn a_native_program_finds_its_own_icon() {
         let (dir, places) = data(&[
-            ("applications/PrusaGcodeviewer.desktop", "[Desktop Entry]\nExec=prusa-slicer --gcodeviewer %F\nIcon=viewer\n"),
+            (
+                "applications/PrusaGcodeviewer.desktop",
+                "[Desktop Entry]\nExec=prusa-slicer --gcodeviewer %F\nIcon=viewer\n",
+            ),
             ("applications/PrusaSlicer.desktop", "[Desktop Entry]\nExec=prusa-slicer %F\nIcon=PrusaSlicer\n"),
             ("icons/hicolor/32x32/apps/PrusaSlicer.png", "small"),
             ("icons/hicolor/192x192/apps/PrusaSlicer.png", "large"),
@@ -428,16 +435,21 @@ mod tests {
 
     #[test]
     fn a_flatpak_is_found_by_its_application_id_and_an_svg_will_do() {
-        let (dir, places) = data(&[
-            ("icons/hicolor/scalable/apps/org.blender.Blender.svg", "svg"),
-            ("applications/solid.desktop", "[Desktop Entry]\nExec=/opt/solid/solid %f\nIcon=ICON\n"),
-        ]);
+        let (dir, places) = data(&[("icons/hicolor/scalable/apps/org.blender.Blender.svg", "svg")]);
         let flatpak = program("/var/lib/flatpak/exports/bin/org.blender.Blender");
         assert_eq!(
             icon_file_in(&places, &flatpak).unwrap(),
             dir.path().join("icons/hicolor/scalable/apps/org.blender.Blender.svg")
         );
-        // An entry may name its picture by its path.
+    }
+
+    /// An entry may name its picture by its path. Desktop entries are a Unix matter: their
+    /// commands are Unix paths, which Windows does not take for whole paths (no drive).
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_may_name_its_picture_by_its_path() {
+        let (dir, places) =
+            data(&[("applications/solid.desktop", "[Desktop Entry]\nExec=/opt/solid/solid %f\nIcon=ICON\n")]);
         let picture = dir.path().join("solid.png");
         std::fs::write(&picture, "png").unwrap();
         let entry = dir.path().join("applications/solid.desktop");
@@ -451,7 +463,8 @@ mod tests {
     #[test]
     fn an_install_without_an_entry_takes_the_icon_of_its_kind() {
         let (dir, places) = data(&[("icons/hicolor/128x128/apps/com.anycubic.AnycubicSlicer.png", "png")]);
-        let script = Program { name: "Anycubic Slicer Next".into(), ..program("/home/u/.local/bin/AnycubicSlicerNext") };
+        let script =
+            Program { name: "Anycubic Slicer Next".into(), ..program("/home/u/.local/bin/AnycubicSlicerNext") };
         assert_eq!(
             icon_file_in(&places, &script).unwrap(),
             dir.path().join("icons/hicolor/128x128/apps/com.anycubic.AnycubicSlicer.png")
