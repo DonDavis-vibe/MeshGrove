@@ -165,18 +165,24 @@ fn action_button(ui: &mut Ui, key: &str, label: &str, enabled: bool, primary: bo
 
 /// The kit's checkbox with a label that is never cut short ([`settings_kit::checkbox`]). In a
 /// row that wraps, a checkbox that does not fit what is left of the line goes to the next one
-/// first.
-fn checkbox(ui: &mut Ui, label: &str, on: &mut bool) -> egui::Response {
+/// first. What is left of the line is measured in `ui` itself (a wrapping layout's
+/// `available_width` is the whole line): a greyed-out checkbox is drawn in a child of it, which
+/// starts where the cursor is and so always seems to stand at the start of its line.
+fn checkbox(ui: &mut Ui, label: &str, on: &mut bool, enabled: bool) -> egui::Response {
     if ui.layout().main_wrap {
         let t = Tokens::get();
         let font = egui::FontId::proportional(t.font_label);
         let text = ui.painter().layout_no_wrap(label.to_owned(), font, t.form_ink).size().x;
         let needed = t.space_14 + t.space_6 + text;
-        if needed > ui.available_width() && ui.cursor().left() > ui.max_rect().left() + 1.0 {
+        if needed > ui.available_size_before_wrap().x && ui.cursor().left() > ui.max_rect().left() + 1.0 {
             ui.end_row();
         }
     }
-    settings_kit::checkbox(ui, label, on)
+    if enabled {
+        settings_kit::checkbox(ui, label, on)
+    } else {
+        ui.add_enabled_ui(false, |ui| settings_kit::checkbox(ui, label, on)).inner
+    }
 }
 
 /// One of a few as the kit's joined buttons; as single buttons that wrap where they are too
@@ -345,12 +351,7 @@ impl Draw<'_> {
             }
             Node::Checkbox { id, label, checked, enabled } => {
                 let mut on = self.state.pending.get(id).and_then(Value::as_bool).unwrap_or(*checked);
-                let r = if *enabled {
-                    checkbox(ui, label, &mut on)
-                } else {
-                    ui.add_enabled_ui(false, |ui| checkbox(ui, label, &mut on)).inner
-                };
-                if r.changed() {
+                if checkbox(ui, label, &mut on, *enabled).changed() {
                     self.state.pending.insert(id.clone(), json!(on));
                     self.events.push(changed(id, json!(on)));
                 }
@@ -1148,6 +1149,30 @@ mod tests {
         let (first, second, third) = (label(medium), label(long), label("Dovetails"));
         assert!(second.top() >= first.bottom() && third.top() >= second.bottom(), "one below the other");
         assert_eq!(click_on(&view, "Dovetails"), [changed("c", serde_json::json!(true))]);
+    }
+
+    /// Bingrove's "Floor": a select and a checkbox in a form's row, too narrow for both on one
+    /// line. The checkbox goes to the next line whole, greyed out as well as enabled, and its
+    /// label stays on one line.
+    #[test]
+    fn a_checkbox_in_a_row_goes_to_the_next_line_whole() {
+        let label = "Magnets from below";
+        let option = "skeleton (pads under every cell)";
+        for enabled in [false, true] {
+            let json = serde_json::json!({"v": 1, "root": {"type": "form", "id": "f", "rows": [
+                {"label": "Floor", "node": {"type": "row", "children": [
+                    {"type": "select", "id": "s", "selected": "a", "options": [{"value": "a", "label": option}]},
+                    {"type": "checkbox", "id": "m", "label": label, "checked": false, "enabled": enabled}]}}]}});
+            let view: View = serde_json::from_value(json).unwrap();
+            let (_, shapes) = drive(&view, 420.0, |_| Vec::new());
+            let drawn = texts(&shapes);
+            let rect = |text: &str| {
+                drawn.iter().find(|(t, ..)| t == text).unwrap_or_else(|| panic!("{text}: {drawn:?}")).clone()
+            };
+            let ((_, select, _), (_, magnets, cut)) = (rect(option), rect(label));
+            assert!(!cut && magnets.height() < 20.0, "enabled {enabled}: whole, on one line: {magnets:?}");
+            assert!(magnets.top() >= select.bottom(), "enabled {enabled}: below the select: {magnets:?}, {select:?}");
+        }
     }
 
     /// A checkbox whose label wraps, alone in a form's row: the next row follows it closely.
