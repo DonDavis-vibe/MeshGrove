@@ -16,6 +16,8 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 - The import takes folders: a folder in an import folder that holds models (or an archive with models) comes into the library as a whole, and one the library already has is listed as known.
 - Tag fields show the matching tags under them with their colours (Up and Down pick, Enter takes). A reference in a chat message can be clicked. On Linux, slicers and editors show their own icons.
 
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-themes.png" alt="The same window in four of the 27 themes: Meshgrove Dark, Meshgrove Light, Amber Phosphor and Gruvbox Light" width="100%">
+
 **Duplicates: whole archives at once, and how far the cleanup is** (new in 0.12)
 
 - *Archives with extracted copies* settles all of them with one click: keep every archive and trash the extracted copies, or keep the copies and trash every archive that is extracted completely. The groups such a row settles no longer crowd the list below; a line says how many there are and shows them on request.
@@ -52,7 +54,7 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 - A batch being applied stays in the list with a green sweep that follows the library's progress and fades out once the batch is recorded; the next batch's buttons land exactly where the clicked ones were. A backlog of hundreds of suggestions is settled with the pointer at rest, and the list no longer flickers or loses your ticks when it reloads.
 - Accepted tag suggestions now remove what they say: a suggestion that only takes a tag away, or a tag merge, used to do nothing. A tag renamed through the AI keeps the spelling it was given instead of folding back to the old one.
 
-<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-review-edit.png" alt="The review: a rename and a move with their names in editable fields, and below them a tag batch with an own tag added, being applied with the green sweep following the progress" width="80%">
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-review-edit.png" alt="The review: a rename and a move with their names in editable fields, one name being edited, and below them a tag batch being applied with the green sweep following the progress" width="80%">
 
 **Archives: browse, unpack, pack, add** (new in 0.10)
 
@@ -60,14 +62,14 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 - Right-click → *Unpack* puts an archive's contents into a new folder named after it, beside it. *Pack as ZIP* makes a new ZIP of the selected files and folders under the name you type, *Add to archive* lists the ZIPs of the same folder to add the selection to, and Ctrl+V while a ZIP is open adds the copied files there. Only ZIP archives are written; 7z, RAR and TAR are unpacked. Nothing is ever replaced (a member of the same name stops the whole addition), and each operation is one entry in the history, which takes it back as long as the archive is unchanged since.
 - Your assistant gets the same three operations (`list_archive`, `propose_archive`), always reviewed; the review shows what goes where.
 
-<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-archive-menu.png" alt="The context menu of two selected models with Pack as ZIP open: a field for the archive's name; Add to archive sits below it, and a ZIP shows as a tile with a mosaic of its contents" width="60%">
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-archive-menu.png" alt="The context menu of a folder and a model, selected together, with Pack as ZIP open: a field for the archive's name and the button that packs" width="60%">
 
 **Duplicates: packed or extracted, one decision per archive** (new in 0.10)
 
 - A model pack that lies in the library both as the ZIP and extracted gave one locked group per model, because a member of an archive cannot be trashed by itself. Now *Settings → Library → Duplicates* says which copy ★ suggests, the extracted or the packed one, so *All suggestions are fine* → *Clean up selected* settles them all at once. Above the groups, *Archives with extracted copies* lists each such archive and settles it with one click: keep the archive and trash its extracted copies, or keep the copies and trash the archive, the latter only once every model in it is extracted (the button says how many would be lost otherwise).
 - *Ignore* keeps a group as it is: no longer listed, counted in the sidebar or badged on its tiles. *Show ignored* lists such groups again, with *Watch again* to undo it.
 
-<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-duplicates-archives.png" alt="The duplicates view: above the groups, an archive with its extracted copies and the two buttons, Keep the archive or Keep the copies" width="80%">
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-duplicates-archives.png" alt="The duplicates view: above the groups, two archives with their extracted copies, buttons for all of them at once and Keep the archive or Keep the copies for each" width="80%">
 
 **Smaller things** (new in 0.10)
 
@@ -99,7 +101,7 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 
 - A plugin can hand its 3D preview the space the model is meant to fit. [Bingrove 0.5](https://github.com/DonDavis-vibe/Bingrove/releases/tag/v0.5.0) shows the drawer, the shelf or the wall as a blue box round the plate and the bins, and the sides they stick out of turn red: a grid planned larger than its shelf shows before anything is printed. *Frame* above the preview hides it.
 
-<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-plugin-frame.png" alt="Bingrove's panel for a shelf: the grid is 16 mm wider and 12 mm deeper than the board, two warnings say so, and the 3D preview outlines the board in red round the plate and the bins" width="80%">
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-plugin-frame.png" alt="Bingrove's panel for a shelf: the grid is 16 mm wider and 12 mm deeper than the board, two warnings say so, and the 3D preview outlines the board in red round the plate" width="80%">
 
 **Smaller things** (new in 0.9)
 
@@ -127,7 +129,7 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 - For developers: [how to write a plugin](https://github.com/DonDavis-vibe/MeshGrove/blob/v@VERSION@/docs/plugins.md), the `meshgrove-plugin-api` crate (MIT or Apache-2.0, so a plugin can use any license) and the small `hello-box` example.
 
 <p>
-<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-plugin.png" alt="Bingrove's panel as a tab: the drawer's grid of bins, the 3D preview on the print bed and the list of parts" width="49%">
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-plugin.png" alt="Bingrove's panel as a tab: the drawer's grid of bins, the 3D preview inside the drawer's outline and the list of parts" width="49%">
 <img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-plugin-settings.png" alt="Settings → Plugins: Bingrove installed, with the switches for what it may do" width="49%">
 </p>
 
@@ -158,8 +160,8 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 - Assistants over MCP learn the rules too (`list_tags` names each tag's folder, `library_overview` the landing folder) and the *eingang-einordnen* task places what it tags.
 
 <p>
-<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-placement-review.png" alt="The review with a placement batch: a coaster tagged Craft fair, Kitchen and Living room, with a menu to choose its folder" width="49%">
-<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-placement.png" alt="Settings → Tags → Placement by tag: the folder for each tag in order of precedence, one row being dragged by its handle" width="49%">
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-placement-review.png" alt="The review with a placement batch: cable clips go to Workshop, and a soap dispenser tagged Bathroom and Kitchen has a menu to choose its folder" width="49%">
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-placement.png" alt="Settings → Tags → Placement by tag: the folder for each tag in order of precedence, an own tag (Craft fair) first" width="49%">
 </p>
 
 **Duplicates cleaned up at once** (since 0.7)
@@ -188,7 +190,7 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 - Labels and controls sit in aligned columns, choices among a few are buttons side by side, and *Restore defaults* puts a page back to how Meshgrove comes (your library folders, programs, printers and AI permissions stay).
 
 <p>
-<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-settings.png" alt="The settings: pages in groups, folding sections, aligned rows and Restore defaults" width="60%">
+<img src="https://github.com/DonDavis-vibe/MeshGrove/raw/v@VERSION@/docs/images/screenshot-settings.png" alt="The settings: pages in groups, a search over all of them, the theme picker on General, Restore defaults, and OK, Cancel and Apply" width="60%">
 </p>
 
 **Reviewing suggestions** (since 0.6)

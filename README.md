@@ -23,170 +23,71 @@
 
 ![Meshgrove showing a folder of multi-colour models, with a painted 3MF logo open in a model window of its own](docs/images/screenshot-hero.png)
 
-## Contents
-
-- [Why Meshgrove?](#why-meshgrove)
-- [Features at a glance](#features-at-a-glance)
-- [Screenshots](#screenshots)
-- [Installation](#installation)
-- [Getting started](#getting-started)
-- [User guide](#user-guide)
-  - [Browsing the gallery](#browsing-the-gallery)
-  - [The 3D viewer and its tools](#the-3d-viewer-and-its-tools)
-  - [The details panel](#the-details-panel)
-  - [Library, search and filters](#library-search-and-filters)
-  - [Tags and notes](#tags-and-notes)
-  - [Favourites, collections and print lists](#favourites-collections-and-print-lists)
-  - [The print log](#the-print-log)
-  - [G-code files](#g-code-files)
-  - [Readmes and text files](#readmes-and-text-files)
-  - [Printers and the bed check](#printers-and-the-bed-check)
-  - [Printability check](#printability-check)
-  - [The inbox](#the-inbox)
-  - [Duplicate finder](#duplicate-finder)
-  - [AI assistant and MCP (optional)](#ai-assistant-and-mcp-optional)
-  - [Plugins (optional)](#plugins-optional)
-  - [Working with your slicer and other apps](#working-with-your-slicer-and-other-apps)
-  - [Archives (ZIP, 7z, RAR, TAR)](#archives-zip-7z-rar-tar)
-  - [Moving files to the trash](#moving-files-to-the-trash)
-  - [Backups, export and import](#backups-export-and-import)
-  - [Thumbnails in Dolphin and file dialogs (Linux)](#thumbnails-in-dolphin-and-file-dialogs-linux)
-- [Keyboard and mouse reference](#keyboard-and-mouse-reference)
-- [Supported file types](#supported-file-types)
-- [Settings and files on disk](#settings-and-files-on-disk)
-- [Privacy and safety](#privacy-and-safety)
-- [Performance](#performance)
-- [Platform support](#platform-support)
-- [Troubleshooting and FAQ](#troubleshooting-and-faq)
-- [Building from source](#building-from-source)
-- [Architecture](#architecture)
-- [Development](#development)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [Tip jar](#tip-jar)
-- [Credits](#credits)
-- [License](#license)
+<p align="center">
+  <a href="#installation">Installation</a> · <a href="#getting-started">Getting started</a> · <a href="https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md">User guide</a> · <a href="#documentation">Documentation</a> · <a href="https://github.com/DonDavis-vibe/MeshGrove/releases">Releases</a>
+</p>
 
 ## Why Meshgrove?
 
 Anyone who prints a lot ends up with folders full of files called `Body1.stl`,
-`final_v3_fixed.3mf` and `pack.zip`. A normal file manager shows a generic icon for each of
-them, so you open model after model in the slicer just to find the right one.
+`final_v3_fixed.3mf` and `pack.zip`, and a file manager that shows the same icon for all of
+them. Meshgrove shows those folders as a gallery with a rendered preview of every model, also
+inside ZIP/7z/RAR packs and from the plate pictures your slicer stored in 3MF projects, and adds
+what a collection needs: an instant search, tags and notes, print lists, a print log, a
+duplicate finder, a print-bed check and a one-click hand-over to your slicer. Your folders stay
+as they are: nothing moves without your okay, and every change can be undone. It is native and
+fast (Rust, rendered on the GPU through [wgpu](https://wgpu.rs), no Electron, no server), made
+for big libraries on spinning hard drives, and free software under the GPL, with no account,
+subscription or telemetry.
 
-Meshgrove shows those folders as a gallery with a rendered preview of every model. That
-includes the models inside ZIP/7z/RAR packs and the plate pictures your slicer stored in 3MF
-projects. It also gives you what a model collection needs: an instant search across the whole
-library, tags and notes, favourites, collections and print lists, a log of what you printed, a
-duplicate finder, a print-bed check, and a one-click hand-over to your slicer.
+## Features
 
-What makes it different from other model managers:
+- **Gallery and list view:** previews for STL, 3MF, STEP, OBJ, PLY, glTF/GLB, G-code, images, PDFs and readmes; folder and archive tiles show a mosaic of what is inside; models spin when you point at them ([guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#browsing-the-gallery))
+- **3D viewer:** in the side pane, as a large preview (Space) or in a window of its own; measuring in mm, standard views, picture export, 3D mice ([guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#the-3d-viewer-and-its-tools))
+- **3MF projects in colour:** the slicer's plate pictures, filament colours per part, painted models and material colours
+- **Archives:** ZIP, 7z, RAR and TAR open like folders; unpack, pack and add to ZIPs ([guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#archives-zip-7z-rar-tar))
+- **Library and search:** one index of all your model folders, searched instantly: `dragon ext:3mf tag:painted is:unprinted` ([guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#library-search-and-filters))
+- **Tags and notes** in colours, attached to the file's content, so they survive renames and moves ([guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#tags-and-notes))
+- **Favourites, collections and print lists** with the copies you need, ticked off as you print, and a print log of what worked ([guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#favourites-collections-and-print-lists))
+- **Printers and checks:** which of your printers a model fits on, and holes, loose parts or suspicious sizes before you slice ([guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#printers-and-the-bed-check))
+- **G-code:** the slicer's picture or the toolpaths, print time, filament, and a warning when it was sliced for another printer ([guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#g-code-files))
+- **Inbox and import:** new files grouped by the folder or ZIP they came in; a downloads folder brought into the library and placed by tag ([guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#the-inbox))
+- **Duplicate finder:** exact copies and the same model saved differently, cleaned up in one go ([guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#duplicate-finder))
+- **Slicers and other apps:** open one or many models in your slicer or mesh editor; copy, cut and paste real files ([guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#working-with-your-slicer-and-other-apps))
+- **AI, only if you want it:** your own assistant over MCP, or the chat with your own endpoint or an AI agent on your computer; nothing changes until you accept it ([guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#ai-assistant-and-mcp-optional))
+- **Plugins:** tools that run sealed off, such as [Bingrove](https://github.com/DonDavis-vibe/Bingrove) (Gridfinity inserts) and [Texgrove](https://github.com/DonDavis-vibe/Texgrove) (textures as real geometry) ([guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#plugins-optional))
+- **Your look:** 27 themes, panes you arrange as you like, and Meshgrove's own title bar ([guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#browsing-the-gallery))
+- **Linux, Windows and macOS**, in English and German; on Linux also thumbnails in Dolphin and file dialogs ([guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#platform-support))
 
-- **Your folders stay as they are.** Meshgrove browses and indexes files where they are and
-  never rearranges them on its own; it works fine on read-only drives. Importing from a
-  downloads folder and placing files by tag are opt-in, shown to you before they happen,
-  journalled and undoable.
-- **Native and fast.** It is written in Rust and renders with the GPU (Vulkan, Metal or
-  DirectX 12 through [wgpu](https://wgpu.rs)). There is no Electron, no web view and no server.
-  Thousands of files and models with millions of triangles stay fluid.
-- **Free and open source** under the GPL, with no account, subscription or telemetry.
-- **Made for real libraries on spinning hard drives.** Reads are scheduled so visible tiles
-  come first, and everything else is cached.
-
-## Features at a glance
-
-| Area | What you get |
-|---|---|
-| **Gallery** | Thumbnails for STL, 3MF, STEP, OBJ, PLY, glTF/GLB, G-code, images, PDFs and readmes; folder and archive tiles show a 2×2 mosaic of what is inside (optionally also models from subfolders on disk, fading through them); **tiles or a sortable list** with the columns you choose; resizable tiles (slider in the status bar, growing smoothly towards the pointer); sort by name, date, size or type; "models and G-code only"; "include subfolders" (all files below a folder in one grid); multi-selection |
-| **Panes** | Places, files, preview and info are panes: drag a header to move one, drop it on an edge to split or on another header to stack; the dividers resize them; *Lock the panes* in the settings keeps them where they are |
-| **Hover turntable** | Point at a model tile and the model spins in place. Drag to turn it yourself, and turn the wheel while dragging to zoom |
-| **3D viewer** | In the side panel, or **double-click a model for a window of its own** (resizable, several at once, with "open in slicer"), or **press Space for a large preview** over the window (just the model until you click ☰); smoother edges and optional studio lighting for both; what a double-click does can be changed (model window, large preview, slicer, mesh editor or the default app); orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **picture export** as a 2048 px PNG |
-| **3D mouse** | Navigate the 3D views with a **3Dconnexion SpaceMouse / SpaceNavigator or a DIY 3D mouse** (anything that reports as a HID multi-axis controller; Linux reads `/dev/hidraw` directly, Windows and macOS use HID): twist or tilt to turn the model, push to pan, push forward/back to zoom, left button resets the view, right button shows the next standard view; a 3D picture of the mouse in the settings follows the real knob; per-axis speed and inversion, dead zone, a choice of what each movement does, and a **calibration** that finds out which axis is which |
-| **3MF projects** | Embedded slicer plate pictures (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); click a plate picture to see that plate in 3D; **multi-colour**: filament colours per object and part, painted models (multi-material painting) and 3MF material colours in the viewer and in rendered previews; filament swatches on tiles and in the details; title, designer and application from the metadata |
-| **STEP / STP** | CAD files are tessellated by OpenCascade in a separate helper process, so a broken file cannot crash the app; results are cached |
-| **Archives** | Open ZIP, 7z, RAR and TAR like folders; every model inside gets a preview; files are extracted only when another program needs them. Right-click: unpack an archive beside itself, pack the selection into a new ZIP, add files to a ZIP (or paste into an open one); each undoable in the history |
-| **Library** | Index (SQLite) of all library folders; instant search such as `dragon ext:3mf tag:painted is:unprinted`; changes on disk are picked up automatically, and *Rescan folder* catches anything else |
-| **Tags and notes** | Tags and notes belong to the file *content*, so they survive renames and moves; **tags in colours**, as pills or dots on the tiles; suggested tags for themes (garden, workshop, kids' room …), print properties and state; the search finds note text too; daily automatic backups; export and import as JSON |
-| **Favourites and lists** | ★ favourites (Ctrl+D); **collections** across folders, hand-picked or a saved search that stays current; **print lists** with the copies you need of each model, ticked off as you print, then archived; a print list becomes a **PDF checklist** with pictures or a CSV file |
-| **Print log** | Log a print as printed or failed (and undo it); tiles show ✓2 or ✗; show only what is not printed yet, printed or failed; search with `is:printed`, `is:unprinted`, `is:failed` |
-| **G-code** | Previews from the picture the slicer embedded (PNG, JPG, QOI), or the toolpaths drawn when there is none; slicer, printer, print time, filament (grams, metres, material, colour), layers, nozzle and cost; a warning when a file was sliced for another printer |
-| **Readmes** | Text files (`.txt`, `.md`, `.nfo`, `README`, `LICENSE`) get a page preview; the preview pane shows them in full, Markdown formatted with links that open in the browser; a selected folder shows its readme |
-| **Printers** | All your printers with their build volumes, found in Anycubic Slicer Next, OrcaSlicer, Bambu Studio and PrusaSlicer or entered by hand; each model says which printers it fits on, tiles mark models that fit only when turned (↻ 41°) or on no printer (✕); G-code is matched to its printer; search with `passt:"Kobra S1"` and `is:zugross` |
-| **Printability check** | Every model is checked for holes (open edges), edges shared by more than two faces, faces without area, separate parts and volume, and for suspicious sizes (drawn in inches?); ⚠ on the tile, details in the info pane, `is:problem` in the search |
-| **Inbox** | New files are collected in an inbox, grouped by the folder or archive they came in (a customer's ZIP, a new download), with copies of known models counted apart; tick them off when sorted |
-| **AI (optional)** | Meshgrove brings no AI, but your own assistant (Claude, LM Studio, Cursor …) can search the libraries you open to it over MCP and suggest tags, notes, lists and moves; the built-in AI chat with `@` references talks to an endpoint of your own (Ollama, LM Studio, OpenAI-compatible) or to an AI agent installed on your computer (Claude Code, Codex, Antigravity, OpenCode …), with a searchable model picker; with an endpoint there are one-click actions too. Nothing changes until you accept it, and everything can be undone |
-| **Import and placement** | Name a downloads folder and Meshgrove offers its new models, G-code and archives for import into the library's landing folder (moved, numbered when a name is taken, archives whole or unpacked; undoable). A file in the landing folder that gets a theme tag is placed into that tag's folder, by a rule you set or by your assistant, with your okay or – out of the landing folder only – by itself |
-| **Duplicates** | Finds exact copies and the same model saved differently (ASCII vs binary STL, STL vs 3MF, rotated or moved copies), suggests which copy to keep and can move the others to the trash |
-| **Slicer and apps** | "Open in slicer" for one or many models (finds over 30 common filament and resin slicers, among them Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer, Cura, Creality Print, QIDI Studio, FlashPrint, Lychee, ChiTuBox and UVtools, whether installed as a package, Flatpak, Snap or AppImage; add the ones you use with a ＋ in the settings, pick a default, the others sit in a submenu), into the slicer window that is already open where the slicer allows it; "open in" your **mesh editors or CAD programs** (finds over 20 programs, among them Blender, FreeCAD, Autodesk Fusion, MeshLab, SolidCraft, OpenSCAD, SolveSpace, Rhino, SketchUp, SolidWorks and fstl, again in every install variant; add and choose a default in the settings); **Ctrl+C copies the files** for pasting into the file manager or slicer, **Ctrl+X cuts, Ctrl+V pastes** files from the clipboard into the folder; "show in file manager"; open with the default app |
-| **Desktop integration** | Menu entry, icon, file associations; on Linux the same renderer also provides **thumbnails in Dolphin and file dialogs** |
-| **Languages** | English and German, following the system language (switchable in the settings) |
+All features in one table: [Features at a glance](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#features-at-a-glance).
 
 ## Screenshots
 
-**Folder tiles show what is inside.** Every folder and archive gets a mosaic of its first
-models, so you can navigate by looking instead of reading names.
+**Your look:** the same window in four of the 27 themes.
+![The same Meshgrove window in four themes](docs/images/screenshot-themes.png)
 
+**Folder tiles show what is inside**, so you navigate by looking instead of reading names.
 ![Folder mosaics of a model library](docs/images/screenshot-folders.png)
 
-**Models in their colours.** Multi-colour 3MF projects show the filament of every part and
-their painted areas, plain 3MF files their material colours, and OBJ, PLY and glTF their vertex
-colours and textures. Tiles get a dot per filament; the details list slot and material.
-
+**Models in their colours:** filaments per part, painted areas, material and vertex colours.
 ![A painted 3MF logo in the viewer with its two filaments, next to a textured GLB and 3MF tiles with filament dots](docs/images/screenshot-colours.png)
 
-**Favourites, collections and print lists.** A print list for a market stall: every model with
-the copies done of those needed (`1/3`), finished ones in green at the end, tags in their
-colours, and a 150 MB lithophane in the viewer. The sidebar holds the favourites, print
-lists and collections (hand-picked or a saved search), and the tags in groups.
-
+**Print lists** count the copies done of those needed; the sidebar holds lists and tags.
 ![A print list with copies per model, coloured tags and a lithophane in the viewer](docs/images/screenshot-lists.png)
 
-**The list view.** The same files as a table, with dimensions, tags, favourites and the print log
-at a glance. Click a column title to sort by it, right-click it to choose the columns.
-
-![The list view of a folder with sizes, dimensions, tags and print state](docs/images/screenshot-list-view.png)
-
-**One search for the whole library.** Here `body` finds every model with "body" in its name,
-from four different folders.
-
+**One search for the whole library**, across all your folders.
 ![Library search for "body" with eleven results](docs/images/screenshot-search.png)
 
-**Every model in a window of its own.** Double-click a model to open it next to the gallery, as
-large as you like and with the same tools. Here it measures a coaster holder: click two points
-on the surface to get the distance in mm, with the difference along each axis.
+**Every model in a window of its own**, with the same tools, here measuring in mm.
+![A coaster holder in its own window next to the main window, measured at 83.5 mm](docs/images/screenshot-window.png)
 
-![A coaster holder in its own window next to the main window, measured at 79.3 mm](docs/images/screenshot-window.png)
-
-**Duplicate finder.** Exact copies and identical geometry, grouped, with a suggestion which
-copy to keep and one click to move the others to the trash.
-
-![Duplicate groups with a keep suggestion](docs/images/screenshot-duplicates.png)
-
-**Your own AI, if you want it.** Ask the chat about `@` references (files, folders, tags, a
-search); it answers with links to the models, and what it would change waits as a card.
-
-![The AI chat answering which toys fit the A1 mini, with model links and a print list waiting for review](docs/images/screenshot-chat.png)
-
-**Nothing changes before you say so.** Suggestions from the chat, the one-click actions or an
-MCP assistant wait in the review, old → new; anything accepted can be undone in the history.
-
-![The review with two renames and a move into a new folder, and tag suggestions with a new tag](docs/images/screenshot-review.png)
-
-**An inbox for new deliveries.** New files grouped by the folder or ZIP they came in, copies of
-known files counted, possible printing problems marked; *✧ Sort in* suggests tags.
-
-![The inbox with a customer folder and a ZIP, and the tags the AI suggested in the chat](docs/images/screenshot-inbox.png)
-
-**Several printers and a printability check.** Which printers a model fits on, and what the
-check found: open or non-manifold edges, several parts, suspicious sizes.
-
+**Several printers and a printability check:** where a model fits, and what to look at.
 ![A tapered adapter that fits the Kobra S1 and MK4 but not the A1 mini, with 118 non-manifold edges](docs/images/screenshot-checks.png)
 
-## Installation
+**Your own AI, if you want it:** answers link to the models, and changes wait for your okay.
+![The AI chat answering which toys fit the A1 mini, with model links and a print list waiting for review](docs/images/screenshot-chat.png)
 
-> **Status:** Meshgrove is young. Linux (developed and used daily on Fedora/Nobara with KDE
-> Plasma on Wayland) is the main platform. The Windows and macOS builds are new. They are
-> built and tested automatically, but have seen little real-world use so far. Please
-> [report problems](https://github.com/DonDavis-vibe/MeshGrove/issues).
+## Installation
 
 Every [release](https://github.com/DonDavis-vibe/MeshGrove/releases) has ready-made packages,
 all with STEP previews. Nothing needs to be built:
@@ -199,93 +100,62 @@ all with STEP previews. Nothing needs to be built:
 | Fedora 44 | `meshgrove-<version>-1.fc44.x86_64.rpm` |
 | Any other Linux (x86_64) | `Meshgrove-<version>-x86_64.AppImage` |
 
+Linux (developed and used daily on Fedora/Nobara with KDE Plasma on Wayland) is the main
+platform. The Windows and macOS builds are built and tested automatically but have seen less
+real-world use, so please [report problems](https://github.com/DonDavis-vibe/MeshGrove/issues).
+
 ### Linux
-
-#### Packages for Ubuntu, Debian and Fedora
-
-Download the package for your release and install it:
 
 ```bash
 sudo apt install ./meshgrove_<version>-1_ubuntu24.04_amd64.deb   # Ubuntu, Debian
 sudo dnf install ./meshgrove-<version>-1.fc44.x86_64.rpm         # Fedora
 ```
 
-The packages use your system's libarchive and OpenCascade. They add the menu entry, the icon,
-the `model/step` file type and the [thumbnailer for Dolphin](#thumbnails-in-dolphin-and-file-dialogs-linux)
+The packages add the menu entry, the icon, the `model/step` file type and the
+[thumbnailer for Dolphin](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#thumbnails-in-dolphin-and-file-dialogs-linux)
 and other file managers. Start **Meshgrove** from your application menu, or run `meshgrove`
-(optionally with a folder or file: `meshgrove ~/3D-Models`). Systems based on a supported
-release take its package, e.g. Linux Mint 22 the one for Ubuntu 24.04. A package only installs
-on the release it was made for; elsewhere, use the AppImage. Remove Meshgrove with
+(optionally with a folder or file: `meshgrove ~/3D-Models`). Systems based on a supported release
+take its package, e.g. Linux Mint 22 the one for Ubuntu 24.04. Remove it with
 `sudo apt remove meshgrove` or `sudo dnf remove meshgrove`.
 
-#### AppImage (any distribution)
-
-```bash
-chmod +x Meshgrove-<version>-x86_64.AppImage
-./Meshgrove-<version>-x86_64.AppImage
-```
-
-The AppImage brings everything it needs, STEP support included, and runs on x86_64
-distributions with glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and everything newer). It adds
-no menu entry by itself (tools like [Gear Lever](https://flathub.org/apps/it.mijorus.gearlever)
-or AppImageLauncher do that) and no file-manager thumbnails; for those, use a package or the
-source build.
+**AppImage:** `chmod +x Meshgrove-<version>-x86_64.AppImage`, then start it. It brings
+everything, STEP included, and runs on x86_64 distributions with glibc 2.35 or newer (Ubuntu
+22.04, Debian 12 and newer), but adds no menu entry by itself (tools like
+[Gear Lever](https://flathub.org/apps/it.mijorus.gearlever) or AppImageLauncher do that) and no
+file-manager thumbnails.
 
 #### From source
 
-Building takes a few minutes and works on any distribution.
+Install Rust 1.95 or newer and libarchive, optionally OpenCascade (STEP previews) and poppler
+(PDF previews); the package names for each distribution are in the
+[development guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/development.md#building-from-source).
+Then build and install for your user (no root needed), with menu entry, icon and thumbnailer:
 
-1. Install Rust and the libraries:
+```bash
+git clone https://github.com/DonDavis-vibe/MeshGrove.git
+cd MeshGrove
+packaging/install.sh
+```
 
-   | Distribution | Command |
-   |---|---|
-   | Fedora / Nobara | `sudo dnf install rust cargo gcc-c++ libarchive-devel opencascade-devel poppler-utils` |
-   | Debian / Ubuntu | `sudo apt install cargo g++ pkg-config libarchive-dev libxkbcommon-dev libwayland-dev libocct-data-exchange-dev poppler-utils` |
-   | Arch / Manjaro | `sudo pacman -S rust gcc libarchive opencascade poppler` |
-
-   OpenCascade (version 7.5 or newer) is optional. Without it everything works except STEP
-   previews. poppler is optional too and only provides PDF previews. If your distribution's
-   Rust is older than 1.95 (Ubuntu 24.04, Debian 13), install a current one with
-   [rustup](https://rustup.rs).
-
-2. Build and install for your user (no root needed):
-
-   ```bash
-   git clone https://github.com/DonDavis-vibe/MeshGrove.git
-   cd MeshGrove
-   packaging/install.sh
-   ```
-
-   This builds release binaries and puts them in `~/.local/bin`. It also adds the menu entry,
-   the icon, the `model/step` file type and the thumbnailer in `~/.local/share`.
-
-3. Update later with `git pull && packaging/install.sh`. Remove it with
-   `packaging/install.sh --uninstall`. Your settings, index and cache are kept; see
-   [Settings and files on disk](#settings-and-files-on-disk) if you want to delete them too.
+Update with `git pull && packaging/install.sh`, remove with `packaging/install.sh --uninstall`.
 
 ### Windows
 
-1. Download `Meshgrove-<version>-windows-x64-setup.exe` from the
-   [releases](https://github.com/DonDavis-vibe/MeshGrove/releases) and run it. Windows
-   SmartScreen may warn because the program is not signed: choose *More info → Run anyway*.
-2. The installer needs no admin rights: it installs for your user, or for all users if you
-   choose so on its first page. It adds a Start menu entry, optionally a desktop shortcut, and
-   Meshgrove under *Open with* for STL, 3MF, STEP, OBJ, PLY and glTF files. Remove it under *Settings → Apps*.
-3. Optional, for PDF previews: install [poppler](https://github.com/oschwartz10612/poppler-windows)
-   and make sure `pdftoppm.exe` is on your `PATH`.
-
-Prefer not to install? `Meshgrove-<version>-windows-x64-portable.zip` holds the same programs:
-unpack it anywhere and start `meshgrove.exe`.
+Download `Meshgrove-<version>-windows-x64-setup.exe` from the
+[releases](https://github.com/DonDavis-vibe/MeshGrove/releases) and run it. SmartScreen may warn
+because the program is not signed: choose *More info → Run anyway*. The installer needs no admin
+rights (it installs for your user, or for all users if you choose so) and adds a Start menu
+entry and Meshgrove under *Open with* for STL, 3MF, STEP, OBJ, PLY and glTF files; remove it
+under *Settings → Apps*. Prefer not to install? Unpack `…-windows-x64-portable.zip` anywhere and
+start `meshgrove.exe`. For PDF previews, install
+[poppler](https://github.com/oschwartz10612/poppler-windows) with `pdftoppm.exe` on your `PATH`.
 
 ### macOS
 
-1. Download `Meshgrove-<version>-macos-universal.dmg` from the
-   [releases](https://github.com/DonDavis-vibe/MeshGrove/releases). It runs natively on Apple
-   Silicon and Intel Macs with macOS 11 or newer.
-2. Open it and drag **Meshgrove** onto *Applications*.
-3. The app is not notarized. On the first start, right-click it and choose *Open*, or run
-   `xattr -dr com.apple.quarantine /Applications/Meshgrove.app` once.
-4. Optional, for PDF previews: `brew install poppler`.
+Open `Meshgrove-<version>-macos-universal.dmg` and drag **Meshgrove** onto *Applications*. The
+app is not notarized: on the first start, right-click it and choose *Open*, or run
+`xattr -dr com.apple.quarantine /Applications/Meshgrove.app` once. For PDF previews:
+`brew install poppler`.
 
 ## Getting started
 
@@ -294,8 +164,8 @@ unpack it anywhere and start `meshgrove.exe`.
    double-click folders. Previews appear within moments: visible tiles first, the rest in the
    background.
 2. **Add your model folders to the library.** Click *➕ Add this folder to the library* in the
-   sidebar (or use *Settings → Library folders*). Library folders are indexed, so you can
-   search them, tag files, write notes and find duplicates. The first indexing of a big
+   sidebar (or use *Settings → Library → Library folders*). Library folders are indexed, so you
+   can search them, tag files, write notes and find duplicates. The first indexing of a big
    collection runs in the background; the status bar shows the progress.
 3. **Look at a model.** Click a tile to see it in the 3D viewer on the right, with its
    dimensions, triangle count and whether it fits your printer. Point at a tile to make the
@@ -305,1002 +175,16 @@ unpack it anywhere and start `meshgrove.exe`.
 5. **Keep track.** Ctrl+D makes a model a favourite. Right-click → *Add to list* puts it on a
    print list or a collection, and *Log as printed* remembers that you printed it.
 
-## User guide
-
-### Browsing the gallery
-
-- **Navigate** with double-click (folders and archives open, models open in a window of their
-  own or as set in *Settings → Double-click on a model*, other files in their default app), the breadcrumb, the sidebar, or the keyboard: arrow keys move the selection, Enter
-  opens, Backspace or Alt+↑ goes up, Alt+← / Alt+→ or the mouse buttons 4 / 5 go back and forward.
-- **Tile size:** Ctrl + mouse wheel, Ctrl + `+` / `-`, or the slider in the status bar or the
-  *View* menu. The tiles grow smoothly, and the one under the pointer stays where it is.
-- **View menu:** tiles or list (also the two buttons next to the size slider, or Ctrl+1 and
-  Ctrl+2); sort by name, modified date, size or type (ascending or descending); *Models and
-  G-code only* hides everything else (folders stay so you can navigate); *Include subfolders*
-  lists every file below the current folder in one grid, each with its folder name under it;
-  *Print state* shows everything, only what is not printed yet, what was printed or what failed
-  last time.
-- **List view:** the same files as a table with a small preview, name, type, size, dimensions,
-  modification date, tags, ★ and print state, plus the folder in search results, lists and
-  *Include subfolders*. Click a column title to sort by it (again for the other direction),
-  drag the borders between the titles to make columns wider, and right-click a title to show or
-  hide columns. The row height follows the size slider, until you drag the preview column wider:
-  then the previews (and the rows) take that size, until the slider is used again. The previews
-  do all a tile does: folders fade through their pictures, resting the pointer on a model spins
-  it, dragging turns it by hand, and the wheel zooms it while a button is held. Selecting, the
-  keyboard, the context menu and double-click work as in the grid.
-- **Filter the folder:** type into the search field (Ctrl+F) with the 📁 scope selected to
-  narrow the current folder by name.
-- **Select several files:** Ctrl+click toggles, Shift+click selects a range, Ctrl+A selects
-  everything shown. Actions in the context menu (right-click) apply to the whole selection.
-- **Hover turntable:** point at a model tile and it turns slowly around its own axis. Hold the
-  left mouse button and drag to turn it by hand; turn the mouse wheel while holding the button
-  to zoom into the tile.
-- **Badges on tiles:** the file type at the bottom left; `2×`, `3×` … at the top right when the
-  library holds duplicates of this file, and the file's tags below it (as pills or dots); at the
-  bottom right the print bed check (↻ angle or ✕), ★ for favourites and the print state (✓2
-  printed twice, ✗ last print failed, on a print list the copies done of those needed); `⚠ 🖨`
-  on G-code sliced for another printer. *Settings → Tiles* shows a sample tile: drag its badges
-  into other corners or out of sight, and choose how tags, filaments, the check and the name look.
-- **Panes:** drag a pane's header to move it; drop it on the edge of another pane to split
-  that, or on another header to stack both as tabs. The dividers between panes resize them.
-  *Settings → Panes* can lock them, so they can only be resized, and resets the layout.
-- **Large preview:** Space shows the selected model large over the window, at first nothing but
-  the model. ☰ in its top right corner adds the file name, the viewer's tools and the hints
-  (Meshgrove remembers the choice). Space, Esc or a click outside closes it.
-  *Settings → Large preview and model windows* sets the picture quality: *High* renders at
-  twice the resolution for smooth edges, *Studio* adds glossy studio lighting.
-- **Double-click on a model** opens its model window. *Settings → Double-click on a model* can
-  make it show the large preview, open the model in the slicer or the mesh editor, or open it
-  with the system's default application instead (Enter does the same). Models that program
-  does not open still get a model window.
-- **Folder previews from disk:** folder tiles outside the library can show models from their
-  subfolders too (*Settings → Tiles → Folder previews*, off by default, up to five levels
-  deep). With more than four models the pictures slowly fade through them.
-
-### The 3D viewer and its tools
-
-The right panel shows the selected model in 3D. **Double-click a model** (or press Enter) to
-open it in a window of its own: it can be made as large as the screen, several models can be
-open side by side, each with its own camera, and the window has the same tools, the model's
-facts and buttons to open it in the slicer or the mesh editor. Esc or the close button closes it.
-
-| Action | Mouse |
-|---|---|
-| Turn | Drag with the left button |
-| Move (pan) | Drag with the right or middle button |
-| Zoom | Mouse wheel |
-| Reset the view | Double-click |
-
-The camera always turns around the centre of the model at a fixed distance, so the model never
-jumps or zooms while you turn it.
-
-The buttons above the view:
-
-- **🎥 View** — jump to a standard view: angled (default), front, back, left, right, top,
-  bottom.
-- **📏 Measure** — click a point on the model, then a second one. Meshgrove shows the
-  distance in millimetres and the difference along X, Y and Z (for example `47.2 mm (ΔX 3.1 ·
-  ΔY 5.4 · ΔZ 46.8)`). A third click starts a new measurement. Click *Measure* again to leave
-  the mode. Points snap to the real surface; the model is loaded into memory once for this.
-- **📷 Picture** — saves exactly what you see as a 2048-pixel PNG with a transparent
-  background in `Pictures/Meshgrove` (on Linux `~/Bilder/Meshgrove` or `~/Pictures/Meshgrove`,
-  depending on your language). This is useful for documentation, sales listings or chats.
-
-**Multi-plate 3MF projects** (Bambu Studio, OrcaSlicer, Anycubic Slicer Next) show the
-pictures of all plates below the facts. Click a plate picture to show that plate in the
-viewer.
-
-**Multi-colour 3MF projects** show their colours in the viewer, the hover turntable and the
-previews Meshgrove renders itself:
-
-- each object and part in the colour of the filament the slicer assigned to it (Bambu Studio,
-  OrcaSlicer, Anycubic Slicer Next, PrusaSlicer)
-- painted models: multi-material painting (`paint_color` / `mmu_segmentation`) is decoded
-  into the painted areas
-- plain 3MF files with standard material colours (`basematerials`, `colorgroup`), as CAD
-  programs write them
-- modifiers, negative volumes and support blockers are not drawn, just as they are not printed
-
-Tiles of slicer projects show a dot per filament colour, and the details list the filaments
-with their slot number and material.
-
-### The details panel
-
-The *Info* pane (below the viewer unless you move it) shows:
-
-- type, file size and modification date
-- **dimensions** in mm (X × Y × Z) and the **triangle** count
-- which of your **printers** it fits on (see [Printers and the bed check](#printers-and-the-bed-check))
-- the **printability check** (see [Printability check](#printability-check))
-- for 3MF: title, designer, the application that wrote it, the **filaments** (colour, slot and
-  material) and whether the preview comes from the slicer's embedded picture
-- for G-code: slicer, printer, print time, filament, layers, nozzle and cost (see
-  [G-code files](#g-code-files))
-- buttons to open the model in the slicer or the mesh editor
-- the **lists** the file is on and its ★ (click a list to show it), the **print log** with
-  *Printed* / *Failed* / *Undo*, and on a shown print list the copies with − and +
-- **tags** and the **note** (for files in the library)
-- the full path
-
-With several files selected, the panel shows how many and their total size. Tags and the note
-then apply to all of them.
-
-### Library, search and filters
-
-**Library folders** are the folders Meshgrove indexes. Add as many as you like (sidebar or
-*Settings → Library folders*). The index stores names, sizes, dates, dimensions, triangle
-counts, content fingerprints, tags and notes. It is kept current automatically: changes are
-noticed through the operating system's file notifications, and a quick check runs in regular
-intervals as a safety net.
-
-**Library search:** select the 📚 scope next to the search field (or press Ctrl+Shift+F) and
-type. Results come from all library folders at once.
-
-| You type | Finds |
-|---|---|
-| `dragon` | files whose name, folder path or note contains "dragon" (case-insensitive) |
-| `castle tower` | files containing both words, anywhere |
-| `"castle tower"` | the exact phrase |
-| `ext:3mf` (also `type:` / `typ:`) | only 3MF files; works with `stl`, `step`, `obj`, `ply`, `glb`, `zip`, `pdf`, `png` … |
-| `tag:painted` | only files with that tag |
-| `tag:"to print"` | tags with spaces |
-| `is:fav` | favourites (also `is:favourite`, `is:favorit`) |
-| `is:printed`, `is:unprinted`, `is:failed` | printed at least once, never printed (models and G-code only), newest print failed |
-| `passt:"Kobra S1"` (also `fits:`) | fits on that printer (G-code: sliced for it) |
-| `is:zugross` (also `is:toobig`), `is:problem` | fits on none of your printers; possible printing problems |
-| `is:neu` (also `is:new`), `is:ohne-tags` (also `is:untagged`) | waiting in the inbox; models and G-code without tags |
-| `list:market` (also `liste:`) | files on the list "market" |
-| `dragon ext:stl tag:painted` | all conditions combined |
-
-Right-click a search result → *Show in folder* jumps to the folder containing it. *✕ Close
-search* (or Esc in the field) returns to the folder.
-
-The sidebar's **TAGS** section lists every tag with its count, grouped into themes, print
-properties, state and your own. Click one to search for it; Ctrl+click adds it to the tags
-searched for, or takes it out again. *Save as collection* in the search bar keeps a search as
-a collection that stays current.
-
-**Rescan folder:** the index normally follows every change by itself. If something was missed,
-for example files copied while Meshgrove was closed onto a drive that another system changed,
-right-click a library folder in the sidebar or its tile → *Rescan folder*. Meshgrove reads that
-folder and everything below it again and says what changed; only changed files are hashed
-again. F5 re-reads the current folder.
-
-### Tags and notes
-
-- **Add a tag:** select one or more files in the library, type into *Add tag …* in the details
-  panel and press Enter, or click one of the suggested existing tags. The ▾ button next to the
-  field offers ready-made tags: themes (household, garden, workshop, kids' room, tabletop,
-  cosplay …), print properties (multicolour, print-in-place, no supports, magnets …) and state
-  (own design, remix, tested, needs tweaking …). Right-click → *Edit tags …* jumps straight
-  into the field.
-- **Colours:** every tag gets a colour of its own, the same everywhere. Right-click a tag in the
-  sidebar to choose another one. *Settings → Tags* turns colours off; *Settings → Tiles* chooses
-  whether tiles show tags as names or as coloured dots, and how many.
-- **Remove a tag:** click the tag chip (`painted ✕`). With several files selected, chips show
-  how many of them carry the tag (`painted (2/5)`).
-- **Notes:** write anything into the *Note* field: print settings, colours, what went wrong
-  last time. It is saved automatically a moment after you stop typing. With several files
-  selected, the note is written to all of them. If they had different notes, the field says
-  so and your text replaces them.
-- **They follow the content:** tags and notes are attached to a fingerprint of the file's
-  content (BLAKE3), not to its path. Rename or move a file, even into another library folder,
-  and its tags and note come along. Identical copies share them.
-
-### Favourites, collections and print lists
-
-The sidebar's **LISTS** section holds three kinds of lists. All of them hold files of the
-library and, like tags, follow the file's content, so moving or renaming a file keeps it on its
-lists.
-
-- **★ Favourites:** Ctrl+D, the ☆ *Favourite* chip in the *Info* pane or the context menu mark
-  the selection; a gold ★ on the tile shows it.
-- **🕘 Last prints:** the models you last sent to the slicer, newest first (10 by default; how
-  many in *Settings → Programs*).
-- **Collections** (📁) gather files from any folders, for a project or a theme. A collection can
-  also be a saved search: search the library (for example `tag:garden ext:3mf`) and click *Save as
-  collection* above the results. It then always shows the current results.
-- **Print lists** (🖨) are for what you want to print, say for a market stall or a gift. Each file
-  on it has a number of copies (− and + in the *Info* pane while the list is shown). Logging a
-  print while the list is shown counts a copy as done; tiles show `1/3`, turning green when all
-  copies are done, and finished files sink to the end. The sidebar shows how many are still open.
-
-Create a list with *+ New list …*, or right-click files → *Add to list* → type a new name. The
-context menu also takes files off the shown list. Right-click a list in the sidebar to rename or
-delete it (the files stay where they are), or for print lists:
-
-- **✓ Finish the list:** it moves to the collapsed *Finished* section below, where *Open again*
-  brings it back. The print log stays.
-- **Export as PDF checklist:** an A4 page with a picture of each model, its folder, size and
-  filament colours, and a box per copy to tick by hand (copies already done are ticked). It is
-  saved in your Documents folder and opened right away, ready to print.
-- **Export as CSV:** the same as a table for spreadsheets (with `;` as separator in German).
-
-### The print log
-
-*✓ Log as printed* and *✗ Log as failed* (context menu, the *Printing* row in the *Info* pane,
-or the buttons in a model window) record a print with its date. The *Info* pane then says
-*Printed 2×, last on 12.10.2026* or *Last print failed*, and *↶ Undo* takes back the newest
-entry. Tiles show `✓2` in green or a red `✗`. *View → Print state* shows only what is not
-printed yet, what was printed, or what failed last time; the search knows `is:printed`,
-`is:unprinted` and `is:failed`. Models and G-code have a print state; other files do not.
-
-### G-code files
-
-G-code files (`.gcode`, `.gco`, `.g`) get a preview like models:
-
-- **The slicer's own picture** when the file contains one (PrusaSlicer, OrcaSlicer, Bambu Studio,
-  Anycubic Slicer Next, Cura with a thumbnail plugin; PNG, JPG and QOI). The largest one is used.
-- **Otherwise the toolpaths**, drawn from above at an angle in the filament colour and shaded by
-  height. The purge line of the start code is left out. Even a 50 MB file takes well under a
-  second.
-
-The *Info* pane lists what the slicer wrote into the file: slicer and version, the printer, print
-time, filament in grams and metres with material and colour, the number of layers and the layer
-height, nozzle and filament cost (in the currency of your slicer profile). When a file was sliced
-for none of your printers (see [Printers and the bed check](#printers-and-the-bed-check)), the printer is shown in
-orange and the tile gets a small `⚠ 🖨` badge, so a file for the wrong machine does not end up on
-the SD card. G-code counts as printable: it has a print log and passes *Models and G-code only*.
-A double-click opens the file in its default app, usually the slicer's G-code viewer.
-
-### Readmes and text files
-
-Readmes, licences and notes (`.txt`, `.md`, `.markdown`, `.nfo`, and `README`, `LICENSE`,
-`COPYING` without an extension) show the beginning of their first page on the tile. Selected,
-the preview pane shows the whole text: Markdown with headings, lists, tables and links (they
-open in your browser), `.nfo` files in a fixed-width font for their ASCII art, everything else
-as wrapped text. Select a **folder** and the preview pane shows its readme (or else its licence),
-with a button to open it. Model packs from Thingiverse and similar sites usually bring one, with
-the designer, the licence and print tips.
-
-### Printers and the bed check
-
-Meshgrove compares every model's size with the build volume of each of your printers:
-
-- **Fits on all:** nothing on the tile. The info pane says *✔ fits on Anycubic Kobra S1, Bambu
-  Lab A1 mini* (with one printer: *✔ fits on Anycubic Kobra S1*).
-- **Fits only when turned:** an amber ↻ badge with the angle, for example ↻ 41° for a long
-  part that fits only diagonally.
-- **Fits on some:** the info pane lists them, and those it is too big for (*✕ too big for Bambu
-  Lab A1 mini*); hover for by how much.
-- **Fits on none:** a red ✕ badge on the tile.
-
-*Settings → Printer* lists your printers. On the first start Meshgrove takes every printer set
-up in **Anycubic Slicer Next**, **OrcaSlicer**, **Bambu Studio** and **PrusaSlicer**: the
-selected one, your own profiles and the models picked in their setup wizards, following
-profiles that inherit from system profiles. Add more with ＋, edit or remove them, or enter one
-by hand (name, build volume, nozzle, materials). The ● marks the main printer, named first.
-
-G-code shows the printer it was sliced for; a ⚠ appears only when that is none of your
-printers. In the search, `passt:"Kobra S1"` (also `fits:`) finds what fits on that printer and
-G-code sliced for it, `is:zugross` (also `is:toobig`) what fits on none.
-
-### Printability check
-
-Every model (STL, 3MF, OBJ, PLY, glTF) is checked once, while its thumbnail is made or, for
-files already in the cache and very large meshes, in the background while nothing else needs
-the disk:
-
-- **Open edges:** holes in the surface. Slicers repair small ones themselves, but with
-  customer files it pays to look.
-- **Edges shared by more than two faces** and **faces without area.**
-- **Parts:** how many separate pieces the file holds, and the **volume** of a closed surface.
-- **Suspicious sizes:** a model of a few millimetres may be drawn in inches (*very small
-  (3.2 mm) – drawn in inches? That would be 81 mm*); one of metres has the wrong unit.
-- **Unreadable files** are noted as such.
-
-Results show as ⚠ on the tile, with the reasons in its tooltip, and as a *Check* row in the info
-pane (*✔ closed · 1 part · 41.2 cm³*). `is:problem` finds every model with something to look at,
-including those too big for every printer. The check belongs to the file content, so copies
-share it.
-
-### The inbox
-
-Files whose content Meshgrove did not know before come into the **inbox**: the sidebar shows
-*📥 Inbox (n)* once something arrived. What is in a library when it is searched for the first
-time does not count as new, so the inbox starts empty.
-
-The inbox groups the new files by the drop they came with: the topmost new folder, or the
-archive, such as a customer's ZIP or a model pack. Each group says how many files are new, how
-many are copies of models the library already had, since when, and how many have possible
-printing problems. Sort the files (tags, lists), then click *✓ Done* for the group, right-click a
-file for *✓ Done*, or *✓ All done*. Tagging alone does not take a file out of the inbox.
-
-`is:neu` (also `is:new`) finds the files waiting in the inbox, `is:ohne-tags` (also `is:untagged`)
-models and G-code without tags. *Settings → Library → Inbox* switches the inbox off.
-
-### Duplicate finder
-
-Click **Duplicates (n)** in the sidebar. Meshgrove groups:
-
-- **Exact copies:** byte-identical files (same BLAKE3 hash).
-- **Same geometry:** the same model saved differently, such as ASCII vs binary STL, STL vs 3MF,
-  re-exported, moved or rotated. These are detected by a rotation-independent signature of the
-  mesh (triangle count, surface area, volume, moments of inertia).
-
-Groups are sorted by wasted space. The ★ *Keep* badge marks the suggested copy: one outside an
-archive (or inside one, as set under *Settings → Library → Duplicates*), then the oldest, then
-the one with the shortest path; to keep another copy, point at it and click ☆ *Keep*. *Move all but ★ to the trash* cleans up a group after a
-confirmation. Once you have looked through them, tick the groups where the choice is right (or
-*All suggestions are fine*) and *Clean up selected* clears them all with one confirmation.
-Copies you want to keep as they are get *Ignore*: the group is no longer listed, counted in the
-sidebar or badged on its tiles; *Show ignored* lists such groups again, with *Watch again* to
-undo it. What is ignored is kept with your tags and notes (and in the user-data export).
-While a cleanup runs, a bar on top says how many files are through, and each group or archive
-whose copies are going is tinted green from the left as far as it got, its buttons resting.
-Tiles everywhere in the gallery show a `2×` / `3×` badge for files that have duplicates.
-
-**Packed and extracted.** A model pack that lies in the library both as the ZIP and extracted
-gives one group per model, and a member of an archive cannot be trashed by itself. The setting
-*A model both packed and extracted: keep the extracted copy | the packed copy* decides which side
-★ suggests, so *All suggestions are fine* → *Clean up selected* settles them all at once. Above
-the groups, *Archives with extracted copies* lists each such archive with how many of its models
-are extracted and where the copies lie, and settles it with one click: keep the archive and trash
-its extracted copies, or keep the copies and trash the archive, the latter only once every model
-in it is extracted (the button says how many would be lost otherwise). Two buttons above the rows
-do the same for all archives at once. The groups that belong to these archives are settled there
-and are folded away among the groups (*Show them below* lists them); a locked group names the
-archive it belongs to and points to that row. *Archives that hold the same models* lists pairs of
-archives of which one holds nothing the other does not (a pack that is in the library twice):
-that one can go to the trash as a whole, which settles groups whose copies are both inside
-archives. Config: `duplicates_keep = "extracted" | "packed"`.
-
-### AI assistant and MCP (optional)
-
-Meshgrove brings **no AI of its own** and is off by default. If you use an AI assistant that
-speaks the [Model Context Protocol](https://modelcontextprotocol.io) – Claude Desktop, Claude
-Code, LM Studio, Cursor, VS Code and others – it can work with your library: search it ("all
-garden models under 2 hours that fit on the A1 mini"), look at new customer files, and suggest
-tags, notes or print lists. **Nothing changes until you accept it in Meshgrove**, and accepted
-changes can be undone.
-
-**Set up:**
-
-1. *Settings → AI & MCP:* tick *Switch AI features on*.
-2. *What AI may see:* for each library choose *no AI*, *local AI only* or *cloud AI too*, and
-   whether thumbnails may be sent. New libraries start hidden. Pick *local AI only* for
-   customer files when your assistant uses a model on your computer or network (LM Studio,
-   Ollama) – that assistant is set up with `--local`.
-3. *Make Meshgrove available to the AI apps on this computer* (on by default): Meshgrove adds
-   itself to the assistants it finds – Claude Desktop, Claude Code, LM Studio, Cursor, VS Code,
-   Codex, Gemini CLI, Copilot CLI, Windsurf, Zed, OpenCode – and lists them there. Only its own
-   entry changes; each file is kept as `.bak` first. Restart the assistant. Any other assistant:
-   *Set up by hand* gives the entry to copy.
-
-The assistant starts `meshgrove-mcp` itself; Meshgrove need not be running. It sees only the
-libraries you opened to it, gets ids like `Garten/Rankhilfe/rose.stl` instead of your folder
-paths (the full path only when it asks about one file, to hand it to a slicer or a printer
-server), and never the model files themselves. Ready-made tasks come with it: *eingang-
-einordnen* (sort the inbox), *druckliste-zusammenstellen* (put together a print list) and
-*tags-aufraeumen* (clean up tags) and *ordner-aufraeumen* (tidy up a folder).
-
-**Review:** suggestions wait in Meshgrove. The ✧ button in the toolbar shows how many; it
-opens the review, where each batch shows what was suggested for which file: tags to add (✓ to
-keep, tags the library does not have yet marked *new*), tags to remove, notes, new lists. Untick a
-file or click a tag to leave it out (the tick at the title covers the whole batch), then *Accept
-selected*, *Accept all* or *Discard*. Everything can be changed on the way: type a tag of your
-own into the *+ own tag* field, rewrite a note (and choose whether it replaces the old one or goes
-below it), type another name or place for a move, rename a list, switch it between print list and
-collection, untick items and set the copies. What you accept is what you see. Accepting a batch for the inbox also takes its files out of
-the inbox. Tags and notes belong to the content, so they also reach identical copies; the review
-says when. *Settings → AI & MCP → Accept suggestions automatically* skips the review for new
-suggestions of AI apps and one-click actions; moves always wait.
-
-**History:** *Review → History* lists what was accepted. *↶ Undo* takes back exactly those
-changes, leaving what you changed by hand since; *↷ Redo* applies them again. *Settings → AI &
-MCP* also shows the **access log** – which assistant looked at what, and when – and *Delete AI
-data* removes all open suggestions, the log and the chat conversations.
-
-**AI chat (your own endpoint, or an agent on your computer):** the chat is answered either by
-an endpoint of your own or by an **AI agent installed on your computer** that speaks the Agent
-Client Protocol – Claude Code (`claude-agent-acp`), Codex, Google Antigravity, Gemini CLI,
-OpenCode, Grok, Copilot CLI, Qwen Code, goose. Meshgrove finds the installed ones by itself
-(*Settings → AI & MCP → Who answers the chat* lists them with their sign-in state, and takes any
-other ACP command you add). Nobody is picked for you: under the message field you choose who
-answers (the choice is kept), *Connect* starts the agent – or the first message does –, and in
-the settings the chat can be set to connect by itself when it opens: the assistant used last, or
-one agent in particular. It reaches the library
-through `meshgrove-mcp`; Meshgrove lets it run Meshgrove's own tools (which read, or suggest for
-the review) and asks you in the chat before anything else it wants to run – a shell command, a
-file, whatever the agent brought. What it suggests shows as cards like the endpoint's. For an endpoint, enter in *Your own
-endpoint* an OpenAI-compatible service you run or use – Ollama, LM Studio, llama.cpp, OpenAI,
-OpenRouter – with a model and, if needed, a key (kept in the system keyring). Under the message
-field you pick who answers and, in a **searchable model picker**, which model: the list comes
-from the agent or the endpoint (OpenRouter's folds under its vendors), and a model that is not
-listed can be typed. Beside it sit the other selectors: the endpoint's **reasoning effort**
-(sent as `reasoning_effort`, also a field in its settings), or whatever session options the agent
-offers (Claude Code: effort; its permission mode is not among them, as Meshgrove decides permissions
-itself and the Review | Automatic switch says what becomes of the suggestions). The **AI chat** pane appears next to *Info*: ask about your library, and type `@` to
-add files, folders, tags, lists, printers, the inbox or a search (`@tag:garden fits:mini`) as
-references. Answers name files as clickable references; what the AI looked up is folded below.
-The **Review | Automatic** switch decides whether its tags, notes and lists go to the review
-first or are applied right away; the ↶ arrow on your message takes back everything changed in
-answer to it. A cloud service sees only the libraries opened to cloud AI, and before the first
-message Meshgrove shows what goes out. Conversations stay on your computer.
-
-**One-click actions** go to whoever answers the chat: *✧ Sort in* in the inbox (per group or
-all) suggests tags, *✧ Suggest tags* in the context menu does it for the selection, and *+ New
-list … → ✧ Or describe* turns "gifts under 2 h for the A1 mini" into a print list (print times
-come from G-code, also from one of the same name next to the model). With an endpoint they need no
-tool calling, so small local models manage them; with an agent such as Claude Code the task
-becomes a message in a conversation of its own and the agent makes the suggestions with
-Meshgrove's tools. The results wait in the review and appear as a card in that conversation to
-ask about. ✧ next to the tag field, which offers tags to click, needs an endpoint. *✧ Mention in chat* puts the selection into
-the message field; *Copy as AI reference* gives `meshgrove:` references for an assistant over MCP.
-
-**Moving and renaming:** the assistant and the chat can suggest moving or renaming files,
-archives or folders within their library, and with *Settings → AI & MCP → Allow the AI to move
-files between libraries* also into another library you opened to it. That always stays a suggestion, also in automatic
-mode: the review shows old → new and which folders would be made. Accepting moves them on disk
-without ever overwriting anything – a place taken by then is skipped. Tags, notes, lists and
-thumbnails go along, nothing is computed again. The history takes it back as long as the files
-are unchanged; folders made for it go again when empty. Files inside archives stay where they are.
-
-**Deleting:** the assistant and the chat can also suggest putting files, archives or folders into
-the trash (`propose_delete`). That always waits for the review, also in automatic mode, and
-accepting it moves them into the system's trash, from where they can be brought back; the history
-cannot. Nothing inside an archive and never a library itself.
-
-**Archives:** `list_archive` tells the assistant what an archive holds (members with their ids,
-and whether it can be written), and `propose_archive` suggests unpacking an archive beside itself,
-packing files into a new ZIP, or adding files to a ZIP (7z, RAR and TAR are only unpacked). That
-always waits for the review, also in automatic mode; nothing is ever replaced, and the history
-takes it back.
-
-**Questions back:** when a request is ambiguous, the assistant can ask you (`ask_user`): its
-questions appear in the chat with radio buttons for one answer, checkboxes for several, and a
-field for an answer in your own words; the assistant waits for the answer (a quarter of an hour at
-most) and carries on with it. *Don't answer* or stopping the answer lets it go on without one. An
-assistant that asks over MCP (Claude Desktop, Cursor …) gets a window of its own in Meshgrove,
-naming who asks.
-
-On the command line, `meshgrove-mcp setup` does the same (`--dry-run` shows it first,
-`--client NAME` picks one), `meshgrove-mcp remove` takes the entries out again, and
-`meshgrove-mcp --print-config claude-desktop` (or `claude-code`, `lm-studio`, `cursor`, `vscode`,
-with `--local` if needed) prints one. With the AppImage the command is `Meshgrove.AppImage mcp`.
-
-### Plugins (optional)
-
-Plugins add tools to Meshgrove, for example Bingrove, a generator for Gridfinity drawer inserts,
-and Texgrove, which puts textures onto models as real geometry. A plugin is one `.wasm` file for
-every system and runs sealed off. It may do nothing until you allow it in *Settings → Plugins*,
-and what it makes comes in as one change you can undo.
-Installing, granting and writing plugins: [docs/plugins.md](docs/plugins.md).
-
-### Working with your slicer and other apps
-
-- **Open in slicer** (context menu, or the button below the facts in the *Info* pane and in a
-  model window, next to the print bed check):
-  opens the selected models, several at once if you like (STL, 3MF, STEP and OBJ; the slicers
-  do not open PLY and glTF). Files inside archives are extracted to a cache folder first.
-  Meshgrove finds these slicers automatically:
-
-  | System | Detected |
-  |---|---|
-  | Linux | Anycubic Slicer Next (in `~/opt/AnycubicSlicer`), OrcaSlicer, PrusaSlicer (system package or Flatpak), Bambu Studio (Flatpak) |
-  | Windows | Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer in *Program Files* or the per-user *Programs* folder |
-  | macOS | Anycubic Slicer Next, OrcaSlicer, Bambu Studio, PrusaSlicer in */Applications* or *~/Applications* |
-
-  **If the slicer is already open**, the files go into that window instead of a new one:
-  Meshgrove hands them to Anycubic Slicer Next and OrcaSlicer over D-Bus on Linux, and starts
-  PrusaSlicer in its single-instance mode. Only when no window is open does a new one start.
-  The status bar says which happened. (On macOS the system passes files to a running app
-  anyway; on Windows a new window opens for now.)
-
-  Any other slicer (Cura, Simplify3D, ElegooSlicer, …) can be set in *Settings → Slicer*:
-  give it a name, the program and optionally a working folder.
-- **Open in the mesh editor** (context menu, or the button next to *Open in slicer*): opens the
-  selected models in a mesh editor or CAD program to repair or change them. Meshgrove finds
-  these automatically:
-
-  | System | Detected |
-  |---|---|
-  | Linux | FreeCAD, Blender, MeshLab (system package, Snap or Flatpak) |
-  | Windows | Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer |
-  | macOS | Autodesk Fusion, FreeCAD, Blender, MeshLab, Meshmixer in */Applications* or *~/Applications* |
-
-  Blender only opens its own files, so Meshgrove starts it with a short import script: an
-  empty scene in millimetres with the models (STL, OBJ, PLY, glTF) in it. FreeCAD and the
-  others get the files directly. Any other program can be set in *Settings → Mesh editor*.
-- **Copy (Ctrl+C):** puts the selected files on the clipboard as real files. Paste them into
-  Dolphin, Explorer or Finder, into many slicers, or into a chat. Archive members are
-  extracted first. *Copy path* puts the paths as text instead.
-- **Paste (Ctrl+V):** copies the files on the clipboard – from Meshgrove, the file manager or
-  as paths – into the folder shown, or by right-click into a folder tile. Nothing is replaced
-  (a taken name gets a number), the copies keep their tags and notes, and the history undoes
-  it.
-- **Cut (Ctrl+X):** marks the selection (the tiles fade) and puts it on the clipboard; the
-  next paste moves the files instead – within the library with tags, notes and previews along,
-  undoable in the history. File managers that know the cut marker (Dolphin, Nautilus) move
-  them too, and what they cut is moved when pasted here.
-- **Show in file manager:** opens Dolphin/Nautilus, Explorer or Finder with the files selected.
-- **Open with default app** (context menu): opens a model in the system's default application,
-  for example the slicer registered for STL files; other files open there with a double-click.
-
-### Archives (ZIP, 7z, RAR, TAR)
-
-Double-click an archive to browse it like a folder, level by level: the folders inside it open
-like folders on disk, with their own mosaic tiles, and *Include subfolders* shows everything below
-the level you are at. Every model, image and PDF inside gets a preview. The archive's tile shows a
-mosaic of its contents, inside the library (from the index) and outside it (read from the archive),
-in a downloads folder or the import view alike. Archives in the library are indexed like folders,
-so the library search, tags, notes and the duplicate finder include their contents. Solid 7z/RAR
-archives are unpacked once per visit, not once per file.
-
-**Changing archives.** Right-click → *Unpack* puts an archive's contents into a new folder named
-after it, beside it (the archive stays; a taken name gets a number). *Pack as ZIP* makes a new ZIP
-of the selected files and folders in their folder, under the name you type. *Add to archive* lists
-the ZIPs in the same folder to add the selection to, and Ctrl+V while a ZIP (or a folder inside
-it) is open adds the copied files there – cut files are not moved into an archive. Only ZIP
-archives are written; 7z, RAR and TAR can be unpacked but not changed. Nothing is ever replaced:
-a member of the same name stops the whole addition, and a new ZIP never overwrites a file. Each
-operation is one entry in the history, which takes it back as long as the ZIP (or the unpacked
-files) are unchanged since. The library lists the folder right away, so the new files and members
-get their previews and land in the inbox.
-
-### Moving files to the trash
-
-Delete or right-click → *Move to trash* moves the selected files to the system trash (the
-freedesktop trash on Linux, the Recycle Bin on Windows, the Trash on macOS) after a
-confirmation. You can restore them from there. Deleting is not possible for files inside
-archives, and on Linux Meshgrove detects read-only mounts (such as an NTFS drive mounted
-read-only) and disables the action with an explanation.
-
-### Backups, export and import
-
-- **Automatic backups:** once a day (when something changed) Meshgrove writes all tags, notes,
-  lists, the print log and tag colours to `user-data-YYYY-MM-DD.json` in the backup folder and
-  keeps the newest seven.
-  *Settings → Back up tags, notes & lists → Open folder* shows them.
-- **Export:** writes all of that to `meshgrove-tags-notes-YYYY-MM-DD.json` in your Documents
-  folder. The file is readable JSON and lists, for each fingerprint, the paths where those files
-  were.
-- **Import:** reads such a file (or a backup) and merges it: tags are added, notes are taken
-  over for files that have none, lists are merged by name and prints are added once. Nothing is
-  deleted. Because everything is keyed by content, an import also works after you reorganised
-  your folders or moved to another computer. Exports from older versions (tags and notes only)
-  import as well.
-
-### Thumbnails in Dolphin and file dialogs (Linux)
-
-The .deb and .rpm packages and `install.sh` register a freedesktop thumbnailer, so Dolphin,
-the KDE and GTK file dialogs and other file managers show the same previews for STL, 3MF,
-STEP, OBJ, PLY, glTF and G-code files. In
-Dolphin, enable them once: *Settings → Configure Dolphin → Interface → Previews*. Tick the
-3D-model entries if they are listed, and raise *Skip previews for local files above* for big
-models. Then reopen the folder. The thumbnailer shares Meshgrove's cache, so files you have
-already seen in the app show up instantly.
-
-## Keyboard and mouse reference
-
-Ctrl means ⌘ Cmd on macOS.
-
-| Keys | Action |
-|---|---|
-| ← → ↑ ↓, Home, End | Move the selection |
-| Enter | Open the selected folder or archive; a model in its own window (or as set for double-click); other files in their default app |
-| Esc (in a model window) | Close the window |
-| Backspace, Alt+↑ | Parent folder |
-| Alt+←, Alt+→, mouse buttons 4 / 5 | Back, forward |
-| Space | Large preview of the selected model (Esc or Space closes it; ☰ shows its tools) |
-| F5 | Reload the folder and read it into the index again |
-| Ctrl+D | Favourite on or off |
-| Ctrl+1, Ctrl+2 | Tiles, list |
-| Ctrl+A | Select all shown files |
-| Ctrl+click, Shift+click | Toggle a file, select a range |
-| Ctrl+C | Copy the selected files to the clipboard |
-| Ctrl+V | Paste the files on the clipboard into the folder shown |
-| Ctrl+X | Cut the selection: the next paste moves it |
-| Delete | Move the selection to the trash (with confirmation) |
-| Ctrl+F | Filter the current folder |
-| Ctrl+Shift+F | Search the whole library |
-| Esc (in the search field) | Clear the search |
-| Ctrl + `+` / `-`, Ctrl + wheel | Tile size (row height in the list) |
-| Ctrl+, | Settings |
-| **Mouse on a model tile** | Hover: spin · drag: turn · wheel while dragging: zoom |
-| **Mouse on a pane header** | Drag: move the pane (not when locked in the settings) |
-| **Mouse in the 3D viewer** | Left drag: turn · right/middle drag: pan · wheel: zoom · double-click: reset |
-
-## Supported file types
-
-| Type | Extensions | Preview | 3D viewer | Notes |
-|---|---|---|---|---|
-| STL | `.stl` | ✔ | ✔ | Binary and ASCII; binary files that start with "solid" are recognised correctly |
-| 3MF | `.3mf` | ✔ | ✔ | Embedded slicer picture first (blank plates are skipped), otherwise rendered; components, transforms, units, Production extension (`p:path`), multiple build plates, filament, paint and material colours |
-| STEP | `.step`, `.stp` | ✔ | ✔ | Needs the OpenCascade helper `meshgrove-step-mesher`; tessellated once, then cached |
-| OBJ | `.obj` | ✔ | ✔ | Colours from the `.mtl` next to it (diffuse colour or texture) and vertex colours; read as millimetres like the slicers do |
-| PLY | `.ply` | ✔ | ✔ | ASCII and binary; vertex and face colours (scans, MeshLab); point clouds without faces are not shown |
-| glTF | `.glb`, `.gltf` | ✔ | ✔ | All meshes of the scene with base colours, vertex colours and textures; external buffers and textures are read from next to the file. glTF counts in **metres**, so a model 1 unit wide shows as 1000 mm; for models meant in millimetres (AI generators, many exports) choose *Settings → 3D models → Millimetres* |
-| Archives | `.zip`, `.7z`, `.rar`, `.tar`, `.tar.gz`, `.tgz`, … | Mosaic | Members | Browsed like folders through libarchive |
-| G-code | `.gcode`, `.gco`, `.g` | ✔ | – | The picture the slicer embedded (PNG, JPG, QOI), otherwise the toolpaths; print facts from the comments (OrcaSlicer, Anycubic, Bambu Studio, PrusaSlicer, Cura). Binary G-code (`.bgcode`) is not read yet |
-| Images | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | ✔ | – | Shown large in the preview pane |
-| PDF | `.pdf` | First page | – | Needs `pdftoppm` from poppler |
-| Text | `.txt`, `.md`, `.markdown`, `.nfo`, `README`, `LICENSE`, `COPYING` | First page | – | Shown in full in the preview pane, Markdown formatted; UTF-8, UTF-16 and Latin-1 |
-| Everything else | | File icon | – | Shown with its extension so the folder view is complete |
-
-## Settings and files on disk
-
-Everything can be changed in the settings window (⚙ at the top right, or Ctrl+,), sorted into
-categories on the left: *General* (language, what a double-click on a model does, the panes),
-*Library* (library folders, the inbox), *Tags* (colours, the tag list, suggested tags), *Tiles*
-(which badges show where on a sample tile, tags as names or dots, file names, tile size, folder
-previews), *3D view* (picture quality of the large preview and the model windows, the
-unit of glTF models), *Programs* (slicer and mesh editor), *Printer* (your printers), *AI & MCP*
-(optional assistant, what it may see, access log), *Data and storage* (backups, and the
-preview cache with its size and a *Clear cache* button) and *About Meshgrove*, which lists the
-exact paths on your system.
-
-| What | Linux | Windows | macOS |
-|---|---|---|---|
-| Settings (`config.toml`) and pane layout (`layout.json`) | `~/.config/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
-| Library index (`library.db`) and `backups/` | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
-| AI suggestions and access log (`proposals.db`, only once an assistant was used) | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
-| Cache: previews, STEP meshes, extracted archive files, the log (`meshgrove.log`) | `~/.cache/meshgrove/` | `%LOCALAPPDATA%\meshgrove\` | `~/Library/Caches/meshgrove/` |
-| Exported pictures | `~/Pictures/Meshgrove` (localised, e.g. `~/Bilder`) | `Pictures\Meshgrove` | `~/Pictures/Meshgrove` |
-| Exported print lists (PDF, CSV), tags and notes | Documents folder | Documents folder | Documents folder |
-
-The cache can always be deleted; it is rebuilt when needed. The index can be deleted too, but
-**tags, notes, lists and the print log live in it**, so export them first or keep the backups.
-
-`config.toml` is plain text. The settings window covers everything, but for reference:
-
-```toml
-library_roots = ["/home/me/3D-Models", "/mnt/nas/prints"]
-last_folder = "/home/me/3D-Models/minis"
-tile_size = 160.0          # 96 … 384
-only_models = false
-sort_by = "name"           # name | modified | size | type
-sort_descending = false
-language = "en"            # "de", "en"; leave out to follow the system
-lock_panes = false         # true: panes can only be resized, not moved
-double_click = "window"    # window | preview | slicer | editor | default_app
-duplicates_keep = "extracted"  # a model both packed and extracted: extracted | packed
-preview_quality = "high"   # large preview and model windows: standard | high | studio
-preview_controls = false   # large preview: show name, tools and hints
-gallery_view = "grid"      # grid | list
-print_filter = "all"       # all | unprinted | printed | failed
-colored_tags = true        # tags in colours (otherwise grey)
-tile_tags = "names"        # names | dots
-tile_tag_count = 3         # 1 … 8
-
-[tile_layout]              # badges on the tiles, each list from its corner inwards
-top_left = ["filaments"]
-top_right = ["duplicates", "tags"]
-bottom_left = ["file_type"]
-bottom_right = ["check", "favorite", "print_state"]
-hidden = []
-filaments = "dots"         # dots | stripe
-check = "text"             # text | symbol
-name_lines = 2             # 0 … 2
-name_extension = true
-
-[list_columns]
-hidden = ["type"]          # preview, folder, type, size, dimensions, modified, tags, favorite, print
-widths = { name = 320.0 }  # columns you made wider or narrower
-
-[folder_previews]
-enabled = false            # models from subfolders on folder tiles
-depth = 2                  # 1 … 5 levels
-cycle = true               # fade through more than four
-
-[slicer]                   # leave out to detect automatically
-name = "My Slicer"
-program = "/opt/myslicer/bin/myslicer"
-args = []                  # put before the file names
-env = [["LD_LIBRARY_PATH", "/opt/myslicer/lib"]]
-workdir = "/opt/myslicer"
-
-[editor]                   # mesh editor; leave out to detect automatically
-name = "FreeCAD"
-program = "/usr/bin/freecad"
-
-inbox = true               # collect new files in the inbox
-
-[[printers]]               # leave all out to take them from the slicers
-name = "Anycubic Kobra S1"
-x = 250.0
-y = 250.0
-z = 250.0
-nozzle = 0.4
-materials = ["PLA", "PETG"]
-
-[ai]                       # optional assistant over MCP
-enabled = false
-
-chat_mode = "review"       # review | auto: changes from the chat reviewed first, or applied at once
-cross_library_moves = false  # the AI may suggest moves into another library it may see
-assistant = "claude"       # who answers the chat: "endpoint", or an agent's id (claude, codex, antigravity,
-                           # gemini, opencode, grok, copilot, qwen, goose, or one of ai.agents)
-auto_connect = "last"  # when the chat opens: "" waits for Connect, "last" connects the assistant used last, an agent id picks and connects that one
-agent_models = { claude = "claude-opus-5-5" }  # the model picked per agent
-[ai.agent_options.claude]  # its other session options, as picked (reasoning effort, mode …)
-effort = "high"
-
-[[ai.agents]]              # an ACP agent added by its command
-id = "agent-1"
-name = "My agent"
-command = "my-agent --acp"
-local = false              # its model runs here or on your own network
-
-[[ai.libraries]]
-root = "/home/me/3D-Models"
-access = "cloud"           # none | local_only | cloud
-images = true              # thumbnails may be sent
-
-[ai.endpoint]              # your own endpoint for the AI chat and one-click actions
-base_url = "http://localhost:11434/v1"
-model = "qwen3:8b"
-local = true               # runs here or on your own network
-vision = false             # the model understands pictures
-tools = true               # the model can use tools
-reasoning_effort = "high"  # sent as reasoning_effort; empty: the service's default
-```
-
-Environment variables for special cases:
-
-| Variable | Effect |
-|---|---|
-| `WGPU_BACKEND=gl` (or `vulkan`, `dx12`, `metal`) | Choose the graphics backend, e.g. if the window stays black |
-| `RUST_LOG=meshgrove=debug` | More log output (on the terminal and in `meshgrove.log`) |
-| `MESHGROVE_STEP_MESHER=/path/to/meshgrove-step-mesher` | Use a specific STEP helper |
-
-Meshgrove was called *STL-Browser* during development. On the first start it moves the
-folders of that name (`~/.config/stl-browser` …) to the new ones, and it imports exports
-made under the old name.
-
-## Privacy and safety
-
-- **Offline.** Meshgrove makes no network connections: no telemetry, no update checks, no
-  accounts.
-- **AI only if you want it.** The optional MCP server runs on your computer and talks to your
-  assistant over a local pipe. What the assistant sends on to its model provider is between you
-  and that provider, so choose per library what it may see; customer files can stay with local
-  models. The model files never leave the computer, and AI cannot change anything you did not
-  accept.
-- **Nothing moves without your say-so.** It reads your model files and never modifies them or
-  archives. It writes to its own settings, index and cache folders, and otherwise only when you
-  ask: files to the trash, an import from a downloads folder, a move you accepted, an export of
-  tags and notes or a print list, a saved picture. Every move is in the history and can be
-  undone.
-- **Crash-safe helpers.** STEP tessellation and PDF rendering run as separate processes with
-  timeouts, so a malformed file cannot take the app down. A file that fails gets a ⚠ tile with
-  the reason in its tooltip.
-
-## Performance
-
-Meshgrove is built for collections of thousands of files on ordinary hard drives:
-
-- A single reader thread reads files in folder order, visible tiles first, to avoid seeking.
-  Parsing runs on all cores, and one GPU thread renders the previews.
-- Previews are stored as PNGs in the cache, so a folder you have seen before appears
-  instantly. In a test, 450 previews of a folder tree on a hard drive, never seen before, were
-  ready in 21 seconds (RTX 3070 Ti); from the cache they appear immediately.
-- The library index makes searching thousands of files instant, and only changed folders are
-  re-read when something changes.
-- Models with millions of triangles (for example a 210 MB, 4.2-million-triangle miniature)
-  display and turn smoothly. Normals are computed on the GPU, so no memory is spent on them.
-- The app uses no CPU while idle.
-
-## Platform support
-
-| Feature | Linux | Windows | macOS |
-|---|---|---|---|
-| Gallery, list view, viewer, library, tags, notes, lists, print log, duplicates, bed check | ✔ | ✔ | ✔ |
-| G-code and readme previews, PDF checklists | ✔ | ✔ | ✔ |
-| ZIP / 7z / RAR / TAR | ✔ | ✔ | ✔ |
-| PDF previews | ✔ with poppler | ✔ with poppler | ✔ with poppler |
-| STEP previews | ✔ all packages; source build with OpenCascade | ✔ | ✔ |
-| Copy files to the clipboard | ✔ Wayland (X11: paths as text) | ✔ | ✔ |
-| Paste files from the clipboard | ✔ Wayland (X11: paths as text) | ✔ | ✔ |
-| Show in file manager | ✔ D-Bus (Dolphin, Nautilus, …) | ✔ Explorer | ✔ Finder |
-| Slicer detection | ✔ | ✔ | ✔ |
-| Read-only drive detection | ✔ | – | – |
-| Thumbnails in the system file manager | ✔ freedesktop thumbnailer (.deb, .rpm, `install.sh`) | – | – |
-| Menu entry and icon | ✔ .deb, .rpm, `install.sh` | ✔ installer (Start menu, *Open with*) | ✔ app bundle |
-
-## Troubleshooting and FAQ
-
-**The window stays black or the app does not start.**
-Meshgrove needs Vulkan (Linux, Windows), Metal (macOS) or DirectX 12 (Windows). Update the
-graphics driver. As a workaround, try another backend: `WGPU_BACKEND=gl meshgrove`. The log
-is `meshgrove.log` in the cache folder; *Settings → About Meshgrove* shows its path.
-
-**Changes on disk show up only after a while (Linux).**
-Linux limits how many programs may watch folders (`fs.inotify.max_user_instances`, often 128).
-On busy desktops that limit is used up, and Meshgrove then falls back to checking every
-minute. To raise the limit: `sudo sysctl fs.inotify.max_user_instances=512`. To keep it
-after a reboot, put `fs.inotify.max_user_instances=512` into
-`/etc/sysctl.d/90-inotify.conf`. F5 reads the current folder again immediately, and
-right-click → *Rescan folder* a whole library folder with everything below it.
-
-**Dolphin shows no 3D previews.**
-Enable the previews in Dolphin's settings (see
-[Thumbnails in Dolphin](#thumbnails-in-dolphin-and-file-dialogs-linux)) and raise the size
-limit. Delete `~/.cache/thumbnails/fail` (install.sh does this) and reopen the folder.
-`meshgrove-thumbnailer -s 256 model.stl /tmp/test.png` tests the thumbnailer by hand. The
-AppImage brings no thumbnailer; use a package or the source build for that.
-
-**STEP files show "built without OpenCascade".**
-This only happens with a source build: the STEP helper was built without OpenCascade, or with
-a version older than 7.5. Install the OpenCascade development files (see
-[From source](#from-source)) and run `packaging/install.sh` again.
-
-**PDFs show only an icon.**
-Install poppler (`pdftoppm` must be on the `PATH`).
-
-**"Move to trash" is greyed out.**
-The file is inside an archive, or the drive is mounted read-only. On Linux, NTFS drives are
-often mounted read-only when Windows was not shut down cleanly (Fast Startup).
-
-**The slicer is not found or does not start.**
-Set it in *Settings → Slicer*. Anycubic Slicer Next on Linux needs its library folder in
-`LD_LIBRARY_PATH`. The automatic detection sets that up, and the settings keep it when you
-only change the name.
-
-**Copying files pastes only text (Linux).**
-Copying real files needs a Wayland session. Under X11, Meshgrove falls back to copying the
-paths as text.
-
-**Where are my tags if I reinstall?**
-In the library index and in the daily backups (see the [table](#settings-and-files-on-disk)).
-Use *Settings → Back up tags, notes & lists → Export* before moving to another computer, then
-*Import* there.
-
-**Does Meshgrove change my 3MF/STL files?**
-No. It never writes to model files or archives. With import or placement by tag switched on it
-moves files (never their contents), and the history takes every move back.
-
-## Building from source
-
-You need Rust 1.95 or newer and libarchive. OpenCascade (STEP) and poppler (PDF, at runtime
-only) are optional.
-
-**Linux:** see [From source](#from-source). For development:
-
-```bash
-cargo run --release -p meshgrove -- ~/3D-Models
-```
-
-**Windows** (MSVC toolchain):
-
-```powershell
-# libarchive as a static library through vcpkg
-git clone https://github.com/microsoft/vcpkg C:\vcpkg
-C:\vcpkg\bootstrap-vcpkg.bat
-C:\vcpkg\vcpkg install libarchive:x64-windows-static
-$env:VCPKG_ROOT = "C:\vcpkg"; $env:VCPKGRS_TRIPLET = "x64-windows-static"
-cargo build --release -p meshgrove -p meshgrove-step
-```
-
-**macOS:**
-
-```bash
-brew install libarchive pkg-config
-cargo build --release -p meshgrove -p meshgrove-step
-```
-
-**STEP support on any system:** install OpenCascade 7.5 or newer (`dnf install
-opencascade-devel`, `apt install libocct-data-exchange-dev`, `brew install opencascade`,
-`vcpkg install opencascade`, …). If its headers are not in `/usr/include/opencascade`, point the
-build at them with `OCCT_INCLUDE` (and `OCCT_LIB` for the library folder), then build
-`-p meshgrove-step`. For a static OpenCascade, such as vcpkg's static triplets, also set
-`OCCT_STATIC=1`. The resulting `meshgrove-step-mesher` must sit next to the `meshgrove`
-executable or be on the `PATH`.
-
-**Release packages:** [`.github/workflows/release.yml`](.github/workflows/release.yml) builds
-them all. Windows, macOS and the AppImage link libarchive and OpenCascade statically from a
-pinned vcpkg ([`packaging/vcpkg/install.sh`](packaging/vcpkg)); the .deb and .rpm use the
-distribution's libraries. The scripts for each format are in [`packaging`](packaging).
-
-## Architecture
-
-Meshgrove is a Cargo workspace of eight crates:
-
-| Crate | Purpose |
-|---|---|
-| [`meshgrove-core`](crates/meshgrove-core) | Everything without a window or GPU: file formats (STL, 3MF, STEP, OBJ, PLY, glTF, G-code, archives, images, PDF, text), the SQLite library index, scanner, search syntax, duplicate signatures, tags, notes, lists, the print log and backups, thumbnail cache, settings, printer profiles, printability checks, the inbox, the change journal, and `ai`: what an assistant may see and suggest |
-| [`meshgrove-render`](crates/meshgrove-render) | The wgpu mesh renderer, shared by thumbnails (headless), the 3D viewer, the hover turntable and the Dolphin thumbnailer |
-| [`meshgrove`](crates/meshgrove) | The egui application |
-| [`meshgrove-step`](crates/meshgrove-step) | `meshgrove-step-mesher`: STEP → STL with OpenCascade, as a separate process |
-| [`meshgrove-thumbnailer`](crates/meshgrove-thumbnailer) | The freedesktop thumbnailer for Dolphin and file dialogs |
-| [`meshgrove-mcp`](crates/meshgrove-mcp) | `meshgrove-mcp`: the optional MCP server the user's own assistant starts (stdio); reads the index, writes only suggestions |
-| [`meshgrove-plugin-api`](crates/meshgrove-plugin-api) | The plugin interface (MIT OR Apache-2.0): the WIT world, manifest, tools, panel widgets, bundles; with `guest` the bindings for writing a plugin ([docs/plugins.md](docs/plugins.md)) |
-| [`meshgrove-plugins`](crates/meshgrove-plugins) | The plugin host: wasmtime sandbox, grants, panels, jobs, staging, the AI tools of plugins, and `meshgrove-plugin-run` for running a plugin without Meshgrove |
-
-How work flows through the app:
-
-```mermaid
-flowchart LR
-    UI["UI thread<br/>(egui)"] -- "visible tiles, hover" --> Q["Thumbnail queue<br/>visible first"]
-    Q --> IO["Reader thread<br/>one at a time, HDD-friendly"]
-    IO --> P["Parser pool<br/>STL · 3MF · OBJ · PLY · glTF · G-code · text · archives"]
-    P -- "STEP" --> S["meshgrove-step-mesher<br/>(own process)"]
-    P --> G["GPU thread<br/>headless wgpu render"]
-    G --> C[("Preview cache<br/>PNG + facts")]
-    C --> UI
-    L["Library service<br/>scanner + file watcher"] --> DB[("SQLite index<br/>files · tags · notes · lists · prints")]
-    G -- "size, hash, geometry" --> L
-    DB -- "search, duplicates" --> UI
-```
-
-Some design decisions:
-
-- **One renderer everywhere.** Thumbnails, viewer, turntable and the Dolphin thumbnailer use
-  the same wgpu pipeline, so a model looks the same wherever you see it. Flat shading uses
-  normals computed from screen-space derivatives in the shader. That ignores the often wrong
-  normals stored in STL files and halves the memory per model.
-- **Orbit framing.** The viewer and turntable turn around the bounding-box centre at one
-  distance that fits every angle, so turning never shifts or zooms the model. Thumbnails use
-  a tight fit per angle instead.
-- **Content fingerprints.** Every model's BLAKE3 hash is computed while it is read for its
-  preview anyway. Tags, notes and exact-duplicate detection hang off that hash. A second,
-  rotation-independent geometry signature finds re-exports.
-- **Embedded pictures first.** For 3MF projects, the picture the slicer saved is the best
-  preview, and it costs no parsing. Blank plate pictures from headless slicing are detected and
-  skipped.
-- **No WebKit.** WebKitGTK still has rendering problems on NVIDIA + Wayland. A native egui UI on
-  wgpu avoids them entirely.
-- **AI proposes, the user decides.** Meshgrove's own placement rules use the same path: a
-  suggestion, the review, the history. `meshgrove-mcp` never writes the library: suggestions go to a
-  database of their own (`proposals.db`), and only Meshgrove's library service applies what the
-  user accepts, journalling every step so it can be undone.
-
-## Development
-
-```bash
-cargo test --workspace                       # unit, format, database and GPU render tests
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --all
-scripts/ui-screenshot.sh out.png 8 ~/3D-Models   # screenshot of the UI in a headless nested KWin
-```
-
-`scripts/ui-screenshot.sh` runs the app in a virtual KWin session and saves its window, so UI
-changes can be checked without touching your desktop. Test hooks (environment variables) can
-script the session. Use separate `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_CACHE_HOME`
-folders to keep test runs away from your real settings:
-
-| Variable | Effect |
-|---|---|
-| `MESHGROVE_SCREENSHOT=out.png`, `MESHGROVE_SCREENSHOT_DELAY=8` | Save the window after the delay and quit |
-| `MESHGROVE_POINTER=x,y` | Pin the pointer, e.g. to test the hover turntable |
-| `MESHGROVE_HOLD=1`, `MESHGROVE_WHEEL=dy` | Hold the button / turn the wheel at the pointer |
-| `MESHGROVE_CLICKS=x,y;x,y` | Click these points one after another (from 3 s, every 0.8 s); `x,y*2` double-clicks |
-| `MESHGROVE_MEASURE=fx,fy;fx,fy` | Measure between these points (fractions of the view) in the first model window |
-| `MESHGROVE_WINDOW_VIEW=top` | Start the first model window in a standard view (`front`, `left`, …) |
-| `MESHGROVE_TYPE=text` | Type text after the clicks |
-| `MESHGROVE_SEARCH=query` | Start with a library search |
-| `MESHGROVE_FLATTEN=1` | Start with "include subfolders" |
-| `MESHGROVE_VIEW=duplicates` / `settings` | Open the duplicate view / the settings |
-
-CI runs formatting, clippy and the tests on Linux, Windows and macOS. Render tests run on
-software Vulkan (lavapipe) on Linux. Pushing a tag `v*` builds the release packages for all
-three systems and creates a draft release.
-
-Translations live in [`crates/meshgrove/locales`](crates/meshgrove/locales) (`de.yml`,
-`en.yml`). A test makes sure every key used in the code exists in every language.
-
-## Roadmap
-
-Ideas and next steps, roughly in order:
-
-- [x] STEP support in all release packages
-- [x] AppImage, .deb and .rpm for Linux, an installer for Windows, a universal DMG for macOS
-- [x] OBJ, PLY and glTF with their colours and textures (0.2)
-- [x] Favourites, collections, print lists and a print log; G-code and readme previews; a list
-  view (0.4)
-- [ ] Tag suggestions from file and folder names, optionally from a local AI model (Ollama with a
-  vision model) that also describes what a model looks like
-- [ ] Source, designer and licence per model; multi-part models as one set
-- [ ] A light theme (light, dark or as the system)
-- [ ] "Open in slicer" links from Printables, MakerWorld and Thingiverse straight into the library
-- [ ] Filament: your own spool list or Spoolman, and whether a project's colours are in stock
-- [ ] Viewer: angle measuring, orthographic view, a G-code layer preview, a large view for
-  G-code, pictures and texts
-- [ ] Several printers; fonts for Chinese and Japanese text; Prusa's binary G-code (`.bgcode`)
-- [ ] Flatpak, a notarized macOS app
-- [ ] Thumbnails in Windows Explorer and macOS Finder
-- [ ] More languages (contributions welcome)
+## Documentation
+
+- [User guide](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md): everything Meshgrove does, step by step, with all features at a glance
+- [Keyboard and mouse](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#keyboard-and-mouse-reference) and [supported file types](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#supported-file-types)
+- [Settings and files on disk](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#settings-and-files-on-disk): the settings window, `config.toml` and where Meshgrove keeps its data
+- [Privacy and safety](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#privacy-and-safety)
+- [Troubleshooting and FAQ](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/guide.md#troubleshooting-and-faq)
+- [Plugins](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/plugins.md): installing, granting and writing plugins
+- [Development](https://github.com/DonDavis-vibe/MeshGrove/blob/main/docs/development.md): building on every system, architecture, tests and roadmap
+- [Release notes](https://github.com/DonDavis-vibe/MeshGrove/releases): what is new in each version
 
 ## Contributing
 
@@ -1308,8 +192,8 @@ Bug reports, ideas and pull requests are welcome in the
 [issue tracker](https://github.com/DonDavis-vibe/MeshGrove/issues). Helpful details in a bug
 report: your operating system, graphics card, what you did, and the log file `meshgrove.log`
 (its path is under *Settings → About Meshgrove*; start Meshgrove with `RUST_LOG=meshgrove=debug`
-for more detail). A sample file
-helps a lot when a model shows wrongly, if you are allowed to share it.
+for more detail). A sample file helps a lot when a model shows wrongly, if you are allowed to
+share it.
 
 For code: run `cargo fmt`, `cargo clippy` and `cargo test` before opening a pull request, and
 keep comments and identifiers in English. New user-visible text goes through `t!("…")`, with
@@ -1325,16 +209,17 @@ are just as welcome.
 ## Credits
 
 Meshgrove is developed by **Davis** as a project of
-**[German Redneck Engineering](https://redneck-design.de/)**.
+**[German Redneck Engineering](https://redneck-design.de/)**. The new interface on
+[SolidCraft](https://github.com/tangency-labs/solidcraft)'s UI kit (0.12), the AI agents, the
+review, archives and the duplicates work come from **[@Rec0iL](https://github.com/Rec0iL)**.
+Thank you!
 
 Built on excellent open-source work: [egui/eframe](https://github.com/emilk/egui) with
-[egui_tiles](https://github.com/rerun-io/egui_tiles),
-[egui_extras](https://github.com/emilk/egui) and
-[egui_commonmark](https://github.com/lampsitter/egui_commonmark) (with
-[pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark)),
-[wgpu](https://wgpu.rs), [glam](https://github.com/bitshifter/glam-rs),
-[rusqlite](https://github.com/rusqlite/rusqlite) with [SQLite](https://sqlite.org),
-[libarchive](https://libarchive.org) through
+[egui_tiles](https://github.com/rerun-io/egui_tiles), [egui_extras](https://github.com/emilk/egui)
+and [egui_commonmark](https://github.com/lampsitter/egui_commonmark) (with
+[pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark)), [wgpu](https://wgpu.rs),
+[glam](https://github.com/bitshifter/glam-rs), [rusqlite](https://github.com/rusqlite/rusqlite) with
+[SQLite](https://sqlite.org), [libarchive](https://libarchive.org) through
 [compress-tools](https://github.com/OSSystems/compress-tools-rs),
 [OpenCascade](https://dev.opencascade.org), [poppler](https://poppler.freedesktop.org),
 [notify](https://github.com/notify-rs/notify), [zip](https://github.com/zip-rs/zip2),
@@ -1344,9 +229,9 @@ Built on excellent open-source work: [egui/eframe](https://github.com/emilk/egui
 [BLAKE3](https://github.com/BLAKE3-team/BLAKE3), [trash](https://github.com/Byron/trash-rs),
 [wl-clipboard-rs](https://github.com/YaLTeR/wl-clipboard-rs),
 [clipboard-rs](https://github.com/ChurchTao/clipboard-rs) and
-[rust-i18n](https://github.com/longbridge/rust-i18n), among others. Finding and connecting the
-AI assistants is adapted from [SolidCraft](https://github.com/tangency-labs/solidcraft) (MIT).
-Logo and banner were created with the Krea 2 image model.
+[rust-i18n](https://github.com/longbridge/rust-i18n), among others. Finding and connecting the AI
+assistants is adapted from [SolidCraft](https://github.com/tangency-labs/solidcraft) (MIT). Logo and
+banner were created with the Krea 2 image model.
 
 All models in the screenshots are our own designs (German Redneck Engineering).
 
