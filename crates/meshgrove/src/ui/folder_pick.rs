@@ -6,8 +6,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use egui::containers::collapsing_header::CollapsingState;
-use egui::{Key, RichText, Ui};
+use egui::Ui;
 use meshgrove_core::listing;
+use solidcraft_ui_kit as sc;
+
+use super::dialogs::{self, Dialog, Tone};
+use super::settings_kit;
 
 /// A library the user may choose a folder in.
 #[derive(Debug, Clone, PartialEq)]
@@ -98,64 +102,57 @@ impl FolderPick {
         Ok(Chosen { root: library.root.clone(), dir, label })
     }
 
-    /// Draws the chooser as a modal; the answer once the user gave one.
+    /// Draws the chooser as one of the kit's dialogs; the answer once the user gave one.
     pub fn show(&mut self, ctx: &egui::Context) -> Option<Answer> {
-        let mut answer = None;
-        egui::Modal::new(egui::Id::unique("plugin-folder-pick")).show(ctx, |ui| {
-            ui.set_width(480.0);
-            ui.heading(self.title.as_str());
-            ui.weak(t!("folder_pick.asker", name = self.asker.as_str()));
+        let (title, ok, cancel) = (self.title.clone(), t!("folder_pick.ok"), t!("trash.cancel"));
+        let dialog = Dialog {
+            id: "plugin_folder_pick",
+            icon: "folder",
+            title: &title,
+            tone: Tone::Info,
+            yes: &ok,
+            no: &cancel,
+            enter_declines: false,
+            cards: 2.0,
+        };
+        let valid = self.chosen().is_ok();
+        let answer = dialog.show(ctx, valid, |ui| {
+            dialogs::quiet(ui, &t!("folder_pick.asker", name = self.asker.as_str()));
             ui.add_space(6.0);
             self.library_row(ui);
-            ui.add_space(4.0);
-            egui::Frame::group(ui.style()).show(ui, |ui| {
+            settings_kit::card_frame().show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
                     if let Some(root) = self.libraries.get(self.library).map(|l| l.root.clone()) {
-                        self.node(ui, &root);
+                        self.node(ui, &root, 0);
                     }
                 });
             });
             self.reveal = false;
-            ui.add_space(4.0);
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label(t!("folder_pick.new_folder"));
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.new_folder)
-                        .hint_text(t!("folder_pick.new_folder_hint"))
-                        .desired_width(f32::INFINITY),
-                );
+                dialogs::say(ui, &t!("folder_pick.new_folder"));
+                let hint = t!("folder_pick.new_folder_hint");
+                settings_kit::text_field_named(ui, "folder-pick-new", &mut self.new_folder, &hint, f32::INFINITY);
             });
-            ui.add_space(4.0);
-            let chosen = self.chosen();
-            match &chosen {
+            ui.add_space(6.0);
+            match self.chosen() {
                 Ok(c) => {
-                    let new = !c.dir.exists();
-                    ui.label(RichText::new(t!("folder_pick.into", label = c.label.as_str())).strong());
-                    if new {
-                        ui.weak(t!("folder_pick.made_later"));
+                    dialogs::stress(ui, &t!("folder_pick.into", label = c.label.as_str()));
+                    if !c.dir.exists() {
+                        dialogs::quiet(ui, &t!("folder_pick.made_later"));
                     }
                 }
                 Err(why) => {
-                    ui.colored_label(ui.visuals().error_fg_color, why);
+                    sc::status_line(ui, &why, sc::StatusTone::Error);
                 }
             }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let ok =
-                    ui.add_enabled(chosen.is_ok(), egui::Button::new(RichText::new(t!("folder_pick.ok")).strong()));
-                let enter = ui.input(|i| i.key_pressed(Key::Enter));
-                if let Ok(c) = &chosen
-                    && (ok.clicked() || enter)
-                {
-                    answer = Some(Answer::Chosen(c.clone()));
-                }
-                if ui.button(t!("trash.cancel")).clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
-                    answer = Some(Answer::Cancelled);
-                }
-            });
         });
-        answer
+        match answer? {
+            // What was typed in this very pass may have made it no folder: the dialog stays.
+            true => self.chosen().ok().map(Answer::Chosen),
+            false => Some(Answer::Cancelled),
+        }
     }
 
     fn library_row(&mut self, ui: &mut Ui) {
@@ -163,59 +160,74 @@ impl FolderPick {
             return;
         }
         ui.horizontal(|ui| {
-            ui.label(t!("folder_pick.library"));
+            dialogs::say(ui, &t!("folder_pick.library"));
             let shown = self.libraries.get(self.library).map(|l| l.alias.clone()).unwrap_or_default();
-            egui::ComboBox::from_id_salt("folder-pick-library").selected_text(shown).show_ui(ui, |ui| {
+            let mut picked = None;
+            settings_kit::dropdown(ui, "folder-pick-library", &shown, 260.0, |ui| {
                 for (i, library) in self.libraries.iter().enumerate() {
                     let text = match library.read_only {
                         true => format!("{} ({})", library.alias, t!("folder_pick.read_only_short")),
                         false => library.alias.clone(),
                     };
-                    let response =
-                        ui.add_enabled(!library.read_only, egui::Button::selectable(i == self.library, text));
-                    if response.clicked() && i != self.library {
-                        self.library = i;
-                        self.dir = library.root.clone();
+                    let row = ui.add_enabled_ui(!library.read_only, |ui| {
+                        settings_kit::choice_row(ui, i == self.library, &text)
+                    });
+                    if row.inner && !library.read_only && i != self.library {
+                        picked = Some(i);
                     }
                 }
             });
+            if let Some(i) = picked {
+                self.library = i;
+                self.dir = self.libraries[i].root.clone();
+            }
         });
+        ui.add_space(6.0);
     }
 
-    /// A folder of the tree with its subfolders, read when it is opened.
-    fn node(&mut self, ui: &mut Ui, path: &Path) {
-        let id = ui.make_persistent_id(("folder-pick", path));
+    /// A folder of the tree with its subfolders, read when it is opened: the kit's tree row, as
+    /// in the sidebar.
+    fn node(&mut self, ui: &mut Ui, path: &Path, depth: usize) {
+        let id = egui::Id::unique(("folder-pick", path));
         let on_way = self.dir.starts_with(path) && self.dir != path;
-        let is_root = self.libraries.iter().any(|l| l.root == path);
-        let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, on_way || is_root);
+        let library = self.libraries.iter().find(|l| l.root == path).map(|l| l.alias.clone());
+        let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, on_way || library.is_some());
         if self.reveal && on_way {
             state.set_open(true);
         }
-        let name = match self.libraries.iter().find(|l| l.root == path) {
-            Some(library) => format!("📚 {}", library.alias),
-            None => listing::file_name(path),
-        };
+        let name = library.unwrap_or_else(|| listing::file_name(path));
         let picked = path == self.dir;
-        state
-            .show_header(ui, |ui| {
-                let text = if picked { RichText::new(&name).strong() } else { RichText::new(&name) };
-                if ui.selectable_label(picked, text).clicked() {
-                    self.dir = path.to_path_buf();
-                }
-            })
-            .body(|ui| {
-                let children = self
-                    .children
-                    .entry(path.to_path_buf())
-                    .or_insert_with(|| listing::subdirs(path).unwrap_or_default())
-                    .clone();
-                if children.is_empty() {
-                    ui.weak(t!("sidebar.no_subfolders"));
-                }
-                for child in children {
-                    self.node(ui, &child);
-                }
-            });
+        let look = sc::Row {
+            depth,
+            fold: Some(state.is_open()),
+            icon: if picked { "open" } else { "folder" },
+            selected: picked,
+            label: &name,
+            name: true,
+            ..Default::default()
+        };
+        let out = sc::tree_row(ui, egui::Id::unique(("folder-pick-row", path)), &look);
+        if out.fold {
+            state.toggle(ui);
+        }
+        if out.clicked {
+            self.dir = path.to_path_buf();
+        }
+        state.show_body_unindented(ui, |ui| {
+            let children = self
+                .children
+                .entry(path.to_path_buf())
+                .or_insert_with(|| listing::subdirs(path).unwrap_or_default())
+                .clone();
+            if children.is_empty() {
+                let none = t!("sidebar.no_subfolders");
+                let look = sc::Row { depth: depth + 1, dim: true, label: &none, name: true, ..Default::default() };
+                sc::tree_row(ui, egui::Id::unique(("folder-pick-empty", path)), &look);
+            }
+            for child in children {
+                self.node(ui, &child, depth + 1);
+            }
+        });
     }
 }
 

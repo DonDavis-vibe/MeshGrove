@@ -60,7 +60,7 @@ pub struct ScreenshotHook {
     pub flatten: bool,
     /// `MESHGROVE_VIEW`: what to open once it can be shown. `duplicates` (the duplicates view),
     /// `inbox`, `import`, `review`, `history`, `settings` or `settings:<category>` (the settings window,
-    /// e.g. `settings:printer`, `settings:ai`).
+    /// e.g. `settings:printer`, `settings:ai`), `folder_pick` (the folder chooser of plugin panels).
     pub view: Option<String>,
     path: String,
     at: Instant,

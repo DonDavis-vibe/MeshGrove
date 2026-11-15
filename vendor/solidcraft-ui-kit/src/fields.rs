@@ -1494,7 +1494,8 @@ pub fn slider<T: egui::emath::Numeric>(ui: &mut Ui, value: &mut T, range: std::o
     super::scope(ui, |ui| {
         let t = Tokens::get();
         ui.style_mut().drag_value_text_style = egui::TextStyle::Monospace;
-        let primary = if options.workspace_accent { solidcraft_theme::TabAccent::current(ui.ctx()).ink } else { t.form_primary };
+        // Meshgrove: a knob and a filled part that show on the control's fill in every theme.
+        let primary = if options.workspace_accent { solidcraft_theme::TabAccent::current(ui.ctx()).ink } else { crate::primary_mark() };
         let limits = (range.start().to_f64(), range.end().to_f64());
         let reserved = if options.show_value {
             // Reserve the actual formatted editor, including suffixes and localized Instant.

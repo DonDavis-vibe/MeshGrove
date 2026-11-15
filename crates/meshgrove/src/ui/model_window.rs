@@ -151,10 +151,10 @@ impl ModelWindow {
                 }
                 if cx.can_log_prints {
                     ui.horizontal(|ui| {
-                        if ui.small_button(t!("print.mark_printed")).clicked() {
+                        if super::settings_kit::bar_button(ui, &t!("print.mark_printed")).clicked() {
                             actions.push(WindowAction::Print(self.entry.path.clone(), PrintResult::Printed));
                         }
-                        if ui.small_button(t!("print.mark_failed")).clicked() {
+                        if super::settings_kit::bar_button(ui, &t!("print.mark_failed")).clicked() {
                             actions.push(WindowAction::Print(self.entry.path.clone(), PrintResult::Failed));
                         }
                     });

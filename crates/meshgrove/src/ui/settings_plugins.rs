@@ -70,7 +70,7 @@ impl PluginSettings {
         for row in rows {
             let Some(entry) = config.plugin(&row.id) else { continue };
             ui.add_space(8.0);
-            egui::Frame::group(ui.style()).show(ui, |ui| {
+            super::settings_kit::card_frame().show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.push_id(&row.id, |ui| self.plugin(ui, row, entry, changes));
             });
@@ -172,7 +172,7 @@ impl PluginSettings {
         ui.label(RichText::new(t!("plugins.found")).strong());
         for (found, offer, installed) in offers {
             ui.add_space(6.0);
-            egui::Frame::group(ui.style()).show(ui, |ui| {
+            super::settings_kit::card_frame().show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.push_id(&found.path, |ui| {
                     ui.horizontal(|ui| {

@@ -648,6 +648,9 @@ impl Gallery {
         let selected = self.is_marked(index);
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 6.0, tile_background(visuals, selected, response.hovered()));
+        if selected && let Some(frame) = selection_frame(visuals) {
+            painter.rect_stroke(rect, 6.0, frame, egui::StrokeKind::Inside);
+        }
 
         let img = image_rect(rect);
         let ink = visuals.text_color();
@@ -1031,6 +1034,16 @@ pub(super) fn entry_menu(
 
 fn pack_name_id() -> egui::Id {
     egui::Id::unique("gallery-pack-name")
+}
+
+/// A frame around what is chosen, in themes whose highlight can hardly be told from the pane
+/// behind it (the 1-bit themes, SolidCraft 95): none where the highlight shows by itself.
+pub(super) fn selection_frame(visuals: &egui::Visuals) -> Option<egui::Stroke> {
+    let tint = over(tile_background(visuals, true, false), visuals.panel_fill);
+    let apart = |a: u8, b: u8| a.abs_diff(b);
+    let (t, p) = (tint, visuals.panel_fill);
+    let most = apart(t.r(), p.r()).max(apart(t.g(), p.g())).max(apart(t.b(), p.b()));
+    (most < 16).then(|| egui::Stroke::new(2.0, solidcraft_ui_kit::primary_mark()))
 }
 
 fn tile_background(visuals: &egui::Visuals, selected: bool, hovered: bool) -> Color32 {

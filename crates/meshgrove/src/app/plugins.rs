@@ -57,6 +57,8 @@ enum DialogFor {
     Library,
     /// The folder a suggested move (the proposal of this id) should go to, in the review.
     MoveTarget(i64),
+    /// A folder for one of the settings' folder fields.
+    Settings(crate::ui::settings::FolderFor),
 }
 
 /// What the user picked in a dialog; nothing when they closed it.
@@ -200,6 +202,7 @@ impl App {
                     *input = first.display().to_string();
                 }
             }
+            DialogFor::Settings(what) => self.settings.folder_picked(what, &first),
             // The review may have moved on meanwhile: then nothing is there to place.
             DialogFor::MoveTarget(proposal) => {
                 if let super::View::Review { batches, .. } = &mut self.view
@@ -350,7 +353,7 @@ impl App {
 
     /// Meshgrove's folder chooser for a panel: in the libraries, starting where the panel's
     /// files went last, else at the root of the library imports go to.
-    fn ask_folder(&mut self, plugin: &str, panel: &str, id: String, title: Option<String>) {
+    pub(super) fn ask_folder(&mut self, plugin: &str, panel: &str, id: String, title: Option<String>) {
         // A double click on the panel's button asks twice before the chooser shows: one is enough.
         if self.folder_asks.iter().any(|a| a.plugin == plugin && a.panel == panel && a.id == id) {
             return;
@@ -783,6 +786,18 @@ impl App {
                         return false;
                     }
                 }
+            }
+            SettingsChange::PickFolder(what) => {
+                if self.plugin_dialog.open.is_none() {
+                    let mut folders = self.plugin_dialog.base.clone().set_title(t!("plugins.choose_folder_title"));
+                    if let Some(dir) = dirs::home_dir() {
+                        folders = folders.set_directory(dir);
+                    }
+                    self.plugin_dialog.ask(DialogFor::Settings(what), move || {
+                        Box::pin(async move { paths(folders.pick_folder().await) })
+                    });
+                }
+                return false;
             }
             SettingsChange::PickPlugin => {
                 if self.plugin_dialog.open.is_none() {

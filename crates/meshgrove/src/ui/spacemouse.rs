@@ -431,7 +431,7 @@ impl MouseSettings {
                     let times = Some((|v| format!("{v:.2}×")) as fn(f64) -> String);
                     super::settings_kit::slider(ui, &mut c.sensitivity[i], SPEED_RANGE, 230.0, times);
                     let level = physical[i].abs().clamp(0.0, 1.0);
-                    ui.add(egui::ProgressBar::new(level).desired_width(60.0).desired_height(8.0));
+                    super::settings_kit::bar(ui, 60.0, level);
                 });
             });
         }
@@ -460,7 +460,7 @@ impl MouseSettings {
                 }
             }
         });
-        ui.collapsing(t!("mouse.custom_mapping"), |ui| {
+        super::settings_kit::fold(ui, "mouse.custom_mapping", &t!("mouse.custom_mapping"), false, None, |ui| {
             egui::Grid::new("mouse_mapping").num_columns(2).show(ui, |ui| {
                 let m = &mut c.mapping;
                 for (label, slot) in [
@@ -553,7 +553,7 @@ impl MouseSettings {
             let motion = config.spacemouse.physical(mouse.raw);
             draw_mouse(knob, ui, vec2(ui.available_width().min(380.0), 210.0), render, motion, target);
             ui.add_space(6.0);
-            ui.add(egui::ProgressBar::new(progress).desired_width(ui.available_width()));
+            super::settings_kit::bar(ui, ui.available_width(), progress);
             dialogs::quiet(ui, &note_text(note));
             if !matches!(mouse.status, Status::Connected(_)) {
                 ui.colored_label(ui.visuals().warn_fg_color, t!("mouse.no_device"));

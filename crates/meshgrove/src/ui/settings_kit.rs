@@ -209,6 +209,50 @@ fn kit_button(ui: &mut Ui, label: &str, enabled: bool, look: sc::Button) -> Resp
     ui.add_enabled_ui(enabled, |ui| sc::button_at(ui, &key, rect, label, look)).inner
 }
 
+/// A row that folds what belongs to it away: the kit's chevron (as on the section titles) and
+/// the title; a click opens and shuts it. `open` forces it: a form that is being edited stays
+/// open. What the body gave, while it shows.
+pub fn fold<R>(
+    ui: &mut Ui,
+    key: impl std::hash::Hash + std::fmt::Debug,
+    title: &str,
+    default_open: bool,
+    open: Option<bool>,
+    body: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    use egui::containers::collapsing_header::CollapsingState;
+    /// Where the title starts, and the body under it: behind the chevron.
+    const INSET: f32 = 18.0;
+    let t = Tokens::get();
+    let id = ui.make_persistent_id(("fold", key));
+    let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
+    if let Some(open) = open {
+        state.set_open(open);
+    }
+    let size = egui::vec2(ui.available_width(), t.control_height);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if response.clicked() {
+        state.toggle(ui);
+    }
+    let is_open = state.is_open();
+    sc::disclosure(ui.painter(), egui::pos2(rect.left() + 8.0, rect.center().y), is_open, t.form_ink);
+    let font = egui::FontId::proportional(t.font_label);
+    let galley = ui.painter().layout_no_wrap(title.to_owned(), font, t.form_ink);
+    let at = egui::pos2(rect.left() + INSET, rect.center().y - galley.size().y / 2.0);
+    ui.painter().with_clip_rect(ui.clip_rect().intersect(rect)).galley(at, galley, t.form_ink);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, is_open, title));
+    response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    state
+        .show_body_unindented(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(INSET);
+                ui.vertical(body).inner
+            })
+            .inner
+        })
+        .map(|shown| shown.inner)
+}
+
 /// A checkbox without a text: the tick of a row or of a whole card. `mixed` draws it as
 /// "some of them"; a click then ticks all.
 pub fn check_mark(ui: &mut Ui, value: &mut bool, mixed: bool, enabled: bool) -> Response {
@@ -233,7 +277,7 @@ pub fn progress(ui: &mut Ui, fraction: Option<f32>) {
     let t = Tokens::get();
     match fraction {
         Some(fraction) => {
-            sc::progress(ui, "pane", fraction);
+            bar(ui, ui.available_width().max(0.0), fraction);
         }
         None => {
             let size = egui::vec2(ui.available_width().max(0.0), t.space_6);
@@ -245,10 +289,34 @@ pub fn progress(ui: &mut Ui, fraction: Option<f32>) {
                 egui::pos2(bar.left() + bar.width() * at.max(0.0), bar.top()),
                 egui::pos2(bar.left() + bar.width() * (at + PIECE).min(1.0), bar.bottom()),
             );
-            ui.painter().rect_filled(piece, t.space_3, t.form_primary);
+            ui.painter().rect_filled(piece, t.space_3, sc::primary_mark());
             ui.ctx().request_repaint();
         }
     }
+}
+
+/// The kit's progress bar, `width` wide: how far something is, in a pane or in a row of other
+/// things (a level beside a slider, the thumbnails in the status bar). Where a theme gives the
+/// track and the filled part one colour (the 1-bit themes), the track is an outline.
+pub fn bar(ui: &mut Ui, width: f32, fraction: f32) -> Response {
+    let t = Tokens::get();
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, t.space_6), egui::Sense::hover());
+    let fraction = if fraction.is_finite() { fraction.clamp(0.0, 1.0) } else { 0.0 };
+    let fill = sc::primary_mark();
+    if solidcraft_theme::contrast_ratio(fill, t.dialog_rule) < 1.5 {
+        ui.painter().rect_filled(rect, t.space_3, t.control_fill);
+        ui.painter().rect_stroke(rect, t.space_3, egui::Stroke::new(1.0, t.dialog_rule), egui::StrokeKind::Inside);
+    } else {
+        ui.painter().rect_filled(rect, t.space_3, t.dialog_rule);
+    }
+    if fraction > 0.0 {
+        let done = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * fraction, rect.height()));
+        ui.painter().rect_filled(done, t.space_3, fill);
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::ProgressIndicator, true, format!("{:.0}%", fraction * 100.0))
+    });
+    response
 }
 
 /// The ink for text and signs on a fill of the form's primary colour (a badge, a button of our

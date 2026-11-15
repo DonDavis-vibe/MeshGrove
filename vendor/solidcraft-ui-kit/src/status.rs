@@ -56,7 +56,8 @@ pub fn progress(ui: &mut egui::Ui, key: &str, fraction: f32) -> egui::Response {
     let (bar, response) = ui.allocate_exact_size(vec2(ui.available_width().max(0.0), t.space_6), egui::Sense::hover());
     ui.painter().rect_filled(bar, t.space_3, t.dialog_rule);
     if fraction > 0.0 {
-        ui.painter().rect_filled(egui::Rect::from_min_size(bar.min, vec2(bar.width() * fraction, bar.height())), t.space_3, t.form_primary);
+        // Meshgrove: a fill that shows in every theme.
+        ui.painter().rect_filled(egui::Rect::from_min_size(bar.min, vec2(bar.width() * fraction, bar.height())), t.space_3, crate::primary_mark());
     }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ProgressIndicator, ui.is_enabled(), format!("{:.0}%", fraction * 100.0)));
     solidcraft_ui_registry::publish_rect(&format!("dialog:progress:{key}"), bar);

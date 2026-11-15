@@ -166,7 +166,8 @@ impl AiSettings {
             let missing: Vec<&agents::Known> =
                 agents::KNOWN.iter().filter(|k| !d.found.iter().any(|f| f.id == k.id)).collect();
             if !missing.is_empty() {
-                egui::CollapsingHeader::new(t!("assistant.missing", count = missing.len())).show(ui, |ui| {
+                let title = t!("assistant.missing", count = missing.len());
+                super::settings_kit::fold(ui, "assistant.missing", &title, false, None, |ui| {
                     for k in missing {
                         ui.horizontal_wrapped(|ui| {
                             ui.label(k.name);
@@ -181,7 +182,7 @@ impl AiSettings {
             hint(ui, t!("assistant.endpoint_hint"));
         }
         ui.add_space(4.0);
-        egui::CollapsingHeader::new(t!("assistant.add")).show(ui, |ui| {
+        super::settings_kit::fold(ui, "assistant.add", &t!("assistant.add"), false, None, |ui| {
             row(ui, &t!("assistant.add_name"), |ui| {
                 super::settings_kit::text_field(ui, &mut self.new_agent.name, "", 220.0);
             });
@@ -348,7 +349,7 @@ impl AiSettings {
             }
         }
         let none_found = self.assistants.as_ref().is_some_and(Vec::is_empty);
-        egui::CollapsingHeader::new(t!("settings.mcp_by_hand")).default_open(none_found).show(ui, |ui| {
+        super::settings_kit::fold(ui, "settings.mcp_by_hand", &t!("settings.mcp_by_hand"), none_found, None, |ui| {
             hint(ui, t!("settings.mcp_found", path = server.display().to_string()));
             row(ui, &t!("settings.mcp_client"), |ui| {
                 let shown = self.client.name().to_owned();

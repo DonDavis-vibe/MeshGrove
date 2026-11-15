@@ -294,6 +294,13 @@ impl Gallery {
                         row.set_selected(selected);
                         for &c in &shown_cols {
                             row.col(|ui| {
+                                // Where the theme's highlight cannot be told from the pane (the
+                                // 1-bit themes), a line over and under the chosen row.
+                                if selected && let Some(frame) = super::selection_frame(ui.visuals()) {
+                                    let cell = ui.max_rect().expand2(egui::vec2(ui.spacing().item_spacing.x, 0.0));
+                                    ui.painter().hline(cell.x_range(), cell.top() + 1.0, frame);
+                                    ui.painter().hline(cell.x_range(), cell.bottom() - 1.0, frame);
+                                }
                                 if let Some(h) = self.cell(ui, c, e, entry, (row_h, selected, striped, wheel)) {
                                     tile_dragged |= h.dragging;
                                     hovered = Some(h);

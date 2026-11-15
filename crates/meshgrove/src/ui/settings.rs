@@ -24,6 +24,15 @@ use crate::spacemouse::Snapshot;
 use solidcraft_ui_kit as sc;
 use solidcraft_ui_kit::prefs_window::{self, HostPage, Labels, Options, Page};
 
+/// A folder field of the settings that has a folder button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderFor {
+    /// A new library folder.
+    Library,
+    /// A new folder to import from.
+    Import,
+}
+
 pub enum SettingsChange {
     Language(Option<String>),
     /// The interface theme; `None`: Meshgrove's own look.
@@ -33,6 +42,9 @@ pub enum SettingsChange {
     /// Who draws the main window's title bar.
     TitleBar(config::TitleBar),
     ProgramIcons(bool),
+    /// Open the system's folder dialog for one of the settings' folder fields; the folder goes
+    /// into that field ([`SettingsDialog::folder_picked`]).
+    PickFolder(FolderFor),
     AddRoot(PathBuf),
     RemoveRoot(PathBuf),
     /// The slicer list and the name of the default one.
@@ -747,9 +759,15 @@ fn page_defaults<const N: usize>(host: &mut Host<'_>) {
     host.changes.extend(changes);
 }
 
+/// The page that is open, for [`page_icon`]: the kit's page list hands a sign only its place.
+static CHOSEN_PAGE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(usize::MAX);
+
 /// The sign of page `N` in the page list.
 fn page_icon<const N: usize>(painter: &egui::Painter, rect: egui::Rect, opacity: f32) {
-    let ink = super::appearance::tokens().icon.gamma_multiply(opacity);
+    let ink = super::appearance::tokens().icon;
+    // On the chosen page's row the sign has to show on the selection's fill.
+    let chosen = CHOSEN_PAGE.load(std::sync::atomic::Ordering::Relaxed) == N;
+    let ink = if chosen { sc::ink_on_selection(ink) } else { ink }.gamma_multiply(opacity);
     let font = egui::FontId::proportional(rect.height() * 0.9);
     painter.text(rect.center(), egui::Align2::CENTER_CENTER, Category::ALL[N].icon(), font, ink);
 }
@@ -1050,6 +1068,7 @@ impl SettingsDialog {
         prefs_window::show(ctx, &mut host, &pages, &options, |_| {});
         // The page the window shows now is the one opened again next time.
         self.category = Category::ALL.get(self.window.section).copied().unwrap_or_default();
+        CHOSEN_PAGE.store(self.window.section, std::sync::atomic::Ordering::Relaxed);
         self.mouse.calibration_modal(ctx, config, info.mouse, info.render, &mut changes);
         changes
     }
@@ -1462,6 +1481,17 @@ impl SettingsDialog {
         chosen
     }
 
+    /// The folder chosen in the system's dialog goes into its field, where it can still be
+    /// changed before "Add".
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    pub fn folder_picked(&mut self, what: FolderFor, folder: &std::path::Path) {
+        let field = match what {
+            FolderFor::Library => &mut self.root_input,
+            FolderFor::Import => &mut self.import_folder_input,
+        };
+        *field = folder.display().to_string();
+    }
+
     fn library(&mut self, ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
         hint(ui, t!("settings.library_hint"));
         for root in &config.library_roots {
@@ -1473,8 +1503,10 @@ impl SettingsDialog {
             });
         }
         ui.horizontal(|ui| {
-            super::settings_kit::text_field(ui, &mut self.root_input, &t!("settings.folder_hint"), 320.0);
-            if sc::button(ui, t!("settings.add"), sc::Button::Normal).clicked() {
+            if folder_field(ui, "settings-root", &mut self.root_input) {
+                changes.push(SettingsChange::PickFolder(FolderFor::Library));
+            }
+            if super::settings_kit::action(ui, t!("settings.add"), true).clicked() {
                 let path = PathBuf::from(self.root_input.trim());
                 if path.is_dir() {
                     changes.push(SettingsChange::AddRoot(path));
@@ -1667,8 +1699,10 @@ impl SettingsDialog {
             });
         }
         ui.horizontal(|ui| {
-            super::settings_kit::text_field(ui, &mut self.import_folder_input, &t!("settings.folder_hint"), 320.0);
-            if sc::button(ui, t!("settings.add"), sc::Button::Normal).clicked() {
+            if folder_field(ui, "settings-import", &mut self.import_folder_input) {
+                changes.push(SettingsChange::PickFolder(FolderFor::Import));
+            }
+            if super::settings_kit::action(ui, t!("settings.add"), true).clicked() {
                 let path = PathBuf::from(self.import_folder_input.trim());
                 if path.is_dir() {
                     let mut all = folders.clone();
@@ -1683,8 +1717,7 @@ impl SettingsDialog {
                 }
             }
             if let Some(downloads) = dirs::download_dir().filter(|d| !folders.contains(d) && d.is_dir())
-                && ui
-                    .button(t!("settings.import_add_downloads"))
+                && super::settings_kit::action(ui, t!("settings.import_add_downloads"), true)
                     .on_hover_text(downloads.display().to_string())
                     .clicked()
             {
@@ -1849,7 +1882,7 @@ impl SettingsDialog {
             }
         });
         let by_hand = if editors { "settings.editors_by_hand" } else { "settings.slicers_by_hand" };
-        ui.collapsing(t!(by_hand), |ui| {
+        super::settings_kit::fold(ui, by_hand, &t!(by_hand), false, None, |ui| {
             let form = if editors { &mut self.editor_form } else { &mut self.slicer_form };
             let (name, program, workdir) = form;
             egui::Grid::new(("program_form", editors)).num_columns(2).show(ui, |ui| {
@@ -1977,23 +2010,27 @@ impl SettingsDialog {
             None => t!("settings.printers_by_hand"),
         };
         let editing = self.printer_editing.is_some();
-        egui::CollapsingHeader::new(heading).id_salt("printer_form").open(editing.then_some(true)).show(ui, |ui| {
+        super::settings_kit::fold(ui, "printer_form", &heading, false, editing.then_some(true), |ui| {
             egui::Grid::new("printer_form").num_columns(2).show(ui, |ui| {
                 ui.label(t!("settings.printer_name"));
                 super::settings_kit::text_field(ui, &mut form[0], "", 320.0);
                 ui.end_row();
                 ui.label(t!("settings.printer_volume"));
+                // The first field starts where the name's does; each says its axis while it is
+                // empty and in its tooltip, and the three are as wide together as the name.
                 ui.horizontal(|ui| {
                     for (i, axis) in ["X", "Y", "Z"].iter().enumerate() {
-                        ui.label(*axis);
-                        super::settings_kit::text_field(ui, &mut form[i + 1], "", 56.0);
+                        if i > 0 {
+                            ui.label("×");
+                        }
+                        super::settings_kit::text_field(ui, &mut form[i + 1], axis, 92.0).on_hover_text(*axis);
                     }
                     ui.label(units.label());
                 });
                 ui.end_row();
                 ui.label(t!("settings.printer_nozzle"));
                 ui.horizontal(|ui| {
-                    super::settings_kit::text_field(ui, &mut form[4], "", 56.0);
+                    super::settings_kit::text_field(ui, &mut form[4], "", 92.0);
                     ui.label("mm");
                 });
                 ui.end_row();
@@ -2003,7 +2040,7 @@ impl SettingsDialog {
             });
             ui.horizontal(|ui| {
                 let label = if editing { t!("settings.apply") } else { t!("settings.printers_add") };
-                if sc::button(ui, label, sc::Button::Normal).clicked() {
+                if super::settings_kit::action(ui, label, true).clicked() {
                     let length = |s: &str| {
                         s.trim().replace(',', ".").parse::<f32>().ok().filter(|v| *v > 0.0).map(|v| units.to_mm(v))
                     };
@@ -2168,10 +2205,27 @@ pub fn export_path() -> PathBuf {
     dir.join(format!("{}-{today}.json", t!("settings.export_file")))
 }
 
+/// A field for a folder's path: typed or pasted, or chosen with the folder button inside it
+/// (in builds that have the system's file dialog). True when that button was clicked.
+fn folder_field(ui: &mut Ui, id: &str, value: &mut String) -> bool {
+    use super::settings_kit as kit;
+    let picks = cfg!(feature = "plugins");
+    let room = if picks { kit::field_button_room() } else { 0.0 };
+    let field = kit::text_field_named_reserving(ui, id, value, &t!("settings.folder_hint"), 320.0, room);
+    picks && kit::field_button(ui, &field, "folder", &t!("review.pick_folder")).clicked()
+}
+
 fn about(ui: &mut Ui, info: &AppInfo) {
     ui.add_space(10.0);
+    // A value starts on the line of its name (which stands in the middle of a control's
+    // height), also where it wraps onto more lines.
     let fact = |ui: &mut Ui, k: std::borrow::Cow<str>, v: String| {
-        row(ui, &k, |ui| ui.add(egui::Label::new(v).wrap()));
+        row(ui, &k, |ui| {
+            // (A point and a half less than the middle: where the kit's row puts its name.)
+            let line = ui.text_style_height(&egui::TextStyle::Body);
+            ui.add_space(((solidcraft_theme::Tokens::get().control_height - line) / 2.0 - 1.5).max(0.0));
+            ui.add(egui::Label::new(v).wrap())
+        });
     };
     row(ui, &t!("settings.developer"), |ui| {
         ui.horizontal(|ui| {
@@ -2179,7 +2233,9 @@ fn about(ui: &mut Ui, info: &AppInfo) {
             ui.hyperlink_to("German Redneck Engineering", env!("CARGO_PKG_HOMEPAGE"));
         });
     });
-    row(ui, &t!("settings.source"), |ui| ui.hyperlink_to(env!("CARGO_PKG_REPOSITORY"), env!("CARGO_PKG_REPOSITORY")));
+    row(ui, &t!("settings.source"), |ui| {
+        ui.horizontal(|ui| ui.hyperlink_to(env!("CARGO_PKG_REPOSITORY"), env!("CARGO_PKG_REPOSITORY")));
+    });
     fact(ui, t!("settings.license"), env!("CARGO_PKG_LICENSE").to_owned());
     fact(ui, t!("settings.version"), env!("CARGO_PKG_VERSION").to_owned());
     fact(ui, t!("settings.gpu"), info.gpu.to_owned());

@@ -229,6 +229,23 @@ pub struct IconSegment {
     pub tip: String,
 }
 
+/// Meshgrove: the ink for a sign or a name on the selection's fill: `wanted`, unless it can
+/// hardly be told from that fill (below 3:1, as in SolidCraft 95, where both are the same
+/// blue, and in the 1-bit themes); then the theme's own ink for selected things.
+pub fn ink_on_selection(wanted: egui::Color32) -> egui::Color32 {
+    let t = Tokens::get();
+    if solidcraft_theme::contrast_ratio(wanted, t.selected_bg) < 3.0 { t.selected_ink } else { wanted }
+}
+
+/// Meshgrove: the primary colour for a mark on a control's own fill (a slider's knob and
+/// filled part, a progress bar): `form_primary`, unless it can hardly be told from that fill
+/// (the 1-bit themes, whose `form_primary` is the ink on their primary fill); then
+/// `form_primary_fill`.
+pub fn primary_mark() -> egui::Color32 {
+    let t = Tokens::get();
+    if solidcraft_theme::contrast_ratio(t.form_primary, t.control_fill) < 3.0 { t.form_primary_fill } else { t.form_primary }
+}
+
 /// A row of equal icon segments in the segmented control's frame. `states` says which segments are on
 /// (several may be, for a mixed selection); without it `selected` is. True when a segment was clicked.
 /// Equal icon choices with mixed state. Tokens: `segmented tokens, space_4/12, icon/fill, accent; icon palette`.
@@ -275,6 +292,9 @@ pub fn segmented_icons(ui: &mut Ui, selected: &mut usize, options: &[IconSegment
         if catalog {
             let icon_rect = egui::Rect::from_center_size(segment.center(), vec2(t.space_14, t.space_14));
             crate::icons::paint_ink(ui.painter(), icon_rect, option.icon, if on { accent.ink } else { t.form_dim });
+        } else if on && solidcraft_theme::contrast_ratio(t.icon, t.selected_bg) < 3.0 {
+            // Meshgrove: a sign in the icons' ink would vanish on this theme's selection.
+            crate::icons::paint_ink(ui.painter(), icon_rect, option.icon, t.selected_ink);
         } else {
             crate::icons::paint_icon(ui.painter(), icon_rect, option.icon, f32::from(t.icon.a()) / 255.0);
         }

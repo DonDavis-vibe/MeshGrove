@@ -1920,6 +1920,7 @@ impl App {
             match change {
                 change @ (SettingsChange::InstallPlugin(_)
                 | SettingsChange::PickPlugin
+                | SettingsChange::PickFolder(_)
                 | SettingsChange::OpenPluginFolder
                 | SettingsChange::PluginEnabled { .. }
                 | SettingsChange::PluginGrants { .. }
@@ -2795,13 +2796,14 @@ impl App {
                     Some(e) => t!("gallery.flatten_count", count = i18n::count(e.len())),
                     None => t!("gallery.loading"),
                 };
-                if ui.button(format!("📂 {text}  ✖")).on_hover_text(t!("gallery.flatten_off")).clicked() {
+                let label = format!("📂 {text}  ✖");
+                if crate::ui::settings_kit::bar_button(ui, &label).on_hover_text(t!("gallery.flatten_off")).clicked() {
                     self.set_flatten(false);
                 }
             }
             View::Duplicates { groups, .. } => {
                 ui.label(RichText::new(format!("🗐 {}", t!("dupes.title", count = groups.len()))).strong());
-                if ui.button(t!("view.close")).clicked() {
+                if crate::ui::settings_kit::bar_button(ui, &t!("view.close")).clicked() {
                     self.view = View::Folder;
                     self.on_listing_arrived();
                 }
@@ -2809,7 +2811,7 @@ impl App {
             }
             View::Inbox { entries, .. } => {
                 ui.label(RichText::new(format!("📥 {}", t!("inbox.title", count = entries.len()))).strong());
-                if ui.button(t!("view.close")).clicked() {
+                if crate::ui::settings_kit::bar_button(ui, &t!("view.close")).clicked() {
                     self.view = View::Folder;
                     self.on_listing_arrived();
                 }
@@ -2818,7 +2820,7 @@ impl App {
             View::Import { .. } => {
                 let count = self.import.importable();
                 ui.label(RichText::new(format!("⬇ {}", t!("import.title", count = count))).strong());
-                if ui.button(t!("view.close")).clicked() {
+                if crate::ui::settings_kit::bar_button(ui, &t!("view.close")).clicked() {
                     self.view = View::Folder;
                     self.on_listing_arrived();
                 }
@@ -2828,7 +2830,7 @@ impl App {
                 let title =
                     if matches!(self.view, View::Review { .. }) { t!("review.title") } else { t!("history.title") };
                 ui.label(RichText::new(format!("✨ {title}")).strong());
-                if ui.button(t!("view.close")).clicked() {
+                if crate::ui::settings_kit::bar_button(ui, &t!("view.close")).clicked() {
                     self.view = View::Folder;
                     self.on_listing_arrived();
                 }
@@ -2872,7 +2874,7 @@ impl App {
             let rate = self.rate.sample(done);
             if total > 0 && done < total {
                 ui.separator();
-                ui.add(egui::ProgressBar::new(done as f32 / total as f32).desired_width(120.0).desired_height(10.0));
+                crate::ui::settings_kit::bar(ui, 120.0, done as f32 / total as f32);
                 ui.label(t!("status.thumbs", done = i18n::count(done), total = i18n::count(total)));
                 if rate > 0.0 {
                     ui.weak(t!("status.rate", rate = format!("{rate:.0}")));
@@ -3222,7 +3224,7 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.add(egui::Label::new(RichText::new(name).heading().strong()).truncate());
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.button("✖").on_hover_text(t!("preview.close")).clicked() {
+                                if crate::ui::settings_kit::small(ui, "✖", &t!("preview.close")).clicked() {
                                     close = true;
                                 }
                             });
@@ -3245,7 +3247,10 @@ impl App {
                     let corner =
                         egui::Rect::from_min_size(rect.right_top() + egui::vec2(-30.0, 2.0), egui::vec2(28.0, 24.0));
                     let tip = if controls { t!("preview.controls_hide") } else { t!("preview.controls_show") };
-                    toggle_controls = ui.put(corner, egui::Button::new("☰")).on_hover_text(tip).clicked();
+                    let look = solidcraft_ui_kit::Button::Normal;
+                    toggle_controls = solidcraft_ui_kit::button_at(ui, "preview-controls", corner, "☰", look)
+                        .on_hover_text(tip)
+                        .clicked();
                     if controls {
                         ui.add(egui::Label::new(RichText::new(t!("preview.hint")).weak()).truncate());
                     }
@@ -3771,6 +3776,12 @@ impl eframe::App for App {
                 ("history", _) if self.index.is_some() => {
                     hook.view = None;
                     self.show_history();
+                }
+                // The folder chooser a plugin's panel asks for, with no plugin behind it.
+                #[cfg(feature = "plugins")]
+                ("folder_pick", _) => {
+                    hook.view = None;
+                    self.ask_folder("demo", "demo", "demo".to_owned(), None);
                 }
                 _ => {}
             }
