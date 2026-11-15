@@ -24,7 +24,7 @@ and bundles: into a folder of their own, beside a library file, and into a folde
 chose.
 
 What is marked **from 0.9.0** needs Meshgrove 0.9.0 (plugin API 0.2) or newer, what is marked
-**from 0.11.0** Meshgrove 0.11.0 (plugin API 0.3); see [API versions](#api-versions) for what an
+**from 0.12.0** Meshgrove 0.12.0 (plugin API 0.3); see [API versions](#api-versions) for what an
 older Meshgrove does with it.
 
 ## Contents
@@ -333,7 +333,7 @@ Write the files below `/out`, then describe them:
 - **Limits:** at most 2000 files and 2 GiB; 8 tags per file; 8 lists; quantities 1–999.
 - **One change:** the copy, its indexing, tags, notes and lists form a single change in
   Meshgrove's history. Files that land in the import folder (no `folder`) wait in the inbox to
-  be put away, like anything imported (from 0.11.0); all others count as seen. Undo removes the files (but keeps
+  be put away, like anything imported (from 0.12.0); all others count as seen. Undo removes the files (but keeps
   the ones the user edited since) and the lists. Redo copies again from the staging folder,
   which Meshgrove keeps while anything refers to it.
 
@@ -366,7 +366,7 @@ a model), name that file instead of a folder:
   are not touched: Meshgrove indexes only the new ones.
 - The review card says "beside <file>".
 
-**Into a folder the user chose (from 0.11.0).** A panel can let the user say where its files
+**Into a folder the user chose (from 0.12.0).** A panel can let the user say where its files
 go, in any library, with Meshgrove's own folder chooser. The plugin learns neither paths nor
 how the libraries are laid out, and needs no `library_read` for it:
 
@@ -634,7 +634,7 @@ of the box it hits.
 | `propose_bundle {bundle}` | the same, into the review |
 | `save_file {path, name}` | offers a file below `/out` or `/tmp` for saving, with the system's file dialog (before 0.9.0: a field to type the path into) |
 | `open_file_dialog {id, title, extensions, multiple, into}` | asks for a file with the system's file dialog, copies it into the panel's `/tmp` and sends `FilePicked {id, name, path}` (`path`: `/tmp/<name>`). From 0.9.0: `multiple: true` lets the user pick several, one `FilePicked` each; `into: "data"` copies to `/data/picked/<name>` instead, where the file stays and the panel's jobs can read it. A file of that name with other content is kept there and the new one gets a number, so use the `path` of the event |
-| `pick_folder {id, title}` (from 0.11.0) | lets the user choose a folder in a library with Meshgrove's own chooser and sends `FolderPicked {id, target, label}`; nothing when they cancel. See [Into a folder the user chose](#bundles-files-for-the-library) |
+| `pick_folder {id, title}` (from 0.12.0) | lets the user choose a folder in a library with Meshgrove's own chooser and sends `FolderPicked {id, target, label}`; nothing when they cancel. See [Into a folder the user chose](#bundles-files-for-the-library) |
 | `open_panel {panel, state}` | opens (or, with a state, re-opens) a panel |
 | `select_model {id}` | shows that library file in the gallery, if the plugin may read it |
 | `repaint_after {ms}` | renders the panel again after that long |
@@ -758,7 +758,7 @@ The interface has two versions, in `meshgrove_plugin_api`:
 | | Is | Now | Changes |
 |---|---|---|---|
 | `WIT_VERSION` | the WIT package `meshgrove:plugin@…`: the functions a plugin imports and exports, which it is **linked** against | `0.1.0` | not within 0.x |
-| `API_VERSION` | the JSON shapes: manifest, widgets, events, effects, bundles, and what the host functions take | `0.3.0` (Meshgrove 0.11.0) | with new fields and variants |
+| `API_VERSION` | the JSON shapes: manifest, widgets, events, effects, bundles, and what the host functions take | `0.3.0` (Meshgrove 0.12.0) | with new fields and variants |
 
 **The rule: within 0.x nothing is added to the WIT world**, no import and no export. A
 component that imports a function the host lacks does not load at all, so a new function
@@ -771,7 +771,7 @@ API 0.1 (Meshgrove 0.8) runs unchanged on 0.9.0.
 |---|---|---|
 | 0.1 | the first | 0.8.0 – 0.8.3 |
 | 0.2 | everything marked "from 0.9.0" in this document | 0.9.0 – 0.10.0 |
-| 0.3 | `pick_folder`, `FolderPicked`, `Bundle.target` ("from 0.11.0") | 0.11.0 |
+| 0.3 | `pick_folder`, `FolderPicked`, `Bundle.target` ("from 0.12.0") | 0.12.0 |
 
 **What Meshgrove checks.** The plugin's manifest names the API it was built for (`api`). It
 runs when that is **the same major version and a minor version no newer than Meshgrove's**:
