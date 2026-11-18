@@ -188,6 +188,8 @@ pub struct App {
     screenshot: Option<crate::screenshot::ScreenshotHook>,
     /// Adds Meshgrove to the AI assistants on this computer while AI is on.
     ai_connect: crate::assist::connect::AiConnect,
+    /// Looks for a newer release (once the user said yes) and puts it in place.
+    updater: crate::update::Updater,
     /// The slicers models can be sent to, and which one is the default.
     slicers: Vec<Slicer>,
     slicer_names: Vec<String>,
@@ -423,6 +425,7 @@ impl App {
             ai_connect: crate::assist::connect::AiConnect::new(
                 std::env::var_os("MESHGROVE_SCREENSHOT").is_none() && crate::assist::connect::AiConnect::allowed(),
             ),
+            updater: crate::update::Updater::new(),
             slicers,
             slicer_names,
             default_slicer,
@@ -2009,6 +2012,9 @@ impl App {
                     self.refresh_gallery(false);
                 }
                 SettingsChange::LockPanes(locked) => self.config.lock_panes = locked,
+                SettingsChange::UpdateCheck(on) => self.config.update_check = on,
+                SettingsChange::CheckForUpdates => self.updater.request_check(),
+                SettingsChange::ShowUpdate => self.updater.show(),
                 SettingsChange::FoldForPlugins(on) => self.config.fold_for_plugins = on,
                 SettingsChange::AiEnabled(on) => {
                     self.config.ai.enabled = on;
@@ -2543,8 +2549,24 @@ impl App {
     /// makes it fill the screen and back.
     fn title_bar(&mut self, ui: &mut Ui) {
         let place = self.nav.current().file_name().map(|name| name.to_string_lossy().into_owned());
-        if let Some(action) = crate::ui::appearance::title_bar(ui, self.brand.id(), "Meshgrove", place.as_deref()) {
+        let (updater, asked) = (&mut self.updater, self.config.update_check);
+        let pill = |ui: &mut Ui, room: egui::Rect| updater.title_pill(ui, room, asked);
+        if let Some(action) = crate::ui::appearance::title_bar(ui, self.brand.id(), "Meshgrove", place.as_deref(), pill)
+        {
             action.send(ui.ctx());
+        }
+    }
+
+    /// The update check's question and window; the answer goes into the settings at once.
+    fn update_windows(&mut self, ctx: &egui::Context) {
+        for event in self.updater.windows(ctx) {
+            match event {
+                crate::update::Event::Answered(yes) => {
+                    self.config.update_check = Some(yes);
+                    self.save_config();
+                }
+                crate::update::Event::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            }
         }
     }
 
@@ -2574,6 +2596,10 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if crate::ui::settings_kit::small(ui, "⚙", &t!("settings.open")).clicked() {
                     self.settings.open();
+                }
+                // Under the desktop's title bar, the update pill stands here.
+                if !crate::ui::appearance::own_title_bar(self.config.title_bar) {
+                    self.updater.toolbar_pill(ui, self.config.update_check);
                 }
                 // Only with AI on and something to review (or the review open), unless the
                 // settings keep it there always.
@@ -3684,6 +3710,7 @@ impl eframe::App for App {
         if self.ai_connect.busy() {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
+        self.updater.tick(&ctx, self.config.update_check == Some(true));
         self.poll_spacemouse(&ctx);
         self.update_selection_facts();
         self.refresh_marks();
@@ -3704,6 +3731,7 @@ impl eframe::App for App {
         self.poll_tag_candidates();
         self.chat_confirm_modal(&ctx);
         self.ask_windows(&ctx);
+        self.update_windows(&ctx);
         #[cfg(feature = "plugins")]
         {
             self.poll_plugins();
@@ -3850,6 +3878,7 @@ impl eframe::App for App {
             plugins: self.plugins.rows(),
             #[cfg(not(feature = "plugins"))]
             plugins: &[],
+            update: self.updater.info(),
         };
         let changes = self.settings.show(
             &ctx,
@@ -3889,6 +3918,8 @@ impl eframe::App for App {
         self.save_note();
         self.library.flush(Duration::from_secs(3));
         self.save_config();
+        // Last: the new version after an update, once everything is saved.
+        self.updater.relaunch_now();
     }
 }
 

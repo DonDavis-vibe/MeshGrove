@@ -52,7 +52,8 @@ fi
 if [[ -x bin/meshgrove ]]; then
     SOURCE=bin   # unpacked release package
 else
-    cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
+    # A build of this script looks for updates the source way (git pull, then this script again).
+    MESHGROVE_PACKAGE=source cargo build --release -p meshgrove -p meshgrove-step -p meshgrove-thumbnailer
     # On its own: built together with the GUI, it gets the GUI's plugin panels (cargo unifies
     # features) and no longer links with thin LTO.
     cargo build --release -p meshgrove-mcp

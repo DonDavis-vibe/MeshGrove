@@ -47,6 +47,8 @@ jobs:
     runs-on: windows-latest
     env:
       TRIPLET: x64-windows-static-meshgrove
+      # Which release file this build updates itself from (crates/meshgrove/src/update/kind.rs).
+      MESHGROVE_PACKAGE: windows
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -174,6 +176,8 @@ jobs:
     name: macOS DMG
     needs: licenses
     runs-on: macos-latest
+    env:
+      MESHGROVE_PACKAGE: macos
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -273,6 +277,7 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       TRIPLET: x64-linux-meshgrove
+      MESHGROVE_PACKAGE: appimage
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -383,6 +388,8 @@ jobs:
     needs: licenses
     runs-on: ubuntu-latest
     container: ${{ matrix.image }}
+    env:
+      MESHGROVE_PACKAGE: deb-${{ matrix.distro }}
     strategy:
       fail-fast: false
       matrix:
@@ -468,6 +475,8 @@ jobs:
     needs: licenses
     runs-on: ubuntu-latest
     container: fedora:44
+    env:
+      MESHGROVE_PACKAGE: rpm-fc44
     steps:
       - name: System packages
         run: |
@@ -570,9 +579,13 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           sed "s/@VERSION@/$version/g" packaging/release-notes.md > notes.md
+          # SHA256SUMS.txt goes up with the packages: the in-app update checks every download
+          # against it before anything changes.
+          (cd dist && sha256sum *) > SHA256SUMS.txt
           printf '\n## Checksums (SHA-256)\n\n```text\n' >> notes.md
-          (cd dist && sha256sum *) >> notes.md
+          cat SHA256SUMS.txt >> notes.md
           printf '```\n' >> notes.md
+          mv SHA256SUMS.txt dist/
       - uses: softprops/action-gh-release@v2
         with:
           draft: true

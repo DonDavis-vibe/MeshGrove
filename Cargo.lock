@@ -3358,8 +3358,10 @@ dependencies = [
  "rfd",
  "rust-i18n",
  "rustls",
+ "semver",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "solidcraft-theme",
  "solidcraft-ui-kit",
  "solidcraft-ui-text",
@@ -3371,6 +3373,7 @@ dependencies = [
  "wgpu",
  "winresource",
  "wl-clipboard-rs",
+ "zip",
 ]
 
 [[package]]

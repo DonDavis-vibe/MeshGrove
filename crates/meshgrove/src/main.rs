@@ -27,6 +27,7 @@ mod spacemouse;
 mod text_preview;
 mod thumbs;
 mod ui;
+mod update;
 
 use std::path::PathBuf;
 

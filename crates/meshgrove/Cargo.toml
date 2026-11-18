@@ -45,6 +45,10 @@ notify.workspace = true
 trash.workspace = true
 ureq.workspace = true
 rustls.workspace = true
+# The update check: comparing release versions, the packages' SHA-256, the Windows ZIP.
+semver = "1"
+sha2 = "0.10"
+zip.workspace = true
 keyring.workspace = true
 base64.workspace = true
 # The widget trees, events and effects of plugin panels (serde types only).

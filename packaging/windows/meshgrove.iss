@@ -92,3 +92,12 @@ Root: HKA; Subkey: "Software\Classes\Applications\meshgrove.exe\SupportedTypes";
 
 [Run]
 Filename: "{app}\meshgrove.exe"; Description: "{cm:LaunchProgram,Meshgrove}"; Flags: nowait postinstall skipifsilent
+; After Meshgrove's own update (it runs this installer quietly with /relaunch=1 and has closed):
+; start the new version, as the user, not as the administrator an all-users update ran as.
+Filename: "{app}\meshgrove.exe"; Flags: nowait runasoriginaluser; Check: RelaunchAfterUpdate
+
+[Code]
+function RelaunchAfterUpdate: Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:relaunch|0}') = '1');
+end;

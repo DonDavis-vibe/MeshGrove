@@ -138,11 +138,14 @@ pub fn own_title_bar(setting: meshgrove_core::config::TitleBar) -> bool {
 /// (`brand`), `name` and, quieter, `about`, with the window's buttons at the right. Empty space
 /// moves the window, a double click makes it fill the screen and back. Gives the button pressed;
 /// the caller sends it on (or handles Close itself).
+/// `trailing` draws into the room the title leaves free before the window's buttons (the
+/// update pill).
 pub fn title_bar(
     ui: &mut Ui,
     brand: egui::TextureId,
     name: &str,
     about: Option<&str>,
+    trailing: impl FnOnce(&mut Ui, egui::Rect),
 ) -> Option<kit::window_chrome::WindowAction> {
     use kit::{type_face, window_chrome};
     let t = tokens();
@@ -161,10 +164,16 @@ pub fn title_bar(
             painter.image(brand, mark, uv, egui::Color32::WHITE);
             let at = egui::pos2(mark.right() + t.space_8, content.center().y);
             let name = painter.text(at, egui::Align2::LEFT_CENTER, name, type_face::semibold(t.font_label), ink);
+            let mut title_end = name.right();
             if let Some(about) = about {
                 let at = egui::pos2(name.right() + t.space_8, content.center().y);
                 let font = egui::FontId::proportional(t.font_label);
-                painter.text(at, egui::Align2::LEFT_CENTER, format!("·  {about}"), font, dim);
+                title_end = painter.text(at, egui::Align2::LEFT_CENTER, format!("·  {about}"), font, dim).right();
+            }
+            let room =
+                egui::Rect::from_min_max(egui::pos2(title_end + t.space_16, content.top()), content.right_bottom());
+            if room.width() > 0.0 {
+                trailing(ui, room);
             }
         })
     })

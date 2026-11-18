@@ -7,6 +7,13 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 
 ## Highlights
 
+**Updates from inside Meshgrove** (new in 0.13)
+
+- Meshgrove asks once whether it may look for new versions; until you say yes, nothing is sent. Then it asks GitHub at start and once a day, one request with nothing about you, your files or this computer. *Settings → General → Updates* changes the answer, *Settings → About* has *Check now*, and `MESHGROVE_UPDATE_CHECK=0` turns it all off.
+- A newer version shows as a pill in the title bar. Its window has the release notes, *Skip this version* and *Later*, and where Meshgrove can replace itself safely, one click: the AppImage and the Windows ZIP swap in place and restart, the Windows installer updates in the same folder and starts Meshgrove again, on macOS the disk image opens. For .deb and .rpm the window shows the command to copy.
+- Every download must match its SHA-256 in the release's new `SHA256SUMS.txt` before anything changes. The program keeps its path, so launchers, menu entries, shortcuts and the AI apps' connections keep working; an AppImage keeps its file name too.
+- 0.13 itself is installed by hand once; from then on the next version comes with one click.
+
 **A new look: SolidCraft's UI kit** (new in 0.12) – the new interface, the duplicates work and most fixes of this release come from [@Rec0iL](https://github.com/Rec0iL), thank you.
 
 - 27 themes under *Settings → General*: SolidCraft's 25 and Meshgrove's own look as Meshgrove Dark and Meshgrove Light. With none chosen, Meshgrove follows the system from dark to light and back. A font list shows each family in itself.

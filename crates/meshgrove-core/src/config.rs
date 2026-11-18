@@ -749,6 +749,10 @@ pub struct Config {
     pub ui_font: Option<String>,
     /// The main window's title bar: Meshgrove's own, or the desktop's.
     pub title_bar: TitleBar,
+    /// Looking for a newer release once a day (one request to GitHub, nothing about the user);
+    /// `None`: not asked yet, so nothing is sent until the user answers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_check: Option<bool>,
     /// Slicers and editors show the icon they bring themselves (the settings' Programs page,
     /// the info pane's buttons, the open-with menus) instead of Meshgrove's own sign.
     pub program_icons: bool,
@@ -1231,6 +1235,7 @@ impl Default for Config {
             ui_theme: None,
             ui_font: None,
             title_bar: TitleBar::default(),
+            update_check: None,
             program_icons: true,
             slicers: None,
             default_slicer: None,
