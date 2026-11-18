@@ -741,11 +741,17 @@ answer any time under *Settings → General → Updates*.
 | Installed as | The update button |
 |---|---|
 | AppImage | downloads the new version beside the old file, checks it and swaps it in place; then **Restart now** |
-| Windows installer | downloads and checks the installer, closes Meshgrove and updates it in the same folder; the installer starts it again |
+| Windows installer | downloads and checks the installer and starts it; once it runs, Meshgrove closes, and the installer updates it in the same folder and starts it again |
 | Windows ZIP | downloads and checks the ZIP and swaps the programs in their folder; then **Restart now** |
 | macOS | downloads and checks the disk image and opens it: quit Meshgrove and drag the new app to where the old one is |
 | .deb / .rpm | **Download** opens the package; the window shows the `sudo apt install` / `sudo dnf install` command to copy |
 | Built with `install.sh` | shows `git pull && packaging/install.sh` and the release page |
+
+On Windows, an installation for all users (under *Program Files*) needs administrator rights:
+Windows asks, and Meshgrove waits for your answer. If you say no or leave the question unanswered,
+Meshgrove stays open and unchanged, and the button tries again. The installer ends a running AI
+connection (`meshgrove-mcp.exe`), so restart the AI app afterwards. Its log is
+`%TEMP%\meshgrove-update\setup.log`.
 
 Builds made with plain `cargo build` never check and show none of this.
 

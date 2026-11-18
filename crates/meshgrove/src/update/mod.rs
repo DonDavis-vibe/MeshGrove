@@ -90,6 +90,9 @@ enum Job {
     Installer,
     /// The disk image is open (macOS).
     Opened,
+    /// The installer ended before it ran (no administrator rights): nothing changed, and the
+    /// update can be tried again.
+    Declined,
     Failed(String),
 }
 
@@ -271,6 +274,7 @@ impl Updater {
             Ok(install::Outcome::Installer) => Some(Job::Installer),
             Ok(install::Outcome::Opened) => Some(Job::Opened),
             Err(e) if e == net::CANCELLED => None,
+            Err(e) if e == install::DECLINED => Some(Job::Declined),
             Err(e) => {
                 log::warn!("update: {e}");
                 Some(Job::Failed(e))

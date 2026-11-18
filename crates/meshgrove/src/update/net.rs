@@ -39,6 +39,9 @@ pub struct Progress {
     /// 0 until the size is known.
     pub total: AtomicU64,
     pub cancel: AtomicBool,
+    /// The download is done and the Windows installer started: Meshgrove waits until it runs
+    /// (Windows may first ask for administrator rights).
+    pub installer: AtomicBool,
 }
 
 impl Progress {

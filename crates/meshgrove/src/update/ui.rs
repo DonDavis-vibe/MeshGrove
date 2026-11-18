@@ -211,17 +211,20 @@ impl Updater {
             Ready,
             Opened,
         }
+        // After a failure only the browser helps; after Windows' "no" the installer may run again.
+        let can_install = one_click && matches!(self.job, None | Some(Job::Declined));
         let phase = match &self.job {
             None => Phase::Offer(None),
             Some(Job::Failed(e)) => Phase::Offer(Some(e.clone())),
+            Some(Job::Declined) => Phase::Offer(Some(t!("update.setup_declined").into())),
             Some(Job::Downloading { progress, .. }) => Phase::Downloading(progress.clone()),
             Some(Job::Ready(_)) => Phase::Ready,
             Some(Job::Opened) => Phase::Opened,
             Some(Job::Installer) => return None,
         };
         let (ok, cancel, apply): (String, String, Option<String>) = match &phase {
-            Phase::Offer(failed) => {
-                let main = if one_click && failed.is_none() {
+            Phase::Offer(_) => {
+                let main = if can_install {
                     main_label(kind)
                 } else if asset.is_none() {
                     t!("update.open_page").into()
@@ -229,6 +232,10 @@ impl Updater {
                     t!("update.download").into()
                 };
                 (main, t!("update.later").into(), Some(t!("update.skip").into()))
+            }
+            // Waiting for the installer: Windows' question is answered there, not here.
+            Phase::Downloading(progress) if progress.installer.load(Ordering::Relaxed) => {
+                (String::new(), String::new(), None)
             }
             Phase::Downloading(_) => (String::new(), t!("update.cancel").into(), None),
             Phase::Ready => (t!("update.restart").into(), t!("update.restart_later").into(), None),
@@ -276,6 +283,11 @@ impl Updater {
                         ui.hyperlink_to(t!("update.page"), &page);
                     }
                 }
+                Phase::Downloading(progress) if progress.installer.load(Ordering::Relaxed) => {
+                    say(ui, &t!("update.waiting_installer"));
+                    ui.add_space(t.space_8);
+                    sc::progress(ui, "update_download", 1.0);
+                }
                 Phase::Downloading(progress) => {
                     let mb = |bytes: u64| format!("{:.1}", bytes as f64 / 1_048_576.0);
                     let (done, total) = (progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed));
@@ -289,8 +301,8 @@ impl Updater {
         });
         let now = state::now();
         match (&phase, action) {
-            (Phase::Offer(failed), sc::Action::Ok) => {
-                if one_click && failed.is_none() {
+            (Phase::Offer(_), sc::Action::Ok) => {
+                if can_install {
                     self.install(ctx);
                 } else {
                     ctx.open_url(egui::OpenUrl::new_tab(browser));

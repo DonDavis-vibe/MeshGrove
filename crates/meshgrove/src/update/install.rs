@@ -9,7 +9,9 @@
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
 use super::kind::InstallKind;
 use super::net::{Net, Progress};
@@ -54,9 +56,13 @@ pub fn run(net: &Net, release: &Release, kind: &InstallKind, progress: &Progress
         InstallKind::WindowsSetup { dir, all_users } => {
             let setup = temp_file(&name)?;
             fetch(&setup)?;
+            let log = setup.with_file_name(SETUP_LOG);
+            let _ = fs::remove_file(&log);
             let mut command = Command::new(&setup);
-            add_args(&mut command, &installer_args(dir, *all_users));
-            command.spawn().map_err(|e| format!("{}: {e}", setup.display()))?;
+            add_args(&mut command, &installer_args(dir, *all_users, &log));
+            let mut child = command.spawn().map_err(|e| format!("{}: {e}", setup.display()))?;
+            progress.installer.store(true, Ordering::Relaxed);
+            wait_for_installer(&mut child, &log, INSTALLER_WAIT)?;
             Ok(Outcome::Installer)
         }
         InstallKind::WindowsPortable(dir) => {
@@ -106,10 +112,20 @@ pub(super) fn put_in_place(update: &Path, target: &Path) -> Result<(), String> {
     })
 }
 
+/// The Windows installer's log, beside the downloaded installer (it also tells why an update
+/// failed).
+const SETUP_LOG: &str = "setup.log";
+/// What the update fails with when the installer ends before it runs: the user said no to
+/// Windows' question for administrator rights, or let it run out (after two minutes).
+pub const DECLINED: &str = "the installer did not start";
+/// How long Meshgrove waits for the installer at most.
+const INSTALLER_WAIT: Duration = Duration::from_secs(600);
+
 /// The Windows installer's arguments: quiet, into the folder it is installed in now and for the
-/// same users, and start Meshgrove again when done (`meshgrove.iss` reads `/relaunch=1`). The
-/// same folder keeps the shortcuts and the AI apps' path to `meshgrove-mcp.exe` right.
-pub(super) fn installer_args(dir: &Path, all_users: bool) -> Vec<String> {
+/// same users, with its log at `log`, and start Meshgrove again when done (`meshgrove.iss` reads
+/// `/relaunch=1`). The same folder keeps the shortcuts and the AI apps' path to
+/// `meshgrove-mcp.exe` right.
+pub(super) fn installer_args(dir: &Path, all_users: bool, log: &Path) -> Vec<String> {
     vec![
         "/SILENT".into(),
         "/SUPPRESSMSGBOXES".into(),
@@ -117,7 +133,28 @@ pub(super) fn installer_args(dir: &Path, all_users: bool) -> Vec<String> {
         "/relaunch=1".into(),
         if all_users { "/ALLUSERS" } else { "/CURRENTUSER" }.into(),
         format!("/DIR=\"{}\"", dir.display()),
+        format!("/LOG=\"{}\"", log.display()),
     ]
+}
+
+/// Meshgrove closes once the installer runs, which it shows by writing its log. For an
+/// installation for all users that is after Windows asked for administrator rights and the user
+/// said yes (the installer started without them writes nothing). If it ends before, the user said
+/// no or let the question run out, and Meshgrove stays open.
+fn wait_for_installer(child: &mut Child, log: &Path, limit: Duration) -> Result<(), String> {
+    let start = Instant::now();
+    loop {
+        if log.exists() {
+            return Ok(());
+        }
+        if let Some(_status) = child.try_wait().map_err(|e| e.to_string())? {
+            return if log.exists() { Ok(()) } else { Err(DECLINED.to_owned()) };
+        }
+        if start.elapsed() > limit {
+            return Err(DECLINED.to_owned());
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 /// Inno Setup wants `/DIR="C:\Program Files\Meshgrove"` as written.
@@ -339,11 +376,36 @@ mod tests {
     #[test]
     fn the_installer_goes_into_the_same_folder_for_the_same_users() {
         let dir = Path::new(r"C:\Program Files\Meshgrove");
-        let args = installer_args(dir, true);
+        let log = Path::new(r"C:\Users\Max Muster\AppData\Local\Temp\meshgrove-update\setup.log");
+        let args = installer_args(dir, true, log);
         assert!(args.contains(&r#"/DIR="C:\Program Files\Meshgrove""#.to_owned()), "{args:?}");
+        assert!(
+            args.contains(&r#"/LOG="C:\Users\Max Muster\AppData\Local\Temp\meshgrove-update\setup.log""#.to_owned())
+        );
         assert!(args.contains(&"/ALLUSERS".to_owned()) && args.contains(&"/relaunch=1".to_owned()));
-        let args = installer_args(Path::new(r"C:\Users\u\AppData\Local\Programs\Meshgrove"), false);
+        let args = installer_args(Path::new(r"C:\Users\u\AppData\Local\Programs\Meshgrove"), false, log);
         assert!(args.contains(&"/CURRENTUSER".to_owned()) && !args.contains(&"/ALLUSERS".to_owned()));
+    }
+
+    /// Meshgrove closes once the installer writes its log, and stays open when the installer
+    /// ends without one (no administrator rights).
+    #[cfg(unix)]
+    #[test]
+    fn waits_until_the_installer_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("setup.log");
+        let script = format!("sleep 0.3; touch '{}'; sleep 5", log.display());
+        let mut running = Command::new("sh").args(["-c", &script]).spawn().unwrap();
+        assert_eq!(wait_for_installer(&mut running, &log, Duration::from_secs(10)), Ok(()));
+        let _ = running.kill();
+        let _ = running.wait();
+        let _ = fs::remove_file(&log);
+        let mut declined = Command::new("sh").args(["-c", "sleep 0.3; exit 1"]).spawn().unwrap();
+        assert_eq!(wait_for_installer(&mut declined, &log, Duration::from_secs(10)), Err(DECLINED.to_owned()));
+        let mut hanging = Command::new("sh").args(["-c", "sleep 5"]).spawn().unwrap();
+        assert_eq!(wait_for_installer(&mut hanging, &log, Duration::from_millis(300)), Err(DECLINED.to_owned()));
+        let _ = hanging.kill();
+        let _ = hanging.wait();
     }
 
     fn portable_zip(path: &Path, files: &[(&str, &[u8])]) {

@@ -793,11 +793,17 @@ Updates*.
 | Installiert als | Der Update-Knopf |
 |---|---|
 | AppImage | lädt die neue Version neben die alte Datei, prüft sie und tauscht sie an ihrem Platz aus; dann **Jetzt neu starten** |
-| Windows-Installer | lädt und prüft den Installer, schließt Meshgrove und aktualisiert es im selben Ordner; der Installer startet es wieder |
+| Windows-Installer | lädt und prüft den Installer und startet ihn; sobald er läuft, schließt sich Meshgrove, und der Installer aktualisiert es im selben Ordner und startet es wieder |
 | Windows-ZIP | lädt und prüft das ZIP und tauscht die Programme in ihrem Ordner aus; dann **Jetzt neu starten** |
 | macOS | lädt und prüft das Disk-Image und öffnet es: Meshgrove beenden und die neue App an den Platz der alten ziehen |
 | .deb / .rpm | **Herunterladen** öffnet das Paket; das Fenster zeigt den Befehl `sudo apt install` / `sudo dnf install` zum Kopieren |
 | Mit `install.sh` gebaut | zeigt `git pull && packaging/install.sh` und die Release-Seite |
+
+Unter Windows braucht eine Installation für alle Benutzer (unter *Programme*) Administratorrechte:
+Windows fragt, und Meshgrove wartet auf deine Antwort. Sagst du Nein oder lässt die Frage
+unbeantwortet, bleibt Meshgrove offen und unverändert, und der Knopf versucht es noch einmal. Der
+Installer beendet eine laufende KI-Verbindung (`meshgrove-mcp.exe`); starte die KI-App danach neu.
+Sein Protokoll liegt in `%TEMP%\meshgrove-update\setup.log`.
 
 Mit einem einfachen `cargo build` gebaute Versionen prüfen nie und zeigen nichts davon.
 
