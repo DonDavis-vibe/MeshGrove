@@ -2,7 +2,7 @@
 //! and bring into the library's landing folder.
 
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use egui::{RichText, Ui};
 use meshgrove_core::config::ArchiveImport;
@@ -51,24 +51,41 @@ pub enum ImportAction {
     /// Tick (true) or untick every file of a folder.
     ToggleGroup(usize, bool),
     Archives(ArchiveImport),
+    /// Import into this library from now on.
+    Library(PathBuf),
     ImportPicked,
+    /// Import the ticked files, then let the AI suggest their tags.
+    ImportAndClassify,
     ImportAll,
     Reload,
     OpenSettings,
 }
 
-/// `target`: where the files go ("3D_druck/Import"); `scanning`: the folders are being looked at.
+/// Where the files go and what the view offers besides its files.
+pub struct Shown<'a> {
+    /// Every library with its name; a list to pick from when there is more than one.
+    pub libraries: &'a [(PathBuf, String)],
+    /// The library imports go to.
+    pub library: Option<&'a Path>,
+    /// The landing folder's name below it ("Import").
+    pub landing: &'a str,
+    pub archives: ArchiveImport,
+    /// The folders are being looked at.
+    pub scanning: bool,
+    /// Tags from the AI after the import: `None` without AI, `Some(false)` while the AI may not
+    /// see the library the files go to.
+    pub ai: Option<bool>,
+}
+
 pub fn show(
     ui: &mut Ui,
     entries: &[Entry],
     groups: &[ImportGroupInfo],
     gallery: &Gallery,
-    target: &str,
-    archives: ArchiveImport,
-    scanning: bool,
+    shown: &Shown,
 ) -> Option<ImportAction> {
     // One of the kit's forms: its controls, its fields, its label font.
-    settings_kit::pane(ui, |ui| import(ui, entries, groups, gallery, target, archives, scanning))
+    settings_kit::pane(ui, |ui| import(ui, entries, groups, gallery, shown))
 }
 
 fn import(
@@ -76,9 +93,7 @@ fn import(
     entries: &[Entry],
     groups: &[ImportGroupInfo],
     gallery: &Gallery,
-    target: &str,
-    archives: ArchiveImport,
-    scanning: bool,
+    shown: &Shown,
 ) -> Option<ImportAction> {
     let mut action = None;
     let importable: usize = groups.iter().map(|g| g.items.iter().filter(|i| i.importable()).count()).sum();
@@ -86,20 +101,32 @@ fn import(
     let any_archive = groups.iter().any(|g| g.items.iter().any(|i| i.archive.is_some() && i.importable()));
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         ui.horizontal(|ui| {
-            let summary = match importable {
-                0 if groups.is_empty() => t!("import.no_folders"),
-                0 => t!("import.none"),
-                n => t!("import.summary", count = n, target = target),
-            };
-            ui.label(settings_kit::strong(summary));
+            let name = shown.library.map(listing::file_name).unwrap_or_default();
+            match importable {
+                0 => {
+                    let none = if groups.is_empty() { t!("import.no_folders") } else { t!("import.none") };
+                    ui.label(settings_kit::strong(none));
+                }
+                n if shown.libraries.len() < 2 => {
+                    let target = format!("{name}/{}", shown.landing);
+                    ui.label(settings_kit::strong(t!("import.summary", count = n, target = target)));
+                }
+                n => {
+                    ui.label(settings_kit::strong(t!("import.summary_into", count = n)));
+                    if let Some(root) = library_list(ui, shown, &name) {
+                        action = Some(ImportAction::Library(root));
+                    }
+                    ui.label(settings_kit::strong(format!("/ {}", shown.landing)));
+                }
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if settings_kit::action(ui, t!("import.open_settings"), true).clicked() {
                     action = Some(ImportAction::OpenSettings);
                 }
-                if settings_kit::action(ui, t!("import.reload"), !scanning).clicked() {
+                if settings_kit::action(ui, t!("import.reload"), !shown.scanning).clicked() {
                     action = Some(ImportAction::Reload);
                 }
-                if scanning {
+                if shown.scanning {
                     settings_kit::busy(ui);
                 }
             });
@@ -107,10 +134,19 @@ fn import(
         ui.weak(t!("import.explain"));
         ui.add_space(4.0);
         if importable > 0 {
-            ui.horizontal(|ui| {
+            // Wrapped: in a narrow window the choice for archives goes to the next line whole.
+            ui.horizontal_wrapped(|ui| {
                 let label = t!("import.import_picked", count = picked);
                 if settings_kit::primary(ui, label, picked > 0).clicked() {
                     action = Some(ImportAction::ImportPicked);
+                }
+                if let Some(visible) = shown.ai {
+                    let label = t!("import.import_classify", count = picked);
+                    let hint = if visible { t!("import.import_classify_hint") } else { t!("import.ai_hidden") };
+                    let button = settings_kit::action(ui, label, picked > 0 && visible);
+                    if button.on_hover_text(hint.as_ref()).on_disabled_hover_text(hint.as_ref()).clicked() {
+                        action = Some(ImportAction::ImportAndClassify);
+                    }
                 }
                 if picked < importable
                     && settings_kit::action(ui, t!("import.import_all", count = importable), true).clicked()
@@ -118,12 +154,16 @@ fn import(
                     action = Some(ImportAction::ImportAll);
                 }
                 if any_archive {
-                    ui.add_space(12.0);
-                    let mut choice = archives;
+                    let mut choice = shown.archives;
                     let options = [
                         (ArchiveImport::Whole, t!("import.archives_whole").into_owned()),
                         (ArchiveImport::Extract, t!("import.archives_extract").into_owned()),
                     ];
+                    if ui.available_size_before_wrap().x < settings_kit::segmented_width(ui, &options) + 12.0 {
+                        ui.end_row();
+                    } else {
+                        ui.add_space(12.0);
+                    }
                     if segmented(ui, &mut choice, &options) {
                         action = Some(ImportAction::Archives(choice));
                     }
@@ -165,6 +205,24 @@ fn import(
         }
     });
     action
+}
+
+/// The list of libraries, showing the one imports go to; the one picked, if another.
+fn library_list(ui: &mut Ui, shown: &Shown, current: &str) -> Option<PathBuf> {
+    let mut picked = None;
+    ui.scope(|ui| {
+        settings_kit::dropdown(ui, "import_library", current, 180.0, |ui| {
+            for (root, name) in shown.libraries {
+                let chosen = shown.library == Some(root.as_path());
+                if settings_kit::choice_row(ui, chosen, name) && !chosen {
+                    picked = Some(root.clone());
+                }
+            }
+        });
+    })
+    .response
+    .on_hover_text(t!("import.target_library"));
+    picked
 }
 
 /// One candidate: its tick (or why it has none) over the tile. Allocated at its size, so the

@@ -14,6 +14,11 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 - Every download must match its SHA-256 in the release's new `SHA256SUMS.txt` before anything changes. The program keeps its path, so launchers, menu entries, shortcuts and the AI apps' connections keep working; an AppImage keeps its file name too.
 - 0.13 itself is installed by hand once; from then on the next version comes with one click.
 
+**Import: pick the library, sort in at once** (new in 0.13)
+
+- With more than one library, the import view has a list for the library the files go to, next to the count of new files. It is the same setting as in *Settings → Library*, so the view always says where an import lands.
+- *✨ Import and sort in* imports the ticked files and has your AI suggest their tags right away, as *✨ Sort in* does in the inbox. Accepting them marks the files done in the inbox, and Meshgrove offers to move them into the folders of their tags. The button is greyed out while the AI may not see the library the files go to.
+
 **A new look: SolidCraft's UI kit** (new in 0.12) – the new interface, the duplicates work and most fixes of this release come from [@Rec0iL](https://github.com/Rec0iL), thank you.
 
 - 27 themes under *Settings → General*: SolidCraft's 25 and Meshgrove's own look as Meshgrove Dark and Meshgrove Light. With none chosen, Meshgrove follows the system from dark to light and back. A font list shows each family in itself.

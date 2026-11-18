@@ -13,6 +13,23 @@ use crate::ui::inbox::{InboxAction, InboxGroupInfo};
 /// Most files the view lists.
 const LIMIT: usize = 2000;
 
+/// Files that came together (a folder, an archive, the loose files of an import), for the AI.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct Batch {
+    /// Shown in the review and the chat.
+    pub title: String,
+    /// Their folder or archive, whose readme and name tell the AI what they are.
+    pub folder: Option<PathBuf>,
+    pub paths: Vec<PathBuf>,
+}
+
+/// Which view asks; it words the action.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum Source {
+    Inbox,
+    Import,
+}
+
 impl App {
     pub(super) fn show_inbox(&mut self) {
         let Some(index) = &self.index else { return };
@@ -78,35 +95,67 @@ impl App {
                     Some(n) => groups.get(n).into_iter().collect(),
                     None => groups.iter().collect(),
                 };
-                let tag_groups: Vec<TagGroup> = picked
+                let drops = picked
                     .iter()
-                    .map(|g| TagGroup {
-                        title: t!("actions.inbox_batch", folder = g.title).into_owned(),
+                    .map(|g| Batch {
+                        title: g.title.clone(),
                         folder: Some(g.folder.clone()),
                         paths: g.range.clone().filter_map(|i| entries.get(i)).map(|e| e.path.clone()).collect(),
                     })
                     .collect();
-                let files: usize = tag_groups.iter().map(|g| g.paths.len()).sum();
-                let (title, user_text) = match picked.as_slice() {
-                    [one] => (
-                        t!("actions.inbox_chat", folder = one.title).into_owned(),
-                        t!("actions.inbox_one", folder = one.title, count = files).into_owned(),
-                    ),
-                    _ => (
-                        t!("actions.inbox_chat", folder = i18n::date(SystemTime::now())).into_owned(),
-                        t!("actions.inbox_all", groups = picked.len(), count = files).into_owned(),
-                    ),
-                };
-                let llm = format!(
-                    "(One-click action) Suggest tags for {files} new files in the inbox ({} drops); the suggestions \
-                     wait in the review, and accepting them takes the files out of the inbox.",
-                    picked.len()
-                );
-                let action = Action::Tags { groups: tag_groups, inbox_done: true };
-                self.start_action(title, user_text, llm, files, action, false);
+                self.classify(drops, Source::Inbox);
             }
             None => {}
         }
+    }
+
+    /// Asks the AI for the tags of these drops in one one-click action; accepting them takes the
+    /// files out of the inbox (and out of the landing folder, into the folders of their tags).
+    pub(super) fn classify(&mut self, drops: Vec<Batch>, from: Source) {
+        let files: usize = drops.iter().map(|d| d.paths.len()).sum();
+        let (title, user_text) = match (drops.as_slice(), from) {
+            ([one], Source::Inbox) => (
+                t!("actions.inbox_chat", folder = one.title).into_owned(),
+                t!("actions.inbox_one", folder = one.title, count = files).into_owned(),
+            ),
+            ([one], Source::Import) => (
+                t!("actions.import_chat", folder = one.title).into_owned(),
+                t!("actions.import_one", folder = one.title, count = files).into_owned(),
+            ),
+            (_, Source::Inbox) => (
+                t!("actions.inbox_chat", folder = i18n::date(SystemTime::now())).into_owned(),
+                t!("actions.inbox_all", groups = drops.len(), count = files).into_owned(),
+            ),
+            (_, Source::Import) => (
+                t!("actions.import_chat", folder = i18n::date(SystemTime::now())).into_owned(),
+                t!("actions.import_all", groups = drops.len(), count = files).into_owned(),
+            ),
+        };
+        let llm = match from {
+            Source::Inbox => format!(
+                "(One-click action) Suggest tags for {files} new files in the inbox ({} drops); the suggestions \
+                 wait in the review, and accepting them takes the files out of the inbox.",
+                drops.len()
+            ),
+            Source::Import => format!(
+                "(One-click action) Suggest tags for {files} files just imported into the library's landing folder \
+                 ({} drops); the suggestions wait in the review, and accepting them takes the files out of the \
+                 inbox and into the folders of their tags.",
+                drops.len()
+            ),
+        };
+        let groups = drops
+            .into_iter()
+            .map(|d| {
+                let title = match from {
+                    Source::Inbox => t!("actions.inbox_batch", folder = d.title),
+                    Source::Import => t!("actions.import_batch", folder = d.title),
+                };
+                TagGroup { title: title.into_owned(), folder: d.folder, paths: d.paths }
+            })
+            .collect();
+        let action = Action::Tags { groups, inbox_done: true };
+        self.start_action(title, user_text, llm, files, action, false);
     }
 
     /// Counts the inbox again a moment after new files were processed (they come in by then).
