@@ -120,7 +120,7 @@ impl ModelWindow {
             if cx.own_title_bar {
                 // As the main window's: the model's name, and whose window it is.
                 use solidcraft_ui_kit::window_chrome::WindowAction as Button;
-                match super::appearance::title_bar(ui, cx.brand, &name, Some("Meshgrove")) {
+                match super::appearance::title_bar(ui, cx.brand, &name, Some("Meshgrove"), |_, _| {}) {
                     Some(Button::Close) => open = false,
                     Some(button) => button.send(ui.ctx()),
                     None => {}

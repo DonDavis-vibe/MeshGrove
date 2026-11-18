@@ -30,6 +30,7 @@ Everything Meshgrove does, and how. Installation and the first steps are in the
   - [Moving files to the trash](#moving-files-to-the-trash)
   - [Backups, export and import](#backups-export-and-import)
   - [Thumbnails in Dolphin and file dialogs (Linux)](#thumbnails-in-dolphin-and-file-dialogs-linux)
+  - [Updates](#updates)
 - [Keyboard and mouse reference](#keyboard-and-mouse-reference)
 - [Supported file types](#supported-file-types)
 - [Settings and files on disk](#settings-and-files-on-disk)
@@ -713,6 +714,47 @@ Dolphin, enable them once: *Settings → Configure Dolphin → Interface → Pre
 models. Then reopen the folder. The thumbnailer shares Meshgrove's cache, so files you have
 already seen in the app show up instantly.
 
+### Updates
+
+Meshgrove can tell you when a new version is out, and where it can replace itself safely, it
+updates with one click. Nothing is sent until you say yes once: after installing, the title bar
+shows a small pill, **Check for updates?**, and a click on it asks you. You can change the
+answer any time under *Settings → General → Updates*.
+
+- **What you see:** when a newer version is out, a pill reading **Update to 0.14.0** appears in
+  the title bar (in the toolbar where the desktop draws the title bar). Its window shows the
+  release notes, the button that fits your installation, **Skip this version** and **Later**
+  (three days of quiet). *Settings → About* has **Check now**, which also works with the
+  automatic check off.
+- **What is sent:** one HTTPS request at start and once a day,
+  `GET https://api.github.com/repos/DonDavis-vibe/MeshGrove/releases/latest`, with the
+  User-Agent `Meshgrove-update-check` and nothing else: no version number, no identifier, no
+  usage data. GitHub sees it like any visit (your IP address, the time). Offline, nothing shows
+  and the check is tried again an hour later. `MESHGROVE_UPDATE_CHECK=0` turns every check off,
+  the question too.
+- **Checked before anything changes:** every download must match its SHA-256 in the release's
+  `SHA256SUMS.txt`. One that does not is deleted, and the installed copy stays as it was.
+- **The program keeps its place:** an update changes what is there, never where it is, so
+  launchers, menu entries, the Windows shortcuts and the AI apps' MCP connections keep working.
+  An AppImage therefore keeps its file name, the old version number in it too.
+
+| Installed as | The update button |
+|---|---|
+| AppImage | downloads the new version beside the old file, checks it and swaps it in place; then **Restart now** |
+| Windows installer | downloads and checks the installer and starts it; once it runs, Meshgrove closes, and the installer updates it in the same folder and starts it again |
+| Windows ZIP | downloads and checks the ZIP and swaps the programs in their folder; then **Restart now** |
+| macOS | downloads and checks the disk image and opens it: quit Meshgrove and drag the new app to where the old one is |
+| .deb / .rpm | **Download** opens the package; the window shows the `sudo apt install` / `sudo dnf install` command to copy |
+| Built with `install.sh` | shows `git pull && packaging/install.sh` and the release page |
+
+On Windows, an installation for all users (under *Program Files*) needs administrator rights:
+Windows asks, and Meshgrove waits for your answer. If you say no or leave the question unanswered,
+Meshgrove stays open and unchanged, and the button tries again. The installer ends a running AI
+connection (`meshgrove-mcp.exe`), so restart the AI app afterwards. Its log is
+`%TEMP%\meshgrove-update\setup.log`.
+
+Builds made with plain `cargo build` never check and show none of this.
+
 ## Keyboard and mouse reference
 
 Ctrl means ⌘ Cmd on macOS.
@@ -780,6 +822,7 @@ finds any setting. A change shows at once: *OK* or *Apply* keeps it, *Cancel* ta
 | Settings (`config.toml`) and pane layout (`layout.json`) | `~/.config/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Library index (`library.db`) and `backups/` | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | AI suggestions and access log (`proposals.db`, only once an assistant was used) | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
+| The update check's memory (`update.json`: last check, a skipped version) | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Cache: previews, STEP meshes, extracted archive files, the log (`meshgrove.log`) | `~/.cache/meshgrove/` | `%LOCALAPPDATA%\meshgrove\` | `~/Library/Caches/meshgrove/` |
 | Exported pictures | `~/Pictures/Meshgrove` (localised, e.g. `~/Bilder`) | `Pictures\Meshgrove` | `~/Pictures/Meshgrove` |
 | Exported print lists (PDF, CSV), tags and notes | Documents folder | Documents folder | Documents folder |
@@ -898,8 +941,9 @@ made under the old name.
 
 ## Privacy and safety
 
-- **Offline.** Meshgrove makes no network connections: no telemetry, no update checks, no
-  accounts.
+- **Offline.** Meshgrove makes no network connections, with one exception you turn on yourself:
+  the update check, one request to GitHub a day with nothing about you
+  ([Updates](#updates)). No telemetry, no accounts.
 - **AI only if you want it.** The optional MCP server runs on your computer and talks to your
   assistant over a local pipe. What the assistant sends on to its model provider is between you
   and that provider, so choose per library what it may see; customer files can stay with local

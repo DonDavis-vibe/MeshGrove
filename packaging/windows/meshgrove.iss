@@ -92,3 +92,42 @@ Root: HKA; Subkey: "Software\Classes\Applications\meshgrove.exe\SupportedTypes";
 
 [Run]
 Filename: "{app}\meshgrove.exe"; Description: "{cm:LaunchProgram,Meshgrove}"; Flags: nowait postinstall skipifsilent
+; After Meshgrove's own update (it runs this installer quietly with /relaunch=1 and has closed):
+; start the new version, as the user, not as the administrator an all-users update ran as.
+Filename: "{app}\meshgrove.exe"; Flags: nowait runasoriginaluser; Check: RelaunchAfterUpdate
+
+[Code]
+function RelaunchAfterUpdate: Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:relaunch|0}') = '1');
+end;
+
+// Meshgrove closes once this installer runs (it watches for the log). Wait until it has (until
+// meshgrove.exe can be opened for writing), at most a minute: the Restart Manager would otherwise
+// find it still saving, fail to close a program whose window is already gone, and the quiet
+// installer would roll back.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Exe: String;
+  Waited: Integer;
+  Stream: TFileStream;
+begin
+  Result := '';
+  if not RelaunchAfterUpdate then
+    Exit;
+  Exe := ExpandConstant('{app}\meshgrove.exe');
+  Waited := 0;
+  while FileExists(Exe) and (Waited < 60000) do
+  begin
+    try
+      Stream := TFileStream.Create(Exe, fmOpenReadWrite or fmShareExclusive);
+      Stream.Free;
+      Log(Format('Meshgrove has closed (waited %d ms).', [Waited]));
+      Exit;
+    except
+      Sleep(200);
+      Waited := Waited + 200;
+    end;
+  end;
+  Log(Format('Meshgrove still runs after %d ms; the Restart Manager takes over.', [Waited]));
+end;

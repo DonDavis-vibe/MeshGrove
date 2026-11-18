@@ -67,23 +67,30 @@ pub struct Endpoint {
     agent: ureq::Agent,
 }
 
+/// An HTTP agent with rustls and the system's certificates; error statuses come back as answers.
+/// `timeout` is how long it waits for the answer and for each read of its body.
+pub fn agent(timeout: Duration, https_only: bool) -> ureq::Agent {
+    let crypto = Arc::new(rustls::crypto::ring::default_provider());
+    let tls = TlsConfig::builder()
+        .provider(TlsProvider::Rustls)
+        .root_certs(RootCerts::PlatformVerifier)
+        .unversioned_rustls_crypto_provider(crypto)
+        .build();
+    ureq::Agent::config_builder()
+        .tls_config(tls)
+        .https_only(https_only)
+        .http_status_as_error(false)
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_recv_response(Some(timeout))
+        .timeout_per_read(Some(timeout))
+        .build()
+        .new_agent()
+}
+
 impl Endpoint {
     pub fn new(base_url: &str, model: &str, key: Option<String>, timeout: Duration) -> Endpoint {
-        let crypto = Arc::new(rustls::crypto::ring::default_provider());
-        let tls = TlsConfig::builder()
-            .provider(TlsProvider::Rustls)
-            .root_certs(RootCerts::PlatformVerifier)
-            .unversioned_rustls_crypto_provider(crypto)
-            .build();
-        let agent = ureq::Agent::config_builder()
-            .tls_config(tls)
-            .http_status_as_error(false)
-            .timeout_connect(Some(Duration::from_secs(10)))
-            // Waiting for the first token can take long on a local model; streaming then goes on.
-            .timeout_recv_response(Some(timeout))
-            .timeout_per_read(Some(timeout))
-            .build()
-            .new_agent();
+        // Waiting for the first token can take long on a local model; streaming then goes on.
+        let agent = agent(timeout, false);
         Endpoint { base: base_url.trim_end_matches('/').to_owned(), model: model.to_owned(), key, effort: None, agent }
     }
 

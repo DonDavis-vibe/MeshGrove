@@ -41,6 +41,12 @@ pub enum SettingsChange {
     UiFont(Option<String>),
     /// Who draws the main window's title bar.
     TitleBar(config::TitleBar),
+    /// Looking for a newer release once a day; `None`: not asked yet (the title bar asks).
+    UpdateCheck(Option<bool>),
+    /// "Check now" on the About page.
+    CheckForUpdates,
+    /// Open the window of the newer version found.
+    ShowUpdate,
     ProgramIcons(bool),
     /// Open the system's folder dialog for one of the settings' folder fields; the folder goes
     /// into that field ([`SettingsDialog::folder_picked`]).
@@ -323,6 +329,8 @@ pub struct AppInfo<'a> {
     pub tags: &'a [(String, usize)],
     /// The installed plugins.
     pub plugins: &'a [super::settings_plugins::PluginRow],
+    /// What the update check knows.
+    pub update: crate::update::Info,
 }
 
 #[derive(Default)]
@@ -575,6 +583,7 @@ impl Category {
                 put(config.ui_theme.is_some(), SettingsChange::UiTheme(None));
                 put(config.ui_font.is_some(), SettingsChange::UiFont(None));
                 put(config.title_bar != d.title_bar, SettingsChange::TitleBar(d.title_bar));
+                put(config.update_check != d.update_check, SettingsChange::UpdateCheck(d.update_check));
                 put(config.double_click != d.double_click, SettingsChange::DoubleClick(d.double_click));
                 put(config.lock_panes != d.lock_panes, SettingsChange::LockPanes(d.lock_panes));
                 put(config.fold_for_plugins != d.fold_for_plugins, SettingsChange::FoldForPlugins(d.fold_for_plugins));
@@ -851,6 +860,7 @@ fn changes_towards(config: &Config, target: &Config) -> Vec<SettingsChange> {
     put(c.ui_theme != t.ui_theme, &|| SettingsChange::UiTheme(t.ui_theme.clone()));
     put(c.ui_font != t.ui_font, &|| SettingsChange::UiFont(t.ui_font.clone()));
     put(c.title_bar != t.title_bar, &|| SettingsChange::TitleBar(t.title_bar));
+    put(c.update_check != t.update_check, &|| SettingsChange::UpdateCheck(t.update_check));
     put(c.program_icons != t.program_icons, &|| SettingsChange::ProgramIcons(t.program_icons));
     put(c.double_click != t.double_click, &|| SettingsChange::DoubleClick(t.double_click));
     put(c.lock_panes != t.lock_panes, &|| SettingsChange::LockPanes(t.lock_panes));
@@ -1124,7 +1134,7 @@ impl SettingsDialog {
             Category::Plugins => &[Section::Plugins],
             Category::Data => &[Section::UserData, Section::Storage],
             Category::About => {
-                about(ui, info);
+                about(ui, info, changes);
                 &[]
             }
         };
@@ -1397,6 +1407,17 @@ impl SettingsDialog {
                     changes.push(SettingsChange::ResetLayout);
                 }
             });
+            // Only where this copy can look at all (a release package or install.sh).
+            if crate::update::available() {
+                sc::settings_section(ui, "updates", &t!("settings.updates"), |ui| {
+                    let mut on = config.update_check == Some(true);
+                    sc::checkbox(ui, &t!("settings.updates_auto"), &mut on);
+                    if on != (config.update_check == Some(true)) {
+                        changes.push(SettingsChange::UpdateCheck(Some(on)));
+                    }
+                    note(ui, &t!("settings.updates_hint"));
+                });
+            }
         });
     }
 
@@ -2214,7 +2235,7 @@ fn folder_field(ui: &mut Ui, id: &str, value: &mut String) -> bool {
     picks && kit::field_button(ui, &field, "folder", &t!("review.pick_folder")).clicked()
 }
 
-fn about(ui: &mut Ui, info: &AppInfo) {
+fn about(ui: &mut Ui, info: &AppInfo, changes: &mut Vec<SettingsChange>) {
     ui.add_space(10.0);
     // A value starts on the line of its name (which stands in the middle of a control's
     // height), also where it wraps onto more lines.
@@ -2237,12 +2258,44 @@ fn about(ui: &mut Ui, info: &AppInfo) {
     });
     fact(ui, t!("settings.license"), env!("CARGO_PKG_LICENSE").to_owned());
     fact(ui, t!("settings.version"), env!("CARGO_PKG_VERSION").to_owned());
+    if info.update.available {
+        row(ui, &t!("settings.updates"), |ui| updates_row(ui, &info.update, changes));
+    }
     fact(ui, t!("settings.gpu"), info.gpu.to_owned());
     fact(ui, t!("settings.config_file"), Config::path().map(|p| p.display().to_string()).unwrap_or_default());
     fact(ui, t!("settings.index_file"), info.db_path.display().to_string());
     fact(ui, t!("settings.cache_dir"), cache_dir().map(|p| p.display().to_string()).unwrap_or_default());
     let log = crate::logging::log_file().map(|p| p.display().to_string()).unwrap_or_default();
     fact(ui, t!("settings.log_file"), log);
+}
+
+/// The About page's update row: "Check now", what the last check said, and the newer version.
+fn updates_row(ui: &mut Ui, update: &crate::update::Info, changes: &mut Vec<SettingsChange>) {
+    use crate::update::Status;
+    ui.horizontal_wrapped(|ui| {
+        let checking = update.status == Status::Checking;
+        if sc::button(ui, t!("settings.updates_check"), sc::Button::Enabled(!checking)).clicked() {
+            changes.push(SettingsChange::CheckForUpdates);
+        }
+        let said = match (&update.status, &update.newer) {
+            (Status::Checking, _) => t!("settings.updates_checking").into_owned(),
+            (_, Some(version)) => t!("settings.updates_newer", version = version).into_owned(),
+            (Status::UpToDate, None) => t!("settings.updates_current").into_owned(),
+            (Status::Failed(message), None) => t!("settings.updates_failed", message = message).into_owned(),
+            (Status::Idle, None) => match update.last_check.and_then(|s| chrono::DateTime::from_timestamp(s as i64, 0))
+            {
+                Some(when) => {
+                    let when = when.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string();
+                    t!("settings.updates_last", when = when).into_owned()
+                }
+                None => t!("settings.updates_never").into_owned(),
+            },
+        };
+        ui.label(said);
+        if update.newer.is_some() && sc::button(ui, t!("settings.updates_show"), sc::Button::Normal).clicked() {
+            changes.push(SettingsChange::ShowUpdate);
+        }
+    });
 }
 
 #[cfg(test)]

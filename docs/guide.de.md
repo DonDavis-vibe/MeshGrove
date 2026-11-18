@@ -30,6 +30,7 @@ Alles, was Meshgrove kann, und wie es geht. Installation und erste Schritte steh
   - [Dateien in den Papierkorb](#dateien-in-den-papierkorb)
   - [Sicherung, Export und Import](#sicherung-export-und-import)
   - [Vorschauen in Dolphin und Dateidialogen (Linux)](#vorschauen-in-dolphin-und-dateidialogen-linux)
+  - [Updates](#updates)
 - [Tastatur und Maus](#tastatur-und-maus)
 - [Unterstützte Dateitypen](#unterstützte-dateitypen)
 - [Einstellungen und Dateien auf der Platte](#einstellungen-und-dateien-auf-der-platte)
@@ -763,6 +764,49 @@ Modelle die Größengrenze für Vorschauen lokaler Dateien erhöhen. Danach den 
 Thumbnailer teilt sich den Cache mit Meshgrove, also erscheinen Dateien, die du schon in der
 App gesehen hast, sofort.
 
+### Updates
+
+Meshgrove kann dir sagen, wenn eine neue Version da ist, und wo es sich sicher selbst ersetzen
+kann, aktualisiert es mit einem Klick. Gesendet wird nichts, bevor du einmal Ja gesagt hast: Nach
+der Installation steht in der Titelleiste eine kleine Pille, **Nach Updates suchen?**, und ein
+Klick darauf fragt dich. Ändern kannst du die Antwort jederzeit unter *Einstellungen → Allgemein →
+Updates*.
+
+- **Was du siehst:** Ist eine neuere Version da, erscheint in der Titelleiste eine Pille **Update
+  auf 0.14.0** (in der Werkzeugleiste, wo der Desktop die Titelleiste zeichnet). Ihr Fenster zeigt
+  die Release-Notes, den Knopf, der zu deiner Installation passt, **Diese Version überspringen**
+  und **Später** (drei Tage Ruhe). *Einstellungen → Über* hat **Jetzt prüfen**, das auch bei
+  ausgeschalteter automatischer Prüfung geht.
+- **Was gesendet wird:** beim Start und einmal am Tag eine HTTPS-Anfrage,
+  `GET https://api.github.com/repos/DonDavis-vibe/MeshGrove/releases/latest`, mit dem
+  User-Agent `Meshgrove-update-check` und sonst nichts: keine Versionsnummer, keine Kennung, keine
+  Nutzungsdaten. GitHub sieht sie wie jeden Besuch (deine IP-Adresse, die Uhrzeit). Ohne Netz
+  erscheint nichts, und es wird eine Stunde später wieder versucht. `MESHGROVE_UPDATE_CHECK=0`
+  schaltet jede Prüfung ab, auch die Frage.
+- **Geprüft, bevor sich etwas ändert:** Jeder Download muss zu seiner SHA-256-Prüfsumme in der
+  `SHA256SUMS.txt` des Releases passen. Einer, der nicht passt, wird gelöscht, und die installierte
+  Version bleibt, wie sie war.
+- **Das Programm bleibt an seinem Platz:** Ein Update ändert, was dort ist, nie, wo es ist. So
+  funktionieren Starter, Menüeinträge, die Windows-Verknüpfungen und die MCP-Verbindungen der
+  KI-Apps weiter. Ein AppImage behält deshalb seinen Dateinamen, auch die alte Versionsnummer darin.
+
+| Installiert als | Der Update-Knopf |
+|---|---|
+| AppImage | lädt die neue Version neben die alte Datei, prüft sie und tauscht sie an ihrem Platz aus; dann **Jetzt neu starten** |
+| Windows-Installer | lädt und prüft den Installer und startet ihn; sobald er läuft, schließt sich Meshgrove, und der Installer aktualisiert es im selben Ordner und startet es wieder |
+| Windows-ZIP | lädt und prüft das ZIP und tauscht die Programme in ihrem Ordner aus; dann **Jetzt neu starten** |
+| macOS | lädt und prüft das Disk-Image und öffnet es: Meshgrove beenden und die neue App an den Platz der alten ziehen |
+| .deb / .rpm | **Herunterladen** öffnet das Paket; das Fenster zeigt den Befehl `sudo apt install` / `sudo dnf install` zum Kopieren |
+| Mit `install.sh` gebaut | zeigt `git pull && packaging/install.sh` und die Release-Seite |
+
+Unter Windows braucht eine Installation für alle Benutzer (unter *Programme*) Administratorrechte:
+Windows fragt, und Meshgrove wartet auf deine Antwort. Sagst du Nein oder lässt die Frage
+unbeantwortet, bleibt Meshgrove offen und unverändert, und der Knopf versucht es noch einmal. Der
+Installer beendet eine laufende KI-Verbindung (`meshgrove-mcp.exe`); starte die KI-App danach neu.
+Sein Protokoll liegt in `%TEMP%\meshgrove-update\setup.log`.
+
+Mit einem einfachen `cargo build` gebaute Versionen prüfen nie und zeigen nichts davon.
+
 ## Tastatur und Maus
 
 Strg heißt auf macOS ⌘ Cmd.
@@ -831,6 +875,7 @@ setzt die gezeigte Seite zurück.
 | Einstellungen (`config.toml`) und Anordnung der Bereiche (`layout.json`) | `~/.config/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Bibliotheks-Index (`library.db`) und `backups/` | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | KI-Vorschläge und Zugriffsprotokoll (`proposals.db`, erst wenn ein Assistent da war) | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
+| Das Gedächtnis der Update-Prüfung (`update.json`: letzte Prüfung, eine übersprungene Version) | `~/.local/share/meshgrove/` | `%APPDATA%\meshgrove\` | `~/Library/Application Support/meshgrove/` |
 | Cache: Vorschauen, STEP-Netze, entpackte Archivdateien, das Log (`meshgrove.log`) | `~/.cache/meshgrove/` | `%LOCALAPPDATA%\meshgrove\` | `~/Library/Caches/meshgrove/` |
 | Exportierte Bilder | `~/Bilder/Meshgrove` | `Bilder\Meshgrove` | `~/Bilder/Meshgrove` |
 | Exportierte Drucklisten (PDF, CSV), Tags und Notizen | Dokumente-Ordner | Dokumente-Ordner | Dokumente-Ordner |
@@ -950,8 +995,9 @@ Namen lassen sich weiter importieren.
 
 ## Datenschutz und Sicherheit
 
-- **Offline.** Meshgrove baut keine Netzwerkverbindungen auf: keine Telemetrie, keine
-  Update-Prüfung, keine Konten.
+- **Offline.** Meshgrove baut keine Netzwerkverbindungen auf, mit einer Ausnahme, die du selbst
+  einschaltest: der Update-Prüfung, einer Anfrage an GitHub am Tag ohne Daten über dich
+  ([Updates](#updates)). Keine Telemetrie, keine Konten.
 - **KI nur, wenn du willst.** Der freiwillige MCP-Server läuft auf deinem Rechner und spricht über
   eine lokale Verbindung mit deinem Assistenten. Was der Assistent an seinen Modell-Anbieter
   weitergibt, ist eine Sache zwischen dir und diesem Anbieter; deshalb legst du pro Bibliothek

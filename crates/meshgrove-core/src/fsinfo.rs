@@ -43,12 +43,22 @@ pub fn spelled_like_root(path: &Path, roots: &[PathBuf]) -> PathBuf {
 /// found among its folder's entries), without the `\\?\` canonical paths carry there.
 #[cfg(windows)]
 fn without_verbatim(_path: &Path, real: PathBuf) -> PathBuf {
-    let s = real.to_string_lossy();
-    match s.strip_prefix(r"\\?\") {
-        Some(rest) if rest.starts_with("UNC\\") => PathBuf::from(format!(r"\\{}", &rest[4..])),
-        Some(rest) => PathBuf::from(rest),
-        None => real,
-    }
+    without_verbatim_prefix(real)
+}
+
+/// A canonical Windows path as people and other programs write it: `\\?\C:\x` is `C:\x`,
+/// `\\?\UNC\server\share` is `\\server\share`. Programs handed a path as text (an installer's
+/// `/DIR=`, a shortcut) refuse the prefix `canonicalize` gives paths there. Elsewhere unchanged.
+pub fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    if cfg!(windows) { strip_verbatim(&path.to_string_lossy()).map(PathBuf::from).unwrap_or(path) } else { path }
+}
+
+fn strip_verbatim(path: &str) -> Option<String> {
+    let rest = path.strip_prefix(r"\\?\")?;
+    Some(match rest.strip_prefix(r"UNC\") {
+        Some(share) => format!(r"\\{share}"),
+        None => rest.to_owned(),
+    })
 }
 
 /// Elsewhere canonical paths resolve symlinks, which the user may well have chosen on purpose.
@@ -110,6 +120,18 @@ mod tests {
         assert!(!ro("/run/media/maker/My Drive/x.stl"), "escaped spaces in mount points");
         assert!(!ro("/mnt/rofs/x"), "'remount-ro' is not the 'ro' flag");
         assert!(!ro("/run/media/maker/1A2B3C4D5E6F7A8Bx/y"), "sibling with a longer name");
+    }
+
+    #[test]
+    fn canonical_windows_paths_lose_their_prefix() {
+        assert_eq!(strip_verbatim(r"\\?\C:\Users\u\Apps\Meshgrove").as_deref(), Some(r"C:\Users\u\Apps\Meshgrove"));
+        assert_eq!(strip_verbatim(r"\\?\UNC\nas\share\Meshgrove").as_deref(), Some(r"\\nas\share\Meshgrove"));
+        assert_eq!(strip_verbatim(r"C:\Program Files\Meshgrove"), None);
+        assert_eq!(strip_verbatim("/opt/meshgrove"), None);
+        let unix = PathBuf::from("/opt/meshgrove");
+        if cfg!(not(windows)) {
+            assert_eq!(without_verbatim_prefix(unix.clone()), unix);
+        }
     }
 
     #[test]
