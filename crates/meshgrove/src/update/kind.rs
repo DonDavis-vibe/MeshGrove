@@ -44,11 +44,14 @@ pub struct Probe<'a> {
 }
 
 impl Probe<'_> {
-    /// This process: its environment, its files, its program.
+    /// This process: its environment, its files, its program. The program's path without the
+    /// `\\?\` Windows gives canonical paths: the installer refuses `/DIR="\\?\C:\…"`.
     pub fn with_process<R>(f: impl FnOnce(&Probe) -> R) -> R {
         let env = |name: &str| std::env::var_os(name);
         let exists = |path: &Path| path.exists();
-        let exe = std::env::current_exe().ok().map(|e| e.canonicalize().unwrap_or(e));
+        let exe = std::env::current_exe()
+            .ok()
+            .map(|e| e.canonicalize().map(meshgrove_core::fsinfo::without_verbatim_prefix).unwrap_or(e));
         f(&Probe { env: &env, exists: &exists, exe })
     }
 }
