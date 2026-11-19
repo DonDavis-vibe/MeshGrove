@@ -952,6 +952,20 @@ impl Library {
         Ok(())
     }
 
+    /// The models and G-codes the index has in or below `dir` (a folder or an archive, whose
+    /// members it keeps under the archive), at any depth: what an import brought in.
+    pub fn files_below(&self, dir: &Path) -> Result<Vec<PathBuf>, Error> {
+        let Some(d) = path_str(dir) else { return Ok(Vec::new()) };
+        let b = below_bounds(d);
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT d.path, f.name, f.kind, f.size, f.mtime_ns FROM files f JOIN dirs d ON d.id = f.dir_id
+             WHERE (d.path = ?1 OR (d.path > ?2 AND d.path < ?3) OR (d.path > ?4 AND d.path < ?5))
+               AND f.kind IN ({MODEL_KINDS}, 'gcode')
+             ORDER BY d.path, f.name COLLATE NOCASE"
+        ))?;
+        stmt.query_map(params![d, b[0], b[1], b[2], b[3]], entry_from_row)?.map(|e| e.map(|e| e.path)).collect()
+    }
+
     /// How many models the index has below `dir` (a folder or an archive), at any depth.
     pub fn models_below(&self, dir: &Path) -> Result<usize, Error> {
         let Some(d) = path_str(dir) else { return Ok(0) };
@@ -1588,6 +1602,30 @@ mod tests {
         writer.update_dir(Path::new("/r"), Path::new("/r"), 1, &[file("/r", "a.stl", 1, 1)], &[]).unwrap();
         let reader = Library::open_reader(&path).expect("index exists now");
         assert_eq!(names(&reader.search(&query::parse("a"), 9).unwrap()), ["a.stl"]);
+    }
+
+    #[test]
+    fn files_below_lists_models_at_any_depth_and_nothing_beside() {
+        let mut lib = Library::open_in_memory().unwrap();
+        let root = Path::new("/lib");
+        let landing = Path::new("/lib/Import");
+        let pack = Path::new("/lib/Import/pack_50%");
+        let deep = Path::new("/lib/Import/pack_50%/teile");
+        let zip = Path::new("/lib/Import/kit.zip");
+        let sibling = Path::new("/lib/Import2");
+        lib.update_dir(root, root, 1, &[], &[landing.into(), sibling.into()]).unwrap();
+        lib.update_dir(root, landing, 1, &[file("/lib/Import", "rose.stl", 1, 1)], &[pack.into(), zip.into()]).unwrap();
+        let files = [file("/lib/Import/pack_50%", "a.3mf", 1, 1), file("/lib/Import/pack_50%", "readme.txt", 1, 1)];
+        lib.update_dir(root, pack, 1, &files, &[deep.into()]).unwrap();
+        lib.update_dir(root, deep, 1, &[file("/lib/Import/pack_50%/teile", "b.gcode", 1, 1)], &[]).unwrap();
+        lib.update_dir(root, zip, 1, &[file("/lib/Import/kit.zip", "minis/orc.stl", 1, 1)], &[]).unwrap();
+        lib.update_dir(root, sibling, 1, &[file("/lib/Import2", "other.stl", 1, 1)], &[]).unwrap();
+        let below = |p: &str| lib.files_below(Path::new(p)).unwrap();
+        assert_eq!(below("/lib/Import/pack_50%"), [pack.join("a.3mf"), deep.join("b.gcode")], "no readme");
+        assert_eq!(below("/lib/Import/kit.zip"), [zip.join("minis/orc.stl")], "an archive's members");
+        assert_eq!(below("/lib/Import").len(), 4, "the landing folder, but not Import2 beside it");
+        assert!(below("/lib/Import/pack_5").is_empty(), "a folder that only starts the same is not below");
+        assert!(below("/lib/Import/pack_%").is_empty(), "% and _ are no wildcards");
     }
 
     #[test]

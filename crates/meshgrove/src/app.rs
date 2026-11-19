@@ -1082,6 +1082,7 @@ impl App {
                         self.trash_later(trash);
                     }
                     self.start_import_scan(); // what is left there
+                    self.classify_imported(&title);
                 }
                 LibEvent::Copied { dir, report, skipped, moved } => {
                     let (to, skipped, n) = (listing::file_name(&dir), skipped + report.skipped, report.applied);
@@ -3015,10 +3016,17 @@ impl App {
             self.config.tile_size = (self.config.tile_size * zoom).clamp(*TILE_SIZE.start(), *TILE_SIZE.end());
         }
         if let View::Import { entries, groups } = &self.view {
-            let target = self.import_target();
-            let archives = self.config.import.archives;
-            let action =
-                import_view::show(ui, entries, groups, &self.gallery, &target, archives, self.import.scanning());
+            let libraries: Vec<(PathBuf, String)> =
+                self.config.library_roots.iter().map(|r| (r.clone(), listing::file_name(r))).collect();
+            let shown = import_view::Shown {
+                libraries: &libraries,
+                library: self.config.import_root(),
+                landing: self.config.landing_name(),
+                archives: self.config.import.archives,
+                scanning: self.import.scanning(),
+                ai: self.import_ai(),
+            };
+            let action = import_view::show(ui, entries, groups, &self.gallery, &shown);
             self.import_action(action);
             return;
         }

@@ -76,6 +76,13 @@ pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T,
     segmented_where(ui, value, options, |_| None)
 }
 
+/// The width a [`segmented`] row of `options` wants: as wide as its words need, as the kit's own
+/// settings segments are.
+pub fn segmented_width<T>(ui: &Ui, options: &[(T, String)]) -> f32 {
+    let widest = options.iter().map(|(_, label)| sc::ContentWidth::name(ui, label)).fold(0.0, f32::max);
+    (widest + Tokens::get().space_16) * options.len() as f32
+}
+
 /// [`segmented`] with options that cannot be picked now: `unavailable` gives the reason, shown when
 /// the pointer rests on them.
 pub fn segmented_where<T: PartialEq + Copy>(
@@ -90,9 +97,7 @@ pub fn segmented_where<T: PartialEq + Copy>(
     let enabled: Vec<bool> = reasons.iter().map(Option::is_none).collect();
     let disabled: Vec<Option<&str>> = reasons.iter().map(Option::as_deref).collect();
     let mut index = options.iter().position(|(option, _)| option == value).unwrap_or(0);
-    // As wide as its words need, as the kit's own settings segments are.
-    let widest = labels.iter().map(|label| sc::ContentWidth::name(ui, label)).fold(0.0, f32::max);
-    let width = ((widest + t.space_16) * labels.len() as f32).min(ui.available_width());
+    let width = segmented_width(ui, options).min(ui.available_width());
     let config = sc::Segments { enabled: &enabled, disabled: &disabled, compact: true, ..Default::default() };
     let layout = egui::Layout::left_to_right(egui::Align::Center);
     // Named after its first choice, so two of them in one row stay apart as well.
