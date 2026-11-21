@@ -4,7 +4,7 @@ Upstream-Contact: https://github.com/DonDavis-vibe/MeshGrove/issues
 Source: https://github.com/DonDavis-vibe/MeshGrove
 
 Files: *
-Copyright: 2026 Davis · German Redneck Engineering
+Copyright: 2026 Davis and Rec0iL · German Redneck Engineering
 License: GPL-3.0+
 Comment:
  The programs contain Rust libraries and fonts under their own licenses; see

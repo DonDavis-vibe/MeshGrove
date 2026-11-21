@@ -662,6 +662,31 @@ mod tests {
         assert_eq!(lib.inbox_count().unwrap(), 0);
     }
 
+    /// A folder's time need not tell that it got a file: Windows keeps it by the clock tick and
+    /// FAT by two seconds, so two writes can share one time.
+    #[cfg(unix)]
+    #[test]
+    fn index_lists_a_known_folder_again_whatever_its_time_says() {
+        let (f, mut lib) = fixture();
+        let new = f.root.join("Neu");
+        let sub = new.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("a.stl"), "a").unwrap();
+        let ops = [ApplyOp::Index { root: f.root.clone(), dir: new.clone(), seen: true, only: Vec::new() }];
+        lib.apply_change("plugin:test", "Index", &ops).unwrap();
+        // One more file in the folder and one in its subfolder, and both folders' times as before.
+        for (dir, name) in [(&new, "b.stl"), (&sub, "c.stl")] {
+            let before = std::fs::metadata(dir).unwrap().modified().unwrap();
+            std::fs::write(dir.join(name), name).unwrap();
+            std::fs::File::open(dir).unwrap().set_modified(before).unwrap();
+        }
+        let ops = [ApplyOp::Index { root: f.root.clone(), dir: new.clone(), seen: false, only: Vec::new() }];
+        lib.apply_change("plugin:test", "Index", &ops).unwrap();
+        assert!(lib.entry_of(&new.join("b.stl")).unwrap().is_some());
+        assert!(lib.entry_of(&sub.join("c.stl")).unwrap().is_some());
+        assert_eq!(lib.inbox_count().unwrap(), 2);
+    }
+
     #[test]
     fn a_bundle_lands_tagged_listed_and_goes_again() {
         let (f, mut lib) = fixture();

@@ -18,6 +18,7 @@ use crate::cache::ThumbCache;
 use crate::db::{Error, Library, nanos};
 use crate::formats::Kind;
 use crate::lists::ListKind;
+use crate::scan::Force;
 
 /// One step of an accepted suggestion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -805,20 +806,18 @@ impl Library {
         if !dir.starts_with(root) || !dir.is_dir() {
             return Ok(None);
         }
-        // A folder the index knows already got new files: it is listed again itself (its time
-        // may not tell, on a file system that keeps it coarsely).
-        let start = if !only.is_empty() && self.dir_mtime(dir).is_some() {
-            dir.to_path_buf()
+        // A folder the index knows already got new files: it is listed again itself, and with
+        // all of it asked for, so is every folder below it (a folder's time may not tell, where
+        // it is kept coarsely: by the clock tick on Windows, by two seconds on FAT).
+        let (start, force) = if self.dir_mtime(dir).is_some() {
+            (dir.to_path_buf(), if only.is_empty() { Force::Tree } else { Force::Start })
         } else {
-            dir.ancestors()
-                .skip(1)
-                .take_while(|a| a.starts_with(root))
-                .find(|a| self.dir_mtime(a).is_some())
-                .unwrap_or(root)
-                .to_path_buf()
+            let known =
+                dir.ancestors().skip(1).take_while(|a| a.starts_with(root)).find(|a| self.dir_mtime(a).is_some());
+            (known.unwrap_or(root).to_path_buf(), Force::Start)
         };
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        if crate::scan::scan(self, root, &start, crate::scan::Force::Start, &cancel).is_err() {
+        if crate::scan::scan(self, root, &start, force, &cancel).is_err() {
             return Ok(None);
         }
         // Rebuilt from its parts: the index stores paths with the platform's separator only.
