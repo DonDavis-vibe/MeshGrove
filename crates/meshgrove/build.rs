@@ -21,7 +21,7 @@ fn main() {
         resource.set("ProductName", "Meshgrove");
         resource.set("FileDescription", "Meshgrove - gallery for 3D-print files");
         resource.set("CompanyName", "German Redneck Engineering");
-        resource.set("LegalCopyright", "Davis, German Redneck Engineering - GPL-3.0-or-later");
+        resource.set("LegalCopyright", "Davis and Rec0iL, German Redneck Engineering - GPL-3.0-or-later");
         if let Err(e) = resource.compile() {
             println!("cargo:warning=no icon for meshgrove.exe: {e}");
         }

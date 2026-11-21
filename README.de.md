@@ -240,7 +240,7 @@ Alle Modelle auf den Screenshots sind eigene Designs von German Redneck Engineer
 
 ## Lizenz
 
-Copyright © 2026 Davis · German Redneck Engineering
+Copyright © 2026 Davis und Rec0iL · German Redneck Engineering
 
 Meshgrove ist freie Software: Du kannst es unter den Bedingungen der
 [GNU General Public License](LICENSE), wie von der Free Software Foundation veröffentlicht,
