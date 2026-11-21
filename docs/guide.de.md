@@ -133,6 +133,13 @@ Alles, was Meshgrove kann, und wie es geht. Installation und erste Schritte steh
   → Modelle öffnen* kannst du stattdessen die große Vorschau, den Slicer, den Mesh-Editor oder das
   Standardprogramm des Systems wählen (Enter macht dasselbe). Modelle, die das gewählte Programm
   nicht öffnet, bekommen trotzdem ein Modellfenster.
+- **Nur das Modell, aus dem Dateimanager:** *Öffnen mit → Meshgrove Viewer* (Linux-Pakete und
+  `install.sh`) zeigt ein Modell allein in seinem Modellfenster, ohne das Hauptfenster. Von der
+  Bibliothek wird nichts geladen (kein Scan, keine Vorschaubilder, kein Index), und es werden
+  keine Einstellungen geschrieben. Mehrere Dateien öffnen sich in je einem Fenster, und
+  *In Meshgrove zeigen* öffnet das Hauptfenster bei der Datei. Mit
+  *Einstellungen → Allgemein → Modelle öffnen → Aus dem Dateimanager → Modellfenster* macht
+  Meshgroves normaler Starter dasselbe: der Weg unter Windows und mit dem AppImage.
 - **Ordnervorschau von der Platte:** Ordnerkacheln außerhalb der Bibliothek können auch Modelle
   aus ihren Unterordnern zeigen (*Einstellungen → Kacheln → Ordnervorschau*, standardmäßig aus,
   bis zu fünf Ebenen tief). Bei mehr als vier Modellen blenden die Bilder langsam durch.
@@ -205,7 +212,8 @@ Filamente mit Slot-Nummer und Material.
 **Jedes Modell im eigenen Fenster.** Ein Doppelklick öffnet ein Modell neben der Galerie, so
 groß du willst und mit denselben Werkzeugen. Hier wird ein Untersetzer-Halter vermessen: Zwei
 Punkte auf der Oberfläche anklicken, und du bekommst den Abstand in mm und die Differenz entlang
-jeder Achse.
+jeder Achse. Die Pfeiltasten links und rechts zeigen das vorige und das nächste Modell des
+Ordners, wie in einem Bildbetrachter.
 
 ![Ein Untersetzer-Halter im eigenen Fenster neben dem Hauptfenster, gemessen: 83,5 mm](images/screenshot-window.png)
 

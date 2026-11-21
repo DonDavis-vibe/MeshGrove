@@ -464,7 +464,8 @@ jobs:
           meshgrove-step-mesher --write-test-cube /tmp/cube.step
           meshgrove-step-mesher /tmp/cube.step /tmp/cube.stl
           test "$(stat -c %s /tmp/cube.stl)" -gt 84
-          ls -la /usr/share/applications/meshgrove.desktop /usr/share/thumbnailers/meshgrove.thumbnailer \
+          ls -la /usr/share/applications/meshgrove.desktop /usr/share/applications/meshgrove_viewer.desktop \
+            /usr/share/thumbnailers/meshgrove.thumbnailer \
             /usr/share/mime/packages/meshgrove-step.xml /usr/share/icons/hicolor/256x256/apps/meshgrove.png \
             /usr/share/doc/meshgrove
           apt-get remove -y meshgrove

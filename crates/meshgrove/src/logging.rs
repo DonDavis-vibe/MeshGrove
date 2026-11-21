@@ -5,17 +5,27 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+/// The main window's log.
+pub const MAIN: &str = "meshgrove";
+/// The log of a start that shows only model windows: it runs beside the main window, whose log
+/// a start under the same name would move aside.
+pub const VIEWER: &str = "meshgrove-viewer";
+
 /// `meshgrove.log` in the cache folder; the previous start's log is kept as `meshgrove.old.log`.
 pub fn log_file() -> Option<PathBuf> {
-    Some(crate::ui::settings::cache_dir()?.join("meshgrove.log"))
+    named(MAIN)
 }
 
-/// Starts the logger (`RUST_LOG` as usual), writing to the log file as well, and logs panics,
-/// which would otherwise leave no trace without a console.
-pub fn init() {
+fn named(name: &str) -> Option<PathBuf> {
+    Some(crate::ui::settings::cache_dir()?.join(format!("{name}.log")))
+}
+
+/// Starts the logger (`RUST_LOG` as usual), writing to the log file `name` as well, and logs
+/// panics, which would otherwise leave no trace without a console.
+pub fn init(name: &str) {
     let mut builder =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,meshgrove=info"));
-    if let Some(file) = log_file().and_then(|path| open(&path)) {
+    if let Some(file) = named(name).and_then(|path| open(&path)) {
         builder.target(env_logger::Target::Pipe(Box::new(Tee(file))));
     }
     builder.init();
@@ -29,7 +39,7 @@ pub fn init() {
 /// A fresh log file, the previous one moved aside.
 fn open(path: &std::path::Path) -> Option<File> {
     std::fs::create_dir_all(path.parent()?).ok()?;
-    let _ = std::fs::rename(path, path.with_file_name("meshgrove.old.log"));
+    let _ = std::fs::rename(path, path.with_extension("old.log"));
     File::create(path).ok()
 }
 
@@ -61,5 +71,11 @@ mod tests {
         Tee(open(&path).unwrap()).write_all(b"second start\n").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "second start\n");
         assert_eq!(std::fs::read_to_string(path.with_file_name("meshgrove.old.log")).unwrap(), "first start\n");
+        // The viewer's log keeps its own previous one and leaves the main window's alone.
+        let viewer = path.with_file_name("meshgrove-viewer.log");
+        Tee(open(&viewer).unwrap()).write_all(b"a model\n").unwrap();
+        Tee(open(&viewer).unwrap()).write_all(b"another\n").unwrap();
+        assert_eq!(std::fs::read_to_string(path.with_file_name("meshgrove-viewer.old.log")).unwrap(), "a model\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "second start\n");
     }
 }

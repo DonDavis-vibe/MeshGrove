@@ -41,6 +41,7 @@ pub enum SettingsChange {
     UiFont(Option<String>),
     /// Who draws the main window's title bar.
     TitleBar(config::TitleBar),
+    OpenFiles(config::OpenFiles),
     /// Looking for a newer release once a day; `None`: not asked yet (the title bar asks).
     UpdateCheck(Option<bool>),
     /// "Check now" on the About page.
@@ -585,6 +586,7 @@ impl Category {
                 put(config.title_bar != d.title_bar, SettingsChange::TitleBar(d.title_bar));
                 put(config.update_check != d.update_check, SettingsChange::UpdateCheck(d.update_check));
                 put(config.double_click != d.double_click, SettingsChange::DoubleClick(d.double_click));
+                put(config.open_files != d.open_files, SettingsChange::OpenFiles(d.open_files));
                 put(config.lock_panes != d.lock_panes, SettingsChange::LockPanes(d.lock_panes));
                 put(config.fold_for_plugins != d.fold_for_plugins, SettingsChange::FoldForPlugins(d.fold_for_plugins));
             }
@@ -863,6 +865,7 @@ fn changes_towards(config: &Config, target: &Config) -> Vec<SettingsChange> {
     put(c.update_check != t.update_check, &|| SettingsChange::UpdateCheck(t.update_check));
     put(c.program_icons != t.program_icons, &|| SettingsChange::ProgramIcons(t.program_icons));
     put(c.double_click != t.double_click, &|| SettingsChange::DoubleClick(t.double_click));
+    put(c.open_files != t.open_files, &|| SettingsChange::OpenFiles(t.open_files));
     put(c.lock_panes != t.lock_panes, &|| SettingsChange::LockPanes(t.lock_panes));
     put(c.fold_for_plugins != t.fold_for_plugins, &|| SettingsChange::FoldForPlugins(t.fold_for_plugins));
     // Library
@@ -1388,6 +1391,15 @@ impl SettingsDialog {
                         });
                     });
                     note(ui, &t!("settings.double_click_hint"));
+                });
+                sc::settings_block(ui, &t!("settings.open_files"), LABELS, |ui| {
+                    let (gallery, viewer) = (t!("settings.open_files_gallery"), t!("settings.open_files_viewer"));
+                    let mut index = usize::from(config.open_files == config::OpenFiles::Viewer);
+                    if sc::settings_segments(ui, &t!("settings.open_files"), &mut index, &[&*gallery, &*viewer]) {
+                        let open = if index == 1 { config::OpenFiles::Viewer } else { config::OpenFiles::Gallery };
+                        changes.push(SettingsChange::OpenFiles(open));
+                    }
+                    note(ui, &t!("settings.open_files_hint"));
                 });
             });
             sc::settings_section(ui, "panes", &t!("settings.panes"), |ui| {

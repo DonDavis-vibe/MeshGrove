@@ -1,10 +1,13 @@
 //! A model in a window of its own: double-click (or Enter) on a model opens it next to the main
 //! window, freely sizable, with the 3D viewer, its facts and "open in" the slicer and the mesh
 //! editor. Several can be
-//! open at once; each has its own camera.
+//! open at once; each has its own camera. A start with model files alone (`viewer_app`) shows
+//! the first of them in the program's own window, without the main window behind it.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use egui::{Key, RichText, Ui, ViewportBuilder, ViewportCommand, ViewportId};
 use meshgrove_core::config::PreviewQuality;
@@ -25,7 +28,12 @@ pub enum WindowAction {
     Print(PathBuf, PrintResult),
     /// Result of a viewer tool (picture saved, …) for the status bar.
     Message(String),
+    /// Show the model in the main window, which is not running (`standalone`).
+    ShowInGallery(PathBuf),
 }
+
+/// How long a notice stands in place of the mouse hints.
+const NOTICE: Duration = Duration::from_secs(6);
 
 /// Everything the windows share with the main window.
 pub struct WindowContext<'a> {
@@ -46,6 +54,8 @@ pub struct WindowContext<'a> {
     /// Meshgrove draws the title bar itself (the settings' choice), with its icon `brand`.
     pub own_title_bar: bool,
     pub brand: egui::TextureId,
+    /// No main window is behind these windows: they offer to show their model in it.
+    pub standalone: bool,
 }
 
 pub struct ModelWindow {
@@ -57,23 +67,34 @@ pub struct ModelWindow {
     model: ModelStatus,
     /// Raise the window on the next frame (it was opened again).
     focus: bool,
+    /// What a tool or a program last said and until when it stands in place of the mouse hints
+    /// (a start with model files alone has no status bar).
+    notice: Option<(String, Instant)>,
 }
 
 impl ModelWindow {
     pub fn new(entry: Entry) -> ModelWindow {
+        // A number, not the path: the window stays the same one while it steps through its folder.
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         ModelWindow {
-            id: ViewportId::from_hash_of(("model-window", &entry.path)),
+            id: ViewportId::from_hash_of(("model-window", NEXT.fetch_add(1, Ordering::Relaxed))),
             entry,
             viewer: ModelViewer::new(),
             plate: None,
             plates: Vec::new(),
             model: ModelStatus::Loading,
             focus: false,
+            notice: None,
         }
     }
 
     pub fn path(&self) -> &Path {
         &self.entry.path
+    }
+
+    /// Says this in place of the mouse hints for a while.
+    pub fn notify(&mut self, text: String) {
+        self.notice = Some((text, Instant::now() + NOTICE));
     }
 
     /// Test hook: measure between these points of the view (see [`ModelViewer::script_measure`]).
@@ -93,46 +114,87 @@ impl ModelWindow {
 
     /// Shows the window for this frame; false once the user closed it.
     pub fn show(&mut self, ctx: &egui::Context, cx: &mut WindowContext, actions: &mut Vec<WindowAction>) -> bool {
+        self.follow(ctx, cx);
+        let builder = viewport(&self.name(), cx.icon.clone(), cx.own_title_bar);
+        let mut open = true;
+        ctx.show_viewport_immediate(self.id, builder, |ui, _| open = self.frame(ui, cx, actions));
+        open
+    }
+
+    /// Shows the model in the program's own window (`ui`) instead of one beside it: a start
+    /// with model files alone. False once the user closed it.
+    pub fn show_root(&mut self, ui: &mut Ui, cx: &mut WindowContext, actions: &mut Vec<WindowAction>) -> bool {
+        self.follow(&ui.ctx().clone(), cx);
+        self.frame(ui, cx, actions)
+    }
+
+    /// The window's title for the desktop.
+    pub fn title(&self) -> String {
+        title(&self.name())
+    }
+
+    /// The model's file name (an entry of a flattened view is named with its folders).
+    fn name(&self) -> String {
+        listing::file_name(&self.entry.path)
+    }
+
+    fn follow(&mut self, ctx: &egui::Context, cx: &mut WindowContext) {
         self.update_model(ctx, cx.meshes);
         self.viewer.set_quality(cx.quality);
         self.viewer.set_free_orbit(cx.free_orbit);
-        let name = listing::file_name(&self.entry.path);
-        let builder = ViewportBuilder::default()
-            .with_title(format!("{name} – Meshgrove"))
-            .with_app_id("meshgrove")
-            .with_icon(cx.icon.clone())
-            .with_decorations(!cx.own_title_bar)
-            .with_inner_size([1040.0, 720.0])
-            .with_min_inner_size([480.0, 360.0]);
+    }
+
+    /// What the window holds, in a window of its own or in the program's: Meshgrove's title bar
+    /// (if it draws one), the viewer and the facts. False once the user closed the window.
+    fn frame(&mut self, ui: &mut Ui, cx: &mut WindowContext, actions: &mut Vec<WindowAction>) -> bool {
         let mut open = true;
-        ctx.show_viewport_immediate(self.id, builder, |ui, _| {
-            if std::mem::take(&mut self.focus) {
-                ui.ctx().send_viewport_cmd(ViewportCommand::Focus);
+        if std::mem::take(&mut self.focus) {
+            ui.ctx().send_viewport_cmd(ViewportCommand::Focus);
+        }
+        if ui.input(|i| i.viewport().close_requested() || i.key_pressed(Key::Escape)) {
+            open = false;
+        }
+        if let Some(input) = cx.space
+            && ui.input(|i| i.viewport().focused == Some(true))
+        {
+            self.viewer.apply_space(input);
+        }
+        // As a picture viewer does: the arrow keys show the model before and the one after.
+        if !ui.ctx().egui_wants_keyboard_input() {
+            let pressed = |key| ui.input(|i| i.key_pressed(key));
+            let by = isize::from(pressed(Key::ArrowRight)) - isize::from(pressed(Key::ArrowLeft));
+            if by != 0 {
+                self.step(by);
             }
-            if ui.input(|i| i.viewport().close_requested() || i.key_pressed(Key::Escape)) {
-                open = false;
+        }
+        let name = self.name();
+        if cx.own_title_bar {
+            // As the main window's: the model's name, and whose window it is.
+            use solidcraft_ui_kit::window_chrome::WindowAction as Button;
+            match super::appearance::title_bar(ui, cx.brand, &name, Some("Meshgrove"), |_, _| {}) {
+                Some(Button::Close) => open = false,
+                Some(button) => button.send(ui.ctx()),
+                None => {}
             }
-            if let Some(input) = cx.space
-                && ui.input(|i| i.viewport().focused == Some(true))
-            {
-                self.viewer.apply_space(input);
-            }
-            if cx.own_title_bar {
-                // As the main window's: the model's name, and whose window it is.
-                use solidcraft_ui_kit::window_chrome::WindowAction as Button;
-                match super::appearance::title_bar(ui, cx.brand, &name, Some("Meshgrove"), |_, _| {}) {
-                    Some(Button::Close) => open = false,
-                    Some(button) => button.send(ui.ctx()),
-                    None => {}
-                }
-            }
-            // Widget ids must not collide with the main window's or other model windows'.
-            ui.push_id(self.id, |ui| self.contents(ui, &name, cx, actions));
-            if cx.own_title_bar {
-                solidcraft_ui_kit::window_chrome::resize_zones(ui);
-            }
-        });
+        }
+        // Widget ids must not collide with the main window's or other model windows'.
+        ui.push_id(self.id, |ui| self.contents(ui, &name, cx, actions));
+        if cx.own_title_bar {
+            solidcraft_ui_kit::window_chrome::resize_zones(ui);
+        }
         open
+    }
+
+    /// Shows the model `by` places after this one among the models of its folder (before it for
+    /// a negative `by`), in the order the gallery lists them; at either end it stays as it is.
+    fn step(&mut self, by: isize) {
+        if let Some(entry) = neighbour(&self.entry.path, by) {
+            self.entry = entry;
+            self.plate = None;
+            self.plates.clear();
+            self.model = ModelStatus::Loading;
+            self.notice = None;
+        }
     }
 
     fn contents(&mut self, ui: &mut Ui, name: &str, cx: &mut WindowContext, actions: &mut Vec<WindowAction>) {
@@ -148,6 +210,12 @@ impl ModelWindow {
                 }
                 if let Some(index) = editor {
                     actions.push(WindowAction::OpenInEditor(self.entry.path.clone(), index));
+                }
+                if cx.standalone {
+                    let show = super::settings_kit::bar_button(ui, &t!("viewer.show_in_gallery"));
+                    if show.on_hover_text(t!("viewer.show_in_gallery_hint")).clicked() {
+                        actions.push(WindowAction::ShowInGallery(self.entry.path.clone()));
+                    }
                 }
                 if cx.can_log_prints {
                     ui.horizontal(|ui| {
@@ -171,11 +239,22 @@ impl ModelWindow {
                 ui.add_space(6.0);
                 let path = RichText::new(self.entry.path.display().to_string()).small().weak();
                 ui.add(egui::Label::new(path).wrap());
+                ui.add_space(6.0);
+                ui.add(egui::Label::new(RichText::new(t!("viewer.step_hint")).small().weak()).wrap());
             });
         });
         egui::Panel::bottom("model-hint").show(ui, |ui| {
             ui.add_space(2.0);
-            ui.weak(t!("viewer.hint"));
+            let now = Instant::now();
+            match self.notice.as_ref().filter(|(_, until)| now < *until) {
+                Some((text, until)) => {
+                    ui.ctx().request_repaint_after(*until - now);
+                    ui.add(egui::Label::new(text.as_str()).truncate());
+                }
+                None => {
+                    ui.weak(t!("viewer.hint"));
+                }
+            }
             ui.add_space(2.0);
         });
         egui::CentralPanel::default().show(ui, |ui| match &self.model {
@@ -226,8 +305,69 @@ impl ModelWindow {
     }
 }
 
+/// The model `by` places after `path` among the models of its folder, as the gallery lists them
+/// (natural name order), if there is one.
+fn neighbour(path: &Path, by: isize) -> Option<Entry> {
+    let models = listing::list_dir(path.parent()?).ok()?.into_iter().filter(|e| crate::meshes::viewable(e.kind));
+    let models: Vec<Entry> = models.collect();
+    let at = models.iter().position(|e| e.path == path)?;
+    models.into_iter().nth(at.checked_add_signed(by)?)
+}
+
+/// A model window's frame, for one beside the main window and for the program's own: the
+/// app's icon and kind of title bar, sized for a model and its facts.
+pub fn viewport(name: &str, icon: Arc<egui::IconData>, own_title_bar: bool) -> ViewportBuilder {
+    ViewportBuilder::default()
+        .with_title(title(name))
+        // Matches the .desktop file name so KDE shows the right icon on Wayland.
+        .with_app_id("meshgrove")
+        .with_icon(icon)
+        .with_decorations(!own_title_bar)
+        .with_inner_size([1040.0, 720.0])
+        .with_min_inner_size([480.0, 360.0])
+}
+
+/// The model's file name, and whose window it is.
+fn title(name: &str) -> String {
+    format!("{name} – Meshgrove")
+}
+
 /// The app icon for model windows, decoded once (the builder is passed every frame).
 pub fn icon(decode: impl FnOnce() -> egui::IconData) -> Arc<egui::IconData> {
     static ICON: OnceLock<Arc<egui::IconData>> = OnceLock::new();
     ICON.get_or_init(|| Arc::new(decode())).clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The arrow keys go through the folder's models as the gallery lists them: natural order,
+    /// models only, and no further than the first and the last.
+    #[test]
+    fn stepping_follows_the_folders_models_in_natural_order() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["part10.stl", "part2.stl", "notes.txt", "plate.3mf", ".hidden.stl", "print.gcode"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        std::fs::create_dir(dir.path().join("more.stl")).unwrap();
+        let at = |name: &str| dir.path().join(name);
+        let next = |name: &str, by| neighbour(&at(name), by).map(|e| e.name);
+        assert_eq!(next("part2.stl", 1).as_deref(), Some("part10.stl"));
+        assert_eq!(next("part10.stl", 1).as_deref(), Some("plate.3mf"));
+        assert_eq!(next("plate.3mf", -1).as_deref(), Some("part10.stl"));
+        assert_eq!(next("part2.stl", -1), None);
+        assert_eq!(next("plate.3mf", 1), None);
+        // A file the folder does not list (hidden, or gone meanwhile) has no place in the row.
+        assert_eq!(next(".hidden.stl", 1), None);
+        assert_eq!(next("gone.stl", 1), None);
+
+        let mut window = ModelWindow::new(Entry::from_path(&at("part2.stl")).unwrap());
+        window.notify("picture saved".into());
+        window.step(1);
+        assert_eq!((window.path(), window.title().as_str()), (at("part10.stl").as_path(), "part10.stl – Meshgrove"));
+        assert!(window.notice.is_none() && matches!(window.model, ModelStatus::Loading));
+        window.step(-5);
+        assert_eq!(window.path(), at("part10.stl"));
+    }
 }

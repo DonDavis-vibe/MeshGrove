@@ -24,19 +24,61 @@ mod print_export;
 mod proposals;
 mod screenshot;
 mod spacemouse;
+mod startup;
 mod text_preview;
 mod thumbs;
 mod ui;
 mod update;
+mod viewer_app;
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
-use meshgrove_core::config::Config;
+use meshgrove_core::config::{Config, OpenFiles};
+
+/// What this start shows.
+#[derive(Debug, PartialEq)]
+enum Launch {
+    /// The main window: at this folder, or at this file's folder with the file selected.
+    Gallery(Option<PathBuf>),
+    /// Only model windows, one for each of these files.
+    Viewer(Vec<PathBuf>),
+}
+
+/// Reads the command line (without the program's name): `--view FILES…` shows the models among
+/// the files in windows of their own, `--gallery PATH` the main window; with neither, the
+/// settings say (`viewer`) what model files open in. A start without a model (`is_model`) among
+/// its files shows the main window, at the first of them.
+fn launch(args: impl IntoIterator<Item = OsString>, viewer: bool, is_model: impl Fn(&Path) -> bool) -> Launch {
+    let mut paths: Vec<PathBuf> = args.into_iter().filter(|a| !a.is_empty()).map(PathBuf::from).collect();
+    let viewer = match paths.first().and_then(|p| p.to_str()) {
+        Some("--view") => {
+            paths.remove(0);
+            true
+        }
+        Some("--gallery") => {
+            paths.remove(0);
+            false
+        }
+        _ => viewer,
+    };
+    let models: Vec<PathBuf> = paths.iter().filter(|p| is_model(p)).cloned().collect();
+    if viewer && !models.is_empty() { Launch::Viewer(models) } else { Launch::Gallery(paths.into_iter().next()) }
+}
+
+/// A file the model windows show.
+fn is_model_file(path: &Path) -> bool {
+    let kind = meshgrove_core::Kind::from_file_name(&meshgrove_core::listing::file_name(path));
+    meshes::viewable(kind) && path.is_file()
+}
 
 fn main() -> eframe::Result {
-    logging::init();
     meshgrove_core::config::migrate_legacy_dirs();
-    let (config, config_error) = match Config::load() {
+    let loaded = Config::load();
+    let viewer = matches!(&loaded, Ok(config) if config.open_files == OpenFiles::Viewer);
+    let launch = launch(std::env::args_os().skip(1), viewer, is_model_file);
+    logging::init(if matches!(launch, Launch::Viewer(_)) { logging::VIEWER } else { logging::MAIN });
+    let (config, config_error) = match loaded {
         Ok(config) => (config, None),
         Err(e) => {
             log::warn!("ignoring broken settings: {e}");
@@ -48,13 +90,18 @@ fn main() -> eframe::Result {
     meshgrove_core::config::set_model_units(config.model_units);
     meshgrove_core::config::set_display_units(config.display_units);
 
-    // Optional argument: a folder to open, or a file to open its folder with it selected.
-    let start = std::env::args_os()
-        .nth(1)
-        .filter(|a| !a.is_empty())
-        .map(PathBuf::from)
-        .map(|p| std::path::absolute(&p).unwrap_or(p))
-        .map(|p| meshgrove_core::fsinfo::spelled_like_root(&p, &config.library_roots));
+    let spelled = |p: PathBuf| {
+        let p = std::path::absolute(&p).unwrap_or(p);
+        meshgrove_core::fsinfo::spelled_like_root(&p, &config.library_roots)
+    };
+    // A folder to open, or a file to open its folder with it selected.
+    let start = match launch {
+        Launch::Viewer(files) => {
+            let files = files.into_iter().map(spelled).collect();
+            return viewer_app::run(config, files);
+        }
+        Launch::Gallery(start) => start.map(spelled),
+    };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(t!("app.title"))
@@ -82,4 +129,47 @@ pub(crate) fn app_icon() -> egui::IconData {
     let png = include_bytes!("../../../packaging/icons/meshgrove-256.png");
     let image = image::load_from_memory(png).expect("bundled icon is a valid PNG").into_rgba8();
     egui::IconData { width: image.width(), height: image.height(), rgba: image.into_raw() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn started(args: &[&str], viewer: bool) -> Launch {
+        let is_model = |p: &Path| p.extension().is_some_and(|e| e == "stl" || e == "3mf");
+        launch(args.iter().map(OsString::from), viewer, is_model)
+    }
+
+    fn paths(names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(PathBuf::from).collect()
+    }
+
+    /// The launcher "Meshgrove Viewer" shows the models among its files, each in its window,
+    /// whatever the settings say; what is no model does not come along.
+    #[test]
+    fn view_shows_only_the_models_in_windows_of_their_own() {
+        let files = ["--view", "/m/a.stl", "/m/parts", "/m/pack.zip", "/m/b.3mf"];
+        assert_eq!(started(&files, false), Launch::Viewer(paths(&["/m/a.stl", "/m/b.3mf"])));
+        // Nothing to show in a model window: the main window opens there, as it always did.
+        assert_eq!(started(&["--view", "/m/parts"], false), Launch::Gallery(Some("/m/parts".into())));
+        assert_eq!(started(&["--view"], true), Launch::Gallery(None));
+    }
+
+    /// Without a flag the settings decide, and only for models: a folder opens the main window.
+    #[test]
+    fn the_settings_say_what_a_model_opens_in() {
+        assert_eq!(started(&["/m/a.stl"], false), Launch::Gallery(Some("/m/a.stl".into())));
+        assert_eq!(started(&["/m/a.stl", "/m/b.3mf"], true), Launch::Viewer(paths(&["/m/a.stl", "/m/b.3mf"])));
+        assert_eq!(started(&["/m/parts"], true), Launch::Gallery(Some("/m/parts".into())));
+        assert_eq!(started(&[], true), Launch::Gallery(None));
+        assert_eq!(started(&[""], false), Launch::Gallery(None));
+    }
+
+    /// "Show in Meshgrove" from a model window must reach the main window, also when the
+    /// settings send models to the viewer.
+    #[test]
+    fn gallery_always_shows_the_main_window() {
+        assert_eq!(started(&["--gallery", "/m/a.stl"], true), Launch::Gallery(Some("/m/a.stl".into())));
+        assert_eq!(started(&["--gallery"], true), Launch::Gallery(None));
+    }
 }

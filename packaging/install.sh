@@ -17,6 +17,7 @@ ICON_SIZES=(16 24 32 48 64 128 256 512)
 FILES=(
     "${PROGRAMS[@]/#/$BIN/}"
     "$DATA/applications/meshgrove.desktop"
+    "$DATA/applications/meshgrove_viewer.desktop"
     "$DATA/mime/packages/meshgrove-step.xml"
     "$DATA/thumbnailers/meshgrove.thumbnailer"
 )
@@ -68,7 +69,9 @@ for size in "${ICON_SIZES[@]}"; do
 done
 install -Dm644 packaging/mime/meshgrove-step.xml "$DATA/mime/packages/meshgrove-step.xml"
 mkdir -p "$DATA/applications" "$DATA/thumbnailers"
-sed "s|@BIN@|$BIN|g" packaging/meshgrove.desktop > "$DATA/applications/meshgrove.desktop"
+for launcher in meshgrove meshgrove_viewer; do
+    sed "s|@BIN@|$BIN|g" "packaging/$launcher.desktop" > "$DATA/applications/$launcher.desktop"
+done
 sed "s|@BIN@|$BIN|g" packaging/meshgrove.thumbnailer > "$DATA/thumbnailers/meshgrove.thumbnailer"
 refresh
 # Old "no preview possible" markers would keep Dolphin from asking our thumbnailer.

@@ -7,7 +7,7 @@
 //! at the pointer from 0.7 s on and `MESHGROVE_WHEEL=dy` turns the mouse wheel there for half a second after 1 s.
 //! `MESHGROVE_CLICKS=x,y;x,y;…` clicks those points one after the other, from 3 s on, every 0.8 s
 //! (`x,y*2` double-clicks, `x,y*r` right-clicks, `x,y*s` clicks with Shift held), and `MESHGROVE_TYPE=text` types the text after the last click; steps
-//! separated by `|` follow half a second apart, `{enter}`, `{down}` and `{esc}` press those keys,
+//! separated by `|` follow half a second apart, `{enter}`, `{down}`, `{left}`, `{right}` and `{esc}` press those keys,
 //! `{click x,y}` clicks there (to click after typing), `{rclick x,y}` right-clicks, `{wheel dy}` turns
 //! the wheel at the pointer, `{copy}`, `{cut}` and `{paste}` are Ctrl+C, Ctrl+X and Ctrl+V;
 //! `{press x,y}`, `{move x,y}` and `{release}` drag with the left button, `{rpress x,y}` instead
@@ -121,6 +121,11 @@ impl ScreenshotHook {
         })
     }
 
+    /// The picture is saved and the window was told to close.
+    pub fn finished(&self) -> bool {
+        self.saved.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     pub fn tick(&mut self, ctx: &egui::Context) {
         // Frames keep coming until the picture is saved, also in a window with nothing to
         // animate: the picture is taken in one frame and handed over in a later one, and an
@@ -218,6 +223,8 @@ impl ScreenshotHook {
             let key = match step.as_str() {
                 "{enter}" => Some(egui::Key::Enter),
                 "{down}" => Some(egui::Key::ArrowDown),
+                "{left}" => Some(egui::Key::ArrowLeft),
+                "{right}" => Some(egui::Key::ArrowRight),
                 "{esc}" => Some(egui::Key::Escape),
                 _ => None,
             };

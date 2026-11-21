@@ -13,9 +13,12 @@ for program in meshgrove meshgrove-step-mesher meshgrove-thumbnailer meshgrove-m
     strip --strip-unneeded "$dest/usr/bin/$program"
 done
 mkdir -p "$dest/usr/share/applications" "$dest/usr/share/thumbnailers"
-sed "s|@BIN@|/usr/bin|g" packaging/meshgrove.desktop > "$dest/usr/share/applications/meshgrove.desktop"
+for launcher in meshgrove meshgrove_viewer; do
+    sed "s|@BIN@|/usr/bin|g" "packaging/$launcher.desktop" > "$dest/usr/share/applications/$launcher.desktop"
+    chmod 644 "$dest/usr/share/applications/$launcher.desktop"
+done
 sed "s|@BIN@|/usr/bin|g" packaging/meshgrove.thumbnailer > "$dest/usr/share/thumbnailers/meshgrove.thumbnailer"
-chmod 644 "$dest/usr/share/applications/meshgrove.desktop" "$dest/usr/share/thumbnailers/meshgrove.thumbnailer"
+chmod 644 "$dest/usr/share/thumbnailers/meshgrove.thumbnailer"
 install -Dm644 packaging/mime/meshgrove-step.xml "$dest/usr/share/mime/packages/meshgrove-step.xml"
 install -Dm644 packaging/linux/70-meshgrove-3dmouse.rules "$dest/usr/lib/udev/rules.d/70-meshgrove-3dmouse.rules"
 for size in 16 24 32 48 64 128 256 512; do
