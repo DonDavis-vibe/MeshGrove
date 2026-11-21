@@ -208,11 +208,10 @@ are just as welcome.
 
 ## Credits
 
-Meshgrove is developed by **Davis** as a project of
-**[German Redneck Engineering](https://redneck-design.de/)**. The new interface on
+Meshgrove is developed by **Davis** and **[@Rec0iL](https://github.com/Rec0iL)** as a project
+of **[German Redneck Engineering](https://redneck-design.de/)**. The new interface on
 [SolidCraft](https://github.com/tangency-labs/solidcraft)'s UI kit (0.12), the AI agents, the
-review, archives and the duplicates work come from **[@Rec0iL](https://github.com/Rec0iL)**.
-Thank you!
+review, archives and the duplicates work are Rec0iL's.
 
 Built on excellent open-source work: [egui/eframe](https://github.com/emilk/egui) with
 [egui_tiles](https://github.com/rerun-io/egui_tiles), [egui_extras](https://github.com/emilk/egui)

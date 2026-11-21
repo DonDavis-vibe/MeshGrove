@@ -342,7 +342,8 @@ toast.moved_skipped: "%{count} Datei(en) nach %{to} verschoben, %{skipped} über
 
 settings.folder_hint: "/pfad/zum/ordner"
 settings.developer: "Entwickelt von"
-settings.developer_value: "Davis · ein Projekt von"
+settings.developer_first: "Davis und"
+settings.developer_project: "· ein Projekt von"
 settings.source: "Quellcode"
 settings.license: "Lizenz"
 toast.slicer_handed_over: "%{count} Datei(en) an den offenen %{name} übergeben"

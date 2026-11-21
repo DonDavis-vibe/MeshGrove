@@ -342,7 +342,8 @@ toast.moved_skipped: "Moved %{count} file(s) into %{to}, %{skipped} skipped (gon
 
 settings.folder_hint: "/path/to/folder"
 settings.developer: "Developed by"
-settings.developer_value: "Davis · a project of"
+settings.developer_first: "Davis and"
+settings.developer_project: "· a project of"
 settings.source: "Source code"
 settings.license: "License"
 toast.slicer_handed_over: "Handed %{count} file(s) to the open %{name}"

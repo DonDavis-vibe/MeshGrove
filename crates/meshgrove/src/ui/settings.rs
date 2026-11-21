@@ -2261,7 +2261,11 @@ fn about(ui: &mut Ui, info: &AppInfo, changes: &mut Vec<SettingsChange>) {
     };
     row(ui, &t!("settings.developer"), |ui| {
         ui.horizontal(|ui| {
-            ui.label(t!("settings.developer_value"));
+            // One sentence: the names stand a word's space apart, not a control's.
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(t!("settings.developer_first"));
+            ui.hyperlink_to("Rec0iL", "https://github.com/Rec0iL");
+            ui.label(t!("settings.developer_project"));
             ui.hyperlink_to("German Redneck Engineering", env!("CARGO_PKG_HOMEPAGE"));
         });
     });
