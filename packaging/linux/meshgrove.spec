@@ -37,6 +37,7 @@ mv %{buildroot}%{_docdir}/%{name}/LICENSE %{buildroot}%{_docdir}/%{name}/THIRD-P
 %{_bindir}/meshgrove-thumbnailer
 %{_bindir}/meshgrove-mcp
 %{_datadir}/applications/meshgrove.desktop
+%{_datadir}/applications/meshgrove_viewer.desktop
 %{_datadir}/icons/hicolor/*/apps/meshgrove.png
 %{_datadir}/mime/packages/meshgrove-step.xml
 %{_datadir}/thumbnailers/meshgrove.thumbnailer

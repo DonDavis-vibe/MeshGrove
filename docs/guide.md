@@ -125,6 +125,12 @@ Everything Meshgrove does, and how. Installation and the first steps are in the
   make it show the large preview, open the model in the slicer or the mesh editor, or open it
   with the system's default application instead (Enter does the same). Models that program
   does not open still get a model window.
+- **Only the model, from the file manager:** *Open with → Meshgrove Viewer* (Linux packages and
+  `install.sh`) shows a model in its model window alone, without the main window. Nothing of
+  the library is loaded (no scan, no thumbnails, no index) and no settings are written. Several
+  files open in a window each, and *Show in Meshgrove* opens the main window at the file. *Settings → General → Opening models →
+  From the file manager → Model window* makes Meshgrove's own launcher do the same: the way to
+  get it on Windows and with the AppImage.
 - **Folder previews from disk:** folder tiles outside the library can show models from their
   subfolders too (*Settings → Tiles → Folder previews*, off by default, up to five levels
   deep). With more than four models the pictures slowly fade through them.
@@ -192,7 +198,8 @@ with their slot number and material.
 
 **Every model in a window of its own.** Double-click a model to open it next to the gallery, as
 large as you like and with the same tools. Here it measures a coaster holder: click two points
-on the surface to get the distance in mm, with the difference along each axis.
+on the surface to get the distance in mm, with the difference along each axis. The left and
+right arrow keys show the previous and the next model of the folder, as a picture viewer does.
 
 ![A coaster holder in its own window next to the main window, measured at 83.5 mm](images/screenshot-window.png)
 

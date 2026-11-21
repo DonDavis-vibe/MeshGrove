@@ -213,6 +213,18 @@ pub enum TitleBar {
     System,
 }
 
+/// What Meshgrove shows when it is started with model files (a file manager's "open"); the
+/// launcher "Meshgrove Viewer" (`--view`) always shows the model windows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenFiles {
+    /// The main window at the file's folder, with the file selected.
+    #[default]
+    Gallery,
+    /// Only a model window for each file, without the main window and the library behind it.
+    Viewer,
+}
+
 /// What a double-click (or Enter) on a model does. Models the chosen program does not open
 /// go to a model window instead.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -749,6 +761,8 @@ pub struct Config {
     pub ui_font: Option<String>,
     /// The main window's title bar: Meshgrove's own, or the desktop's.
     pub title_bar: TitleBar,
+    /// What a start with model files shows: the main window, or only their model windows.
+    pub open_files: OpenFiles,
     /// Looking for a newer release once a day (one request to GitHub, nothing about the user);
     /// `None`: not asked yet, so nothing is sent until the user answers.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1235,6 +1249,7 @@ impl Default for Config {
             ui_theme: None,
             ui_font: None,
             title_bar: TitleBar::default(),
+            open_files: OpenFiles::default(),
             update_check: None,
             program_icons: true,
             slicers: None,

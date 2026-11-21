@@ -212,11 +212,10 @@ dalassen. Fehlermeldungen, Ideen und ein ⭐ auf GitHub sind genauso willkommen.
 
 ## Danksagung
 
-Meshgrove wird von **Davis** als Projekt von
+Meshgrove wird von **Davis** und **[@Rec0iL](https://github.com/Rec0iL)** als Projekt von
 **[German Redneck Engineering](https://redneck-design.de/)** entwickelt. Die neue Oberfläche auf
 dem UI-Kit von [SolidCraft](https://github.com/tangency-labs/solidcraft) (0.12), die KI-Agenten,
-die Prüfliste, die Archive und die Arbeit an den Duplikaten stammen von
-**[@Rec0iL](https://github.com/Rec0iL)**. Danke!
+die Prüfliste, die Archive und die Arbeit an den Duplikaten stammen von Rec0iL.
 
 Es baut auf großartiger Open-Source-Arbeit auf: [egui/eframe](https://github.com/emilk/egui) mit
 [egui_tiles](https://github.com/rerun-io/egui_tiles), [egui_extras](https://github.com/emilk/egui)

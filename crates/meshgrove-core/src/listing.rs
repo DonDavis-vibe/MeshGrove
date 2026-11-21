@@ -20,6 +20,17 @@ impl Entry {
     pub fn is_dir(&self) -> bool {
         self.kind == Kind::Folder
     }
+
+    /// The entry of one file or folder, as [`list_dir`] gives it for its folder (symlinks
+    /// followed): for a path that comes from outside a listing, e.g. the command line.
+    pub fn from_path(path: &Path) -> io::Result<Entry> {
+        Ok(Entry::of(file_name(path), path.to_path_buf(), &std::fs::metadata(path)?))
+    }
+
+    fn of(name: String, path: PathBuf, meta: &std::fs::Metadata) -> Entry {
+        let kind = if meta.is_dir() { Kind::Folder } else { Kind::from_file_name(&name) };
+        Entry { name, path, kind, size: if meta.is_dir() { 0 } else { meta.len() }, modified: meta.modified().ok() }
+    }
 }
 
 /// Dotfiles, Windows system folders and Explorer's own leftovers (`desktop.ini`, `Thumbs.db`),
@@ -60,14 +71,7 @@ pub fn list_dir(dir: &Path) -> io::Result<Vec<Entry>> {
         if has_hidden_attribute(&meta) {
             continue;
         }
-        let kind = if meta.is_dir() { Kind::Folder } else { Kind::from_file_name(&name) };
-        entries.push(Entry {
-            name,
-            path,
-            kind,
-            size: if meta.is_dir() { 0 } else { meta.len() },
-            modified: meta.modified().ok(),
-        });
+        entries.push(Entry::of(name, path, &meta));
     }
     entries.sort_by(|a, b| b.is_dir().cmp(&a.is_dir()).then_with(|| natural_cmp(&a.name, &b.name)));
     Ok(entries)
@@ -227,6 +231,20 @@ pub fn readme_excerpt(dir: &Path, max_chars: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file named on its own (the command line) is the entry its folder's listing has for it.
+    #[test]
+    fn a_path_gives_the_entry_of_its_listing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("cube.stl");
+        std::fs::write(&file, b"solid cube").unwrap();
+        std::fs::create_dir(dir.path().join("parts")).unwrap();
+        let listed = list_dir(dir.path()).unwrap();
+        assert_eq!(Entry::from_path(&file).unwrap(), listed[1]);
+        assert_eq!((listed[1].kind, listed[1].size), (Kind::Stl, 10));
+        assert_eq!(Entry::from_path(&dir.path().join("parts")).unwrap(), listed[0]);
+        assert!(Entry::from_path(&dir.path().join("gone.stl")).is_err());
+    }
 
     /// An archive's tile is pictured from its members, from any folder: the model in a subfolder
     /// counts for the archive and for that folder inside it, not for another one.

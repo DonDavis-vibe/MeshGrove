@@ -9,14 +9,13 @@ use meshgrove_core::cache::{ThumbCache, ThumbMeta};
 use meshgrove_core::changes::ChangeInfo;
 use meshgrove_core::checks::MeshChecks;
 use meshgrove_core::config::{
-    Config, DisplayUnits, DoubleClick, DuplicatesKeep, GalleryView, ImportAtStart, ModelUnits, PrintFilter, Program,
-    Slicer, SortKey, TILE_SIZE, TileTags,
+    Config, DisplayUnits, DoubleClick, DuplicatesKeep, GalleryView, ImportAtStart, ModelUnits, PrintFilter, SortKey,
+    TILE_SIZE, TileTags,
 };
 use meshgrove_core::db::Library;
 use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::lists::{ListInfo, ListKind, PrintResult, PrintStatus};
-use meshgrove_core::printer::{self, Printer};
-use meshgrove_core::programs;
+use meshgrove_core::printer::Printer;
 use meshgrove_core::{Kind, archive, archives, copies, query};
 use meshgrove_render::Renderer;
 
@@ -29,6 +28,7 @@ use crate::meshes::{self, MeshState, MeshStore};
 use crate::nav::{Listing, Navigator};
 use crate::print_export;
 use crate::proposals::ProposalWatcher;
+use crate::startup::{self, Programs};
 use crate::text_preview::TextPreview;
 use crate::thumbs::{ThumbResult, ThumbService};
 use crate::ui::details::{
@@ -190,13 +190,9 @@ pub struct App {
     ai_connect: crate::assist::connect::AiConnect,
     /// Looks for a newer release (once the user said yes) and puts it in place.
     updater: crate::update::Updater,
-    /// The slicers models can be sent to, and which one is the default.
-    slicers: Vec<Slicer>,
-    slicer_names: Vec<String>,
-    default_slicer: usize,
-    /// Mesh editors and CAD programs for "open in …", and which one is the default.
-    editors: Vec<Program>,
-    default_editor: usize,
+    /// The slicers models can be sent to and the mesh editors and CAD programs for "open in …",
+    /// with the default one of each.
+    programs: Programs,
     /// Context-menu facts for `menu_for` (recomputed when the selection changes).
     menu: MenuContext,
     menu_for: Vec<PathBuf>,
@@ -305,56 +301,10 @@ impl App {
         start: Option<PathBuf>,
     ) -> anyhow::Result<App> {
         let rs = cc.wgpu_render_state.as_ref().context("eframe was not started with the wgpu renderer")?;
-        // Ctrl +/- and Ctrl+wheel resize tiles instead of zooming the whole UI.
-        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-        // The theme from the settings; `MESHGROVE_THEME` overrides it for one start (screenshots).
-        crate::ui::appearance::install();
         let mut config = config;
-        let theme = std::env::var("MESHGROVE_THEME").ok().or_else(|| config.ui_theme.clone());
-        crate::ui::appearance::apply(&cc.egui_ctx, theme.as_deref().filter(|t| !t.is_empty()));
-        apply_fonts(&cc.egui_ctx, config.ui_font.as_deref(), &BTreeSet::new());
-
-        // Slicers never chosen in the settings: take all that are installed.
-        if config.slicers.is_none() {
-            let found: Vec<Slicer> = programs::detect_slicers().into_iter().map(|d| d.program).collect();
-            if !found.is_empty() {
-                config.default_slicer = found.first().map(|s| s.name.clone());
-                config.slicers = Some(found);
-            }
-        }
-        let slicers = config.slicers.clone().unwrap_or_default();
-        for s in &slicers {
-            log::info!("slicer: {} ({})", s.name, s.program.display());
-        }
-        if slicers.is_empty() {
-            log::info!("no slicer found; models open with the default application");
-        }
-        let default_slicer = Config::default_slicer_index(&slicers, config.default_slicer.as_deref());
-        let slicer_names = slicers.iter().map(|s| s.name.clone()).collect();
-        if config.editors.is_none() {
-            let found: Vec<Program> = programs::detect_editors().into_iter().map(|d| d.program).collect();
-            if !found.is_empty() {
-                config.default_editor = found.first().map(|e| e.name.clone());
-                config.editors = Some(found);
-            }
-        }
-        let editors = config.editors.clone().unwrap_or_default();
-        for e in &editors {
-            log::info!("mesh editor: {} ({})", e.name, e.program.display());
-        }
-        let default_editor = Config::default_slicer_index(&editors, config.default_editor.as_deref());
-        // Printers never chosen in the settings: take all the slicers know.
-        if config.printers.is_none() {
-            let found = printer::detect_all();
-            if !found.is_empty() {
-                config.default_printer = found.first().map(|d| d.printer.name.clone());
-                config.printers = Some(found.into_iter().map(|d| d.printer).collect());
-            }
-        }
-        let printers = config.printers_in_order();
-        for p in &printers {
-            log::info!("printer: {} ({} × {} × {} mm)", p.name, p.x, p.y, p.z);
-        }
+        startup::look(&cc.egui_ctx, &config);
+        let programs = Programs::of(&mut config);
+        let printers = startup::printers(&mut config);
         let cache = ThumbCache::new(ThumbCache::default_location().context("no cache directory")?);
         let db_path = Library::default_location().context("no data directory")?;
         let library = LibraryService::start(db_path.clone(), config.library_roots.clone(), cc.egui_ctx.clone());
@@ -426,11 +376,7 @@ impl App {
                 std::env::var_os("MESHGROVE_SCREENSHOT").is_none() && crate::assist::connect::AiConnect::allowed(),
             ),
             updater: crate::update::Updater::new(),
-            slicers,
-            slicer_names,
-            default_slicer,
-            editors,
-            default_editor,
+            programs,
             menu: MenuContext::default(),
             menu_for: Vec::new(),
             cut: Vec::new(),
@@ -492,13 +438,7 @@ impl App {
             messages: unbounded(),
             settings: SettingsDialog::default(),
             font_previews: BTreeSet::new(),
-            brand: {
-                let png = include_bytes!("../../../packaging/icons/meshgrove-64.png");
-                let icon = image::load_from_memory(png).expect("bundled icon is a valid PNG").into_rgba8();
-                let size = [icon.width() as usize, icon.height() as usize];
-                let icon = egui::ColorImage::from_rgba_unmultiplied(size, icon.as_raw());
-                cc.egui_ctx.load_texture("brand", icon, egui::TextureOptions::LINEAR)
-            },
+            brand: startup::brand(&cc.egui_ctx),
             #[cfg(feature = "plugins")]
             plugins: crate::plugins::PluginHost::new(cc.egui_ctx.clone()),
             #[cfg(feature = "plugins")]
@@ -668,7 +608,7 @@ impl App {
                     }
                     self.open_preview();
                 }
-                DoubleClick::Slicer if !self.slicers.is_empty() && kind.is_sliceable() => {
+                DoubleClick::Slicer if !self.programs.slicers.is_empty() && kind.is_sliceable() => {
                     self.open_in_slicer(vec![entry.path]);
                 }
                 DoubleClick::Editor if self.editor_for(kind).is_some() => {
@@ -715,41 +655,26 @@ impl App {
 
     /// Hands the models among `files` to the default slicer (several at once if it allows).
     fn open_in_slicer(&mut self, files: Vec<PathBuf>) {
-        self.open_in_slicer_with(files, self.default_slicer);
+        self.open_in_slicer_with(files, self.programs.default_slicer);
     }
 
     /// Hands the models among `files` to the slicer number `index` of the list.
     fn open_in_slicer_with(&mut self, files: Vec<PathBuf>, index: usize) {
-        let models: Vec<PathBuf> =
-            files.into_iter().filter(|p| Kind::from_file_name(&listing::file_name(p)).is_sliceable()).collect();
-        let Some(slicer) = self.slicers.get(index) else { return };
-        if models.is_empty() {
-            return;
+        let Some((message, sent)) = self.programs.open_in_slicer(files, index) else { return };
+        let keep = usize::from(self.config.recent_prints);
+        if keep > 0 && !sent.is_empty() {
+            self.library.list(ListOp::Sent(sent, keep));
         }
-        let message = match actions::open_in_slicer(slicer, &models) {
-            Ok(opened) => {
-                let keep = usize::from(self.config.recent_prints);
-                if keep > 0 {
-                    self.library.list(ListOp::Sent(models.clone(), keep));
-                }
-                match opened {
-                    actions::SlicerOpened::Started => {
-                        t!("toast.slicer_started", name = slicer.name, count = models.len())
-                    }
-                    actions::SlicerOpened::HandedOver => {
-                        t!("toast.slicer_handed_over", name = slicer.name, count = models.len())
-                    }
-                }
-            }
-            Err(e) => t!("toast.slicer_failed", name = slicer.name, error = e.to_string()),
-        };
-        self.toast(message.into_owned());
+        self.toast(message);
     }
 
     /// The editor to use for a file of this kind: the default one if it opens it, else the first
     /// that does.
     fn editor_for(&self, kind: Kind) -> Option<usize> {
-        EditorList { programs: &self.editors, default: self.default_editor }.usable(kind).first().map(|(i, _)| *i)
+        EditorList { programs: &self.programs.editors, default: self.programs.default_editor }
+            .usable(kind)
+            .first()
+            .map(|(i, _)| *i)
     }
 
     /// Opens the models among `files` in the editor that suits the first of them.
@@ -762,17 +687,9 @@ impl App {
 
     /// Opens the models among `files` that the editor number `index` reads.
     fn open_in_editor_with(&mut self, files: Vec<PathBuf>, index: usize) {
-        let Some(editor) = self.editors.get(index) else { return };
-        let models: Vec<PathBuf> =
-            files.into_iter().filter(|p| editor.opens(Kind::from_file_name(&listing::file_name(p)))).collect();
-        if models.is_empty() {
-            return;
+        if let Some(message) = self.programs.open_in_editor(files, index) {
+            self.toast(message);
         }
-        let message = match actions::open_in_editor(editor, &models) {
-            Ok(()) => t!("toast.slicer_started", name = editor.name, count = models.len()),
-            Err(e) => t!("toast.slicer_failed", name = editor.name, error = e.to_string()),
-        };
-        self.toast(message.into_owned());
     }
 
     /// Draws the model windows; handles what they ask for and forgets the closed ones.
@@ -788,13 +705,14 @@ impl App {
             printers: &self.printers,
             space: self.space.as_ref(),
             free_orbit: self.config.free_orbit,
-            slicers: SlicerList { names: &self.slicer_names, default: self.default_slicer },
-            editors: EditorList { programs: &self.editors, default: self.default_editor },
+            slicers: SlicerList { names: &self.programs.slicer_names, default: self.programs.default_slicer },
+            editors: EditorList { programs: &self.programs.editors, default: self.programs.default_editor },
             quality: self.config.preview_quality,
             can_log_prints: self.index.is_some(),
             icon: model_window::icon(crate::app_icon),
             own_title_bar: crate::ui::appearance::own_title_bar(self.config.title_bar),
             brand: self.brand.id(),
+            standalone: false,
         };
         self.model_windows.retain_mut(|window| window.show(ctx, &mut cx, &mut actions));
         for action in actions {
@@ -803,6 +721,8 @@ impl App {
                 WindowAction::OpenInEditor(path, index) => self.open_in_editor_with(vec![path], index),
                 WindowAction::Print(path, result) => self.record_print(vec![path], result),
                 WindowAction::Message(message) => self.toast(message),
+                // Only a window without the main window behind it asks for this.
+                WindowAction::ShowInGallery(_) => {}
             }
         }
     }
@@ -1140,11 +1060,11 @@ impl App {
             self.save_note(); // belongs to the previous selection
             self.note_dirty = true;
             self.menu = MenuContext {
-                slicers: self.slicer_names.clone(),
-                default_slicer: self.default_slicer,
+                slicers: self.programs.slicer_names.clone(),
+                default_slicer: self.programs.default_slicer,
                 editors: {
                     let kinds: Vec<Kind> = paths.iter().map(|p| Kind::from_file_name(&listing::file_name(p))).collect();
-                    EditorList { programs: &self.editors, default: self.default_editor }
+                    EditorList { programs: &self.programs.editors, default: self.programs.default_editor }
                         .usable_for_any(&kinds)
                         .into_iter()
                         .map(|(i, name)| (i, name.to_owned()))
@@ -1967,27 +1887,29 @@ impl App {
                     self.library.set_roots(self.config.library_roots.clone());
                 }
                 SettingsChange::Slicers { list, default } => {
-                    self.default_slicer = Config::default_slicer_index(&list, default.as_deref());
-                    self.slicer_names = list.iter().map(|s| s.name.clone()).collect();
+                    self.programs.default_slicer = Config::default_slicer_index(&list, default.as_deref());
+                    self.programs.slicer_names = list.iter().map(|s| s.name.clone()).collect();
                     self.config.slicers = Some(list.clone());
-                    self.config.default_slicer = list.get(self.default_slicer).map(|s| s.name.clone());
-                    self.slicers = list;
+                    self.config.default_slicer = list.get(self.programs.default_slicer).map(|s| s.name.clone());
+                    self.programs.slicers = list;
                     self.menu_for.clear();
                     let name = self
+                        .programs
                         .slicers
-                        .get(self.default_slicer)
+                        .get(self.programs.default_slicer)
                         .map_or_else(|| t!("settings.slicer_none").into_owned(), |s| s.name.clone());
                     self.toast(t!("toast.slicer_set", name = name).into_owned());
                 }
                 SettingsChange::Editors { list, default } => {
-                    self.default_editor = Config::default_slicer_index(&list, default.as_deref());
+                    self.programs.default_editor = Config::default_slicer_index(&list, default.as_deref());
                     self.config.editors = Some(list.clone());
-                    self.config.default_editor = list.get(self.default_editor).map(|e| e.name.clone());
-                    self.editors = list;
+                    self.config.default_editor = list.get(self.programs.default_editor).map(|e| e.name.clone());
+                    self.programs.editors = list;
                     self.menu_for.clear();
                     let name = self
+                        .programs
                         .editors
-                        .get(self.default_editor)
+                        .get(self.programs.default_editor)
                         .map_or_else(|| t!("settings.editor_none").into_owned(), |e| e.name.clone());
                     self.toast(t!("toast.editor_set", name = name).into_owned());
                 }
@@ -2014,6 +1936,7 @@ impl App {
                 }
                 SettingsChange::LockPanes(locked) => self.config.lock_panes = locked,
                 SettingsChange::UpdateCheck(on) => self.config.update_check = on,
+                SettingsChange::OpenFiles(open) => self.config.open_files = open,
                 SettingsChange::CheckForUpdates => self.updater.request_check(),
                 SettingsChange::ShowUpdate => self.updater.show(),
                 SettingsChange::FoldForPlugins(on) => self.config.fold_for_plugins = on,
@@ -2275,20 +2198,13 @@ impl App {
         if !config.enabled || self.settings.is_open() {
             return;
         }
-        let motion = config.camera(config.process(self.mouse_state.raw));
-        if motion.is_still() && presses.is_empty() {
-            return;
-        }
-        let input = SpaceInput { motion, dt: ctx.input(|i| i.unstable_dt).min(0.1), presses };
+        let Some(input) = SpaceInput::read(ctx, config, self.mouse_state.raw, presses) else { return };
         if ctx.input(|i| i.viewport().focused == Some(true)) {
             if self.preview_open {
                 self.preview_viewer.apply_space(&input);
             } else {
                 self.viewer.apply_space(&input);
             }
-        }
-        if !input.motion.is_still() {
-            ctx.request_repaint(); // the knob is held: keep moving
         }
         self.space = Some(input);
     }
@@ -3207,8 +3123,8 @@ impl App {
             },
             note: NoteEditor { enabled: self.menu.can_tag, text: &mut self.note_input, mixed: self.note_mixed },
             printers: &self.printers,
-            slicers: SlicerList { names: &self.slicer_names, default: self.default_slicer },
-            editors: EditorList { programs: &self.editors, default: self.default_editor },
+            slicers: SlicerList { names: &self.programs.slicer_names, default: self.programs.default_slicer },
+            editors: EditorList { programs: &self.programs.editors, default: self.programs.default_editor },
             plugin_openers: &self.menu.plugin_openers,
             lists: ListsOfSelection { lists: &self.selection_lists, favorite: self.menu.favorite },
             print: PrintInfo { enabled: self.menu.can_tag, status: &self.selection_print, on_list },
@@ -3749,7 +3665,10 @@ impl eframe::App for App {
         let chat = self.chat_available();
         self.layout.show_chat(chat);
         // Which programs there are, for the places that show their own icons beside their names.
-        crate::ui::program_icons::publish(self.slicers.iter().chain(&self.editors), self.config.program_icons);
+        crate::ui::program_icons::publish(
+            self.programs.slicers.iter().chain(&self.programs.editors),
+            self.config.program_icons,
+        );
         self.shortcuts(&ctx);
         if let Some(changed) = self.search_changed {
             if changed.elapsed() >= SEARCH_DEBOUNCE {
@@ -3891,8 +3810,8 @@ impl eframe::App for App {
         let changes = self.settings.show(
             &ctx,
             &self.config,
-            (&self.slicers, self.default_slicer),
-            (&self.editors, self.default_editor),
+            (&self.programs.slicers, self.programs.default_slicer),
+            (&self.programs.editors, self.programs.default_editor),
             (&self.printers, 0),
             info,
         );
@@ -4008,7 +3927,7 @@ fn list_title(list: &ListInfo) -> String {
 /// Set the interface fonts: the font chosen in the settings (`ui_font`) in front of the desktop's
 /// UI font (Noto Sans on KDE) and egui's bundled ones, which stay as fallbacks for the signs it
 /// lacks. `previews`: the families the settings' font list shows in themselves.
-fn apply_fonts(ctx: &egui::Context, ui_font: Option<&str>, previews: &BTreeSet<String>) {
+pub(crate) fn apply_fonts(ctx: &egui::Context, ui_font: Option<&str>, previews: &BTreeSet<String>) {
     use crate::ui::fonts;
     static SYSTEM: std::sync::OnceLock<Option<std::sync::Arc<egui::FontData>>> = std::sync::OnceLock::new();
     let system = SYSTEM.get_or_init(|| {

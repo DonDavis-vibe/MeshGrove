@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=Meshgrove Viewer
+GenericName=3D Model Viewer
+GenericName[de]=3D-Modell-Betrachter
+Comment=Show a 3D-print file (STL, 3MF, STEP, OBJ, PLY, glTF) in a window of its own
+Comment[de]=Eine 3D-Druck-Datei (STL, 3MF, STEP, OBJ, PLY, glTF) in einem eigenen Fenster zeigen
+Exec=@BIN@/meshgrove --view %F
+Icon=meshgrove
+Terminal=false
+# Under "Open with", not in the application menu: without a file it has nothing to show.
+NoDisplay=true
+# Never the program a model opens in unless the user chooses it: behind Meshgrove's main
+# launcher in KDE's order (InitialPreference) and, by this file's name, in the MIME cache's.
+InitialPreference=0
+Categories=Graphics;3DGraphics;Viewer;
+MimeType=model/stl;model/3mf;model/step;model/obj;model/x-ply;model/gltf-binary;model/gltf+json;
+StartupWMClass=meshgrove

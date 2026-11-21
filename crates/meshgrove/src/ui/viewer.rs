@@ -138,6 +138,27 @@ pub struct SpaceInput {
     pub presses: Vec<u8>,
 }
 
+impl SpaceInput {
+    /// What the knob (its `raw` axes) and the buttons pressed since the last frame mean for a
+    /// viewer's camera; `None` while the 3D mouse rests. Asks for the next frame while the knob
+    /// is held, so the view keeps moving.
+    pub fn read(
+        ctx: &egui::Context,
+        config: &meshgrove_core::spacemouse::SpaceMouseConfig,
+        raw: [f32; 6],
+        presses: Vec<u8>,
+    ) -> Option<SpaceInput> {
+        let motion = config.camera(config.process(raw));
+        if motion.is_still() && presses.is_empty() {
+            return None;
+        }
+        if !motion.is_still() {
+            ctx.request_repaint();
+        }
+        Some(SpaceInput { motion, dt: ctx.input(|i| i.unstable_dt).min(0.1), presses })
+    }
+}
+
 impl ModelViewer {
     pub fn new() -> ModelViewer {
         ModelViewer {
