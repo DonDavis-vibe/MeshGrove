@@ -128,9 +128,11 @@ Everything Meshgrove does, and how. Installation and the first steps are in the
 - **Only the model, from the file manager:** *Open with → Meshgrove Viewer* (Linux packages and
   `install.sh`) shows a model in its model window alone, without the main window. Nothing of
   the library is loaded (no scan, no thumbnails, no index) and no settings are written. Several
-  files open in a window each, and *Show in Meshgrove* opens the main window at the file. *Settings → General → Opening models →
-  From the file manager → Model window* makes Meshgrove's own launcher do the same: the way to
-  get it on Windows and with the AppImage.
+  files open in a window each, and *Show in Meshgrove* opens the main window at the file.
+  *Open with → Meshgrove* beside it always shows the main window; your file manager sets which
+  of the two a double-click starts. On Windows and with the AppImage Meshgrove is one entry:
+  there *Settings → General → Opening models → From the file manager → Model window* makes it
+  open models that way.
 - **Folder previews from disk:** folder tiles outside the library can show models from their
   subfolders too (*Settings → Tiles → Folder previews*, off by default, up to five levels
   deep). With more than four models the pictures slowly fade through them.

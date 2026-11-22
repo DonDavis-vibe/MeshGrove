@@ -586,7 +586,9 @@ impl Category {
                 put(config.title_bar != d.title_bar, SettingsChange::TitleBar(d.title_bar));
                 put(config.update_check != d.update_check, SettingsChange::UpdateCheck(d.update_check));
                 put(config.double_click != d.double_click, SettingsChange::DoubleClick(d.double_click));
-                put(config.open_files != d.open_files, SettingsChange::OpenFiles(d.open_files));
+                // (Not shown beside the launcher "Meshgrove Viewer", so nothing to put back there.)
+                let open_files = !crate::update::kind().viewer_launcher() && config.open_files != d.open_files;
+                put(open_files, SettingsChange::OpenFiles(d.open_files));
                 put(config.lock_panes != d.lock_panes, SettingsChange::LockPanes(d.lock_panes));
                 put(config.fold_for_plugins != d.fold_for_plugins, SettingsChange::FoldForPlugins(d.fold_for_plugins));
             }
@@ -1393,6 +1395,12 @@ impl SettingsDialog {
                     note(ui, &t!("settings.double_click_hint"));
                 });
                 sc::settings_block(ui, &t!("settings.open_files"), LABELS, |ui| {
+                    // Two launchers under "open with": the file manager holds the choice.
+                    if crate::update::kind().viewer_launcher() {
+                        let launchers = t!("settings.open_files_launchers");
+                        sc::text(ui, &launchers, sc::Text::Note(&launchers));
+                        return;
+                    }
                     let (gallery, viewer) = (t!("settings.open_files_gallery"), t!("settings.open_files_viewer"));
                     let mut index = usize::from(config.open_files == config::OpenFiles::Viewer);
                     if sc::settings_segments(ui, &t!("settings.open_files"), &mut index, &[&*gallery, &*viewer]) {

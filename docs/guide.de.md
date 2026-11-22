@@ -137,9 +137,11 @@ Alles, was Meshgrove kann, und wie es geht. Installation und erste Schritte steh
   `install.sh`) zeigt ein Modell allein in seinem Modellfenster, ohne das Hauptfenster. Von der
   Bibliothek wird nichts geladen (kein Scan, keine Vorschaubilder, kein Index), und es werden
   keine Einstellungen geschrieben. Mehrere Dateien öffnen sich in je einem Fenster, und
-  *In Meshgrove zeigen* öffnet das Hauptfenster bei der Datei. Mit
-  *Einstellungen → Allgemein → Modelle öffnen → Aus dem Dateimanager → Modellfenster* macht
-  Meshgroves normaler Starter dasselbe: der Weg unter Windows und mit dem AppImage.
+  *In Meshgrove zeigen* öffnet das Hauptfenster bei der Datei. *Öffnen mit → Meshgrove* daneben
+  zeigt immer das Hauptfenster; welcher der beiden beim Doppelklick startet, legst du im
+  Dateimanager fest. Unter Windows und mit dem AppImage ist Meshgrove ein einziger Eintrag: Dort
+  öffnet er Modelle mit *Einstellungen → Allgemein → Modelle öffnen → Aus dem Dateimanager →
+  Modellfenster* auf diese Weise.
 - **Ordnervorschau von der Platte:** Ordnerkacheln außerhalb der Bibliothek können auch Modelle
   aus ihren Unterordnern zeigen (*Einstellungen → Kacheln → Ordnervorschau*, standardmäßig aus,
   bis zu fünf Ebenen tief). Bei mehr als vier Modellen blenden die Bilder langsam durch.

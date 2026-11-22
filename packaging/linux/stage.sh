@@ -13,6 +13,8 @@ for program in meshgrove meshgrove-step-mesher meshgrove-thumbnailer meshgrove-m
     strip --strip-unneeded "$dest/usr/bin/$program"
 done
 mkdir -p "$dest/usr/share/applications" "$dest/usr/share/thumbnailers"
+# Two launchers, each with its meaning under "open with": the main window and the model window
+# (InstallKind::viewer_launcher in crates/meshgrove/src/update/kind.rs names the packages).
 for launcher in meshgrove meshgrove_viewer; do
     sed "s|@BIN@|/usr/bin|g" "packaging/$launcher.desktop" > "$dest/usr/share/applications/$launcher.desktop"
     chmod 644 "$dest/usr/share/applications/$launcher.desktop"

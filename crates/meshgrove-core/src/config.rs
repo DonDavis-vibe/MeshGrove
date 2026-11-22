@@ -213,8 +213,10 @@ pub enum TitleBar {
     System,
 }
 
-/// What Meshgrove shows when it is started with model files (a file manager's "open"); the
-/// launcher "Meshgrove Viewer" (`--view`) always shows the model windows.
+/// What Meshgrove shows when it is started with model files (a file manager's "open"), where
+/// it is the only launcher (Windows, macOS, the AppImage). Where the launcher "Meshgrove Viewer"
+/// (`--view`) is installed beside it, that one shows the model windows and Meshgrove's own the
+/// main window, and this is not asked.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenFiles {
