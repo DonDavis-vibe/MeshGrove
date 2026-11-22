@@ -129,6 +129,13 @@ impl InstallKind {
         )
     }
 
+    /// The launcher "Meshgrove Viewer" is installed beside Meshgrove's own (`packaging/linux/stage.sh`,
+    /// `packaging/install.sh`; the AppImage leaves it out). Each of the two then has its one
+    /// meaning under "open with", and the settings do not say what model files open in.
+    pub fn viewer_launcher(&self) -> bool {
+        matches!(self, InstallKind::Deb(_) | InstallKind::Rpm(_) | InstallKind::Source)
+    }
+
     /// The command that updates this installation, for the user to copy: the package manager's,
     /// or the source's.
     pub fn command(&self, v: &Version) -> Option<String> {
@@ -201,6 +208,24 @@ mod tests {
         assert!(!starts_with_ignoring_case(Path::new(r"C:\Program Files (x86)\M"), Path::new(r"C:\Program Files")));
         let unix = kind(Some("windows"), &[], &["/opt/m/unins000.exe"], "/opt/m/meshgrove.exe");
         assert_eq!(unix, InstallKind::WindowsSetup { dir: "/opt/m".into(), all_users: false });
+    }
+
+    /// The .deb, the .rpm and `install.sh` put "Meshgrove Viewer" beside Meshgrove's launcher;
+    /// everything else is one launcher, or none.
+    #[test]
+    fn knows_where_the_viewer_launcher_is_installed() {
+        let with = [InstallKind::Deb("debian13".into()), InstallKind::Rpm("fc44".into()), InstallKind::Source];
+        let without = [
+            InstallKind::Dev,
+            InstallKind::AppImage("/a".into()),
+            InstallKind::Unpacked,
+            InstallKind::WindowsSetup { dir: "/d".into(), all_users: false },
+            InstallKind::WindowsPortable("/d".into()),
+            InstallKind::MacApp("/A.app".into()),
+            InstallKind::MacOther,
+        ];
+        assert!(with.iter().all(InstallKind::viewer_launcher), "{with:?}");
+        assert!(!without.iter().any(InstallKind::viewer_launcher), "{without:?}");
     }
 
     #[test]

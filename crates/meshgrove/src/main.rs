@@ -45,10 +45,17 @@ enum Launch {
     Viewer(Vec<PathBuf>),
 }
 
+/// Whether the settings send model files to the model window. They do where Meshgrove is one
+/// launcher (Windows, macOS, the AppImage). Beside the launcher "Meshgrove Viewer" each of the
+/// two has its meaning: this one shows the main window, whatever the settings held before.
+fn settings_open_the_viewer(open_files: OpenFiles, kind: &update::InstallKind) -> bool {
+    open_files == OpenFiles::Viewer && !kind.viewer_launcher()
+}
+
 /// Reads the command line (without the program's name): `--view FILES…` shows the models among
-/// the files in windows of their own, `--gallery PATH` the main window; with neither, the
-/// settings say (`viewer`) what model files open in. A start without a model (`is_model`) among
-/// its files shows the main window, at the first of them.
+/// the files in windows of their own, `--gallery PATH` the main window; with neither, `viewer`
+/// says what model files open in ([`settings_open_the_viewer`]). A start without a model
+/// (`is_model`) among its files shows the main window, at the first of them.
 fn launch(args: impl IntoIterator<Item = OsString>, viewer: bool, is_model: impl Fn(&Path) -> bool) -> Launch {
     let mut paths: Vec<PathBuf> = args.into_iter().filter(|a| !a.is_empty()).map(PathBuf::from).collect();
     let viewer = match paths.first().and_then(|p| p.to_str()) {
@@ -75,7 +82,7 @@ fn is_model_file(path: &Path) -> bool {
 fn main() -> eframe::Result {
     meshgrove_core::config::migrate_legacy_dirs();
     let loaded = Config::load();
-    let viewer = matches!(&loaded, Ok(config) if config.open_files == OpenFiles::Viewer);
+    let viewer = matches!(&loaded, Ok(config) if settings_open_the_viewer(config.open_files, update::kind()));
     let launch = launch(std::env::args_os().skip(1), viewer, is_model_file);
     logging::init(if matches!(launch, Launch::Viewer(_)) { logging::VIEWER } else { logging::MAIN });
     let (config, config_error) = match loaded {
@@ -163,6 +170,20 @@ mod tests {
         assert_eq!(started(&["/m/parts"], true), Launch::Gallery(Some("/m/parts".into())));
         assert_eq!(started(&[], true), Launch::Gallery(None));
         assert_eq!(started(&[""], false), Launch::Gallery(None));
+    }
+
+    /// The settings count where Meshgrove is the only launcher; with "Meshgrove Viewer" beside
+    /// it (.deb, .rpm, install.sh), this launcher is the main window's.
+    #[test]
+    fn the_settings_do_not_count_beside_the_viewer_launcher() {
+        use update::InstallKind;
+        for one in [InstallKind::Dev, InstallKind::AppImage("/a".into()), InstallKind::WindowsPortable("/d".into())] {
+            assert!(settings_open_the_viewer(OpenFiles::Viewer, &one), "{one:?}");
+            assert!(!settings_open_the_viewer(OpenFiles::Gallery, &one), "{one:?}");
+        }
+        for two in [InstallKind::Deb("debian13".into()), InstallKind::Rpm("fc44".into()), InstallKind::Source] {
+            assert!(!settings_open_the_viewer(OpenFiles::Viewer, &two), "{two:?}");
+        }
     }
 
     /// "Show in Meshgrove" from a model window must reach the main window, also when the

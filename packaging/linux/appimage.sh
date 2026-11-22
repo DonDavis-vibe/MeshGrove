@@ -18,7 +18,8 @@ cp -a "$stage/usr" "$app/"
 # A thumbnailer inside an AppImage cannot be registered with the system.
 rm -rf "$app/usr/share/thumbnailers"
 install -m755 "$here/AppRun" "$app/AppRun"
-# The AppImage is one launcher: the settings say whether it opens models in the model window.
+# The AppImage is one launcher: the settings say whether it opens models in the model window
+# (InstallKind::viewer_launcher in crates/meshgrove/src/update/kind.rs).
 rm -f "$app/usr/share/applications/meshgrove_viewer.desktop"
 sed 's|^Exec=.*|Exec=meshgrove %F|' "$stage/usr/share/applications/meshgrove.desktop" > "$app/meshgrove.desktop"
 cp "$stage/usr/share/icons/hicolor/256x256/apps/meshgrove.png" "$app/meshgrove.png"

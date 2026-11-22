@@ -10,7 +10,8 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 **Meshgrove as a quick viewer** (new in 0.14)
 
 - *Open with → Meshgrove Viewer* in your file manager shows a model in its model window alone: the 3D view with its standard views, measuring and the picture button, the model's facts and "open in" your slicer. The library is not loaded: no scan, no thumbnails, no index. Several files open in a window each, and *Show in Meshgrove* opens the main window at the file. The launcher comes with the .deb, the .rpm and `install.sh`.
-- *Settings → General → Opening models → From the file manager* makes Meshgrove's own launcher open models that way too. On Windows and with the AppImage this is how you get the viewer.
+- Beside it, *Open with → Meshgrove* always shows the main window; your file manager sets which of the two a double-click starts.
+- On Windows and with the AppImage, where Meshgrove is one entry, *Settings → General → Opening models → From the file manager* makes it open models in the model window.
 - In every model window, the left and right arrow keys show the previous and the next model of the folder, as a picture viewer does.
 
 **Updates from inside Meshgrove** (new in 0.13)
