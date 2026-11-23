@@ -27,6 +27,7 @@ use crate::ui::{EditorList, SlicerList, appearance};
 pub fn run(config: Config, files: Vec<PathBuf>) -> eframe::Result {
     // The window and the graphics take a moment to start: the first model is read meanwhile.
     let head = files.first().map(|f| HeadStart::of(f));
+    let looked_up = LookedUp::start(&config);
     let name = files.first().map(|f| listing::file_name(f)).unwrap_or_default();
     let own_title_bar = appearance::own_title_bar(config.title_bar);
     let options =
@@ -35,9 +36,32 @@ pub fn run(config: Config, files: Vec<PathBuf>) -> eframe::Result {
         "meshgrove",
         options,
         Box::new(move |cc| {
-            Ok(Box::new(ViewerApp::new(cc, config, &files, head).map_err(|e| e.into_boxed_dyn_error())?))
+            Ok(Box::new(ViewerApp::new(cc, config, &files, head, looked_up).map_err(|e| e.into_boxed_dyn_error())?))
         }),
     )
+}
+
+/// The printers and programs of the settings, looked up while the window and the graphics
+/// start: where the settings name none, finding them reads other programs' files, which took
+/// some 30 ms of the start under Windows.
+struct LookedUp(std::thread::JoinHandle<(Config, Vec<Printer>, Programs)>);
+
+impl LookedUp {
+    fn start(config: &Config) -> Option<LookedUp> {
+        let config = config.clone();
+        std::thread::Builder::new()
+            .name("printers-programs".into())
+            .spawn(move || LookedUp::now(config))
+            .ok()
+            .map(LookedUp)
+    }
+
+    /// Found here if the settings never named any; only the main window writes them down.
+    fn now(mut config: Config) -> (Config, Vec<Printer>, Programs) {
+        let printers = startup::printers(&mut config);
+        let programs = Programs::of(&mut config);
+        (config, printers, programs)
+    }
 }
 
 struct ViewerApp {
@@ -59,9 +83,10 @@ struct ViewerApp {
 impl ViewerApp {
     fn new(
         cc: &eframe::CreationContext<'_>,
-        mut config: Config,
+        config: Config,
         files: &[PathBuf],
         head: Option<HeadStart>,
+        looked_up: Option<LookedUp>,
     ) -> anyhow::Result<ViewerApp> {
         let rs = cc.wgpu_render_state.as_ref().context("eframe was not started with the wgpu renderer")?;
         startup::mark("window and graphics");
@@ -80,9 +105,10 @@ impl ViewerApp {
         }
         let title = first.title();
         let renderer = startup::renderer(rs);
-        // Found here if the settings never named any; only the main window writes them down.
-        let printers = startup::printers(&mut config);
-        let programs = Programs::of(&mut config);
+        let (config, printers, programs) = match looked_up.map(|l| l.0.join()) {
+            Some(Ok(found)) => found,
+            _ => LookedUp::now(config),
+        };
         startup::mark("printers and programs");
         let app = ViewerApp {
             title,

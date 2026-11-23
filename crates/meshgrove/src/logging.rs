@@ -25,6 +25,8 @@ fn named(name: &str) -> Option<PathBuf> {
 pub fn init(name: &str) {
     let mut builder =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,meshgrove=info"));
+    // To the millisecond: what a start spends its time on shows between the lines.
+    builder.format_timestamp_millis();
     if let Some(file) = named(name).and_then(|path| open(&path)) {
         builder.target(env_logger::Target::Pipe(Box::new(Tee(file))));
     }
