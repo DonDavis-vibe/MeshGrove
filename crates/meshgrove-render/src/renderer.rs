@@ -488,6 +488,12 @@ impl Renderer {
     }
 }
 
+/// What wgpu prepares on every device by default and nothing here uses: the check of indirect
+/// draws, for which it builds two pipelines whenever a device is made. Under DirectX their
+/// shaders are translated anew each time, some 30 ms of every start. Take these flags from an
+/// instance's descriptor.
+pub const UNUSED_INSTANCE_FLAGS: wgpu::InstanceFlags = wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL;
+
 /// What a device of `adapter` needs beyond the usual so that meshes reach it quickly: ask
 /// for it when the device is made.
 ///

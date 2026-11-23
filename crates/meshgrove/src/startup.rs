@@ -71,6 +71,7 @@ pub fn first_model(ctx: &egui::Context) {
 pub fn native_options(viewport: egui::ViewportBuilder) -> eframe::NativeOptions {
     let mut options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, ..Default::default() };
     if let egui_wgpu::WgpuSetup::CreateNew(new) = &mut options.wgpu_options.wgpu_setup {
+        new.instance_descriptor.flags.remove(meshgrove_render::UNUSED_INSTANCE_FLAGS);
         let usual = new.device_descriptor.clone();
         new.device_descriptor = std::sync::Arc::new(move |adapter| {
             let mut descriptor = usual(adapter);

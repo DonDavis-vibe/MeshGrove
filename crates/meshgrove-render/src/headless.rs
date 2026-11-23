@@ -34,6 +34,7 @@ impl HeadlessRenderer {
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
         // Vulkan (lavapipe in CI) is all we need; skipping GL avoids EGL noise at shutdown.
         desc.backends = wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY);
+        desc.flags.remove(crate::renderer::UNUSED_INSTANCE_FLAGS);
         let instance = wgpu::Instance::new(desc);
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
