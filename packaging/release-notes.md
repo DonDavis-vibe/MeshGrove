@@ -13,6 +13,10 @@ Video, screenshots and every download at a glance: [meshgrove.redneck-design.de]
 - Beside it, *Open with → Meshgrove* always shows the main window; your file manager sets which of the two a double-click starts.
 - On Windows and with the AppImage, where Meshgrove is one entry, *Settings → General → Opening models → From the file manager* makes it open models in the model window.
 - In every model window, the left and right arrow keys show the previous and the next model of the folder, as a picture viewer does.
+- *Wireframe* in the 3D view's bar (W in a model window) draws the edges of the triangles on the shaded surface; the picture export keeps them.
+- The model window's facts now say what the info pane says: closed, the number of parts and the volume, or the open edges and other faults of the mesh. The check runs in the background once the model is shown, with or without a library.
+- A model file dropped on a model window is shown in it; further ones dropped with it open in windows of their own. On Windows, macOS and X11; under Wayland the files do not arrive yet.
+- The viewer starts quicker: the first model is read while the window and the graphics come up, and so are the system font and the programs' icons. The log (`meshgrove-viewer.log`) now says where a start spends its time and how long each model took to load.
 
 **Updates from inside Meshgrove** (new in 0.13)
 
