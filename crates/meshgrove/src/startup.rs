@@ -11,6 +11,33 @@ use meshgrove_core::{Kind, programs};
 
 use crate::actions;
 
+static BEGAN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Starts the clock of [`mark`]: first thing in `main`.
+pub fn begin() {
+    BEGAN.get_or_init(std::time::Instant::now);
+}
+
+/// Notes in the log how long after its start the program got to `what` ("start: first frame
+/// after 212 ms"): where a slow start spends its time.
+pub fn mark(what: &str) {
+    if let Some(began) = BEGAN.get() {
+        log::info!("start: {what} after {} ms", began.elapsed().as_millis());
+    }
+}
+
+/// The first frame is drawn, after which the window shows: noted once, call it every frame.
+pub fn first_frame() {
+    static NOTED: std::sync::Once = std::sync::Once::new();
+    NOTED.call_once(|| mark("first frame"));
+}
+
+/// The first model is on screen: noted once.
+pub fn first_model() {
+    static NOTED: std::sync::Once = std::sync::Once::new();
+    NOTED.call_once(|| mark("first model shown"));
+}
+
 /// The theme and the fonts of the settings; `MESHGROVE_THEME` overrides the theme for one
 /// start (screenshots).
 pub fn look(ctx: &egui::Context, config: &Config) {
@@ -20,6 +47,7 @@ pub fn look(ctx: &egui::Context, config: &Config) {
     let theme = std::env::var("MESHGROVE_THEME").ok().or_else(|| config.ui_theme.clone());
     crate::ui::appearance::apply(ctx, theme.as_deref().filter(|t| !t.is_empty()));
     crate::app::apply_fonts(ctx, config.ui_font.as_deref(), &BTreeSet::new());
+    mark("look and fonts");
 }
 
 /// Meshgrove's sign for the title bars it draws itself.

@@ -47,7 +47,7 @@ Everything Meshgrove does, and how. Installation and the first steps are in the
 | **Panes** | Places, files, preview and info are panes: drag a header to move one, drop it on an edge to split or on another header to stack; the dividers resize them; *Lock the panes* in the settings keeps them where they are |
 | **Look** | 27 themes: SolidCraft's 25 and Meshgrove's own look as Meshgrove Dark and Meshgrove Light; with none chosen, Meshgrove follows the system from dark to light and back; its own title bar in the theme's colours on Linux and Windows |
 | **Hover turntable** | Point at a model tile and the model spins in place. Drag to turn it yourself, and turn the wheel while dragging to zoom |
-| **3D viewer** | In the side panel, or **double-click a model for a window of its own** (resizable, several at once, with "open in slicer"), or **press Space for a large preview** over the window (just the model until you click ☰); smoother edges and optional studio lighting for both; what a double-click does can be changed (model window, large preview, slicer, mesh editor or the default app); orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **picture export** as a 2048 px PNG |
+| **3D viewer** | In the side panel, or **double-click a model for a window of its own** (resizable, several at once, with "open in slicer"), or **press Space for a large preview** over the window (just the model until you click ☰); smoother edges and optional studio lighting for both; what a double-click does can be changed (model window, large preview, slicer, mesh editor or the default app); orbit, pan and zoom with a fixed pivot (turning never shifts the model); standard views (front, back, left, right, top, bottom, angled); **point-to-point measuring in mm**; **wireframe** (the triangles' edges on the surface); **picture export** as a 2048 px PNG |
 | **3D mouse** | Navigate the 3D views with a **3Dconnexion SpaceMouse / SpaceNavigator or a DIY 3D mouse** (anything that reports as a HID multi-axis controller; Linux reads `/dev/hidraw` directly, Windows and macOS use HID): twist or tilt to turn the model, push to pan, push forward/back to zoom, left button resets the view, right button shows the next standard view; a 3D picture of the mouse in the settings follows the real knob; per-axis speed and inversion, dead zone, a choice of what each movement does, and a **calibration** that finds out which axis is which |
 | **3MF projects** | Embedded slicer plate pictures (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); click a plate picture to see that plate in 3D; **multi-colour**: filament colours per object and part, painted models (multi-material painting) and 3MF material colours in the viewer and in rendered previews; filament swatches on tiles and in the details; title, designer and application from the metadata |
 | **STEP / STP** | CAD files are tessellated by OpenCascade in a separate helper process, so a broken file cannot crash the app; results are cached |
@@ -202,6 +202,12 @@ with their slot number and material.
 large as you like and with the same tools. Here it measures a coaster holder: click two points
 on the surface to get the distance in mm, with the difference along each axis. The left and
 right arrow keys show the previous and the next model of the folder, as a picture viewer does.
+*Wireframe* (or the W key) draws the edges of the triangles on the surface, so you see how fine
+the mesh is; the picture export keeps them. The facts beside the model say whether the mesh is
+closed, in how many parts, and its volume, or what is wrong with it (open edges, edges shared
+by more than two faces, triangles without area). A model file dropped on the window is shown in
+it, and further ones dropped with it get windows of their own; under Wayland the files do not
+arrive yet, there they open from the file manager.
 
 ![A coaster holder in its own window next to the main window, measured at 83.5 mm](images/screenshot-window.png)
 
@@ -773,6 +779,8 @@ Ctrl means ⌘ Cmd on macOS.
 | ← → ↑ ↓, Home, End | Move the selection |
 | Enter | Open the selected folder or archive; a model in its own window (or as set for double-click); other files in their default app |
 | Esc (in a model window) | Close the window |
+| ←, → (in a model window) | The previous, the next model of the folder |
+| W (in a model window) | Wireframe on or off |
 | Backspace, Alt+↑ | Parent folder |
 | Alt+←, Alt+→, mouse buttons 4 / 5 | Back, forward |
 | Space | Large preview of the selected model (Esc or Space closes it; ☰ shows its tools) |

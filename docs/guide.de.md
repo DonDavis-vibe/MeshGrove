@@ -47,7 +47,7 @@ Alles, was Meshgrove kann, und wie es geht. Installation und erste Schritte steh
 | **Bereiche** | Orte, Dateien, Vorschau und Info sind Bereiche: Kopfzeile ziehen verschiebt einen, am Rand eines anderen ablegen teilt ihn, auf einer anderen Kopfzeile ablegen stapelt beide; die Trennlinien ändern die Größe; *Bereiche fixieren* in den Einstellungen hält sie an ihrem Platz |
 | **Aussehen** | 27 Themes: die 25 von SolidCraft und Meshgroves eigener Look als Meshgrove Dark und Meshgrove Light; ist keins gewählt, folgt Meshgrove dem System von dunkel zu hell und zurück; eine eigene Titelleiste in den Farben des Themes unter Linux und Windows |
 | **Drehvorschau** | Mit der Maus über eine Modell-Kachel fahren, und das Modell dreht sich. Ziehen dreht es von Hand, Mausrad beim Ziehen zoomt |
-| **3D-Viewer** | In der Seitenleiste, oder **Doppelklick auf ein Modell für ein eigenes Fenster** (frei vergrößerbar, mehrere gleichzeitig, mit „In Slicer öffnen“), oder **Leertaste für eine große Vorschau** über dem Fenster (nur das Modell, bis du auf ☰ klickst); für beide glattere Kanten und auf Wunsch Studiolicht; was ein Doppelklick tut, ist einstellbar (Modellfenster, große Vorschau, Slicer, Mesh-Editor oder Standardprogramm); Drehen, Verschieben und Zoomen um einen festen Drehpunkt (das Modell springt beim Drehen nie); Standardansichten (vorne, hinten, links, rechts, oben, unten, schräg); **Messen zwischen zwei Punkten in mm**; **Bildexport** als PNG mit 2048 px |
+| **3D-Viewer** | In der Seitenleiste, oder **Doppelklick auf ein Modell für ein eigenes Fenster** (frei vergrößerbar, mehrere gleichzeitig, mit „In Slicer öffnen“), oder **Leertaste für eine große Vorschau** über dem Fenster (nur das Modell, bis du auf ☰ klickst); für beide glattere Kanten und auf Wunsch Studiolicht; was ein Doppelklick tut, ist einstellbar (Modellfenster, große Vorschau, Slicer, Mesh-Editor oder Standardprogramm); Drehen, Verschieben und Zoomen um einen festen Drehpunkt (das Modell springt beim Drehen nie); Standardansichten (vorne, hinten, links, rechts, oben, unten, schräg); **Messen zwischen zwei Punkten in mm**; **Drahtgitter** (die Kanten der Dreiecke auf der Fläche); **Bildexport** als PNG mit 2048 px |
 | **3D-Maus** | Die 3D-Ansichten mit einer **3Dconnexion SpaceMouse / SpaceNavigator oder einer selbstgebauten 3D-Maus** steuern (alles, was sich als HID-Multi-Achsen-Controller meldet; Linux liest `/dev/hidraw` direkt, Windows und macOS nutzen HID): drehen oder kippen dreht das Modell, schieben verschiebt, vor/zurück zoomt, linke Taste setzt die Ansicht zurück, rechte Taste zeigt die nächste Standardansicht; ein 3D-Bild der Maus in den Einstellungen folgt dem echten Knopf; Geschwindigkeit und Umkehrung je Achse, Totzone, frei wählbare Belegung der Bewegungen und eine **Kalibrierung**, die herausfindet, welche Achse welche ist |
 | **3MF-Projekte** | Eingebettete Plattenbilder der Slicer (Bambu Studio, OrcaSlicer, Anycubic, Elegoo, Creality Print, PrusaSlicer); Klick auf ein Plattenbild zeigt diese Platte in 3D; **mehrfarbig**: Filamentfarben pro Objekt und Teil, bemalte Modelle (Multi-Material-Bemalung) und 3MF-Materialfarben im Viewer und in selbst gerenderten Vorschauen; Filament-Farbfelder auf Kacheln und in den Details; Titel, Designer und Programm aus den Metadaten |
 | **STEP / STP** | CAD-Dateien werden von OpenCascade in einem eigenen Hilfsprozess vernetzt, eine kaputte Datei kann die App also nicht abstürzen lassen; das Ergebnis wird zwischengespeichert |
@@ -215,7 +215,13 @@ Filamente mit Slot-Nummer und Material.
 groß du willst und mit denselben Werkzeugen. Hier wird ein Untersetzer-Halter vermessen: Zwei
 Punkte auf der Oberfläche anklicken, und du bekommst den Abstand in mm und die Differenz entlang
 jeder Achse. Die Pfeiltasten links und rechts zeigen das vorige und das nächste Modell des
-Ordners, wie in einem Bildbetrachter.
+Ordners, wie in einem Bildbetrachter. *Drahtgitter* (oder die Taste W) zeichnet die Kanten der
+Dreiecke auf die Fläche, so siehst du, wie fein das Netz ist; der Bildexport behält sie. Die
+Angaben neben dem Modell sagen, ob das Netz geschlossen ist, aus wie vielen Teilen es besteht
+und welches Volumen es hat, oder was nicht stimmt (offene Kanten, Kanten an mehr als zwei
+Flächen, Dreiecke ohne Fläche). Eine Modelldatei, die du aufs Fenster ziehst, wird darin
+gezeigt, weitere mit abgelegte bekommen eigene Fenster; unter Wayland kommen die Dateien noch
+nicht an, dort öffnest du sie aus dem Dateimanager.
 
 ![Ein Untersetzer-Halter im eigenen Fenster neben dem Hauptfenster, gemessen: 83,5 mm](images/screenshot-window.png)
 
@@ -826,6 +832,8 @@ Strg heißt auf macOS ⌘ Cmd.
 | ← → ↑ ↓, Pos1, Ende | Auswahl bewegen |
 | Enter | Ausgewählten Ordner oder Archiv öffnen; ein Modell im eigenen Fenster (oder wie für den Doppelklick eingestellt); andere Dateien im Standardprogramm |
 | Esc (im Modell-Fenster) | Fenster schließen |
+| ←, → (im Modell-Fenster) | Das vorige, das nächste Modell des Ordners |
+| W (im Modell-Fenster) | Drahtgitter an oder aus |
 | Rücktaste, Alt+↑ | Übergeordneter Ordner |
 | Alt+←, Alt+→, Maustasten 4 / 5 | Zurück, vor |
 | Leertaste | Große Vorschau des gewählten Modells (Esc oder Leertaste schließt sie; ☰ zeigt ihre Werkzeuge) |

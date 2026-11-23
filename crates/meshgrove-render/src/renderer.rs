@@ -38,6 +38,9 @@ pub struct ViewParams {
     pub framing: Framing,
     /// Studio lighting with glossy highlights instead of the plain thumbnail lighting.
     pub studio: bool,
+    /// Wireframe: the edges of the triangles are drawn on the shaded surface, this many pixels
+    /// of the rendered picture wide. 0 draws none.
+    pub edges: f32,
     /// Free orbit: the orientation of the camera (see [`orientation_of`]), which also allows
     /// turning about the view axis and going over the poles. When set, it replaces the azimuth
     /// and elevation, which keep the model upright.
@@ -55,6 +58,7 @@ impl Default for ViewParams {
             background: [0.0, 0.0, 0.0, 0.0],
             framing: Framing::Tight,
             studio: false,
+            edges: 0.0,
             orientation: None,
         }
     }
@@ -68,6 +72,8 @@ struct Uniforms {
     base_color: [f32; 4],
     key_dir: [f32; 4],
     fill_dir: [f32; 4],
+    /// x: the width of the triangles' edges in pixels, 0 for none.
+    wire: [f32; 4],
 }
 
 /// A mesh uploaded to the GPU, recentred on its bounding-box centre for float precision.
@@ -404,12 +410,31 @@ pub fn project_point(bounds: &Aabb, view: &ViewParams, aspect: f32, point: Vec3)
 
 /// Uploads a mesh; needs only the device, so it can run on a background thread.
 pub fn upload_mesh(device: &wgpu::Device, mesh: &Mesh) -> Option<GpuMesh> {
-    let bounds = mesh.bounds()?;
-    let center = bounds.center();
-    let soup: Vec<[f32; 3]> = mesh.to_soup().into_iter().map(|p| (Vec3::from(p) - center).to_array()).collect();
-    let colors = mesh.soup_colors().filter(|c| c.len() == soup.len());
-    let bounds = Aabb { min: bounds.min - center, max: bounds.max - center };
-    Some(upload_soup(device, &soup, bounds, colors.as_deref()))
+    Some(PreparedMesh::of(mesh)?.upload(device))
+}
+
+/// A mesh made ready for the GPU before there is one: the work [`upload_mesh`] does on the CPU.
+/// A model read while the window and the graphics start is only uploaded once they are there.
+pub struct PreparedMesh {
+    soup: Vec<[f32; 3]>,
+    colors: Option<Vec<[u8; 4]>>,
+    bounds: Aabb,
+}
+
+impl PreparedMesh {
+    /// The mesh recentred on its bounding-box centre; none for an empty mesh.
+    pub fn of(mesh: &Mesh) -> Option<PreparedMesh> {
+        let bounds = mesh.bounds()?;
+        let center = bounds.center();
+        let soup: Vec<[f32; 3]> = mesh.to_soup().into_iter().map(|p| (Vec3::from(p) - center).to_array()).collect();
+        let colors = mesh.soup_colors().filter(|c| c.len() == soup.len());
+        let bounds = Aabb { min: bounds.min - center, max: bounds.max - center };
+        Some(PreparedMesh { soup, colors, bounds })
+    }
+
+    pub fn upload(&self, device: &wgpu::Device) -> GpuMesh {
+        upload_soup(device, &self.soup, self.bounds, self.colors.as_deref())
+    }
 }
 
 /// Uploads a triangle soup that is already recentred, with `bounds` in those coordinates, and
@@ -590,6 +615,7 @@ impl Camera {
             base_color: [r, g, b, 1.0],
             key_dir: key.extend(0.0).to_array(),
             fill_dir: fill.extend(0.0).to_array(),
+            wire: [view.edges.max(0.0), 0.0, 0.0, 0.0],
         }
     }
 }

@@ -14,7 +14,8 @@ use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::printer::Printer;
 use meshgrove_render::Renderer;
 
-use crate::meshes::MeshStore;
+use crate::checker::ShownChecks;
+use crate::meshes::{HeadStart, MeshStore};
 use crate::screenshot::ScreenshotHook;
 use crate::spacemouse::SpaceMouse;
 use crate::startup::{self, Programs};
@@ -24,6 +25,8 @@ use crate::ui::{EditorList, SlicerList, appearance};
 
 /// Shows `files` (models, at least one) and returns once the last of their windows is closed.
 pub fn run(config: Config, files: Vec<PathBuf>) -> eframe::Result {
+    // The window and the graphics take a moment to start: the first model is read meanwhile.
+    let head = files.first().map(|f| HeadStart::of(f));
     let name = files.first().map(|f| listing::file_name(f)).unwrap_or_default();
     let own_title_bar = appearance::own_title_bar(config.title_bar);
     let options = eframe::NativeOptions {
@@ -34,7 +37,9 @@ pub fn run(config: Config, files: Vec<PathBuf>) -> eframe::Result {
     eframe::run_native(
         "meshgrove",
         options,
-        Box::new(move |cc| Ok(Box::new(ViewerApp::new(cc, config, &files).map_err(|e| e.into_boxed_dyn_error())?))),
+        Box::new(move |cc| {
+            Ok(Box::new(ViewerApp::new(cc, config, &files, head).map_err(|e| e.into_boxed_dyn_error())?))
+        }),
     )
 }
 
@@ -45,6 +50,7 @@ struct ViewerApp {
     /// The program's window is titled for this model.
     title: String,
     meshes: MeshStore,
+    checks: ShownChecks,
     renderer: Renderer,
     printers: Vec<Printer>,
     programs: Programs,
@@ -54,8 +60,14 @@ struct ViewerApp {
 }
 
 impl ViewerApp {
-    fn new(cc: &eframe::CreationContext<'_>, mut config: Config, files: &[PathBuf]) -> anyhow::Result<ViewerApp> {
+    fn new(
+        cc: &eframe::CreationContext<'_>,
+        mut config: Config,
+        files: &[PathBuf],
+        head: Option<HeadStart>,
+    ) -> anyhow::Result<ViewerApp> {
         let rs = cc.wgpu_render_state.as_ref().context("eframe was not started with the wgpu renderer")?;
+        startup::mark("window and graphics");
         startup::look(&cc.egui_ctx, &config);
         let mut windows: Vec<ModelWindow> =
             files.iter().filter_map(|f| Entry::from_path(f).ok()).map(ModelWindow::new).collect();
@@ -69,10 +81,11 @@ impl ViewerApp {
                 first.script_view(&view);
             }
         }
-        Ok(ViewerApp {
+        let app = ViewerApp {
             title: first.title(),
             windows,
-            meshes: MeshStore::new(rs.device.clone(), cc.egui_ctx.clone()),
+            meshes: MeshStore::with_head_start(rs.device.clone(), cc.egui_ctx.clone(), head),
+            checks: ShownChecks::start(cc.egui_ctx.clone()),
             renderer: Renderer::new(&rs.device, &rs.adapter),
             // Found here if the settings never named any; only the main window writes them down.
             printers: startup::printers(&mut config),
@@ -81,12 +94,18 @@ impl ViewerApp {
             brand: startup::brand(&cc.egui_ctx),
             screenshot,
             config,
-        })
+        };
+        startup::mark("viewer set up");
+        Ok(app)
     }
 
     /// Does what a window asked for; what to tell the user in that window, if anything.
-    fn act(&self, action: WindowAction) -> Option<String> {
+    fn act(&mut self, action: WindowAction) -> Option<String> {
         match action {
+            WindowAction::Open(files) => {
+                self.windows.extend(files.iter().filter_map(|f| Entry::from_path(f).ok()).map(ModelWindow::new));
+                None
+            }
             WindowAction::OpenInSlicer(path, index) => {
                 self.programs.open_in_slicer(vec![path], index).map(|(message, _)| message)
             }
@@ -119,6 +138,7 @@ impl eframe::App for ViewerApp {
 
         let mut cx = WindowContext {
             meshes: &mut self.meshes,
+            checks: &mut self.checks,
             render_state: &rs,
             renderer: &self.renderer,
             printers: &self.printers,
@@ -149,6 +169,10 @@ impl eframe::App for ViewerApp {
             if let Some(message) = self.act(action) {
                 self.windows[i].notify(message);
             }
+        }
+        startup::first_frame();
+        if self.windows.first().is_some_and(ModelWindow::loaded) {
+            startup::first_model();
         }
 
         // A test run's picture is taken: its close ends the program, whatever is open.

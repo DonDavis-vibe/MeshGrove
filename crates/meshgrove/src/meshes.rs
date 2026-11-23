@@ -9,7 +9,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use crossbeam_channel::{Receiver, unbounded};
 use meshgrove_core::Kind;
 use meshgrove_core::loaders::{self, threemf};
-use meshgrove_render::{GpuMesh, upload_mesh};
+use meshgrove_render::{GpuMesh, PreparedMesh};
 
 /// Kinds the viewer and turntable can show.
 pub fn viewable(kind: Kind) -> bool {
@@ -80,14 +80,73 @@ pub struct MeshStore {
     frame: u64,
 }
 
+/// A model read and made ready for the GPU.
+type Read = Result<(PreparedMesh, ModelInfo), String>;
+
+/// A model that is being read before there is a GPU to show it on: the file a start with model
+/// files alone shows first, read while the window and the graphics start.
+pub struct HeadStart {
+    key: MeshKey,
+    kind: Kind,
+    /// The model, and the ms its reading took.
+    read: Receiver<(Read, u128)>,
+    began: std::time::Instant,
+}
+
+impl HeadStart {
+    /// Starts reading the model at `path` (its first plate, as a window shows it first).
+    pub fn of(path: &Path) -> HeadStart {
+        let kind = Kind::from_file_name(&meshgrove_core::listing::file_name(path));
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let file = path.to_path_buf();
+        let spawned = std::thread::Builder::new().name("mesh-head-start".into()).spawn(move || {
+            let began = std::time::Instant::now();
+            let read = read(&file, kind, None);
+            let read_ms = began.elapsed().as_millis();
+            let _ = tx.send((read.and_then(|(mesh, info)| prepare(&mesh, info)), read_ms));
+        });
+        if let Err(e) = spawned {
+            log::warn!("no head start for the first model: {e}");
+        }
+        HeadStart { key: (path.to_path_buf(), None), kind, read: rx, began: std::time::Instant::now() }
+    }
+
+    /// Waits for the model and uploads it.
+    fn finish(self, device: &wgpu::Device) -> (MeshKey, Result<Loaded, String>) {
+        let Ok((read, read_ms)) = self.read.recv() else {
+            // Its thread never ran: read now, as any other model.
+            let loaded = load(&self.key.0, self.kind, None, device);
+            return (self.key, loaded);
+        };
+        let loaded = read.map(|(prepared, info)| upload(&prepared, info, device));
+        if let Ok(loaded) = &loaded {
+            log_loaded(&self.key.0, loaded, read_ms, self.began);
+        }
+        (self.key, loaded)
+    }
+}
+
 impl MeshStore {
     pub fn new(device: wgpu::Device, ctx: egui::Context) -> MeshStore {
+        MeshStore::with_head_start(device, ctx, None)
+    }
+
+    /// As [`MeshStore::new`], with a model whose reading began before (see [`HeadStart`]).
+    pub fn with_head_start(device: wgpu::Device, ctx: egui::Context, head: Option<HeadStart>) -> MeshStore {
         let pending: Pending = Arc::default();
         let (tx, results) = unbounded();
         let queue = pending.clone();
+        // Asked for from the first frame on: it is on its way already.
+        let slots = head.iter().map(|h| (h.key.clone(), Slot { state: MeshState::Loading, last_used: 0 })).collect();
         std::thread::Builder::new()
             .name("mesh-loader".into())
             .spawn(move || {
+                if let Some(head) = head {
+                    if tx.send(head.finish(&device)).is_err() {
+                        return;
+                    }
+                    ctx.request_repaint();
+                }
                 loop {
                     let (key, kind) = {
                         let (lock, wake) = &*queue;
@@ -107,7 +166,7 @@ impl MeshStore {
                 }
             })
             .expect("spawning mesh loader");
-        MeshStore { slots: HashMap::new(), pending, results, frame: 0 }
+        MeshStore { slots, pending, results, frame: 0 }
     }
 
     /// Call once per frame before any `request`: collects finished loads and evicts.
@@ -177,8 +236,21 @@ fn ready_bytes(state: &MeshState) -> Option<usize> {
 }
 
 fn load(path: &Path, kind: Kind, plate: Option<usize>, device: &wgpu::Device) -> Result<Loaded, String> {
+    let began = std::time::Instant::now();
     let (mesh, info) = read(path, kind, plate)?;
-    finish(mesh, info, device)
+    let read_ms = began.elapsed().as_millis();
+    let (prepared, info) = prepare(&mesh, info)?;
+    let loaded = upload(&prepared, info, device);
+    log_loaded(path, &loaded, read_ms, began);
+    Ok(loaded)
+}
+
+/// How long a model took: reading its file, and all of it from the request until it is on the
+/// GPU (a head start waits for the GPU in between).
+fn log_loaded(path: &Path, loaded: &Loaded, read_ms: u128, began: std::time::Instant) {
+    let (name, triangles) = (meshgrove_core::listing::file_name(path), loaded.info.triangles);
+    let all = began.elapsed().as_millis();
+    log::info!("loaded {name}: {triangles} triangles, read in {read_ms} ms, ready after {all} ms");
 }
 
 /// The model's triangles on the CPU (for measuring), as a soup in the same recentred
@@ -227,12 +299,17 @@ fn read(path: &Path, kind: Kind, plate: Option<usize>) -> Result<(meshgrove_core
     Ok((mesh, info))
 }
 
-fn finish(mesh: meshgrove_core::Mesh, mut info: ModelInfo, device: &wgpu::Device) -> Result<Loaded, String> {
+/// The work on a read model that needs no GPU: its facts, and its mesh made ready to upload.
+fn prepare(mesh: &meshgrove_core::Mesh, mut info: ModelInfo) -> Read {
     // 3MF files report their own count: split paint must not inflate it.
     if info.triangles == 0 {
         info.triangles = mesh.triangle_count();
     }
     info.size_mm = mesh.bounds().map(|b| b.size()).unwrap_or_default();
-    let gpu = upload_mesh(device, &mesh).ok_or_else(|| t!("error.empty_model").into_owned())?;
-    Ok(Loaded { mesh: Arc::new(gpu), info: Arc::new(info) })
+    let prepared = PreparedMesh::of(mesh).ok_or_else(|| t!("error.empty_model").into_owned())?;
+    Ok((prepared, info))
+}
+
+fn upload(prepared: &PreparedMesh, info: ModelInfo, device: &wgpu::Device) -> Loaded {
+    Loaded { mesh: Arc::new(prepared.upload(device)), info: Arc::new(info) }
 }

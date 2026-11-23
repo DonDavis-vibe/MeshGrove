@@ -20,7 +20,7 @@ use meshgrove_core::{Kind, archive, archives, copies, query};
 use meshgrove_render::Renderer;
 
 use crate::actions;
-use crate::checker::Checker;
+use crate::checker::{Checker, ShownChecks};
 use crate::folder_scan::FolderScanner;
 use crate::i18n;
 use crate::library::{LibEvent, LibraryService, ListOp, Transfer};
@@ -214,6 +214,8 @@ pub struct App {
     /// Background printability checks: the checker, results not stored yet and when they last
     /// were, content already handed over this session, and when to look for more.
     checker: Checker,
+    /// The checks of the models in model windows, which may show files the library does not hold.
+    shown_checks: ShownChecks,
     checks_done: Vec<(String, MeshChecks)>,
     checks_flushed: Instant,
     checks_queued: HashSet<String>,
@@ -301,6 +303,7 @@ impl App {
         start: Option<PathBuf>,
     ) -> anyhow::Result<App> {
         let rs = cc.wgpu_render_state.as_ref().context("eframe was not started with the wgpu renderer")?;
+        startup::mark("window and graphics");
         let mut config = config;
         startup::look(&cc.egui_ctx, &config);
         let programs = Programs::of(&mut config);
@@ -391,6 +394,7 @@ impl App {
             selection_checks: None,
             marks_dirty: true,
             checker: Checker::start(cc.egui_ctx.clone()),
+            shown_checks: ShownChecks::start(cc.egui_ctx.clone()),
             checks_done: Vec::new(),
             checks_flushed: Instant::now(),
             checks_queued: HashSet::new(),
@@ -700,6 +704,7 @@ impl App {
         let mut actions = Vec::new();
         let mut cx = WindowContext {
             meshes: &mut self.meshes,
+            checks: &mut self.shown_checks,
             render_state: rs,
             renderer: &self.renderer,
             printers: &self.printers,
@@ -723,6 +728,11 @@ impl App {
                 WindowAction::Message(message) => self.toast(message),
                 // Only a window without the main window behind it asks for this.
                 WindowAction::ShowInGallery(_) => {}
+                WindowAction::Open(files) => {
+                    for entry in files.iter().filter_map(|f| Entry::from_path(f).ok()) {
+                        self.open_model_window(entry);
+                    }
+                }
             }
         }
     }
@@ -3826,6 +3836,7 @@ impl eframe::App for App {
             // Without the desktop's frame the window is resized at its edges by Meshgrove.
             solidcraft_ui_kit::window_chrome::resize_zones(ui);
         }
+        startup::first_frame();
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -3929,15 +3940,29 @@ fn list_title(list: &ListInfo) -> String {
 /// lacks. `previews`: the families the settings' font list shows in themselves.
 pub(crate) fn apply_fonts(ctx: &egui::Context, ui_font: Option<&str>, previews: &BTreeSet<String>) {
     use crate::ui::fonts;
+    let themed = crate::ui::appearance::themed();
+    ctx.set_fonts(fonts::definitions(ui_fonts(), system_font(), fonts::Choice::of(ui_font), themed, previews));
+}
+
+/// The desktop's UI font, looked up and read once.
+fn system_font() -> Option<std::sync::Arc<egui::FontData>> {
     static SYSTEM: std::sync::OnceLock<Option<std::sync::Arc<egui::FontData>>> = std::sync::OnceLock::new();
-    let system = SYSTEM.get_or_init(|| {
+    let font = SYSTEM.get_or_init(|| {
         let path = system_ui_font()?;
         let bytes = std::fs::read(&path).ok()?;
         log::info!("UI font: {}", path.display());
         Some(std::sync::Arc::new(egui::FontData::from_owned(bytes)))
     });
-    let themed = crate::ui::appearance::themed();
-    ctx.set_fonts(fonts::definitions(ui_fonts(), system.clone(), fonts::Choice::of(ui_font), themed, previews));
+    font.clone()
+}
+
+/// Looks the desktop's UI font up beside the start of the window and the graphics, so that
+/// [`apply_fonts`] finds it there (on Linux the lookup runs a program).
+pub(crate) fn warm_fonts() {
+    let spawned = std::thread::Builder::new().name("ui-font".into()).spawn(|| drop(system_font()));
+    if let Err(e) = spawned {
+        log::debug!("the UI font is looked up later: {e}");
+    }
 }
 
 /// egui's bundled fonts, with Hack last in line for the interface's text too: of them only it
