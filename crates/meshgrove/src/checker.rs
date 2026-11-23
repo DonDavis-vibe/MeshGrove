@@ -44,7 +44,7 @@ impl Checker {
                             std::thread::sleep(Duration::from_millis(250));
                         }
                         let result = match meshgrove_core::archive::read(&job.path) {
-                            Ok(bytes) => checks::check_file(&job.path, job.kind, &bytes),
+                            Ok(bytes) => checks::check_file(&job.path, job.kind, bytes),
                             Err(e) => {
                                 log::info!("not checked, unreadable: {}: {e}", job.path.display());
                                 None
@@ -130,7 +130,7 @@ impl ShownChecks {
                     };
                     let began = std::time::Instant::now();
                     let result = match meshgrove_core::archive::read(&key.0) {
-                        Ok(bytes) => checks::check_file(&key.0, kind, &bytes),
+                        Ok(bytes) => checks::check_file(&key.0, kind, bytes),
                         Err(e) => {
                             log::info!("not checked, unreadable: {}: {e}", key.0.display());
                             None
