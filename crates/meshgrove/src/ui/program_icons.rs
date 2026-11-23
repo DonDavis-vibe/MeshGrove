@@ -5,7 +5,8 @@
 //! ([`publish`]); the places that show a program ask by its name ([`paint`]). A picture is
 //! looked up and read once, the first time it is asked for
 //! ([`meshgrove_core::program_icons`] finds the file). An AppImage's icon is inside the
-//! AppImage: it is unpacked on a thread of its own and shows when that is done.
+//! AppImage: it is unpacked on a thread of its own and shows when that is done. The icons of
+//! the settings' programs are read ahead at the start ([`warm`]), while the window comes up.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -37,6 +38,43 @@ static STATE: Mutex<Option<State>> = Mutex::new(None);
 /// AppImages whose unpacking is done: the program, and the picture file it gave (or none).
 static UNPACKED: Mutex<Vec<(PathBuf, Option<PathBuf>)>> = Mutex::new(Vec::new());
 
+/// What [`warm`] read ahead.
+struct Warmed {
+    finder: Finder,
+    /// The programs whose icon file was found: the program, the file and its picture (or that
+    /// the file cannot be read).
+    pictures: Vec<(PathBuf, PathBuf, Option<egui::ColorImage>)>,
+}
+
+static WARMED: Mutex<Option<Warmed>> = Mutex::new(None);
+
+/// Reads the desktop entries and the icons of the settings' programs on a thread of its own,
+/// beside the start of the window and the graphics: the first frame then finds them there
+/// instead of reading some hundred files itself.
+pub fn warm(config: &meshgrove_core::config::Config) {
+    if !config.program_icons {
+        return;
+    }
+    let programs: Vec<Program> =
+        config.slicers.iter().flatten().chain(config.editors.iter().flatten()).cloned().collect();
+    if programs.is_empty() {
+        return;
+    }
+    let spawned = std::thread::Builder::new().name("program-icons".into()).spawn(move || {
+        let finder = Finder::real();
+        let found = |p: &Program| {
+            let file = finder.icon_file(p)?;
+            let picture = read(&file);
+            Some((p.program.clone(), file, picture))
+        };
+        let pictures = programs.iter().filter_map(found).collect();
+        *WARMED.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Warmed { finder, pictures });
+    });
+    if let Err(e) = spawned {
+        log::debug!("program icons are read when they are shown: {e}");
+    }
+}
+
 fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
     let mut state = STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     f(state.get_or_insert_with(State::default))
@@ -62,6 +100,13 @@ pub fn of(ctx: &egui::Context, name: &str) -> Option<TextureHandle> {
     with(|state| {
         if !state.enabled {
             return None;
+        }
+        // What was read ahead at the start: taken over once.
+        if let Some(warmed) = WARMED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+            state.finder.get_or_insert(warmed.finder);
+            for (program, file, picture) in warmed.pictures {
+                state.icons.entry(program).or_insert_with(|| picture.map(|p| texture(ctx, &file, p)));
+            }
         }
         // What the threads unpacked since the last question.
         let done = std::mem::take(&mut *UNPACKED.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
@@ -115,15 +160,23 @@ pub fn paint(ui: &Ui, rect: Rect, name: &str) -> bool {
 
 /// Reads a PNG or an SVG into a texture of [`EDGE`] pixels; none when it cannot be read.
 fn load(ctx: &egui::Context, file: &Path) -> Option<TextureHandle> {
-    let image = match file.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase).as_deref() {
+    read(file).map(|picture| texture(ctx, file, picture))
+}
+
+/// Reads a PNG or an SVG into a picture of [`EDGE`] pixels; none when it cannot be read.
+fn read(file: &Path) -> Option<egui::ColorImage> {
+    let picture = match file.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase).as_deref() {
         Some("svg") => svg(file),
         _ => raster(file),
     };
-    let Some(image) = image else {
+    if picture.is_none() {
         log::debug!("program icon {} could not be read", file.display());
-        return None;
-    };
-    Some(ctx.load_texture(format!("program-icon-{}", file.display()), image, egui::TextureOptions::LINEAR))
+    }
+    picture
+}
+
+fn texture(ctx: &egui::Context, file: &Path, picture: egui::ColorImage) -> TextureHandle {
+    ctx.load_texture(format!("program-icon-{}", file.display()), picture, egui::TextureOptions::LINEAR)
 }
 
 fn raster(file: &Path) -> Option<egui::ColorImage> {

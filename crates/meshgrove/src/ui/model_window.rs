@@ -92,6 +92,11 @@ impl ModelWindow {
         &self.entry.path
     }
 
+    /// Whether the model is loaded (shown, or about to be with this frame).
+    pub fn loaded(&self) -> bool {
+        matches!(self.model, ModelStatus::Ready(_))
+    }
+
     /// Says this in place of the mouse hints for a while.
     pub fn notify(&mut self, text: String) {
         self.notice = Some((text, Instant::now() + NOTICE));

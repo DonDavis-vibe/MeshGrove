@@ -404,12 +404,31 @@ pub fn project_point(bounds: &Aabb, view: &ViewParams, aspect: f32, point: Vec3)
 
 /// Uploads a mesh; needs only the device, so it can run on a background thread.
 pub fn upload_mesh(device: &wgpu::Device, mesh: &Mesh) -> Option<GpuMesh> {
-    let bounds = mesh.bounds()?;
-    let center = bounds.center();
-    let soup: Vec<[f32; 3]> = mesh.to_soup().into_iter().map(|p| (Vec3::from(p) - center).to_array()).collect();
-    let colors = mesh.soup_colors().filter(|c| c.len() == soup.len());
-    let bounds = Aabb { min: bounds.min - center, max: bounds.max - center };
-    Some(upload_soup(device, &soup, bounds, colors.as_deref()))
+    Some(PreparedMesh::of(mesh)?.upload(device))
+}
+
+/// A mesh made ready for the GPU before there is one: the work [`upload_mesh`] does on the CPU.
+/// A model read while the window and the graphics start is only uploaded once they are there.
+pub struct PreparedMesh {
+    soup: Vec<[f32; 3]>,
+    colors: Option<Vec<[u8; 4]>>,
+    bounds: Aabb,
+}
+
+impl PreparedMesh {
+    /// The mesh recentred on its bounding-box centre; none for an empty mesh.
+    pub fn of(mesh: &Mesh) -> Option<PreparedMesh> {
+        let bounds = mesh.bounds()?;
+        let center = bounds.center();
+        let soup: Vec<[f32; 3]> = mesh.to_soup().into_iter().map(|p| (Vec3::from(p) - center).to_array()).collect();
+        let colors = mesh.soup_colors().filter(|c| c.len() == soup.len());
+        let bounds = Aabb { min: bounds.min - center, max: bounds.max - center };
+        Some(PreparedMesh { soup, colors, bounds })
+    }
+
+    pub fn upload(&self, device: &wgpu::Device) -> GpuMesh {
+        upload_soup(device, &self.soup, self.bounds, self.colors.as_deref())
+    }
 }
 
 /// Uploads a triangle soup that is already recentred, with `bounds` in those coordinates, and

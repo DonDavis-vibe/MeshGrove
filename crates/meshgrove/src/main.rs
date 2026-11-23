@@ -80,11 +80,13 @@ fn is_model_file(path: &Path) -> bool {
 }
 
 fn main() -> eframe::Result {
+    startup::begin();
     meshgrove_core::config::migrate_legacy_dirs();
     let loaded = Config::load();
     let viewer = matches!(&loaded, Ok(config) if settings_open_the_viewer(config.open_files, update::kind()));
     let launch = launch(std::env::args_os().skip(1), viewer, is_model_file);
     logging::init(if matches!(launch, Launch::Viewer(_)) { logging::VIEWER } else { logging::MAIN });
+    startup::mark("settings read");
     let (config, config_error) = match loaded {
         Ok(config) => (config, None),
         Err(e) => {
@@ -92,6 +94,9 @@ fn main() -> eframe::Result {
             (Config::default(), Some(e))
         }
     };
+    // Read beside the start of the window and the graphics, which takes the longest.
+    app::warm_fonts();
+    ui::program_icons::warm(&config);
     i18n::init(config.language.as_deref());
     meshgrove_core::config::set_gltf_unit(config.gltf_unit);
     meshgrove_core::config::set_model_units(config.model_units);
@@ -126,7 +131,9 @@ fn main() -> eframe::Result {
         "meshgrove",
         options,
         Box::new(|cc| {
-            Ok(Box::new(app::App::new(cc, config, config_error, start).map_err(|e| e.into_boxed_dyn_error())?))
+            let app = app::App::new(cc, config, config_error, start).map_err(|e| e.into_boxed_dyn_error())?;
+            startup::mark("main window set up");
+            Ok(Box::new(app))
         }),
     )
 }

@@ -301,6 +301,7 @@ impl App {
         start: Option<PathBuf>,
     ) -> anyhow::Result<App> {
         let rs = cc.wgpu_render_state.as_ref().context("eframe was not started with the wgpu renderer")?;
+        startup::mark("window and graphics");
         let mut config = config;
         startup::look(&cc.egui_ctx, &config);
         let programs = Programs::of(&mut config);
@@ -3826,6 +3827,7 @@ impl eframe::App for App {
             // Without the desktop's frame the window is resized at its edges by Meshgrove.
             solidcraft_ui_kit::window_chrome::resize_zones(ui);
         }
+        startup::first_frame();
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -3929,15 +3931,29 @@ fn list_title(list: &ListInfo) -> String {
 /// lacks. `previews`: the families the settings' font list shows in themselves.
 pub(crate) fn apply_fonts(ctx: &egui::Context, ui_font: Option<&str>, previews: &BTreeSet<String>) {
     use crate::ui::fonts;
+    let themed = crate::ui::appearance::themed();
+    ctx.set_fonts(fonts::definitions(ui_fonts(), system_font(), fonts::Choice::of(ui_font), themed, previews));
+}
+
+/// The desktop's UI font, looked up and read once.
+fn system_font() -> Option<std::sync::Arc<egui::FontData>> {
     static SYSTEM: std::sync::OnceLock<Option<std::sync::Arc<egui::FontData>>> = std::sync::OnceLock::new();
-    let system = SYSTEM.get_or_init(|| {
+    let font = SYSTEM.get_or_init(|| {
         let path = system_ui_font()?;
         let bytes = std::fs::read(&path).ok()?;
         log::info!("UI font: {}", path.display());
         Some(std::sync::Arc::new(egui::FontData::from_owned(bytes)))
     });
-    let themed = crate::ui::appearance::themed();
-    ctx.set_fonts(fonts::definitions(ui_fonts(), system.clone(), fonts::Choice::of(ui_font), themed, previews));
+    font.clone()
+}
+
+/// Looks the desktop's UI font up beside the start of the window and the graphics, so that
+/// [`apply_fonts`] finds it there (on Linux the lookup runs a program).
+pub(crate) fn warm_fonts() {
+    let spawned = std::thread::Builder::new().name("ui-font".into()).spawn(|| drop(system_font()));
+    if let Err(e) = spawned {
+        log::debug!("the UI font is looked up later: {e}");
+    }
 }
 
 /// egui's bundled fonts, with Hack last in line for the interface's text too: of them only it
