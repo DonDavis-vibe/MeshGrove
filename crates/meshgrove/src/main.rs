@@ -114,8 +114,8 @@ fn main() -> eframe::Result {
         }
         Launch::Gallery(start) => start.map(spelled),
     };
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
+    let options = startup::native_options(
+        egui::ViewportBuilder::default()
             .with_title(t!("app.title"))
             // Matches the .desktop file name so KDE shows the right icon on Wayland.
             .with_app_id("meshgrove")
@@ -124,9 +124,7 @@ fn main() -> eframe::Result {
             .with_decorations(!ui::appearance::own_title_bar(config.title_bar))
             .with_inner_size([1400.0, 860.0])
             .with_min_inner_size([720.0, 480.0]),
-        renderer: eframe::Renderer::Wgpu,
-        ..Default::default()
-    };
+    );
     eframe::run_native(
         "meshgrove",
         options,

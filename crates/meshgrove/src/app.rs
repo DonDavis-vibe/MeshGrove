@@ -340,7 +340,7 @@ impl App {
             db_path,
             index: None,
             index_missing: false,
-            renderer: Renderer::new(&rs.device, &rs.adapter),
+            renderer: startup::renderer(rs),
             viewer: ModelViewer::new(),
             text: TextPreview::default(),
             model_windows: Vec::new(),

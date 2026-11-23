@@ -29,11 +29,8 @@ pub fn run(config: Config, files: Vec<PathBuf>) -> eframe::Result {
     let head = files.first().map(|f| HeadStart::of(f));
     let name = files.first().map(|f| listing::file_name(f)).unwrap_or_default();
     let own_title_bar = appearance::own_title_bar(config.title_bar);
-    let options = eframe::NativeOptions {
-        viewport: model_window::viewport(&name, model_window::icon(crate::app_icon), own_title_bar),
-        renderer: eframe::Renderer::Wgpu,
-        ..Default::default()
-    };
+    let options =
+        startup::native_options(model_window::viewport(&name, model_window::icon(crate::app_icon), own_title_bar));
     eframe::run_native(
         "meshgrove",
         options,
@@ -82,8 +79,7 @@ impl ViewerApp {
             }
         }
         let title = first.title();
-        let renderer = Renderer::new(&rs.device, &rs.adapter);
-        startup::mark("renderer");
+        let renderer = startup::renderer(rs);
         // Found here if the settings never named any; only the main window writes them down.
         let printers = startup::printers(&mut config);
         let programs = Programs::of(&mut config);

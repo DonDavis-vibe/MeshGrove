@@ -65,6 +65,37 @@ pub fn first_model(ctx: &egui::Context) {
     });
 }
 
+/// How a window of the program is started: drawn with wgpu, on a device that has what the
+/// 3D views need of a software renderer ([`meshgrove_render::device_features`]: nothing
+/// where a graphics card draws).
+pub fn native_options(viewport: egui::ViewportBuilder) -> eframe::NativeOptions {
+    let mut options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, ..Default::default() };
+    if let egui_wgpu::WgpuSetup::CreateNew(new) = &mut options.wgpu_options.wgpu_setup {
+        let usual = new.device_descriptor.clone();
+        new.device_descriptor = std::sync::Arc::new(move |adapter| {
+            let mut descriptor = usual(adapter);
+            descriptor.required_features |= meshgrove_render::device_features(adapter);
+            descriptor
+        });
+    }
+    options
+}
+
+static SOFTWARE: AtomicBool = AtomicBool::new(false);
+
+/// The renderer of the 3D views of this program's windows.
+pub fn renderer(rs: &egui_wgpu::RenderState) -> meshgrove_render::Renderer {
+    let renderer = meshgrove_render::Renderer::for_window(&rs.device, &rs.adapter);
+    SOFTWARE.store(renderer.software(), Ordering::Relaxed);
+    mark("renderer");
+    renderer
+}
+
+/// Whether the processor draws the 3D views instead of a graphics card (the settings say so).
+pub fn software_renderer() -> bool {
+    SOFTWARE.load(Ordering::Relaxed)
+}
+
 /// The theme and the fonts of the settings; `MESHGROVE_THEME` overrides the theme for one
 /// start (screenshots).
 pub fn look(ctx: &egui::Context, config: &Config) {
