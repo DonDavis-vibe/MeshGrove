@@ -21,6 +21,9 @@ use crate::i18n;
 /// Longer side of an exported picture, in pixels.
 const PICTURE_SIZE: f32 = 2048.0;
 
+/// How wide the wireframe's lines are, in points of the interface.
+const EDGE_POINTS: f32 = 1.2;
+
 /// Where the shown mesh comes from (to load its triangles for measuring).
 #[derive(Clone, PartialEq)]
 pub enum MeshSource {
@@ -111,7 +114,9 @@ pub struct ModelViewer {
     /// Render this many times the pixels the view shows (smooths edges).
     supersample: f32,
     studio: bool,
-    /// The buttons over the view (standard views, measuring, picture).
+    /// Wireframe: the triangles' edges are drawn on the surface.
+    wireframe: bool,
+    /// The buttons over the view (standard views, measuring, wireframe, picture).
     tools: bool,
     /// The standard view the 3D mouse's second button showed last.
     preset: usize,
@@ -173,6 +178,7 @@ impl ModelViewer {
             scripted_view: None,
             supersample: 1.0,
             studio: false,
+            wireframe: false,
             preset: 0,
             free_orbit: false,
             tools: true,
@@ -288,6 +294,18 @@ impl ModelViewer {
             self.studio = studio;
             self.dirty = true;
         }
+    }
+
+    /// Shows or hides the wireframe: the edges of the triangles, drawn on the surface.
+    pub fn toggle_wireframe(&mut self) {
+        self.wireframe = !self.wireframe;
+        self.dirty = true;
+    }
+
+    /// The width of the wireframe's lines in a picture that has `pixels` for each point of the
+    /// interface; 0 without wireframe.
+    fn edges(&self, pixels: f32) -> f32 {
+        if self.wireframe { EDGE_POINTS * pixels } else { 0.0 }
     }
 
     /// Test hook: shows a standard view (`top`, `front`, …) as soon as the model is there.
@@ -420,6 +438,7 @@ impl ModelViewer {
         let max = rs.device.limits().max_texture_dimension_2d;
         let (w, h) = (((w as f32 * self.supersample) as u32).min(max), ((h as f32 * self.supersample) as u32).min(max));
         self.view.studio = self.studio;
+        self.view.edges = self.edges(w as f32 / rect.width());
         if self.offscreen.ensure_size(rs, renderer, w, h) {
             self.dirty = true;
         }
@@ -649,7 +668,8 @@ impl ModelViewer {
         }
     }
 
-    /// Small buttons over the top-left corner: standard views, measuring, picture export.
+    /// Small buttons over the top-left corner: standard views, measuring, wireframe, picture
+    /// export.
     fn toolbar(
         &mut self,
         ui: &mut Ui,
@@ -673,6 +693,7 @@ impl ModelViewer {
             (true, format!("🎥 {} ▾", t!("viewer.views"))),
             (can_measure, format!("📏 {}", t!("viewer.measure"))),
             (self.frame.is_some(), format!("⬜ {}", t!("viewer.frame"))),
+            (true, format!("🕸 {}", t!("viewer.wireframe"))),
             (true, format!("📷 {}", t!("viewer.picture"))),
         ];
         let needed: f32 =
@@ -705,26 +726,34 @@ impl ModelViewer {
             self.frame_shown = !self.frame_shown;
             self.dirty = true;
         }
+        if bar_button_if(ui, &label(3, "🕸"), true, self.wireframe).on_hover_text(t!("viewer.wireframe_hint")).clicked()
+        {
+            self.toggle_wireframe();
+        }
         let saving = self.saving.is_some();
-        let picture = bar_button_if(ui, &label(3, "📷"), !saving, false).on_hover_text(t!("viewer.picture_hint"));
+        let picture = bar_button_if(ui, &label(4, "📷"), !saving, false).on_hover_text(t!("viewer.picture_hint"));
         if picture.clicked() {
-            message = self.save_picture(rs, renderer, mesh, rect.aspect_ratio()).err();
+            message = self.save_picture(rs, renderer, mesh, rect.size()).err();
         }
         message
     }
 
-    /// Renders the current view large and writes it as PNG on a thread.
+    /// Renders the current view (`shown` points large on screen) large and writes it as PNG on
+    /// a thread.
     fn save_picture(
         &mut self,
         rs: &egui_wgpu::RenderState,
         renderer: &Renderer,
         mesh: &GpuMesh,
-        aspect: f32,
+        shown: egui::Vec2,
     ) -> Result<(), String> {
+        let aspect = shown.x / shown.y;
         let (w, h) =
             if aspect >= 1.0 { (PICTURE_SIZE, PICTURE_SIZE / aspect) } else { (PICTURE_SIZE * aspect, PICTURE_SIZE) };
+        // The wireframe's lines as wide as on screen, measured against the model.
+        let view = ViewParams { edges: self.edges(w / shown.x), ..self.view };
         let image = renderer
-            .render_image(&rs.device, &rs.queue, mesh, &self.view, w.round() as u32, h.round() as u32)
+            .render_image(&rs.device, &rs.queue, mesh, &view, w.round() as u32, h.round() as u32)
             .map_err(|e| t!("toast.picture_failed", error = e.to_string()).into_owned())?;
         let name = match &self.source {
             Some(MeshSource::File { path, .. }) => path.file_stem().map(|s| s.to_string_lossy().into_owned()),

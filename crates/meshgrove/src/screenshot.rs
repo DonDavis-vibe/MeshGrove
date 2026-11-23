@@ -7,7 +7,7 @@
 //! at the pointer from 0.7 s on and `MESHGROVE_WHEEL=dy` turns the mouse wheel there for half a second after 1 s.
 //! `MESHGROVE_CLICKS=x,y;x,y;…` clicks those points one after the other, from 3 s on, every 0.8 s
 //! (`x,y*2` double-clicks, `x,y*r` right-clicks, `x,y*s` clicks with Shift held), and `MESHGROVE_TYPE=text` types the text after the last click; steps
-//! separated by `|` follow half a second apart, `{enter}`, `{down}`, `{left}`, `{right}` and `{esc}` press those keys,
+//! separated by `|` follow half a second apart, `{enter}`, `{down}`, `{left}`, `{right}`, `{esc}` and `{w}` press those keys,
 //! `{click x,y}` clicks there (to click after typing), `{rclick x,y}` right-clicks, `{wheel dy}` turns
 //! the wheel at the pointer, `{copy}`, `{cut}` and `{paste}` are Ctrl+C, Ctrl+X and Ctrl+V;
 //! `{press x,y}`, `{move x,y}` and `{release}` drag with the left button, `{rpress x,y}` instead
@@ -226,6 +226,7 @@ impl ScreenshotHook {
                 "{left}" => Some(egui::Key::ArrowLeft),
                 "{right}" => Some(egui::Key::ArrowRight),
                 "{esc}" => Some(egui::Key::Escape),
+                "{w}" => Some(egui::Key::W),
                 _ => None,
             };
             let point = |s: &str| {

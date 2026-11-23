@@ -38,6 +38,9 @@ pub struct ViewParams {
     pub framing: Framing,
     /// Studio lighting with glossy highlights instead of the plain thumbnail lighting.
     pub studio: bool,
+    /// Wireframe: the edges of the triangles are drawn on the shaded surface, this many pixels
+    /// of the rendered picture wide. 0 draws none.
+    pub edges: f32,
     /// Free orbit: the orientation of the camera (see [`orientation_of`]), which also allows
     /// turning about the view axis and going over the poles. When set, it replaces the azimuth
     /// and elevation, which keep the model upright.
@@ -55,6 +58,7 @@ impl Default for ViewParams {
             background: [0.0, 0.0, 0.0, 0.0],
             framing: Framing::Tight,
             studio: false,
+            edges: 0.0,
             orientation: None,
         }
     }
@@ -68,6 +72,8 @@ struct Uniforms {
     base_color: [f32; 4],
     key_dir: [f32; 4],
     fill_dir: [f32; 4],
+    /// x: the width of the triangles' edges in pixels, 0 for none.
+    wire: [f32; 4],
 }
 
 /// A mesh uploaded to the GPU, recentred on its bounding-box centre for float precision.
@@ -609,6 +615,7 @@ impl Camera {
             base_color: [r, g, b, 1.0],
             key_dir: key.extend(0.0).to_array(),
             fill_dir: fill.extend(0.0).to_array(),
+            wire: [view.edges.max(0.0), 0.0, 0.0, 0.0],
         }
     }
 }

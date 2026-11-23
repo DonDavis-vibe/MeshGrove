@@ -129,3 +129,35 @@ fn triangle_colours_change_after_the_upload() {
     let bare = upload_soup(device, &soup, bounds, None);
     assert!(!bare.set_triangle_colors(queue, &[[230, 30, 30, 255]; 12]) && !bare.tint_triangles(queue, &[0], [0; 4]));
 }
+
+/// The wireframe draws the triangles' edges on the surface: dark lines on the light cube, its
+/// outline and what is between the lines unchanged. A coloured mesh gets them as well.
+#[test]
+fn wireframe_draws_the_edges_on_the_surface() {
+    let Some(gpu) = gpu() else { return };
+    let cube = Mesh::cube(20.0);
+    let plain = gpu.render(&cube, 256, &ViewParams::default()).unwrap();
+    let wired = gpu.render(&cube, 256, &ViewParams { edges: 2.0, ..ViewParams::default() }).unwrap();
+    let brightness = |p: &image::Rgba<u8>| u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]);
+    let (mut covered, mut darker, mut lighter, mut outline) = (0u32, 0u32, 0u32, 0u32);
+    for (a, b) in plain.pixels().zip(wired.pixels()) {
+        outline += u32::from((a[3] > 128) != (b[3] > 128));
+        if a[3] > 128 {
+            covered += 1;
+            darker += u32::from(brightness(b) + 90 < brightness(a));
+            lighter += u32::from(brightness(b) > brightness(a) + 6);
+        }
+    }
+    assert_eq!(outline, 0, "the wireframe changes the model's outline");
+    assert_eq!(lighter, 0, "lines on a light surface are dark");
+    let share = darker as f32 / covered as f32;
+    assert!((0.02..0.25).contains(&share), "lines cover {share} of the cube");
+
+    let mut painted = cube.clone();
+    painted.colors = Some(vec![[20, 20, 20, 255]; painted.triangle_count()]);
+    let view = ViewParams::default();
+    let dark = gpu.render(&painted, 256, &view).unwrap();
+    let dark_wired = gpu.render(&painted, 256, &ViewParams { edges: 2.0, ..view }).unwrap();
+    let lit = dark.pixels().zip(dark_wired.pixels()).filter(|(a, b)| brightness(b) > brightness(a) + 90).count();
+    assert!(lit > 200, "light lines on a dark surface: {lit}");
+}

@@ -171,6 +171,9 @@ impl ModelWindow {
             if by != 0 {
                 self.step(by);
             }
+            if pressed(Key::W) {
+                self.viewer.toggle_wireframe();
+            }
         }
         let name = self.name();
         if cx.own_title_bar {
