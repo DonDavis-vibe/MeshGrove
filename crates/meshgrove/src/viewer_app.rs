@@ -81,15 +81,21 @@ impl ViewerApp {
                 first.script_view(&view);
             }
         }
+        let title = first.title();
+        let renderer = Renderer::new(&rs.device, &rs.adapter);
+        startup::mark("renderer");
+        // Found here if the settings never named any; only the main window writes them down.
+        let printers = startup::printers(&mut config);
+        let programs = Programs::of(&mut config);
+        startup::mark("printers and programs");
         let app = ViewerApp {
-            title: first.title(),
+            title,
             windows,
             meshes: MeshStore::with_head_start(rs.device.clone(), cc.egui_ctx.clone(), head),
             checks: ShownChecks::start(cc.egui_ctx.clone()),
-            renderer: Renderer::new(&rs.device, &rs.adapter),
-            // Found here if the settings never named any; only the main window writes them down.
-            printers: startup::printers(&mut config),
-            programs: Programs::of(&mut config),
+            renderer,
+            printers,
+            programs,
             spacemouse: SpaceMouse::start(cc.egui_ctx.clone()),
             brand: startup::brand(&cc.egui_ctx),
             screenshot,
@@ -122,6 +128,7 @@ impl ViewerApp {
 
 impl eframe::App for ViewerApp {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        startup::frame_begins();
         let ctx = ui.ctx().clone();
         let rs = frame.wgpu_render_state().expect("wgpu renderer").clone();
         appearance::follow_system(&ctx);
@@ -172,7 +179,7 @@ impl eframe::App for ViewerApp {
         }
         startup::first_frame();
         if self.windows.first().is_some_and(ModelWindow::loaded) {
-            startup::first_model();
+            startup::first_model(&ctx);
         }
 
         // A test run's picture is taken: its close ends the program, whatever is open.

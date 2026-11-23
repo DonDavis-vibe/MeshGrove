@@ -1,5 +1,6 @@
 use glam::{Mat4, Quat, Vec2, Vec3};
 use meshgrove_core::{Aabb, Mesh};
+use std::sync::{Arc, OnceLock};
 use wgpu::util::DeviceExt;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -175,11 +176,82 @@ pub struct RenderTarget {
 }
 
 pub struct Renderer {
-    pipeline: wgpu::RenderPipeline,
-    /// The same with a second vertex buffer of per-vertex colours.
-    colored: wgpu::RenderPipeline,
+    pipelines: Arc<Pipelines>,
     bind_group_layout: wgpu::BindGroupLayout,
     sample_count: u32,
+}
+
+/// The pipelines a mesh is drawn with. Building one translates the shader for the graphics
+/// driver, which takes tens of milliseconds where that is DirectX: each is built once, when
+/// first asked for, and the one every model needs is started ahead on a thread of its own.
+struct Pipelines {
+    device: wgpu::Device,
+    shader: wgpu::ShaderModule,
+    layout: wgpu::PipelineLayout,
+    sample_count: u32,
+    plain: OnceLock<wgpu::RenderPipeline>,
+    /// The same with a second vertex buffer of per-vertex colours.
+    colored: OnceLock<wgpu::RenderPipeline>,
+}
+
+impl Pipelines {
+    fn plain(&self) -> &wgpu::RenderPipeline {
+        self.plain.get_or_init(|| self.build("meshgrove mesh pipeline", "vs_main", false))
+    }
+
+    fn colored(&self) -> &wgpu::RenderPipeline {
+        self.colored.get_or_init(|| self.build("meshgrove coloured mesh pipeline", "vs_colored", true))
+    }
+
+    fn build(&self, label: &str, entry_point: &str, colored: bool) -> wgpu::RenderPipeline {
+        let positions = wgpu::VertexBufferLayout {
+            array_stride: 12,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+        };
+        let colors = wgpu::VertexBufferLayout {
+            array_stride: 4,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &wgpu::vertex_attr_array![1 => Unorm8x4],
+        };
+        let buffers = [Some(positions), Some(colors)];
+        self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&self.layout),
+            vertex: wgpu::VertexState {
+                module: &self.shader,
+                entry_point: Some(entry_point),
+                compilation_options: Default::default(),
+                buffers: if colored { &buffers } else { &buffers[..1] },
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                // No culling: winding in STL files is unreliable and meshes may be open.
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState { count: self.sample_count, ..Default::default() },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: COLOR_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
 }
 
 impl Renderer {
@@ -208,60 +280,22 @@ impl Renderer {
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
-        let positions = wgpu::VertexBufferLayout {
-            array_stride: 12,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-        };
-        let colors = wgpu::VertexBufferLayout {
-            array_stride: 4,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![1 => Unorm8x4],
-        };
-        let pipeline = |label, entry_point, buffers: &[Option<wgpu::VertexBufferLayout>]| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some(entry_point),
-                    compilation_options: Default::default(),
-                    buffers,
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    // No culling: winding in STL files is unreliable and meshes may be open.
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::Less),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: wgpu::MultisampleState { count: sample_count, ..Default::default() },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: COLOR_FORMAT,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        Renderer {
-            pipeline: pipeline("meshgrove mesh pipeline", "vs_main", &[Some(positions.clone())]),
-            colored: pipeline("meshgrove coloured mesh pipeline", "vs_colored", &[Some(positions), Some(colors)]),
-            bind_group_layout,
+        let pipelines = Arc::new(Pipelines {
+            device: device.clone(),
+            shader,
+            layout,
             sample_count,
-        }
+            plain: OnceLock::new(),
+            colored: OnceLock::new(),
+        });
+        // Ready by the time the first model is drawn, without holding up whoever asked for
+        // the renderer; a draw that comes sooner waits for it. Without the thread the first
+        // draw builds it.
+        let ahead = pipelines.clone();
+        let _ = std::thread::Builder::new().name("mesh-pipeline".into()).spawn(move || {
+            ahead.plain();
+        });
+        Renderer { pipelines, bind_group_layout, sample_count }
     }
 
     pub fn upload(&self, device: &wgpu::Device, mesh: &Mesh) -> Option<GpuMesh> {
@@ -382,7 +416,7 @@ impl Renderer {
         });
         pass.set_bind_group(0, &target.bind_group, &[]);
         for chunk in &mesh.chunks {
-            pass.set_pipeline(if chunk.colors.is_some() { &self.colored } else { &self.pipeline });
+            pass.set_pipeline(if chunk.colors.is_some() { self.pipelines.colored() } else { self.pipelines.plain() });
             pass.set_vertex_buffer(0, chunk.positions.slice(..));
             if let Some(colors) = &chunk.colors {
                 pass.set_vertex_buffer(1, colors.slice(..));

@@ -3,6 +3,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use meshgrove_core::config::{Config, Program, Slicer};
 use meshgrove_core::listing;
@@ -26,16 +27,42 @@ pub fn mark(what: &str) {
     }
 }
 
-/// The first frame is drawn, after which the window shows: noted once, call it every frame.
-pub fn first_frame() {
-    static NOTED: std::sync::Once = std::sync::Once::new();
-    NOTED.call_once(|| mark("first frame"));
+static FRAME_DRAWN: AtomicBool = AtomicBool::new(false);
+static MODEL_DRAWN: AtomicBool = AtomicBool::new(false);
+
+/// A frame begins, so what the frame before drew has been handed to the screen: notes once
+/// each when that was the first frame and the first frame with the model. Call it first thing
+/// in every frame.
+pub fn frame_begins() {
+    static FRAME: std::sync::Once = std::sync::Once::new();
+    static MODEL: std::sync::Once = std::sync::Once::new();
+    if FRAME_DRAWN.load(Ordering::Relaxed) {
+        FRAME.call_once(|| mark("first frame handed to the screen"));
+    }
+    if MODEL_DRAWN.load(Ordering::Relaxed) {
+        MODEL.call_once(|| mark("first model handed to the screen"));
+    }
 }
 
-/// The first model is on screen: noted once.
-pub fn first_model() {
+/// The first frame is drawn (the window shows once it is handed to the screen): noted once,
+/// call it at the end of every frame.
+pub fn first_frame() {
     static NOTED: std::sync::Once = std::sync::Once::new();
-    NOTED.call_once(|| mark("first model shown"));
+    NOTED.call_once(|| {
+        mark("first frame drawn");
+        FRAME_DRAWN.store(true, Ordering::Relaxed);
+    });
+}
+
+/// The first model is drawn into a frame: noted once. Asks for one more frame, whose
+/// beginning says when this one reached the screen ([`frame_begins`]).
+pub fn first_model(ctx: &egui::Context) {
+    static NOTED: std::sync::Once = std::sync::Once::new();
+    NOTED.call_once(|| {
+        mark("first model drawn");
+        MODEL_DRAWN.store(true, Ordering::Relaxed);
+        ctx.request_repaint();
+    });
 }
 
 /// The theme and the fonts of the settings; `MESHGROVE_THEME` overrides the theme for one
