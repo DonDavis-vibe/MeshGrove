@@ -100,8 +100,12 @@ impl ViewerApp {
     }
 
     /// Does what a window asked for; what to tell the user in that window, if anything.
-    fn act(&self, action: WindowAction) -> Option<String> {
+    fn act(&mut self, action: WindowAction) -> Option<String> {
         match action {
+            WindowAction::Open(files) => {
+                self.windows.extend(files.iter().filter_map(|f| Entry::from_path(f).ok()).map(ModelWindow::new));
+                None
+            }
             WindowAction::OpenInSlicer(path, index) => {
                 self.programs.open_in_slicer(vec![path], index).map(|(message, _)| message)
             }

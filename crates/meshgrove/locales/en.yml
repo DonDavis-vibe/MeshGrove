@@ -97,6 +97,7 @@ viewer.hint: "Left mouse: rotate · Right mouse: pan · Wheel: zoom · Double-cl
 viewer.step_hint: "Left and right arrow keys: previous and next model in the folder"
 viewer.show_in_gallery: "Show in Meshgrove"
 viewer.show_in_gallery_hint: "Opens the main window at this file's folder, with the file selected."
+viewer.drop_unknown: "None of the dropped files is a 3D model Meshgrove shows."
 
 kind.folder: "Folder"
 kind.stl: "STL model"

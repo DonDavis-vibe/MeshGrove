@@ -97,6 +97,7 @@ viewer.hint: "Linke Maustaste: drehen · Rechte Maustaste: verschieben · Mausra
 viewer.step_hint: "Pfeiltasten links und rechts: voriges und nächstes Modell im Ordner"
 viewer.show_in_gallery: "In Meshgrove zeigen"
 viewer.show_in_gallery_hint: "Öffnet das Hauptfenster am Ordner dieser Datei, mit ihr markiert."
+viewer.drop_unknown: "Unter den abgelegten Dateien ist kein 3D-Modell, das Meshgrove zeigt."
 
 kind.folder: "Ordner"
 kind.stl: "STL-Modell"

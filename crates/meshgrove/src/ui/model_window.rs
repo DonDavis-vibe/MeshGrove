@@ -31,6 +31,9 @@ pub enum WindowAction {
     Message(String),
     /// Show the model in the main window, which is not running (`standalone`).
     ShowInGallery(PathBuf),
+    /// Show these models in windows of their own (dropped on a window along with the one it
+    /// shows now).
+    Open(Vec<PathBuf>),
 }
 
 /// How long a notice stands in place of the mouse hints.
@@ -167,6 +170,11 @@ impl ModelWindow {
         {
             self.viewer.apply_space(input);
         }
+        // A model file dropped on the window is shown in it.
+        let (dropped, hovering) = ui.input(|i| (i.raw.dropped_files.clone(), !i.raw.hovered_files.is_empty()));
+        if !dropped.is_empty() {
+            self.take_dropped(dropped.iter().map(|file| file.path().to_path_buf()), actions);
+        }
         // As a picture viewer does: the arrow keys show the model before and the one after.
         if !ui.ctx().egui_wants_keyboard_input() {
             let pressed = |key| ui.input(|i| i.key_pressed(key));
@@ -190,22 +198,49 @@ impl ModelWindow {
         }
         // Widget ids must not collide with the main window's or other model windows'.
         ui.push_id(self.id, |ui| self.contents(ui, &name, cx, actions));
+        if hovering {
+            // Where the file held over the window lands.
+            let accent = super::appearance::tokens().accent;
+            super::appearance::glow(ui.painter(), ui.max_rect().shrink(6.0), accent);
+        }
         if cx.own_title_bar {
             solidcraft_ui_kit::window_chrome::resize_zones(ui);
         }
         open
     }
 
+    /// Shows the first model among the files dropped on the window in it and asks for windows
+    /// for the models dropped along with it; says so if there is no model among them.
+    fn take_dropped(&mut self, files: impl Iterator<Item = PathBuf>, actions: &mut Vec<WindowAction>) {
+        let mut models =
+            files.filter_map(|file| Entry::from_path(&file).ok()).filter(|entry| crate::meshes::viewable(entry.kind));
+        match models.next() {
+            Some(first) => {
+                self.replace(first);
+                let others: Vec<PathBuf> = models.map(|entry| entry.path).collect();
+                if !others.is_empty() {
+                    actions.push(WindowAction::Open(others));
+                }
+            }
+            None => self.notify(t!("viewer.drop_unknown").into_owned()),
+        }
+    }
+
     /// Shows the model `by` places after this one among the models of its folder (before it for
     /// a negative `by`), in the order the gallery lists them; at either end it stays as it is.
     fn step(&mut self, by: isize) {
         if let Some(entry) = neighbour(&self.entry.path, by) {
-            self.entry = entry;
-            self.plate = None;
-            self.plates.clear();
-            self.model = ModelStatus::Loading;
-            self.notice = None;
+            self.replace(entry);
         }
+    }
+
+    /// Shows another model in this window; the camera fits it once it is loaded.
+    fn replace(&mut self, entry: Entry) {
+        self.entry = entry;
+        self.plate = None;
+        self.plates.clear();
+        self.model = ModelStatus::Loading;
+        self.notice = None;
     }
 
     fn contents(&mut self, ui: &mut Ui, name: &str, cx: &mut WindowContext, actions: &mut Vec<WindowAction>) {

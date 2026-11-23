@@ -728,6 +728,11 @@ impl App {
                 WindowAction::Message(message) => self.toast(message),
                 // Only a window without the main window behind it asks for this.
                 WindowAction::ShowInGallery(_) => {}
+                WindowAction::Open(files) => {
+                    for entry in files.iter().filter_map(|f| Entry::from_path(f).ok()) {
+                        self.open_model_window(entry);
+                    }
+                }
             }
         }
     }

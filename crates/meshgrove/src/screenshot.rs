@@ -12,6 +12,8 @@
 //! the wheel at the pointer, `{copy}`, `{cut}` and `{paste}` are Ctrl+C, Ctrl+X and Ctrl+V;
 //! `{press x,y}`, `{move x,y}` and `{release}` drag with the left button, `{rpress x,y}` instead
 //! with the right one, `{spress x,y}` with the left one and Shift held until the release.
+//! `{hover file;file}` holds files over the window as a drag from a file manager does, `{drop file;file}`
+//! drops them on it.
 //! `MESHGROVE_MEASURE=fx,fy;fx,fy` measures between those points (fractions of the view) in the
 //! first model window that opens, which the hook's input cannot reach; `MESHGROVE_WINDOW_VIEW=top`
 //! (or `front`, `left` …) starts that window in a standard view.
@@ -41,6 +43,8 @@ pub struct ScreenshotHook {
     /// Steps to type after the clicks, half a second apart: text, `{enter}`, `{down}`, `{esc}`.
     typing: std::collections::VecDeque<String>,
     typed_at: f32,
+    /// Files a `{hover …}` step holds over the window, until they are dropped.
+    hovering: Vec<std::path::PathBuf>,
     /// Where a `{move x,y}` step takes the pointer, a few points per frame.
     glide: Option<egui::Pos2>,
     /// The button to let go next frame, and whether Shift is let go the frame after (a hand
@@ -106,6 +110,7 @@ impl ScreenshotHook {
                 .map(|s| s.split('|').map(str::to_owned).collect())
                 .unwrap_or_default(),
             typed_at: 0.0,
+            hovering: Vec::new(),
             glide: None,
             started: Instant::now(),
             pressed: false,
@@ -162,10 +167,29 @@ impl ScreenshotHook {
     }
 }
 
+/// A file a `{drop …}` step drops on the window.
+#[derive(Debug)]
+struct Dropped(std::path::PathBuf);
+
+impl egui::DroppedFile for Dropped {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
+}
+
 impl ScreenshotHook {
     /// Replaces real pointer input with the scripted one.
     pub fn inject(&mut self, raw: &mut egui::RawInput) {
-        if self.pointer.is_none() && self.clicks.is_empty() && self.typing.is_empty() && self.release.is_none() {
+        if self.pointer.is_none()
+            && self.clicks.is_empty()
+            && self.typing.is_empty()
+            && self.release.is_none()
+            && self.hovering.is_empty()
+        {
             return;
         }
         // The scripted run has the keyboard whatever window the desktop has in front: egui
@@ -245,10 +269,21 @@ impl ScreenshotHook {
                 (.., Some(at)) => (Some(at), (egui::PointerButton::Primary, true)),
                 _ => (None, (egui::PointerButton::Primary, false)),
             };
+            let files = |s: &str| -> Option<Vec<std::path::PathBuf>> {
+                Some(s.strip_suffix('}')?.split(';').map(std::path::PathBuf::from).collect())
+            };
+            let hovered = step.strip_prefix("{hover ").and_then(files);
+            let dropped = step.strip_prefix("{drop ").and_then(files);
             let move_to = step.strip_prefix("{move ").and_then(point);
             let wheel =
                 step.strip_prefix("{wheel ").and_then(|s| s.strip_suffix('}')).and_then(|s| s.trim().parse().ok());
             match key {
+                _ if hovered.is_some() => self.hovering = hovered.unwrap_or_default(),
+                _ if dropped.is_some() => {
+                    self.hovering.clear();
+                    let file = |path| -> egui::DroppedFileHandle { std::sync::Arc::new(Dropped(path)) };
+                    raw.dropped_files = dropped.unwrap_or_default().into_iter().map(file).collect();
+                }
                 _ if wheel.is_some() => raw.events.push(egui::Event::MouseWheel {
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, wheel.unwrap_or_default()),
@@ -311,6 +346,8 @@ impl ScreenshotHook {
                 self.glide = None;
             }
         }
+        let held = |path: &std::path::PathBuf| egui::HoveredFile { path: Some(path.clone()), ..Default::default() };
+        raw.hovered_files = self.hovering.iter().map(held).collect();
         let Some(pos) = self.pointer else { return };
         raw.events.push(egui::Event::PointerMoved(pos));
         // Press only once the gallery is on screen, so the press lands on a tile.
