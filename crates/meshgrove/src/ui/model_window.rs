@@ -18,6 +18,7 @@ use meshgrove_render::Renderer;
 
 use super::details::{self, ModelStatus};
 use super::viewer::{MeshSource, ModelViewer, SpaceInput};
+use crate::checker::ShownChecks;
 use crate::meshes::{MeshState, MeshStore};
 
 /// What the windows ask the app to do.
@@ -38,6 +39,8 @@ const NOTICE: Duration = Duration::from_secs(6);
 /// Everything the windows share with the main window.
 pub struct WindowContext<'a> {
     pub meshes: &'a mut MeshStore,
+    /// The printability checks of the models the windows show.
+    pub checks: &'a mut ShownChecks,
     pub render_state: &'a egui_wgpu::RenderState,
     pub renderer: &'a Renderer,
     pub printers: &'a [Printer],
@@ -211,7 +214,9 @@ impl ModelWindow {
                 ui.add_space(6.0);
                 ui.label(RichText::new(name).heading().strong());
                 ui.add_space(10.0);
-                details::facts(ui, &self.entry, None, &self.model, cx.printers, (None, false));
+                // Checked once it is shown: a model passed while stepping through a folder is not.
+                let checks = if self.loaded() { cx.checks.of(&self.entry) } else { (None, false) };
+                details::facts(ui, &self.entry, None, &self.model, cx.printers, checks);
                 let (slicer, editor, _) = details::open_buttons(ui, self.entry.kind, cx.slicers, cx.editors, &[]);
                 if let Some(index) = slicer {
                     actions.push(WindowAction::OpenInSlicer(self.entry.path.clone(), index));

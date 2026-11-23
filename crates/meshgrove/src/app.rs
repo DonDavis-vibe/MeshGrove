@@ -20,7 +20,7 @@ use meshgrove_core::{Kind, archive, archives, copies, query};
 use meshgrove_render::Renderer;
 
 use crate::actions;
-use crate::checker::Checker;
+use crate::checker::{Checker, ShownChecks};
 use crate::folder_scan::FolderScanner;
 use crate::i18n;
 use crate::library::{LibEvent, LibraryService, ListOp, Transfer};
@@ -214,6 +214,8 @@ pub struct App {
     /// Background printability checks: the checker, results not stored yet and when they last
     /// were, content already handed over this session, and when to look for more.
     checker: Checker,
+    /// The checks of the models in model windows, which may show files the library does not hold.
+    shown_checks: ShownChecks,
     checks_done: Vec<(String, MeshChecks)>,
     checks_flushed: Instant,
     checks_queued: HashSet<String>,
@@ -392,6 +394,7 @@ impl App {
             selection_checks: None,
             marks_dirty: true,
             checker: Checker::start(cc.egui_ctx.clone()),
+            shown_checks: ShownChecks::start(cc.egui_ctx.clone()),
             checks_done: Vec::new(),
             checks_flushed: Instant::now(),
             checks_queued: HashSet::new(),
@@ -701,6 +704,7 @@ impl App {
         let mut actions = Vec::new();
         let mut cx = WindowContext {
             meshes: &mut self.meshes,
+            checks: &mut self.shown_checks,
             render_state: rs,
             renderer: &self.renderer,
             printers: &self.printers,

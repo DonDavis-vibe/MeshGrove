@@ -14,6 +14,7 @@ use meshgrove_core::listing::{self, Entry};
 use meshgrove_core::printer::Printer;
 use meshgrove_render::Renderer;
 
+use crate::checker::ShownChecks;
 use crate::meshes::{HeadStart, MeshStore};
 use crate::screenshot::ScreenshotHook;
 use crate::spacemouse::SpaceMouse;
@@ -49,6 +50,7 @@ struct ViewerApp {
     /// The program's window is titled for this model.
     title: String,
     meshes: MeshStore,
+    checks: ShownChecks,
     renderer: Renderer,
     printers: Vec<Printer>,
     programs: Programs,
@@ -83,6 +85,7 @@ impl ViewerApp {
             title: first.title(),
             windows,
             meshes: MeshStore::with_head_start(rs.device.clone(), cc.egui_ctx.clone(), head),
+            checks: ShownChecks::start(cc.egui_ctx.clone()),
             renderer: Renderer::new(&rs.device, &rs.adapter),
             // Found here if the settings never named any; only the main window writes them down.
             printers: startup::printers(&mut config),
@@ -131,6 +134,7 @@ impl eframe::App for ViewerApp {
 
         let mut cx = WindowContext {
             meshes: &mut self.meshes,
+            checks: &mut self.checks,
             render_state: &rs,
             renderer: &self.renderer,
             printers: &self.printers,
