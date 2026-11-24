@@ -264,6 +264,9 @@ fn preview(ui: &mut Ui, config: &Config, changes: &mut Vec<SettingsChange>) {
             changes.push(SettingsChange::PreviewQuality(quality));
         }
         hint(ui, t!("settings.preview_hint"));
+        if crate::startup::software_renderer() {
+            hint(ui, t!("settings.preview_software"));
+        }
     });
     let mut free = config.free_orbit;
     if check(ui, &mut free, t!("settings.free_orbit"), t!("settings.free_orbit_hint")) {

@@ -1,5 +1,6 @@
 use glam::{Mat4, Quat, Vec2, Vec3};
 use meshgrove_core::{Aabb, Mesh};
+use std::sync::{Arc, OnceLock};
 use wgpu::util::DeviceExt;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -166,6 +167,8 @@ impl GpuMesh {
 pub struct RenderTarget {
     pub width: u32,
     pub height: u32,
+    /// Samples per pixel of its MSAA and depth buffers; 1 without an MSAA buffer.
+    samples: u32,
     msaa_view: Option<wgpu::TextureView>,
     pub color: wgpu::Texture,
     pub color_view: wgpu::TextureView,
@@ -175,17 +178,108 @@ pub struct RenderTarget {
 }
 
 pub struct Renderer {
-    pipeline: wgpu::RenderPipeline,
-    /// The same with a second vertex buffer of per-vertex colours.
-    colored: wgpu::RenderPipeline,
+    /// For pictures that are kept: with smoothed edges where the adapter can.
+    pictures: Arc<Pipelines>,
+    /// For the views of a window. The same as `pictures`, except on a software renderer.
+    views: Arc<Pipelines>,
     bind_group_layout: wgpu::BindGroupLayout,
+    software: bool,
+}
+
+/// The pipelines a mesh is drawn with. Building one translates the shader for the graphics
+/// driver, which takes tens of milliseconds where that is DirectX: each is built once, when
+/// first asked for, and the one every model needs is started ahead on a thread of its own.
+struct Pipelines {
+    device: wgpu::Device,
+    shader: wgpu::ShaderModule,
+    layout: wgpu::PipelineLayout,
     sample_count: u32,
+    plain: OnceLock<wgpu::RenderPipeline>,
+    /// The same with a second vertex buffer of per-vertex colours.
+    colored: OnceLock<wgpu::RenderPipeline>,
+}
+
+impl Pipelines {
+    fn plain(&self) -> &wgpu::RenderPipeline {
+        self.plain.get_or_init(|| self.build("meshgrove mesh pipeline", "vs_main", false))
+    }
+
+    fn colored(&self) -> &wgpu::RenderPipeline {
+        self.colored.get_or_init(|| self.build("meshgrove coloured mesh pipeline", "vs_colored", true))
+    }
+
+    fn build(&self, label: &str, entry_point: &str, colored: bool) -> wgpu::RenderPipeline {
+        let positions = wgpu::VertexBufferLayout {
+            array_stride: 12,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+        };
+        let colors = wgpu::VertexBufferLayout {
+            array_stride: 4,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &wgpu::vertex_attr_array![1 => Unorm8x4],
+        };
+        let buffers = [Some(positions), Some(colors)];
+        self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&self.layout),
+            vertex: wgpu::VertexState {
+                module: &self.shader,
+                entry_point: Some(entry_point),
+                compilation_options: Default::default(),
+                buffers: if colored { &buffers } else { &buffers[..1] },
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                // No culling: winding in STL files is unreliable and meshes may be open.
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState { count: self.sample_count, ..Default::default() },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: COLOR_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
 }
 
 impl Renderer {
+    /// A renderer for pictures that are kept (thumbnails): edges smoothed wherever the adapter
+    /// can, however long a picture takes.
     pub fn new(device: &wgpu::Device, adapter: &wgpu::Adapter) -> Renderer {
-        let sample_count =
-            if adapter.get_texture_format_features(COLOR_FORMAT).flags.sample_count_supported(4) { 4 } else { 1 };
+        Renderer::with(device, smooth_samples(adapter), false)
+    }
+
+    /// A renderer for a window. Where no graphics card draws but the processor (a software
+    /// renderer: virtual machines, remote sessions), its views go without smoothed edges,
+    /// which there cost several times the time; pictures it saves keep them.
+    pub fn for_window(device: &wgpu::Device, adapter: &wgpu::Adapter) -> Renderer {
+        let software = adapter.get_info().device_type == wgpu::DeviceType::Cpu;
+        if software {
+            log::info!("software renderer ({}): the 3D views draw in simple quality", adapter.get_info().name);
+        }
+        Renderer::with(device, smooth_samples(adapter), software)
+    }
+
+    /// `smooth`: the samples per pixel of pictures that are kept; `software`: the views of a
+    /// window go with one.
+    pub(crate) fn with(device: &wgpu::Device, smooth: u32, software: bool) -> Renderer {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("meshgrove mesh shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mesh.wgsl").into()),
@@ -208,73 +302,74 @@ impl Renderer {
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
-        let positions = wgpu::VertexBufferLayout {
-            array_stride: 12,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-        };
-        let colors = wgpu::VertexBufferLayout {
-            array_stride: 4,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![1 => Unorm8x4],
-        };
-        let pipeline = |label, entry_point, buffers: &[Option<wgpu::VertexBufferLayout>]| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some(entry_point),
-                    compilation_options: Default::default(),
-                    buffers,
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    // No culling: winding in STL files is unreliable and meshes may be open.
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::Less),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: wgpu::MultisampleState { count: sample_count, ..Default::default() },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: COLOR_FORMAT,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
+        let pipelines = |sample_count| {
+            Arc::new(Pipelines {
+                device: device.clone(),
+                shader: shader.clone(),
+                layout: layout.clone(),
+                sample_count,
+                plain: OnceLock::new(),
+                colored: OnceLock::new(),
             })
         };
-        Renderer {
-            pipeline: pipeline("meshgrove mesh pipeline", "vs_main", &[Some(positions.clone())]),
-            colored: pipeline("meshgrove coloured mesh pipeline", "vs_colored", &[Some(positions), Some(colors)]),
-            bind_group_layout,
-            sample_count,
-        }
+        let pictures = pipelines(smooth);
+        let views = if software && smooth > 1 { pipelines(1) } else { pictures.clone() };
+        // Ready by the time the first model is drawn, without holding up whoever asked for
+        // the renderer; a draw that comes sooner waits for it. Without the thread the first
+        // draw builds it.
+        let ahead = views.clone();
+        let _ = std::thread::Builder::new().name("mesh-pipeline".into()).spawn(move || {
+            ahead.plain();
+        });
+        Renderer { pictures, views, bind_group_layout, software }
+    }
+
+    /// Whether the processor draws instead of a graphics card: views then keep to the simple
+    /// picture quality.
+    pub fn software(&self) -> bool {
+        self.software
     }
 
     pub fn upload(&self, device: &wgpu::Device, mesh: &Mesh) -> Option<GpuMesh> {
         upload_mesh(device, mesh)
     }
 
-    /// `extra_usage` lets callers add e.g. `COPY_SRC` (readback) or `TEXTURE_BINDING` (egui).
+    /// Where a view of a window is drawn. `extra_usage` lets callers add e.g.
+    /// `TEXTURE_BINDING` (egui).
     pub fn create_target(
         &self,
         device: &wgpu::Device,
         width: u32,
         height: u32,
         extra_usage: wgpu::TextureUsages,
+    ) -> RenderTarget {
+        self.target(device, width, height, extra_usage, self.views.sample_count)
+    }
+
+    /// Samples per pixel of pictures that are kept.
+    #[cfg(test)]
+    pub(crate) fn smooth(&self) -> u32 {
+        self.pictures.sample_count
+    }
+
+    /// Where a picture that is kept is drawn (`extra_usage`: `COPY_SRC` for the readback).
+    pub(crate) fn create_picture_target(
+        &self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        extra_usage: wgpu::TextureUsages,
+    ) -> RenderTarget {
+        self.target(device, width, height, extra_usage, self.pictures.sample_count)
+    }
+
+    fn target(
+        &self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        extra_usage: wgpu::TextureUsages,
+        samples: u32,
     ) -> RenderTarget {
         let size = wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 };
         let texture = |label, format, samples, usage| {
@@ -290,13 +385,12 @@ impl Renderer {
             })
         };
         let color = texture("meshgrove color", COLOR_FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | extra_usage);
-        let msaa_view = (self.sample_count > 1).then(|| {
-            texture("meshgrove msaa", COLOR_FORMAT, self.sample_count, wgpu::TextureUsages::RENDER_ATTACHMENT)
+        let msaa_view = (samples > 1).then(|| {
+            texture("meshgrove msaa", COLOR_FORMAT, samples, wgpu::TextureUsages::RENDER_ATTACHMENT)
                 .create_view(&Default::default())
         });
-        let depth_view =
-            texture("meshgrove depth", DEPTH_FORMAT, self.sample_count, wgpu::TextureUsages::RENDER_ATTACHMENT)
-                .create_view(&Default::default());
+        let depth_view = texture("meshgrove depth", DEPTH_FORMAT, samples, wgpu::TextureUsages::RENDER_ATTACHMENT)
+            .create_view(&Default::default());
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("meshgrove uniforms"),
             size: std::mem::size_of::<Uniforms>() as u64,
@@ -311,6 +405,7 @@ impl Renderer {
         RenderTarget {
             width: size.width,
             height: size.height,
+            samples,
             msaa_view,
             color_view: color.create_view(&Default::default()),
             color,
@@ -380,9 +475,10 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        let pipelines = if target.samples == self.views.sample_count { &self.views } else { &self.pictures };
         pass.set_bind_group(0, &target.bind_group, &[]);
         for chunk in &mesh.chunks {
-            pass.set_pipeline(if chunk.colors.is_some() { &self.colored } else { &self.pipeline });
+            pass.set_pipeline(if chunk.colors.is_some() { pipelines.colored() } else { pipelines.plain() });
             pass.set_vertex_buffer(0, chunk.positions.slice(..));
             if let Some(colors) = &chunk.colors {
                 pass.set_vertex_buffer(1, colors.slice(..));
@@ -390,6 +486,58 @@ impl Renderer {
             pass.draw(0..chunk.vertices, 0..1);
         }
     }
+}
+
+/// What wgpu prepares on every device by default and nothing here uses: the check of indirect
+/// draws, for which it builds two pipelines whenever a device is made. Under DirectX their
+/// shaders are translated anew each time, some 30 ms of every start. Take these flags from an
+/// instance's descriptor.
+pub const UNUSED_INSTANCE_FLAGS: wgpu::InstanceFlags = wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL;
+
+/// A device on the adapter of `instance` (its backends) that a graphics card drives, the one
+/// `power` prefers, made with `descriptor`; `None` where those backends find only a software
+/// renderer or none at all, or the device cannot be made.
+///
+/// For a window that should take one graphics interface where it can, and leave the choice
+/// among all of them to wgpu where it cannot.
+pub fn graphics_card_device(
+    instance: wgpu::InstanceDescriptor,
+    power: wgpu::PowerPreference,
+    descriptor: &dyn Fn(&wgpu::Adapter) -> wgpu::DeviceDescriptor<'static>,
+) -> Option<(wgpu::Instance, wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
+    let instance = wgpu::Instance::new(instance);
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: power,
+        force_fallback_adapter: false,
+        compatible_surface: None,
+        apply_limit_buckets: false,
+    }))
+    .ok()?;
+    if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
+        return None;
+    }
+    let (device, queue) = pollster::block_on(adapter.request_device(&descriptor(&adapter))).ok()?;
+    Some((instance, adapter, device, queue))
+}
+
+/// What a device of `adapter` needs beyond the usual so that meshes reach it quickly: ask
+/// for it when the device is made.
+///
+/// A mesh usually reaches the graphics side through a copy made there. A software renderer
+/// under DirectX takes that copy at some 6 MiB a second, 14 seconds for a 116-MiB model in
+/// which nothing of the window moves, while it draws from memory the program has written
+/// itself without trouble. So there, and only there, the vertex buffers are such memory.
+pub fn device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
+    if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
+        adapter.features() & wgpu::Features::MAPPABLE_PRIMARY_BUFFERS
+    } else {
+        wgpu::Features::empty()
+    }
+}
+
+/// Samples per pixel for smoothed edges: four where the adapter can, else one.
+fn smooth_samples(adapter: &wgpu::Adapter) -> u32 {
+    if adapter.get_texture_format_features(COLOR_FORMAT).flags.sample_count_supported(4) { 4 } else { 1 }
 }
 
 /// The ray from the camera through a point of the view (`ndc` −1..1, y up), in the mesh's
@@ -444,8 +592,25 @@ impl PreparedMesh {
 pub fn upload_soup(device: &wgpu::Device, soup: &[[f32; 3]], bounds: Aabb, colors: Option<&[[u8; 4]]>) -> GpuMesh {
     let colors = colors.filter(|c| c.len() == soup.len());
     let per_chunk = (MAX_CHUNK_BYTES / 12) / 3 * 3;
-    let buffer = |label, contents: &[u8], usage| {
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents, usage })
+    // On a software renderer the program fills the buffers itself ([`device_features`]).
+    let direct = device.features().contains(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS);
+    let buffer = |label, contents: &[u8], usage: wgpu::BufferUsages| {
+        if !direct {
+            return device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents,
+                usage,
+            });
+        }
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: contents.len() as u64,
+            usage: usage | wgpu::BufferUsages::MAP_WRITE,
+            mapped_at_creation: true,
+        });
+        buffer.slice(..).get_mapped_range_mut().expect("mapped at creation").copy_from_slice(contents);
+        buffer.unmap();
+        buffer
     };
     let chunks = soup
         .chunks(per_chunk)

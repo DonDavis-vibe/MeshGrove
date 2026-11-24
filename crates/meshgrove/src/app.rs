@@ -340,7 +340,7 @@ impl App {
             db_path,
             index: None,
             index_missing: false,
-            renderer: Renderer::new(&rs.device, &rs.adapter),
+            renderer: startup::renderer(rs),
             viewer: ModelViewer::new(),
             text: TextPreview::default(),
             model_windows: Vec::new(),
@@ -3621,6 +3621,7 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        crate::startup::frame_begins();
         let ctx = ui.ctx().clone();
         let rs = frame.wgpu_render_state().expect("wgpu renderer").clone();
         crate::ui::appearance::follow_system(&ctx);

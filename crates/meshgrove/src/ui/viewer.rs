@@ -436,8 +436,11 @@ impl ModelViewer {
             return message;
         }
         let max = rs.device.limits().max_texture_dimension_2d;
-        let (w, h) = (((w as f32 * self.supersample) as u32).min(max), ((h as f32 * self.supersample) as u32).min(max));
-        self.view.studio = self.studio;
+        // A software renderer keeps to the simple quality, whatever is set: twice the
+        // resolution takes it four times as long.
+        let (supersample, studio) = if renderer.software() { (1.0, false) } else { (self.supersample, self.studio) };
+        let (w, h) = (((w as f32 * supersample) as u32).min(max), ((h as f32 * supersample) as u32).min(max));
+        self.view.studio = studio;
         self.view.edges = self.edges(w as f32 / rect.width());
         if self.offscreen.ensure_size(rs, renderer, w, h) {
             self.dirty = true;
