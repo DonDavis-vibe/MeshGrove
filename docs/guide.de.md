@@ -1068,8 +1068,9 @@ Meshgrove ist für Sammlungen mit Tausenden Dateien auf ganz normalen Festplatte
 ## Probleme und häufige Fragen
 
 **Das Fenster bleibt schwarz oder die App startet nicht.**
-Meshgrove braucht Vulkan (Linux, Windows), Metal (macOS) oder DirectX 12 (Windows). Aktualisiere
-den Grafiktreiber. Als Ausweg eine andere Schnittstelle probieren: `WGPU_BACKEND=gl meshgrove`.
+Meshgrove braucht Vulkan (Linux, Windows), Metal (macOS) oder DirectX 12 (Windows); unter Windows
+nimmt es DirectX 12, wo die Grafikkarte es kann. Aktualisiere den Grafiktreiber. Als Ausweg eine
+andere Schnittstelle probieren: `WGPU_BACKEND=gl meshgrove` (oder `vulkan`).
 Das Log steht in `meshgrove.log` im Cache-Ordner; *Einstellungen → Über Meshgrove* zeigt den Pfad.
 
 **Änderungen auf der Platte erscheinen erst nach einer Weile (Linux).**

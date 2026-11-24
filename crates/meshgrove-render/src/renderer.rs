@@ -494,6 +494,32 @@ impl Renderer {
 /// instance's descriptor.
 pub const UNUSED_INSTANCE_FLAGS: wgpu::InstanceFlags = wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL;
 
+/// A device on the adapter of `instance` (its backends) that a graphics card drives, the one
+/// `power` prefers, made with `descriptor`; `None` where those backends find only a software
+/// renderer or none at all, or the device cannot be made.
+///
+/// For a window that should take one graphics interface where it can, and leave the choice
+/// among all of them to wgpu where it cannot.
+pub fn graphics_card_device(
+    instance: wgpu::InstanceDescriptor,
+    power: wgpu::PowerPreference,
+    descriptor: &dyn Fn(&wgpu::Adapter) -> wgpu::DeviceDescriptor<'static>,
+) -> Option<(wgpu::Instance, wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
+    let instance = wgpu::Instance::new(instance);
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: power,
+        force_fallback_adapter: false,
+        compatible_surface: None,
+        apply_limit_buckets: false,
+    }))
+    .ok()?;
+    if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
+        return None;
+    }
+    let (device, queue) = pollster::block_on(adapter.request_device(&descriptor(&adapter))).ok()?;
+    Some((instance, adapter, device, queue))
+}
+
 /// What a device of `adapter` needs beyond the usual so that meshes reach it quickly: ask
 /// for it when the device is made.
 ///

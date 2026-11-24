@@ -7,5 +7,5 @@ mod renderer;
 pub use headless::{HeadlessRenderer, RenderError};
 pub use renderer::{
     COLOR_FORMAT, Framing, GpuMesh, PreparedMesh, RenderTarget, Renderer, UNUSED_INSTANCE_FLAGS, ViewParams,
-    default_model_color, device_features, project_point, upload_mesh, upload_soup, view_ray,
+    default_model_color, device_features, graphics_card_device, project_point, upload_mesh, upload_soup, view_ray,
 };

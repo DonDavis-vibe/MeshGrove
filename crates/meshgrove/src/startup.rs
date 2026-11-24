@@ -67,9 +67,10 @@ pub fn first_model(ctx: &egui::Context) {
 
 /// How a window of the program is started: drawn with wgpu, on a device that has what the
 /// 3D views need of a software renderer ([`meshgrove_render::device_features`]: nothing
-/// where a graphics card draws).
+/// where a graphics card draws). Under Windows on DirectX where a graphics card speaks it.
 pub fn native_options(viewport: egui::ViewportBuilder) -> eframe::NativeOptions {
     let mut options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, ..Default::default() };
+    let mut first = None;
     if let egui_wgpu::WgpuSetup::CreateNew(new) = &mut options.wgpu_options.wgpu_setup {
         new.instance_descriptor.flags.remove(meshgrove_render::UNUSED_INSTANCE_FLAGS);
         let usual = new.device_descriptor.clone();
@@ -78,8 +79,40 @@ pub fn native_options(viewport: egui::ViewportBuilder) -> eframe::NativeOptions 
             descriptor.required_features |= meshgrove_render::device_features(adapter);
             descriptor
         });
+        // Left to itself wgpu takes Vulkan on Windows where the driver has it (NVIDIA's
+        // does), which starts some 50 to 150 ms slower than DirectX on the same card.
+        // WGPU_BACKEND still decides when it is set.
+        if cfg!(windows) && std::env::var_os("WGPU_BACKEND").is_none() {
+            first = first_choice(new, wgpu::Backends::DX12);
+        }
+    }
+    if let Some(device) = first {
+        options.wgpu_options.wgpu_setup = egui_wgpu::WgpuSetup::Existing(device);
     }
     options
+}
+
+/// The device a window gets from `backends` alone, as `new` would make it: where those find
+/// a graphics card. Otherwise `None`, and wgpu chooses among all its backends as usual (an
+/// older card may speak only OpenGL, a virtual machine has no card at all).
+fn first_choice(new: &egui_wgpu::WgpuSetupCreateNew, backends: wgpu::Backends) -> Option<egui_wgpu::WgpuSetupExisting> {
+    let usual = &new.instance_descriptor;
+    let instance = wgpu::InstanceDescriptor {
+        backends,
+        flags: usual.flags,
+        backend_options: usual.backend_options.clone(),
+        memory_budget_thresholds: usual.memory_budget_thresholds,
+        display: None,
+    };
+    let Some((instance, adapter, device, queue)) =
+        meshgrove_render::graphics_card_device(instance, new.power_preference, &*new.device_descriptor)
+    else {
+        log::info!("graphics: no graphics card on {backends:?}, wgpu chooses among all its interfaces");
+        return None;
+    };
+    let info = adapter.get_info();
+    log::info!("graphics: {:?} on {}", info.backend, info.name);
+    Some(egui_wgpu::WgpuSetupExisting { instance, adapter, device, queue })
 }
 
 static SOFTWARE: AtomicBool = AtomicBool::new(false);
@@ -216,4 +249,32 @@ pub fn printers(config: &mut Config) -> Vec<Printer> {
         log::info!("printer: {} ({} × {} × {} mm)", p.name, p.x, p.y, p.z);
     }
     printers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A backend that finds a graphics card gives a window its device; one that finds only a
+    /// software renderer (or nothing) leaves the choice to wgpu.
+    #[test]
+    fn a_graphics_card_is_taken_first_and_a_software_renderer_is_not() {
+        let Some(egui_wgpu::WgpuSetup::CreateNew(new)) =
+            Some(native_options(egui::ViewportBuilder::default()).wgpu_options.wgpu_setup)
+        else {
+            return; // Windows with a graphics card: already chosen.
+        };
+        assert!(!new.instance_descriptor.flags.intersects(meshgrove_render::UNUSED_INSTANCE_FLAGS));
+        // The thumbnails' renderer asks the same backends for the adapter they prefer.
+        let backend = wgpu::Backends::PRIMARY;
+        let found = meshgrove_render::HeadlessRenderer::new().ok().map(|gpu| gpu.adapter_info.device_type);
+        match (found, first_choice(&new, backend)) {
+            (Some(wgpu::DeviceType::Cpu) | None, chosen) => assert!(chosen.is_none()),
+            (Some(_), Some(device)) => {
+                assert_ne!(device.adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+                assert_eq!(device.device.limits().max_texture_dimension_2d, 8192, "the limits egui asks for");
+            }
+            (Some(kind), None) => panic!("a {kind:?} adapter was not taken"),
+        }
+    }
 }

@@ -1010,9 +1010,10 @@ Meshgrove is built for collections of thousands of files on ordinary hard drives
 ## Troubleshooting and FAQ
 
 **The window stays black or the app does not start.**
-Meshgrove needs Vulkan (Linux, Windows), Metal (macOS) or DirectX 12 (Windows). Update the
-graphics driver. As a workaround, try another backend: `WGPU_BACKEND=gl meshgrove`. The log
-is `meshgrove.log` in the cache folder; *Settings → About Meshgrove* shows its path.
+Meshgrove needs Vulkan (Linux, Windows), Metal (macOS) or DirectX 12 (Windows); on Windows it
+takes DirectX 12 where the graphics card speaks it. Update the graphics driver. As a workaround,
+try another backend: `WGPU_BACKEND=gl meshgrove` (or `vulkan`). The log is `meshgrove.log` in
+the cache folder; *Settings → About Meshgrove* shows its path.
 
 **Changes on disk show up only after a while (Linux).**
 Linux limits how many programs may watch folders (`fs.inotify.max_user_instances`, often 128).
