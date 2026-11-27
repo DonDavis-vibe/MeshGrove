@@ -59,6 +59,8 @@ enum DialogFor {
     MoveTarget(i64),
     /// A folder for one of the settings' folder fields.
     Settings(crate::ui::settings::FolderFor),
+    /// A theme file to import (Settings → Appearance).
+    Theme,
 }
 
 /// What the user picked in a dialog; nothing when they closed it.
@@ -203,6 +205,7 @@ impl App {
                 }
             }
             DialogFor::Settings(what) => self.settings.folder_picked(what, &first),
+            DialogFor::Theme => self.apply_settings(vec![SettingsChange::ImportTheme(first)]),
             // The review may have moved on meanwhile: then nothing is there to place.
             DialogFor::MoveTarget(proposal) => {
                 if let super::View::Review { batches, .. } = &mut self.view
@@ -796,6 +799,23 @@ impl App {
                     self.plugin_dialog.ask(DialogFor::Settings(what), move || {
                         Box::pin(async move { paths(folders.pick_folder().await) })
                     });
+                }
+                return false;
+            }
+            SettingsChange::PickTheme => {
+                if self.plugin_dialog.open.is_none() {
+                    let mut dialog = self
+                        .plugin_dialog
+                        .base
+                        .clone()
+                        .set_title(t!("settings.theme_pick_title"))
+                        // Linux dialogs match the pattern by case.
+                        .add_filter(t!("settings.theme_filter"), &["json", "JSON"]);
+                    if let Some(dir) = dirs::download_dir().or_else(dirs::home_dir) {
+                        dialog = dialog.set_directory(dir);
+                    }
+                    self.plugin_dialog
+                        .ask(DialogFor::Theme, move || Box::pin(async move { paths(dialog.pick_file().await) }));
                 }
                 return false;
             }
