@@ -113,8 +113,11 @@ Everything Meshgrove does, and how. Installation and the first steps are in the
   resized (a pane on its own then shows no header); *Reset the layout* there puts them back.
 - **Themes and title bar:** *Settings → General → Appearance* offers 27 themes: SolidCraft's 25
   and Meshgrove's own look as Meshgrove Dark and Meshgrove Light. With none chosen, Meshgrove
-  follows the system from dark to light and back. The font list there shows each family in
-  itself. On Linux and Windows Meshgrove draws its own title bar in the theme's colours, for the
+  follows the system from dark to light and back. *Import theme file…* adds a SolidCraft theme
+  file of your own (`.json`), kept in Meshgrove's settings folder under `themes`; right-click an
+  imported theme to remove it. *Background picture* puts a picture of your own behind the files,
+  covering the window from its centre; *Dim* darkens it towards the theme's background so the
+  file names stay readable. The font list there shows each family in itself. On Linux and Windows Meshgrove draws its own title bar in the theme's colours, for the
   main window and the model windows; *Title bar → System* goes back to the desktop's.
 - **Large preview:** Space shows the selected model large over the window, at first nothing but
   the model. ☰ in its top right corner adds the file name, the viewer's tools and the hints

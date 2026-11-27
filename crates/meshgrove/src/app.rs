@@ -279,6 +279,8 @@ pub struct App {
     settings: SettingsDialog,
     /// The preview fonts loaded for the settings' font list.
     font_previews: BTreeSet<String>,
+    /// The picture behind the file view, once read.
+    background: crate::ui::background::Background,
     /// Meshgrove's icon, for its own title bar.
     brand: egui::TextureHandle,
     /// The user's plugins: their panels, jobs and tools.
@@ -442,6 +444,7 @@ impl App {
             messages: unbounded(),
             settings: SettingsDialog::default(),
             font_previews: BTreeSet::new(),
+            background: Default::default(),
             brand: startup::brand(&cc.egui_ctx),
             #[cfg(feature = "plugins")]
             plugins: crate::plugins::PluginHost::new(cc.egui_ctx.clone()),
@@ -1854,6 +1857,8 @@ impl App {
             match change {
                 change @ (SettingsChange::InstallPlugin(_)
                 | SettingsChange::PickPlugin
+                | SettingsChange::PickTheme
+                | SettingsChange::PickBackground
                 | SettingsChange::PickFolder(_)
                 | SettingsChange::OpenPluginFolder
                 | SettingsChange::PluginEnabled { .. }
@@ -1870,11 +1875,27 @@ impl App {
                     i18n::init(lang.as_deref());
                     self.config.language = lang;
                 }
-                SettingsChange::UiTheme(theme) => {
-                    crate::ui::appearance::apply(&self.egui_ctx, theme.as_deref());
-                    self.config.ui_theme = theme;
-                    apply_fonts(&self.egui_ctx, self.config.ui_font.as_deref(), &self.font_previews);
-                }
+                SettingsChange::UiTheme(theme) => self.set_ui_theme(theme),
+                SettingsChange::ImportTheme(file) => match crate::ui::appearance::import(&file) {
+                    Ok((id, name)) => {
+                        self.settings.themes_changed();
+                        self.set_ui_theme(Some(id));
+                        self.toast(t!("settings.theme_imported", name = name).into_owned());
+                    }
+                    Err(e) => self.toast(t!("settings.theme_import_failed", error = e).into_owned()),
+                },
+                SettingsChange::BackgroundPicture(picture) => self.config.background_picture = picture,
+                SettingsChange::BackgroundDim(dim) => self.config.background_dim = dim.min(90),
+                SettingsChange::RemoveTheme(id) => match crate::ui::appearance::remove(&id) {
+                    Ok(()) => {
+                        self.settings.themes_changed();
+                        // The one on is gone: Meshgrove's own look takes over.
+                        if self.config.ui_theme.as_deref() == Some(id.as_str()) {
+                            self.set_ui_theme(None);
+                        }
+                    }
+                    Err(e) => self.toast(e),
+                },
                 SettingsChange::ProgramIcons(on) => self.config.program_icons = on,
                 SettingsChange::TitleBar(title_bar) => {
                     self.config.title_bar = title_bar;
@@ -2121,6 +2142,13 @@ impl App {
             }
             self.save_config();
         }
+    }
+
+    /// Puts the interface theme `theme` on (`None`: Meshgrove's own look) and keeps it.
+    fn set_ui_theme(&mut self, theme: Option<String>) {
+        crate::ui::appearance::apply(&self.egui_ctx, theme.as_deref());
+        self.config.ui_theme = theme;
+        apply_fonts(&self.egui_ctx, self.config.ui_font.as_deref(), &self.font_previews);
     }
 
     fn toast(&mut self, message: String) {
@@ -3421,6 +3449,14 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
             if gliding {
                 // Over the panes it passes.
                 ui.painter().rect_filled(shown, 0.0, ui.visuals().panel_fill);
+            }
+            if *pane == Pane::Files {
+                let app = &mut *self.app;
+                let picture = app.config.background_picture.as_deref();
+                let dim = f32::from(app.config.background_dim.min(90)) / 100.0;
+                if let Some(error) = app.background.paint(ui.painter(), shown, picture, dim) {
+                    app.toast(t!("settings.background_unreadable", error = error).into_owned());
+                }
             }
             self.pane_body(ui, pane, margin, rs);
         });

@@ -120,7 +120,12 @@ Alles, was Meshgrove kann, und wie es geht. Installation und erste Schritte steh
   Anordnung wieder her.
 - **Themes und Titelleiste:** *Einstellungen → Allgemein → Erscheinungsbild* bietet 27 Themes:
   die 25 von SolidCraft und Meshgroves eigenen Look als Meshgrove Dark und Meshgrove Light. Ist
-  keins gewählt, folgt Meshgrove dem System von dunkel zu hell und zurück. Die Schriftliste dort
+  keins gewählt, folgt Meshgrove dem System von dunkel zu hell und zurück. *Theme-Datei
+  importieren…* fügt eine eigene SolidCraft-Theme-Datei (`.json`) hinzu, abgelegt in Meshgroves
+  Einstellungsordner unter `themes`; ein Rechtsklick auf ein importiertes Theme entfernt es.
+  *Hintergrundbild* legt ein eigenes Bild hinter die Dateien, das das Fenster von seiner Mitte aus
+  füllt; *Abdunkeln* dunkelt es zum Hintergrund des Themes hin ab, damit die Dateinamen lesbar
+  bleiben. Die Schriftliste dort
   zeigt jede Schrift in sich selbst. Unter Linux und Windows zeichnet Meshgrove seine eigene
   Titelleiste in den Farben des Themes, für das Hauptfenster und die Modellfenster;
   *Titelleiste → System* holt die des Desktops zurück.

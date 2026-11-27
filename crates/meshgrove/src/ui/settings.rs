@@ -37,6 +37,21 @@ pub enum SettingsChange {
     Language(Option<String>),
     /// The interface theme; `None`: Meshgrove's own look.
     UiTheme(Option<String>),
+    /// Asks for a theme file in the system's file dialog, then imports it.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    PickTheme,
+    /// Imports this theme file and puts it on.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    ImportTheme(PathBuf),
+    /// Takes the imported theme of this id away.
+    RemoveTheme(String),
+    /// The picture behind the file view; `None`: the theme's background.
+    BackgroundPicture(Option<PathBuf>),
+    /// How much the background picture is dimmed, in percent.
+    BackgroundDim(u8),
+    /// Asks for a background picture in the system's file dialog.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    PickBackground,
     /// The interface font: "system", a family, or `None` for the theme's own.
     UiFont(Option<String>),
     /// Who draws the main window's title bar.
@@ -586,6 +601,8 @@ impl Category {
                 put(config.language.is_some(), SettingsChange::Language(None));
                 put(config.ui_theme.is_some(), SettingsChange::UiTheme(None));
                 put(config.ui_font.is_some(), SettingsChange::UiFont(None));
+                put(config.background_picture.is_some(), SettingsChange::BackgroundPicture(None));
+                put(config.background_dim != d.background_dim, SettingsChange::BackgroundDim(d.background_dim));
                 put(config.title_bar != d.title_bar, SettingsChange::TitleBar(d.title_bar));
                 put(config.update_check != d.update_check, SettingsChange::UpdateCheck(d.update_check));
                 put(config.double_click != d.double_click, SettingsChange::DoubleClick(d.double_click));
@@ -866,6 +883,10 @@ fn changes_towards(config: &Config, target: &Config) -> Vec<SettingsChange> {
     put(c.language != t.language, &|| SettingsChange::Language(t.language.clone()));
     put(c.ui_theme != t.ui_theme, &|| SettingsChange::UiTheme(t.ui_theme.clone()));
     put(c.ui_font != t.ui_font, &|| SettingsChange::UiFont(t.ui_font.clone()));
+    put(c.background_picture != t.background_picture, &|| {
+        SettingsChange::BackgroundPicture(t.background_picture.clone())
+    });
+    put(c.background_dim != t.background_dim, &|| SettingsChange::BackgroundDim(t.background_dim));
     put(c.title_bar != t.title_bar, &|| SettingsChange::TitleBar(t.title_bar));
     put(c.update_check != t.update_check, &|| SettingsChange::UpdateCheck(t.update_check));
     put(c.program_icons != t.program_icons, &|| SettingsChange::ProgramIcons(t.program_icons));
@@ -989,6 +1010,11 @@ impl SettingsDialog {
         self.mouse.reset();
         self.refresh_cache_size();
         self.plugins.search_again();
+    }
+
+    /// A theme was imported or taken away: the theme picker shows the themes there are now.
+    pub fn themes_changed(&mut self) {
+        self.themes.refresh();
     }
 
     /// A plugin came or went: the plugin search looks again.
@@ -1346,14 +1372,67 @@ impl SettingsDialog {
                 });
             });
             sc::settings_section(ui, "appearance", &t!("settings.appearance"), |ui| {
-                note(ui, &t!("settings.appearance_hint"));
+                let hint = t!("settings.appearance_hint");
                 // Not among search results: the cards are pictures, and their room would stay
                 // empty above the rows the search found.
-                if !sc::settings_search::querying(ui) {
-                    let labels = [&*t!("settings.appearance_dark"), &*t!("settings.appearance_light")];
-                    if let Some(theme) = self.themes.show(ui, labels) {
-                        changes.push(SettingsChange::UiTheme(Some(theme)));
+                if sc::settings_search::querying(ui) {
+                    note(ui, &hint);
+                } else {
+                    let (dark, light) = (t!("settings.appearance_dark"), t!("settings.appearance_light"));
+                    let (imported, remove) = (t!("settings.theme_imported_note"), t!("settings.theme_remove"));
+                    let (import, import_tip) = (t!("settings.theme_import"), t!("settings.theme_import_tip"));
+                    // Only builds with the system's file dialog can ask for a file.
+                    let import = cfg!(feature = "plugins").then_some((&*import, &*import_tip));
+                    let texts = super::appearance::PickerTexts {
+                        dark: &dark,
+                        light: &light,
+                        imported: &imported,
+                        import,
+                        remove: &remove,
+                    };
+                    let hint = |ui: &mut Ui| {
+                        sc::text(ui, &hint, sc::Text::Note(&hint));
+                    };
+                    match self.themes.show(ui, &texts, hint) {
+                        Some(super::appearance::Pick::Theme(theme)) => {
+                            changes.push(SettingsChange::UiTheme(Some(theme)))
+                        }
+                        Some(super::appearance::Pick::Import) => changes.push(SettingsChange::PickTheme),
+                        Some(super::appearance::Pick::Remove(theme)) => {
+                            changes.push(SettingsChange::RemoveTheme(theme))
+                        }
+                        None => {}
                     }
+                }
+                // Only builds with the system's file dialog can ask for a picture.
+                if cfg!(feature = "plugins") || config.background_picture.is_some() {
+                    sc::settings_block(ui, &t!("settings.background"), LABELS, |ui| {
+                        ui.horizontal(|ui| {
+                            if cfg!(feature = "plugins")
+                                && super::settings_kit::action(ui, t!("settings.background_choose"), true).clicked()
+                            {
+                                changes.push(SettingsChange::PickBackground);
+                            }
+                            if let Some(picture) = &config.background_picture {
+                                if super::settings_kit::action(ui, t!("settings.background_remove"), true).clicked() {
+                                    changes.push(SettingsChange::BackgroundPicture(None));
+                                }
+                                let name = picture.file_name().unwrap_or(picture.as_os_str()).to_string_lossy();
+                                ui.label(name).on_hover_text(picture.display().to_string());
+                            }
+                        });
+                        if config.background_picture.is_some() {
+                            ui.horizontal(|ui| {
+                                ui.label(t!("settings.background_dim"));
+                                let mut dim = config.background_dim.min(90);
+                                super::settings_kit::slider(ui, &mut dim, 0..=90, 220.0, Some(|v| format!("{v:.0} %")));
+                                if dim != config.background_dim {
+                                    changes.push(SettingsChange::BackgroundDim(dim));
+                                }
+                            });
+                        }
+                        note(ui, &t!("settings.background_hint"));
+                    });
                 }
                 sc::settings_block(ui, &t!("settings.font"), LABELS, |ui| {
                     if let Some(font) = self.font_picker(ui, config.ui_font.as_deref()) {
