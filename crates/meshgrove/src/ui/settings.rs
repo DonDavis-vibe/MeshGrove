@@ -37,6 +37,14 @@ pub enum SettingsChange {
     Language(Option<String>),
     /// The interface theme; `None`: Meshgrove's own look.
     UiTheme(Option<String>),
+    /// Asks for a theme file in the system's file dialog, then imports it.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    PickTheme,
+    /// Imports this theme file and puts it on.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    ImportTheme(PathBuf),
+    /// Takes the imported theme of this id away.
+    RemoveTheme(String),
     /// The interface font: "system", a family, or `None` for the theme's own.
     UiFont(Option<String>),
     /// Who draws the main window's title bar.
@@ -991,6 +999,11 @@ impl SettingsDialog {
         self.plugins.search_again();
     }
 
+    /// A theme was imported or taken away: the theme picker shows the themes there are now.
+    pub fn themes_changed(&mut self) {
+        self.themes.refresh();
+    }
+
     /// A plugin came or went: the plugin search looks again.
     #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
     pub fn plugins_changed(&mut self) {
@@ -1346,13 +1359,36 @@ impl SettingsDialog {
                 });
             });
             sc::settings_section(ui, "appearance", &t!("settings.appearance"), |ui| {
-                note(ui, &t!("settings.appearance_hint"));
+                let hint = t!("settings.appearance_hint");
                 // Not among search results: the cards are pictures, and their room would stay
                 // empty above the rows the search found.
-                if !sc::settings_search::querying(ui) {
-                    let labels = [&*t!("settings.appearance_dark"), &*t!("settings.appearance_light")];
-                    if let Some(theme) = self.themes.show(ui, labels) {
-                        changes.push(SettingsChange::UiTheme(Some(theme)));
+                if sc::settings_search::querying(ui) {
+                    note(ui, &hint);
+                } else {
+                    let (dark, light) = (t!("settings.appearance_dark"), t!("settings.appearance_light"));
+                    let (imported, remove) = (t!("settings.theme_imported_note"), t!("settings.theme_remove"));
+                    let (import, import_tip) = (t!("settings.theme_import"), t!("settings.theme_import_tip"));
+                    // Only builds with the system's file dialog can ask for a file.
+                    let import = cfg!(feature = "plugins").then_some((&*import, &*import_tip));
+                    let texts = super::appearance::PickerTexts {
+                        dark: &dark,
+                        light: &light,
+                        imported: &imported,
+                        import,
+                        remove: &remove,
+                    };
+                    let hint = |ui: &mut Ui| {
+                        sc::text(ui, &hint, sc::Text::Note(&hint));
+                    };
+                    match self.themes.show(ui, &texts, hint) {
+                        Some(super::appearance::Pick::Theme(theme)) => {
+                            changes.push(SettingsChange::UiTheme(Some(theme)))
+                        }
+                        Some(super::appearance::Pick::Import) => changes.push(SettingsChange::PickTheme),
+                        Some(super::appearance::Pick::Remove(theme)) => {
+                            changes.push(SettingsChange::RemoveTheme(theme))
+                        }
+                        None => {}
                     }
                 }
                 sc::settings_block(ui, &t!("settings.font"), LABELS, |ui| {

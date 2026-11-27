@@ -1854,6 +1854,7 @@ impl App {
             match change {
                 change @ (SettingsChange::InstallPlugin(_)
                 | SettingsChange::PickPlugin
+                | SettingsChange::PickTheme
                 | SettingsChange::PickFolder(_)
                 | SettingsChange::OpenPluginFolder
                 | SettingsChange::PluginEnabled { .. }
@@ -1870,11 +1871,25 @@ impl App {
                     i18n::init(lang.as_deref());
                     self.config.language = lang;
                 }
-                SettingsChange::UiTheme(theme) => {
-                    crate::ui::appearance::apply(&self.egui_ctx, theme.as_deref());
-                    self.config.ui_theme = theme;
-                    apply_fonts(&self.egui_ctx, self.config.ui_font.as_deref(), &self.font_previews);
-                }
+                SettingsChange::UiTheme(theme) => self.set_ui_theme(theme),
+                SettingsChange::ImportTheme(file) => match crate::ui::appearance::import(&file) {
+                    Ok((id, name)) => {
+                        self.settings.themes_changed();
+                        self.set_ui_theme(Some(id));
+                        self.toast(t!("settings.theme_imported", name = name).into_owned());
+                    }
+                    Err(e) => self.toast(t!("settings.theme_import_failed", error = e).into_owned()),
+                },
+                SettingsChange::RemoveTheme(id) => match crate::ui::appearance::remove(&id) {
+                    Ok(()) => {
+                        self.settings.themes_changed();
+                        // The one on is gone: Meshgrove's own look takes over.
+                        if self.config.ui_theme.as_deref() == Some(id.as_str()) {
+                            self.set_ui_theme(None);
+                        }
+                    }
+                    Err(e) => self.toast(e),
+                },
                 SettingsChange::ProgramIcons(on) => self.config.program_icons = on,
                 SettingsChange::TitleBar(title_bar) => {
                     self.config.title_bar = title_bar;
@@ -2121,6 +2136,13 @@ impl App {
             }
             self.save_config();
         }
+    }
+
+    /// Puts the interface theme `theme` on (`None`: Meshgrove's own look) and keeps it.
+    fn set_ui_theme(&mut self, theme: Option<String>) {
+        crate::ui::appearance::apply(&self.egui_ctx, theme.as_deref());
+        self.config.ui_theme = theme;
+        apply_fonts(&self.egui_ctx, self.config.ui_font.as_deref(), &self.font_previews);
     }
 
     fn toast(&mut self, message: String) {
