@@ -761,6 +761,12 @@ pub struct Config {
     /// `None`: the theme's own.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_font: Option<String>,
+    /// A picture behind the file view; `None`: the theme's background.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_picture: Option<PathBuf>,
+    /// How much the background picture is dimmed towards the theme's background, in percent, so
+    /// the file names over it stay readable.
+    pub background_dim: u8,
     /// The main window's title bar: Meshgrove's own, or the desktop's.
     pub title_bar: TitleBar,
     /// What a start with model files shows: the main window, or only their model windows.
@@ -1250,6 +1256,8 @@ impl Default for Config {
             language: None,
             ui_theme: None,
             ui_font: None,
+            background_picture: None,
+            background_dim: 40,
             title_bar: TitleBar::default(),
             open_files: OpenFiles::default(),
             update_check: None,

@@ -1,5 +1,6 @@
 #[cfg(feature = "plugins")]
 pub mod appearance;
+pub mod background;
 pub mod canvas;
 pub mod chat;
 pub mod chat_input;

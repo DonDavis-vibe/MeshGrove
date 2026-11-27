@@ -279,6 +279,8 @@ pub struct App {
     settings: SettingsDialog,
     /// The preview fonts loaded for the settings' font list.
     font_previews: BTreeSet<String>,
+    /// The picture behind the file view, once read.
+    background: crate::ui::background::Background,
     /// Meshgrove's icon, for its own title bar.
     brand: egui::TextureHandle,
     /// The user's plugins: their panels, jobs and tools.
@@ -442,6 +444,7 @@ impl App {
             messages: unbounded(),
             settings: SettingsDialog::default(),
             font_previews: BTreeSet::new(),
+            background: Default::default(),
             brand: startup::brand(&cc.egui_ctx),
             #[cfg(feature = "plugins")]
             plugins: crate::plugins::PluginHost::new(cc.egui_ctx.clone()),
@@ -1855,6 +1858,7 @@ impl App {
                 change @ (SettingsChange::InstallPlugin(_)
                 | SettingsChange::PickPlugin
                 | SettingsChange::PickTheme
+                | SettingsChange::PickBackground
                 | SettingsChange::PickFolder(_)
                 | SettingsChange::OpenPluginFolder
                 | SettingsChange::PluginEnabled { .. }
@@ -1880,6 +1884,8 @@ impl App {
                     }
                     Err(e) => self.toast(t!("settings.theme_import_failed", error = e).into_owned()),
                 },
+                SettingsChange::BackgroundPicture(picture) => self.config.background_picture = picture,
+                SettingsChange::BackgroundDim(dim) => self.config.background_dim = dim.min(90),
                 SettingsChange::RemoveTheme(id) => match crate::ui::appearance::remove(&id) {
                     Ok(()) => {
                         self.settings.themes_changed();
@@ -3443,6 +3449,14 @@ impl egui_tiles::Behavior<Pane> for PaneHost<'_> {
             if gliding {
                 // Over the panes it passes.
                 ui.painter().rect_filled(shown, 0.0, ui.visuals().panel_fill);
+            }
+            if *pane == Pane::Files {
+                let app = &mut *self.app;
+                let picture = app.config.background_picture.as_deref();
+                let dim = f32::from(app.config.background_dim.min(90)) / 100.0;
+                if let Some(error) = app.background.paint(ui.painter(), shown, picture, dim) {
+                    app.toast(t!("settings.background_unreadable", error = error).into_owned());
+                }
             }
             self.pane_body(ui, pane, margin, rs);
         });
